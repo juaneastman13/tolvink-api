@@ -114,6 +114,14 @@ export class FreightsController {
     return this.service.cancel(id, dto, user);
   }
 
+  @Post(':id/authorize')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Autorizar viaje con flota propia (solo planta)' })
+  authorize(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.authorize(id, user);
+  }
+
   @Post(':id/documents')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Registrar documento/foto del flete' })

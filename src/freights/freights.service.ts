@@ -625,6 +625,41 @@ export class FreightsService {
     });
   }
 
+  // ======================== AUTHORIZE (plant approves own fleet) =======
+
+  async authorize(freightId: string, user: any) {
+    if (user.companyType !== 'plant') {
+      throw new ForbiddenException('Solo la planta puede autorizar');
+    }
+
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (freight.status !== FreightStatus.assigned) {
+      throw new BadRequestException('El flete no está en estado asignado');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.freight.update({
+        where: { id: freightId },
+        data: { status: FreightStatus.accepted },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight', entityId: freightId,
+          action: 'authorized',
+          fromValue: 'assigned', toValue: 'accepted',
+          userId: user.sub,
+        },
+      });
+
+      return updated;
+    });
+  }
+
   // ======================== ADD DOCUMENT ================================
 
   async addDocument(freightId: string, body: { name: string; url: string; type?: string; step?: string }, user: any) {
