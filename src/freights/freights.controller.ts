@@ -79,10 +79,30 @@ export class FreightsController {
     return this.service.start(id, user);
   }
 
+  // ======================== NEW ENDPOINTS =============================
+
+  @Post(':id/confirm-loaded')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'producer')
+  @ApiOperation({ summary: 'Confirmar carga (transportista: in_progress→loaded, productor: confirma en loaded)' })
+  confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.confirmLoaded(id, user);
+  }
+
+  @Post(':id/confirm-finished')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'plant')
+  @ApiOperation({ summary: 'Confirmar finalización (requiere ambos: transportista + planta)' })
+  confirmFinished(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.confirmFinished(id, user);
+  }
+
+  // ======================== EXISTING ENDPOINTS (maintained) ===========
+
   @Post(':id/finish')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'plant')
-  @ApiOperation({ summary: 'Finalizar viaje' })
+  @ApiOperation({ summary: 'Finalizar viaje (legacy — ahora requiere estado loaded)' })
   finish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.finish(id, user);
   }

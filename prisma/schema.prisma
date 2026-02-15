@@ -32,6 +32,7 @@ enum FreightStatus {
   assigned
   accepted
   in_progress
+  loaded
   finished
   canceled
 }
@@ -58,6 +59,8 @@ enum NotificationType {
   freight_accepted
   freight_rejected
   freight_started
+  freight_loaded
+  freight_confirmed
   freight_finished
   freight_canceled
   message_received
@@ -189,6 +192,13 @@ model Freight {
   updatedAt DateTime @updatedAt @map("updated_at")
   startedAt DateTime? @map("started_at")
   finishedAt DateTime? @map("finished_at")
+  loadedAt  DateTime? @map("loaded_at")
+
+  // Cross-confirmations
+  transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
+  producerLoadedConfirmedAt      DateTime? @map("producer_loaded_confirmed_at")
+  transporterFinishedConfirmedAt DateTime? @map("transporter_finished_confirmed_at")
+  plantFinishedConfirmedAt       DateTime? @map("plant_finished_confirmed_at")
 
   // Relations
   originCompany Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])

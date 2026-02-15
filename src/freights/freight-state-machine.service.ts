@@ -2,14 +2,25 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { FreightStatus } from '@prisma/client';
 
 // =====================================================================
-// TOLVINK — Freight State Machine
-// Single source of truth for all state transitions
-// Frontend must mirror these rules exactly
+// TOLVINK — Freight State Machine v2
+// Added: loaded state, cross-confirmation flow
+// 
+// FLOW:
+//   draft → pending_assignment → assigned → accepted → in_progress → loaded → finished
+//                                                                          ↘ canceled
+//
+// CROSS-CONFIRMATIONS:
+//   in_progress → loaded:   transportista confirma carga
+//   loaded:                 productor confirma carga (optional enrichment)
+//   loaded → finished:      transportista + planta ambos confirman entrega
+//
+// BREAKING CHANGE: in_progress → finished ya NO es directo.
+//   Debe pasar por loaded primero.
 // =====================================================================
 
 type Transition = {
   to: FreightStatus;
-  requiredRole?: string[];       // company types that can trigger
+  requiredRole?: string[];
   requiresReason?: boolean;
   validate?: (context: any) => string | null;
 };
@@ -29,7 +40,7 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
       to: FreightStatus.pending_assignment,
       requiredRole: ['transporter'],
       requiresReason: true,
-      validate: () => null, // rejection — handled via assignment respond
+      validate: () => null,
     },
     { to: FreightStatus.canceled, requiresReason: true },
   ],
@@ -43,8 +54,15 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
     { to: FreightStatus.canceled, requiresReason: true },
   ],
   in_progress: [
+    // CHANGED: in_progress → loaded (transportista confirms load)
+    { to: FreightStatus.loaded, requiredRole: ['transporter'] },
+    // REMOVED: in_progress → finished (must go through loaded now)
+    // CANNOT cancel when in_progress — business rule maintained
+  ],
+  loaded: [
+    // loaded → finished: requires cross-confirmation (handled in service layer)
     { to: FreightStatus.finished, requiredRole: ['transporter', 'plant'] },
-    // CANNOT cancel when in_progress — this is a business rule
+    // CANNOT cancel when loaded — cargo is on the truck
   ],
   finished: [],   // terminal
   canceled: [],   // terminal
@@ -78,7 +96,6 @@ export class FreightStateMachine {
       );
     }
 
-    // Check role permission
     if (transition.requiredRole && companyType) {
       if (!transition.requiredRole.includes(companyType)) {
         throw new BadRequestException(
@@ -87,12 +104,10 @@ export class FreightStateMachine {
       }
     }
 
-    // Check required reason
     if (transition.requiresReason && (!reason || reason.trim().length === 0)) {
       throw new BadRequestException('Motivo obligatorio para esta acción');
     }
 
-    // Custom validation
     if (transition.validate) {
       const error = transition.validate({ reason });
       if (error) throw new BadRequestException(error);

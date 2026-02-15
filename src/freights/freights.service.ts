@@ -14,20 +14,17 @@ export class FreightsService {
   // ======================== CREATE ====================================
 
   async create(dto: CreateFreightDto, user: any) {
-    // Validate lot belongs to user's company
     const lot = await this.prisma.lot.findFirst({
       where: { id: dto.originLotId, companyId: user.companyId, active: true },
     });
     if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
 
-    // Validate plant exists
     const plant = await this.prisma.plant.findFirst({
       where: { id: dto.destPlantId, active: true },
       include: { company: true },
     });
     if (!plant) throw new BadRequestException('Planta no encontrada');
 
-    // Generate code
     const count = await this.prisma.freight.count();
     const code = `FLT-${String(count + 1).padStart(4, '0')}`;
 
@@ -81,7 +78,6 @@ export class FreightsService {
 
     const where: any = {};
 
-    // Multi-tenant filter
     if (user.role !== 'platform_admin') {
       where.OR = [
         { originCompanyId: user.companyId },
@@ -156,28 +152,23 @@ export class FreightsService {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Only plant can assign
     if (user.companyType !== 'plant') {
       throw new ForbiddenException('Solo la planta puede asignar transportista');
     }
 
-    // Validate state
     this.stateMachine.validateTransition(freight.status, FreightStatus.assigned, 'plant');
 
-    // Validate transport company exists and is transporter
     const transport = await this.prisma.company.findFirst({
       where: { id: dto.transportCompanyId, type: 'transporter', active: true },
     });
     if (!transport) throw new BadRequestException('Empresa transportista no encontrada');
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Deactivate any previous active assignment
       await tx.freightAssignment.updateMany({
         where: { freightId, status: { in: ['active', 'accepted'] } },
         data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
       });
 
-      // Create new assignment
       const assignment = await tx.freightAssignment.create({
         data: {
           freightId,
@@ -187,7 +178,6 @@ export class FreightsService {
         },
       });
 
-      // Update freight status
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.assigned },
@@ -219,7 +209,6 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Only assigned transporter can respond
     if (user.companyType !== 'transporter') {
       throw new ForbiddenException('Solo el transportista puede responder');
     }
@@ -229,7 +218,6 @@ export class FreightsService {
       throw new ForbiddenException('Tu empresa no está asignada a este flete');
     }
 
-    // Validate reason if rejecting
     if (dto.action === 'rejected') {
       if (!dto.reason || dto.reason.trim().length === 0) {
         throw new BadRequestException('Motivo obligatorio para rechazar');
@@ -259,7 +247,6 @@ export class FreightsService {
       });
     }
 
-    // Accept
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
 
     return this.prisma.$transaction(async (tx) => {
@@ -313,11 +300,213 @@ export class FreightsService {
     });
   }
 
-  // ======================== FINISH ====================================
+  // ======================== CONFIRM LOADED (NEW) ======================
+  // POST /freights/:id/confirm-loaded
+  //
+  // Transportista (in_progress): confirma carga → estado pasa a loaded
+  // Productor (loaded): confirma carga desde su lado
+  // =================================================================
+
+  async confirmLoaded(freightId: string, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    const ct = user.companyType;
+
+    // === TRANSPORTISTA: in_progress → loaded ===
+    if (ct === 'transporter') {
+      if (freight.status !== FreightStatus.in_progress) {
+        throw new BadRequestException(
+          `Solo se puede confirmar carga en estado "in_progress". Estado actual: "${freight.status}"`,
+        );
+      }
+
+      if (freight.transporterLoadedConfirmedAt) {
+        throw new BadRequestException('El transportista ya confirmó la carga');
+      }
+
+      this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
+
+      return this.prisma.$transaction(async (tx) => {
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data: {
+            status: FreightStatus.loaded,
+            loadedAt: new Date(),
+            transporterLoadedConfirmedAt: new Date(),
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight', entityId: freightId,
+            action: 'confirm_loaded',
+            fromValue: 'in_progress', toValue: 'loaded',
+            userId: user.sub,
+            metadata: { confirmedBy: 'transporter' },
+          },
+        });
+
+        return updated;
+      });
+    }
+
+    // === PRODUCTOR: confirma carga (estado ya es loaded) ===
+    if (ct === 'producer') {
+      if (freight.status !== FreightStatus.loaded) {
+        throw new BadRequestException(
+          `El productor solo puede confirmar carga en estado "loaded". Estado actual: "${freight.status}"`,
+        );
+      }
+
+      if (freight.producerLoadedConfirmedAt) {
+        throw new BadRequestException('El productor ya confirmó la carga');
+      }
+
+      return this.prisma.$transaction(async (tx) => {
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data: { producerLoadedConfirmedAt: new Date() },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight', entityId: freightId,
+            action: 'confirm_loaded',
+            fromValue: 'loaded', toValue: 'loaded',
+            userId: user.sub,
+            metadata: { confirmedBy: 'producer' },
+          },
+        });
+
+        return updated;
+      });
+    }
+
+    throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
+  }
+
+  // ======================== CONFIRM FINISHED (NEW) ====================
+  // POST /freights/:id/confirm-finished
+  //
+  // Transportista (loaded): confirma entrega
+  // Planta (loaded): confirma recepción
+  // Cuando AMBOS confirmaron → estado pasa a finished
+  // =================================================================
+
+  async confirmFinished(freightId: string, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    if (freight.status !== FreightStatus.loaded) {
+      throw new BadRequestException(
+        `Solo se puede confirmar finalización en estado "loaded". Estado actual: "${freight.status}"`,
+      );
+    }
+
+    const ct = user.companyType;
+
+    // === TRANSPORTISTA: confirma entrega ===
+    if (ct === 'transporter') {
+      if (freight.transporterFinishedConfirmedAt) {
+        throw new BadRequestException('El transportista ya confirmó la entrega');
+      }
+
+      const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
+
+      return this.prisma.$transaction(async (tx) => {
+        const data: any = { transporterFinishedConfirmedAt: new Date() };
+
+        // If plant already confirmed → transition to finished
+        if (plantAlsoConfirmed) {
+          this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
+          data.status = FreightStatus.finished;
+          data.finishedAt = new Date();
+        }
+
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data,
+        });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight', entityId: freightId,
+            action: plantAlsoConfirmed ? 'finished' : 'confirm_finished',
+            fromValue: 'loaded',
+            toValue: plantAlsoConfirmed ? 'finished' : 'loaded',
+            userId: user.sub,
+            metadata: {
+              confirmedBy: 'transporter',
+              bothConfirmed: plantAlsoConfirmed,
+            },
+          },
+        });
+
+        return updated;
+      });
+    }
+
+    // === PLANTA: confirma recepción ===
+    if (ct === 'plant') {
+      if (freight.plantFinishedConfirmedAt) {
+        throw new BadRequestException('La planta ya confirmó la recepción');
+      }
+
+      const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
+
+      return this.prisma.$transaction(async (tx) => {
+        const data: any = { plantFinishedConfirmedAt: new Date() };
+
+        // If transporter already confirmed → transition to finished
+        if (transporterAlsoConfirmed) {
+          this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'plant');
+          data.status = FreightStatus.finished;
+          data.finishedAt = new Date();
+        }
+
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data,
+        });
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight', entityId: freightId,
+            action: transporterAlsoConfirmed ? 'finished' : 'confirm_finished',
+            fromValue: 'loaded',
+            toValue: transporterAlsoConfirmed ? 'finished' : 'loaded',
+            userId: user.sub,
+            metadata: {
+              confirmedBy: 'plant',
+              bothConfirmed: transporterAlsoConfirmed,
+            },
+          },
+        });
+
+        return updated;
+      });
+    }
+
+    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
+  }
+
+  // ======================== FINISH (UPDATED) ==========================
+  // BREAKING CHANGE: Now rejects in_progress → finished.
+  // Must go through loaded first.
+  // Kept for backward compatibility but validates loaded state.
+  // =================================================================
 
   async finish(freightId: string, user: any) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    // GUARD: Cannot skip loaded
+    if (freight.status === FreightStatus.in_progress) {
+      throw new BadRequestException(
+        'No se puede finalizar directamente. Primero debe confirmarse la carga (estado loaded).',
+      );
+    }
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.finished, user.companyType);
 
@@ -331,7 +520,7 @@ export class FreightsService {
         data: {
           entityType: 'freight', entityId: freightId,
           action: 'finished',
-          fromValue: 'in_progress', toValue: 'finished',
+          fromValue: freight.status, toValue: 'finished',
           userId: user.sub,
         },
       });
@@ -346,15 +535,14 @@ export class FreightsService {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Cannot cancel if in_progress
-    if (freight.status === FreightStatus.in_progress) {
-      throw new BadRequestException('No se puede cancelar un flete en curso');
+    // Cannot cancel if in_progress or loaded (cargo on truck)
+    if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
+      throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
     }
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.canceled, user.companyType, dto.reason);
 
     return this.prisma.$transaction(async (tx) => {
-      // Cancel active assignments too
       await tx.freightAssignment.updateMany({
         where: { freightId, status: { in: ['active', 'accepted'] } },
         data: { status: AssignmentStatus.canceled, reason: 'Flete cancelado' },
