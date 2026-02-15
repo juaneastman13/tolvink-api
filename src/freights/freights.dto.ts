@@ -1,16 +1,33 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ValidateNested, IsNumber, Min, MaxLength, IsDateString, Matches } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ValidateNested, IsNumber, Min, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class FreightItemDto {
-  @ApiProperty({ enum: ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada'] })
-  @IsEnum(['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada'])
+  @ApiProperty({ enum: ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] })
+  @IsEnum(['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'])
   grain: string;
 
-  @ApiProperty({ example: 30 })
+  @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)' })
   @IsNumber()
-  @Min(0.1, { message: 'Toneladas debe ser mayor a 0' })
+  @Min(0.1, { message: 'Cantidad debe ser mayor a 0' })
   tons: number;
+
+  @ApiProperty({ required: false, enum: ['toneladas', 'cantidad', 'metros', 'm3'], default: 'toneladas' })
+  @IsOptional()
+  @IsEnum(['toneladas', 'cantidad', 'metros', 'm3'])
+  unit?: string;
+
+  @ApiProperty({ required: false, description: 'Importe' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  amount?: number;
+
+  @ApiProperty({ required: false, description: 'Descripción si tipo = Otros' })
+  @ValidateIf(o => o.grain === 'Otros')
+  @IsNotEmpty({ message: 'Descripción obligatoria si tipo es Otros' })
+  @MaxLength(255)
+  productTypeOther?: string;
 
   @IsOptional()
   notes?: string;
@@ -20,6 +37,11 @@ export class CreateFreightDto {
   @ApiProperty()
   @IsUUID()
   originLotId: string;
+
+  @ApiProperty({ required: false, description: 'ID del campo' })
+  @IsOptional()
+  @IsUUID()
+  fieldId?: string;
 
   @ApiProperty()
   @IsUUID()

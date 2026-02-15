@@ -16,6 +16,7 @@ export class FreightsService {
   async create(dto: CreateFreightDto, user: any) {
     const lot = await this.prisma.lot.findFirst({
       where: { id: dto.originLotId, companyId: user.companyId, active: true },
+      include: { field: true },
     });
     if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
 
@@ -24,6 +25,16 @@ export class FreightsService {
       include: { company: true },
     });
     if (!plant) throw new BadRequestException('Planta no encontrada');
+
+    // Resolve fieldId from dto or from lot
+    const fieldId = dto.fieldId || lot.fieldId || null;
+
+    // Compute scheduledAt
+    let scheduledAt: Date | null = null;
+    try {
+      scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime}:00`);
+      if (isNaN(scheduledAt.getTime())) scheduledAt = null;
+    } catch { scheduledAt = null; }
 
     const count = await this.prisma.freight.count();
     const code = `FLT-${String(count + 1).padStart(4, '0')}`;
@@ -35,6 +46,7 @@ export class FreightsService {
           status: FreightStatus.pending_assignment,
           originCompanyId: user.companyId,
           originLotId: lot.id,
+          fieldId,
           originName: lot.name,
           originLat: lot.lat,
           originLng: lot.lng,
@@ -45,14 +57,33 @@ export class FreightsService {
           destLng: plant.lng,
           loadDate: new Date(dto.loadDate),
           loadTime: dto.loadTime,
+          scheduledAt,
           requestedById: user.sub,
           notes: dto.notes,
           items: {
-            create: dto.items.map(i => ({ grain: i.grain as any, tons: i.tons, notes: i.notes })),
+            create: dto.items.map(i => ({
+              grain: i.grain as any,
+              tons: i.tons,
+              quantity: i.tons,
+              unit: (i.unit as any) || 'toneladas',
+              amount: i.amount || 0,
+              productTypeOther: i.productTypeOther || null,
+              notes: i.notes,
+            })),
           },
-          conversation: { create: {} },
+          // Create conversation WITH participants
+          conversation: {
+            create: {
+              participants: {
+                create: [
+                  { companyId: user.companyId },
+                  { companyId: plant.companyId },
+                ],
+              },
+            },
+          },
         },
-        include: { items: true },
+        include: { items: true, conversation: { select: { id: true } } },
       });
 
       await tx.auditLog.create({
@@ -103,11 +134,13 @@ export class FreightsService {
           originCompany: { select: { id: true, name: true } },
           destCompany: { select: { id: true, name: true } },
           requestedBy: { select: { id: true, name: true } },
+          conversation: { select: { id: true } },
           assignments: {
             where: { status: { in: ['active', 'accepted'] } },
             include: {
               transportCompany: { select: { id: true, name: true } },
-              driver: { select: { id: true, name: true } },
+              driver: { select: { id: true, name: true, phone: true } },
+              truck: { select: { id: true, plate: true, model: true } },
             },
           },
         },
@@ -127,15 +160,17 @@ export class FreightsService {
         items: true,
         originLot: true,
         destPlant: true,
+        field: { select: { id: true, name: true } },
         originCompany: { select: { id: true, name: true, type: true } },
         destCompany: { select: { id: true, name: true, type: true } },
         requestedBy: { select: { id: true, name: true } },
         assignments: {
           orderBy: { createdAt: 'desc' },
           include: {
-            transportCompany: { select: { id: true, name: true } },
+            transportCompany: { select: { id: true, name: true, phone: true } },
             assignedBy: { select: { id: true, name: true } },
-            driver: { select: { id: true, name: true } },
+            driver: { select: { id: true, name: true, phone: true } },
+            truck: { select: { id: true, plate: true, model: true } },
           },
         },
         documents: { orderBy: { createdAt: 'desc' } },
@@ -150,7 +185,10 @@ export class FreightsService {
   // ======================== ASSIGN ===================================
 
   async assign(freightId: string, dto: AssignFreightDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { conversation: { select: { id: true } } },
+    });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
     if (user.companyType !== 'plant') {
@@ -183,6 +221,23 @@ export class FreightsService {
         where: { id: freightId },
         data: { status: FreightStatus.assigned },
       });
+
+      // Add transporter as conversation participant
+      if (freight.conversation?.id) {
+        await tx.conversationParticipant.upsert({
+          where: {
+            conversationId_companyId: {
+              conversationId: freight.conversation.id,
+              companyId: dto.transportCompanyId,
+            },
+          },
+          create: {
+            conversationId: freight.conversation.id,
+            companyId: dto.transportCompanyId,
+          },
+          update: {},
+        });
+      }
 
       await tx.auditLog.create({
         data: {
@@ -251,7 +306,6 @@ export class FreightsService {
     // ACCEPT
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
 
-    // Build assignment update — truckId optional for now
     const assignmentUpdate: any = { status: AssignmentStatus.accepted };
 
     if (dto.truckId) {
