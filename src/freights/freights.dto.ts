@@ -64,6 +64,11 @@ export class CreateFreightDto {
   @IsOptional()
   @MaxLength(1000)
   notes?: string;
+
+  @ApiProperty({ required: false, description: 'ID del camión (flota propia del productor)' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
 }
 
 export class AssignFreightDto {

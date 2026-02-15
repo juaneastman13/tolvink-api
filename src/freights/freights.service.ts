@@ -94,6 +94,31 @@ export class FreightsService {
         },
       });
 
+      // If producer provided own truck (flota propia), create self-assignment
+      if (dto.truckId) {
+        const truck = await tx.truck.findFirst({
+          where: { id: dto.truckId, companyId: user.companyId, active: true },
+        });
+        if (truck) {
+          await tx.freightAssignment.create({
+            data: {
+              freightId: f.id,
+              transportCompanyId: user.companyId,
+              status: AssignmentStatus.accepted,
+              assignedById: user.sub,
+              truckId: truck.id,
+              plate: truck.plate,
+              driverId: truck.assignedUserId || null,
+            },
+          });
+          // Update freight status — plant only needs to authorize
+          await tx.freight.update({
+            where: { id: f.id },
+            data: { status: FreightStatus.assigned },
+          });
+        }
+      }
+
       return f;
     });
 
