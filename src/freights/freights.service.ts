@@ -599,4 +599,22 @@ export class FreightsService {
       return updated;
     });
   }
+
+  // ======================== ADD DOCUMENT ================================
+
+  async addDocument(freightId: string, body: { name: string; url: string; type?: string; step?: string }, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    return this.prisma.freightDocument.create({
+      data: {
+        freightId,
+        name: body.name || 'foto',
+        url: body.url,
+        type: body.type || 'photo',
+        step: (body.step as any) || null,
+        uploadedById: user.sub,
+      },
+    });
+  }
 }

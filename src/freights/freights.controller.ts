@@ -79,12 +79,10 @@ export class FreightsController {
     return this.service.start(id, user);
   }
 
-  // ======================== NEW ENDPOINTS =============================
-
   @Post(':id/confirm-loaded')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer')
-  @ApiOperation({ summary: 'Confirmar carga (transportista: in_progress→loaded, productor: confirma en loaded)' })
+  @ApiOperation({ summary: 'Confirmar carga' })
   confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.confirmLoaded(id, user);
   }
@@ -97,12 +95,10 @@ export class FreightsController {
     return this.service.confirmFinished(id, user);
   }
 
-  // ======================== EXISTING ENDPOINTS (maintained) ===========
-
   @Post(':id/finish')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'plant')
-  @ApiOperation({ summary: 'Finalizar viaje (legacy — ahora requiere estado loaded)' })
+  @ApiOperation({ summary: 'Finalizar viaje (legacy — requiere estado loaded)' })
   finish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.finish(id, user);
   }
@@ -116,5 +112,16 @@ export class FreightsController {
     @CurrentUser() user: any,
   ) {
     return this.service.cancel(id, dto, user);
+  }
+
+  @Post(':id/documents')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Registrar documento/foto del flete' })
+  addDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { name: string; url: string; type?: string; step?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.addDocument(id, body, user);
   }
 }
