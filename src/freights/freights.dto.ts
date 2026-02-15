@@ -59,6 +59,11 @@ export class RespondAssignmentDto {
   @IsOptional()
   @MaxLength(255)
   reason?: string;
+
+  @ApiProperty({ required: false, description: 'ID del camión (obligatorio si acepta)' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
 }
 
 export class CancelFreightDto {

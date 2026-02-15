@@ -247,12 +247,29 @@ export class FreightsService {
       });
     }
 
+    // ACCEPT
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
+
+    // Build assignment update — truckId optional for now
+    const assignmentUpdate: any = { status: AssignmentStatus.accepted };
+
+    if (dto.truckId) {
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: dto.truckId, companyId: user.companyId, active: true },
+      });
+      if (!truck) throw new BadRequestException('Camión no encontrado o no pertenece a tu empresa');
+
+      assignmentUpdate.truckId = truck.id;
+      assignmentUpdate.plate = truck.plate;
+      if (truck.assignedUserId) {
+        assignmentUpdate.driverId = truck.assignedUserId;
+      }
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.update({
         where: { id: assignment.id },
-        data: { status: AssignmentStatus.accepted },
+        data: assignmentUpdate,
       });
 
       const updated = await tx.freight.update({
@@ -266,6 +283,7 @@ export class FreightsService {
           action: 'accepted',
           fromValue: 'assigned', toValue: 'accepted',
           userId: user.sub,
+          metadata: dto.truckId ? { truckId: dto.truckId } : undefined,
         },
       });
 
@@ -300,12 +318,7 @@ export class FreightsService {
     });
   }
 
-  // ======================== CONFIRM LOADED (NEW) ======================
-  // POST /freights/:id/confirm-loaded
-  //
-  // Transportista (in_progress): confirma carga → estado pasa a loaded
-  // Productor (loaded): confirma carga desde su lado
-  // =================================================================
+  // ======================== CONFIRM LOADED ============================
 
   async confirmLoaded(freightId: string, user: any) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
@@ -313,14 +326,12 @@ export class FreightsService {
 
     const ct = user.companyType;
 
-    // === TRANSPORTISTA: in_progress → loaded ===
     if (ct === 'transporter') {
       if (freight.status !== FreightStatus.in_progress) {
         throw new BadRequestException(
           `Solo se puede confirmar carga en estado "in_progress". Estado actual: "${freight.status}"`,
         );
       }
-
       if (freight.transporterLoadedConfirmedAt) {
         throw new BadRequestException('El transportista ya confirmó la carga');
       }
@@ -351,14 +362,12 @@ export class FreightsService {
       });
     }
 
-    // === PRODUCTOR: confirma carga (estado ya es loaded) ===
     if (ct === 'producer') {
       if (freight.status !== FreightStatus.loaded) {
         throw new BadRequestException(
           `El productor solo puede confirmar carga en estado "loaded". Estado actual: "${freight.status}"`,
         );
       }
-
       if (freight.producerLoadedConfirmedAt) {
         throw new BadRequestException('El productor ya confirmó la carga');
       }
@@ -386,13 +395,7 @@ export class FreightsService {
     throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
   }
 
-  // ======================== CONFIRM FINISHED (NEW) ====================
-  // POST /freights/:id/confirm-finished
-  //
-  // Transportista (loaded): confirma entrega
-  // Planta (loaded): confirma recepción
-  // Cuando AMBOS confirmaron → estado pasa a finished
-  // =================================================================
+  // ======================== CONFIRM FINISHED ==========================
 
   async confirmFinished(freightId: string, user: any) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
@@ -406,7 +409,6 @@ export class FreightsService {
 
     const ct = user.companyType;
 
-    // === TRANSPORTISTA: confirma entrega ===
     if (ct === 'transporter') {
       if (freight.transporterFinishedConfirmedAt) {
         throw new BadRequestException('El transportista ya confirmó la entrega');
@@ -416,18 +418,13 @@ export class FreightsService {
 
       return this.prisma.$transaction(async (tx) => {
         const data: any = { transporterFinishedConfirmedAt: new Date() };
-
-        // If plant already confirmed → transition to finished
         if (plantAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
           data.status = FreightStatus.finished;
           data.finishedAt = new Date();
         }
 
-        const updated = await tx.freight.update({
-          where: { id: freightId },
-          data,
-        });
+        const updated = await tx.freight.update({ where: { id: freightId }, data });
 
         await tx.auditLog.create({
           data: {
@@ -436,10 +433,7 @@ export class FreightsService {
             fromValue: 'loaded',
             toValue: plantAlsoConfirmed ? 'finished' : 'loaded',
             userId: user.sub,
-            metadata: {
-              confirmedBy: 'transporter',
-              bothConfirmed: plantAlsoConfirmed,
-            },
+            metadata: { confirmedBy: 'transporter', bothConfirmed: plantAlsoConfirmed },
           },
         });
 
@@ -447,7 +441,6 @@ export class FreightsService {
       });
     }
 
-    // === PLANTA: confirma recepción ===
     if (ct === 'plant') {
       if (freight.plantFinishedConfirmedAt) {
         throw new BadRequestException('La planta ya confirmó la recepción');
@@ -457,18 +450,13 @@ export class FreightsService {
 
       return this.prisma.$transaction(async (tx) => {
         const data: any = { plantFinishedConfirmedAt: new Date() };
-
-        // If transporter already confirmed → transition to finished
         if (transporterAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'plant');
           data.status = FreightStatus.finished;
           data.finishedAt = new Date();
         }
 
-        const updated = await tx.freight.update({
-          where: { id: freightId },
-          data,
-        });
+        const updated = await tx.freight.update({ where: { id: freightId }, data });
 
         await tx.auditLog.create({
           data: {
@@ -477,10 +465,7 @@ export class FreightsService {
             fromValue: 'loaded',
             toValue: transporterAlsoConfirmed ? 'finished' : 'loaded',
             userId: user.sub,
-            metadata: {
-              confirmedBy: 'plant',
-              bothConfirmed: transporterAlsoConfirmed,
-            },
+            metadata: { confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed },
           },
         });
 
@@ -491,17 +476,12 @@ export class FreightsService {
     throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
   }
 
-  // ======================== FINISH (UPDATED) ==========================
-  // BREAKING CHANGE: Now rejects in_progress → finished.
-  // Must go through loaded first.
-  // Kept for backward compatibility but validates loaded state.
-  // =================================================================
+  // ======================== FINISH ====================================
 
   async finish(freightId: string, user: any) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // GUARD: Cannot skip loaded
     if (freight.status === FreightStatus.in_progress) {
       throw new BadRequestException(
         'No se puede finalizar directamente. Primero debe confirmarse la carga (estado loaded).',
@@ -535,7 +515,6 @@ export class FreightsService {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Cannot cancel if in_progress or loaded (cargo on truck)
     if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
       throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
     }
