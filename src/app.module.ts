@@ -7,6 +7,12 @@ import { HealthModule } from './health/health.module';
 import { CatalogController } from './catalog.controller';
 import { PrismaService } from './database/prisma.service';
 
+// NEW modules
+import { FieldsController, FieldsService } from './fields/fields.controller';
+import { TrucksController, TrucksService } from './trucks/trucks.controller';
+import { PlantAccessController, PlantAccessService } from './plant-access/plant-access.controller';
+import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -15,7 +21,19 @@ import { PrismaService } from './database/prisma.service';
     FreightsModule,
     HealthModule,
   ],
-  controllers: [CatalogController],
-  providers: [PrismaService],
+  controllers: [
+    CatalogController,
+    FieldsController,
+    TrucksController,
+    PlantAccessController,
+    ConversationsController,
+  ],
+  providers: [
+    PrismaService,
+    FieldsService,
+    TrucksService,
+    PlantAccessService,
+    ConversationsService,
+  ],
 })
 export class AppModule {}
