@@ -134,6 +134,7 @@ model User {
   assignmentsMade    FreightAssignment[] @relation("AssignmentAssignedBy")
   assignmentsAsDriver FreightAssignment[] @relation("AssignmentDriver")
   trucksAssigned     Truck[]             @relation("TruckAssignedUser")
+  trackingPoints     FreightTracking[]
   messagesSent       Message[]
   auditLogs          AuditLog[]
   notifications      Notification[]
@@ -303,6 +304,7 @@ model Freight {
   assignments   FreightAssignment[]
   documents     FreightDocument[]
   conversation  Conversation?       @relation("FreightConversation")
+  tracking      FreightTracking[]
   auditLogs     AuditLog[]
 
   @@index([status])
@@ -473,4 +475,23 @@ model Notification {
   @@index([userId, read])
   @@index([createdAt])
   @@map("notifications")
+}
+
+// ======================== FREIGHT TRACKING ============================
+
+model FreightTracking {
+  id        String   @id @default(uuid())
+  freightId String   @map("freight_id")
+  lat       Decimal  @db.Decimal(10, 6)
+  lng       Decimal  @db.Decimal(10, 6)
+  speed     Decimal? @db.Decimal(6, 2)
+  heading   Decimal? @db.Decimal(5, 1)
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([freightId, createdAt])
+  @@map("freight_tracking")
 }

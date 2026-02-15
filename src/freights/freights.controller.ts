@@ -122,6 +122,28 @@ export class FreightsController {
     return this.service.authorize(id, user);
   }
 
+  @Post(':id/tracking')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'producer')
+  @ApiOperation({ summary: 'Enviar punto de tracking GPS' })
+  addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() body: { lat: number; lng: number; speed?: number; heading?: number }, @CurrentUser() user: any) {
+    return this.service.addTrackingPoint(id, body, user);
+  }
+
+  @Get(':id/tracking')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Obtener puntos de tracking' })
+  getTracking(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getTrackingPoints(id);
+  }
+
+  @Get(':id/tracking/last')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Última posición del camión' })
+  getLastPosition(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getLastPosition(id);
+  }
+
   @Post(':id/documents')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Registrar documento/foto del flete' })

@@ -675,6 +675,43 @@ export class FreightsService {
     });
   }
 
+  // ======================== TRACKING ===================================
+
+  async addTrackingPoint(freightId: string, body: { lat: number; lng: number; speed?: number; heading?: number }, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (freight.status !== FreightStatus.in_progress) {
+      throw new BadRequestException('Solo se puede trackear un flete en curso');
+    }
+
+    return this.prisma.freightTracking.create({
+      data: {
+        freightId,
+        lat: body.lat,
+        lng: body.lng,
+        speed: body.speed || null,
+        heading: body.heading || null,
+        userId: user.sub,
+      },
+    });
+  }
+
+  async getTrackingPoints(freightId: string) {
+    return this.prisma.freightTracking.findMany({
+      where: { freightId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
+    });
+  }
+
+  async getLastPosition(freightId: string) {
+    return this.prisma.freightTracking.findFirst({
+      where: { freightId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
+    });
+  }
+
   // ======================== ADD DOCUMENT ================================
 
   async addDocument(freightId: string, body: { name: string; url: string; type?: string; step?: string }, user: any) {
