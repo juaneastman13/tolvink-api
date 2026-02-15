@@ -139,6 +139,7 @@ export class FreightsService {
           },
         },
         documents: { orderBy: { createdAt: 'desc' } },
+        conversation: { select: { id: true } },
       },
     });
 
