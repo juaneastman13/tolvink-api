@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
@@ -122,6 +122,14 @@ export class FreightsController {
     return this.service.authorize(id, user);
   }
 
+  @Patch(':id')
+  @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant')
+  @ApiOperation({ summary: 'Editar flete pendiente (fecha, hora, notas)' })
+  updateFreight(@Param('id', ParseUUIDPipe) id: string, @Body() body: { loadDate?: string; loadTime?: string; notes?: string }, @CurrentUser() user: any) {
+    return this.service.updateFreight(id, body, user);
+  }
+
   @Post(':id/tracking')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer')
@@ -142,6 +150,13 @@ export class FreightsController {
   @ApiOperation({ summary: 'Última posición del camión' })
   getLastPosition(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getLastPosition(id);
+  }
+
+  @Get(':id/audit')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Historial de cambios del flete' })
+  getAuditLog(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getAuditLog(id);
   }
 
   @Post(':id/documents')

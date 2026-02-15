@@ -675,6 +675,67 @@ export class FreightsService {
     });
   }
 
+  // ======================== UPDATE FREIGHT ==============================
+
+  async updateFreight(freightId: string, dto: { loadDate?: string; loadTime?: string; notes?: string }, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (freight.status !== FreightStatus.pending_assignment) {
+      throw new BadRequestException('Solo se puede editar un flete pendiente de asignación');
+    }
+    if (freight.requestedById !== user.sub) {
+      throw new ForbiddenException('Solo el solicitante puede editar');
+    }
+
+    const data: any = {};
+    if (dto.loadDate) { data.loadDate = new Date(dto.loadDate); data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`); }
+    if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
+    if (dto.notes !== undefined) data.notes = dto.notes;
+
+    return this.prisma.freight.update({
+      where: { id: freightId },
+      data,
+      include: {
+        items: true,
+        originLot: { select: { id: true, name: true } },
+        destPlant: { select: { id: true, name: true } },
+        originCompany: { select: { id: true, name: true } },
+        destCompany: { select: { id: true, name: true } },
+        requestedBy: { select: { id: true, name: true } },
+        conversation: { select: { id: true } },
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          include: {
+            transportCompany: { select: { id: true, name: true } },
+            driver: { select: { id: true, name: true, phone: true } },
+            truck: { select: { id: true, plate: true, model: true } },
+          },
+        },
+      },
+    });
+  }
+
+  // ======================== AUDIT LOG ==================================
+
+  async getAuditLog(freightId: string) {
+    return this.prisma.auditLog.findMany({
+      where: { entityType: 'freight', entityId: freightId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        action: true,
+        fromValue: true,
+        toValue: true,
+        reason: true,
+        metadata: true,
+        createdAt: true,
+        user: {
+          select: { id: true, name: true, company: { select: { name: true, type: true } } },
+        },
+      },
+    });
+  }
+
   // ======================== TRACKING ===================================
 
   async addTrackingPoint(freightId: string, body: { lat: number; lng: number; speed?: number; heading?: number }, user: any) {
