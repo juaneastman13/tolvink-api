@@ -69,6 +69,22 @@ export class CreateFreightDto {
   @IsOptional()
   @IsUUID()
   truckId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  overrideOriginLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  overrideOriginLng?: number;
+
+  @IsOptional()
+  @IsNumber()
+  overrideDestLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  overrideDestLng?: number;
 }
 
 export class AssignFreightDto {
