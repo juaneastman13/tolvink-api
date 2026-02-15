@@ -374,10 +374,17 @@ export class FreightsService {
   // ======================== START =====================================
 
   async start(freightId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+    });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, user.companyType);
+    // Allow producer to start if they have own fleet
+    const isOwnFleet = freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+    const effectiveType = (user.companyType === 'producer' && isOwnFleet) ? 'transporter' : user.companyType;
+
+    this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.freight.update({
@@ -401,10 +408,18 @@ export class FreightsService {
   // ======================== CONFIRM LOADED ============================
 
   async confirmLoaded(freightId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+    });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    const ct = user.companyType;
+    let ct = user.companyType;
+    // Producer with own fleet acts as transporter for confirm_loaded
+    const isOwnFleet = freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+    if (ct === 'producer' && isOwnFleet && freight.status === FreightStatus.in_progress) {
+      ct = 'transporter';
+    }
 
     if (ct === 'transporter') {
       if (freight.status !== FreightStatus.in_progress) {

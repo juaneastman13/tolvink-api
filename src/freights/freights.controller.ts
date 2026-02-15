@@ -73,7 +73,7 @@ export class FreightsController {
 
   @Post(':id/start')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter')
+  @Roles('transporter', 'producer')
   @ApiOperation({ summary: 'Iniciar viaje' })
   start(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.start(id, user);
