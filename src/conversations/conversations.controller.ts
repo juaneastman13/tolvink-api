@@ -1,6 +1,6 @@
 // =====================================================================
-// TOLVINK — Conversations Controller + Service v3
-// Independent chat + freight chat with search + company name search
+// TOLVINK — Conversations Controller + Service v4
+// Conversations tracked by user (not just company) for grouping
 // =====================================================================
 
 import { Controller, Get, Post, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
@@ -19,6 +19,11 @@ export class StartConversationDto {
   @ApiProperty({ description: 'ID de empresa destino' })
   @IsUUID()
   targetCompanyId: string;
+
+  @ApiProperty({ description: 'ID de usuario destino', required: false })
+  @IsOptional()
+  @IsUUID()
+  targetUserId?: string;
 }
 
 export class SendMessageDto {
@@ -47,28 +52,17 @@ export class ConversationsService {
     return Array.from(ids);
   }
 
-  async searchCompanies(q: string, user: any) {
-    if (!q || q.trim().length < 2) return [];
-    const allIds = await this.resolveAllCompanyIds(user);
-    return this.prisma.company.findMany({
-      where: {
-        active: true,
-        id: { notIn: allIds },
-        name: { contains: q.trim(), mode: 'insensitive' },
-      },
-      select: { id: true, name: true, type: true },
-      take: 10,
-      orderBy: { name: 'asc' },
-    });
-  }
-
   async searchUsers(q: string, user: any) {
     if (!q || q.trim().length < 2) return [];
     return this.prisma.user.findMany({
       where: {
         active: true,
         id: { not: user.sub },
-        name: { contains: q.trim(), mode: 'insensitive' },
+        OR: [
+          { name: { contains: q.trim(), mode: 'insensitive' } },
+          { email: { contains: q.trim(), mode: 'insensitive' } },
+          { phone: { contains: q.trim() } },
+        ],
       },
       select: {
         id: true,
@@ -76,7 +70,7 @@ export class ConversationsService {
         phone: true,
         company: { select: { id: true, name: true, type: true } },
       },
-      take: 10,
+      take: 15,
       orderBy: { name: 'asc' },
     });
   }
@@ -84,39 +78,51 @@ export class ConversationsService {
   async startConversation(dto: StartConversationDto, user: any) {
     const allIds = await this.resolveAllCompanyIds(user);
     const myPrimaryId = allIds[0];
-    const targetId = dto.targetCompanyId;
+    const targetCompanyId = dto.targetCompanyId;
+    const targetUserId = dto.targetUserId || null;
 
-    if (allIds.includes(targetId)) {
+    if (allIds.includes(targetCompanyId)) {
       throw new BadRequestException('No podés iniciar conversación con tu propia empresa');
     }
 
     const target = await this.prisma.company.findFirst({
-      where: { id: targetId, active: true },
+      where: { id: targetCompanyId, active: true },
     });
     if (!target) throw new BadRequestException('Empresa no encontrada');
 
-    // Check if conversation already exists between any of user's companies and target
-    const existing = await this.prisma.conversation.findFirst({
-      where: {
-        freightId: null,
-        AND: [
-          { participants: { some: { companyId: { in: allIds } } } },
-          { participants: { some: { companyId: targetId } } },
-        ],
-      },
-      include: { participants: true },
-    });
-
-    if (existing && existing.participants.length === 2) {
-      return existing;
+    // Check existing: if targetUserId provided, match by user; else by company
+    if (targetUserId) {
+      const existing = await this.prisma.conversation.findFirst({
+        where: {
+          freightId: null,
+          AND: [
+            { participants: { some: { companyId: { in: allIds }, userId: user.sub } } },
+            { participants: { some: { companyId: targetCompanyId, userId: targetUserId } } },
+          ],
+        },
+        include: { participants: true },
+      });
+      if (existing) return existing;
+    } else {
+      const existing = await this.prisma.conversation.findFirst({
+        where: {
+          freightId: null,
+          AND: [
+            { participants: { some: { companyId: { in: allIds } } } },
+            { participants: { some: { companyId: targetCompanyId } } },
+          ],
+        },
+        include: { participants: true },
+      });
+      if (existing && existing.participants.length === 2) return existing;
     }
 
     return this.prisma.conversation.create({
       data: {
         participants: {
           create: [
-            { companyId: myPrimaryId },
-            { companyId: targetId },
+            { companyId: myPrimaryId, userId: user.sub },
+            { companyId: targetCompanyId, userId: targetUserId },
           ],
         },
       },
@@ -143,35 +149,53 @@ export class ConversationsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Enrich participants with company info
+    // Collect all company IDs and user IDs for enrichment
     const companyIds = new Set<string>();
-    convs.forEach(c => c.participants.forEach(p => companyIds.add(p.companyId)));
+    const userIds = new Set<string>();
+    convs.forEach(c => c.participants.forEach(p => {
+      companyIds.add(p.companyId);
+      if (p.userId) userIds.add(p.userId);
+    }));
 
-    const companies = await this.prisma.company.findMany({
-      where: { id: { in: Array.from(companyIds) } },
-      select: { id: true, name: true, type: true },
-    });
+    const [companies, users] = await Promise.all([
+      this.prisma.company.findMany({
+        where: { id: { in: Array.from(companyIds) } },
+        select: { id: true, name: true, type: true },
+      }),
+      userIds.size > 0
+        ? this.prisma.user.findMany({
+            where: { id: { in: Array.from(userIds) } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
     const companyMap = new Map(companies.map(c => [c.id, c]));
+    const userMap = new Map(users.map(u => [u.id, u]));
 
     const enriched = convs.map(c => {
-      const participantsWithCompany = c.participants.map(p => ({
+      const participantsEnriched = c.participants.map(p => ({
         ...p,
         company: companyMap.get(p.companyId) || null,
+        user: p.userId ? (userMap.get(p.userId) || null) : null,
       }));
 
-      const otherParticipants = participantsWithCompany.filter(p => !allIds.includes(p.companyId));
+      const otherParticipants = participantsEnriched.filter(p => !allIds.includes(p.companyId));
       const displayName = c.freight
         ? `Flete ${c.freight.code}`
-        : otherParticipants.map(p => p.company?.name || 'Desconocido').join(', ');
+        : otherParticipants.map(p => p.user?.name || p.company?.name || 'Desconocido').join(', ');
 
-      return { ...c, participants: participantsWithCompany, displayName };
+      return { ...c, participants: participantsEnriched, displayName };
     });
 
     if (search && search.trim()) {
       const s = search.toLowerCase().trim();
       return enriched.filter(c =>
         c.displayName.toLowerCase().includes(s) ||
-        c.participants.some(p => p.company?.name?.toLowerCase().includes(s)) ||
+        c.participants.some(p =>
+          p.company?.name?.toLowerCase().includes(s) ||
+          p.user?.name?.toLowerCase().includes(s)
+        ) ||
         c.freight?.code?.toLowerCase().includes(s)
       );
     }
@@ -198,7 +222,7 @@ export class ConversationsService {
 
         if (isInvolved) {
           await this.prisma.conversationParticipant.create({
-            data: { conversationId, companyId: allIds[0] },
+            data: { conversationId, companyId: allIds[0], userId: user.sub },
           }).catch(() => {});
         } else {
           const assignment = await this.prisma.freightAssignment.findFirst({
@@ -210,7 +234,7 @@ export class ConversationsService {
           });
           if (assignment) {
             await this.prisma.conversationParticipant.create({
-              data: { conversationId, companyId: allIds[0] },
+              data: { conversationId, companyId: allIds[0], userId: user.sub },
             }).catch(() => {});
           } else {
             throw new ForbiddenException('No participás en esta conversación');
@@ -255,7 +279,7 @@ export class ConversationsService {
 
         if (isInvolved || isTransporter) {
           await this.prisma.conversationParticipant.create({
-            data: { conversationId, companyId: allIds[0] },
+            data: { conversationId, companyId: allIds[0], userId: user.sub },
           }).catch(() => {});
         } else {
           throw new ForbiddenException('No participás en esta conversación');
@@ -285,13 +309,6 @@ export class ConversationsService {
 export class ConversationsController {
   constructor(private service: ConversationsService) {}
 
-  @Get('search-companies')
-  @ApiOperation({ summary: 'Buscar empresas por nombre para iniciar chat' })
-  @ApiQuery({ name: 'q', required: true })
-  searchCompanies(@Query('q') q: string, @CurrentUser() user: any) {
-    return this.service.searchCompanies(q, user);
-  }
-
   @Get('search-users')
   @ApiOperation({ summary: 'Buscar usuarios por nombre para iniciar chat' })
   @ApiQuery({ name: 'q', required: true })
@@ -300,7 +317,7 @@ export class ConversationsController {
   }
 
   @Post('start')
-  @ApiOperation({ summary: 'Iniciar conversación con otra empresa' })
+  @ApiOperation({ summary: 'Iniciar conversación con usuario/empresa' })
   start(@Body() dto: StartConversationDto, @CurrentUser() user: any) {
     return this.service.startConversation(dto, user);
   }

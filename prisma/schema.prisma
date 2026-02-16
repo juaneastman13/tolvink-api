@@ -452,12 +452,14 @@ model ConversationParticipant {
   id             String   @id @default(uuid())
   conversationId String   @map("conversation_id")
   companyId      String   @map("company_id")
+  userId         String?  @map("user_id")
   joinedAt       DateTime @default(now()) @map("joined_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, companyId])
   @@index([companyId])
+  @@index([userId])
   @@map("conversation_participants")
 }
 
