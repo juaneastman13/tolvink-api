@@ -105,6 +105,7 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
   @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
+  @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
 }
 
 // ======================== SERVICE ====================================
@@ -134,6 +135,27 @@ export class AdminService {
     }
   }
 
+  // Extract all company IDs a user belongs to (from companyId + companyByType)
+  getUserCompanyIds(user: any): string[] {
+    const ids = new Set<string>();
+    if (user.companyId) ids.add(user.companyId);
+    if (user.companyByType && typeof user.companyByType === 'object') {
+      Object.values(user.companyByType).forEach((v: any) => { if (v) ids.add(v); });
+    }
+    return Array.from(ids);
+  }
+
+  // Fetch full user from DB (JWT only has sub, role, companyId)
+  async resolveFullUser(jwtUser: any): Promise<any> {
+    if (this.isPlatformAdmin(jwtUser)) return jwtUser;
+    const full = await this.prisma.user.findUnique({
+      where: { id: jwtUser.sub },
+      select: { id: true, role: true, companyId: true, companyByType: true, roleByType: true, userTypes: true, isSuperAdmin: true },
+    });
+    if (!full) throw new ForbiddenException('Usuario no encontrado');
+    return { ...jwtUser, ...full, sub: full.id };
+  }
+
   // --- Stats ---
   async getStats() {
     const [users, companies, branches, freights] = await Promise.all([
@@ -146,13 +168,25 @@ export class AdminService {
   }
 
   // --- Companies ---
-  async listCompanies(search?: string) {
+  async listCompanies(search?: string, callerUser?: any) {
     const where: any = {};
+
+    // Non-superadmin: only see their own companies
+    if (callerUser && !this.isPlatformAdmin(callerUser)) {
+      const myIds = this.getUserCompanyIds(callerUser);
+      if (myIds.length === 0) return [];
+      where.id = { in: myIds };
+    }
+
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { rut: { contains: search, mode: 'insensitive' } },
+      where.AND = [
+        ...(where.id ? [{ id: where.id }] : []),
+        { OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { rut: { contains: search, mode: 'insensitive' } },
+        ]},
       ];
+      delete where.id;
     }
     return this.prisma.company.findMany({
       where,
@@ -164,7 +198,12 @@ export class AdminService {
     });
   }
 
-  async getCompany(id: string) {
+  async getCompany(id: string, callerUser?: any) {
+    // Non-superadmin: verify they belong to this company
+    if (callerUser && !this.isPlatformAdmin(callerUser)) {
+      const myIds = this.getUserCompanyIds(callerUser);
+      if (!myIds.includes(id)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     const c = await this.prisma.company.findUnique({
       where: { id },
       include: {
@@ -193,9 +232,10 @@ export class AdminService {
   }
 
   async updateCompany(id: string, dto: Partial<CreateCompanyDto>, user: any) {
-    // Company admin can only edit their own company
-    if (!this.isPlatformAdmin(user) && user.companyId !== id) {
-      throw new ForbiddenException('No podés editar esta empresa');
+    // Non-superadmin can only edit companies they belong to
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = this.getUserCompanyIds(user);
+      if (!myIds.includes(id)) throw new ForbiddenException('No podés editar esta empresa');
     }
     const company = await this.prisma.company.findUnique({ where: { id } });
     if (!company) throw new NotFoundException('Empresa no encontrada');
@@ -256,22 +296,39 @@ export class AdminService {
   }
 
   // --- Users ---
-  async listUsers(search?: string, companyId?: string) {
+  async listUsers(search?: string, companyId?: string, callerUser?: any) {
     const where: any = {};
-    if (companyId) where.companyId = companyId;
+
+    // Non-superadmin: only see users from their own companies
+    if (callerUser && !this.isPlatformAdmin(callerUser)) {
+      const myIds = this.getUserCompanyIds(callerUser);
+      if (myIds.length === 0) return [];
+      where.companyId = { in: myIds };
+    } else if (companyId) {
+      where.companyId = companyId;
+    }
+
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
-      ];
+      const searchFilter = {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+      if (where.companyId) {
+        where.AND = [{ companyId: where.companyId }, searchFilter];
+        delete where.companyId;
+      } else {
+        Object.assign(where, searchFilter);
+      }
     }
     return this.prisma.user.findMany({
       where,
       select: {
         id: true, name: true, email: true, phone: true, role: true,
         userTypes: true, isSuperAdmin: true, active: true, companyId: true,
-        companyByType: true,
+        companyByType: true, roleByType: true,
         createdAt: true,
         company: { select: { id: true, name: true, type: true } },
       },
@@ -309,7 +366,7 @@ export class AdminService {
       },
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true, companyByType: true,
+        userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
         company: { select: { id: true, name: true, type: true } },
       },
     });
@@ -339,13 +396,14 @@ export class AdminService {
     if (dto.active !== undefined) data.active = dto.active;
     if (dto.companyId !== undefined) data.companyId = dto.companyId || null;
     if (dto.companyByType !== undefined) data.companyByType = dto.companyByType || {};
+    if (dto.roleByType !== undefined) data.roleByType = dto.roleByType || {};
 
     return this.prisma.user.update({
       where: { id: userId },
       data,
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true, companyByType: true,
+        userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
         company: { select: { id: true, name: true, type: true } },
       },
     });
@@ -362,7 +420,7 @@ export class AdminService {
       data,
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true, companyByType: true,
+        userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
         company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
       },
     });
@@ -390,16 +448,18 @@ export class AdminController {
   @Get('companies')
   @ApiOperation({ summary: 'Listar empresas' })
   @ApiQuery({ name: 'search', required: false })
-  companies(@CurrentUser() u: any, @Query('search') search?: string) {
+  async companies(@CurrentUser() u: any, @Query('search') search?: string) {
     this.svc.assertCompanyOrPlatformAdmin(u);
-    return this.svc.listCompanies(search);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.listCompanies(search, fullUser);
   }
 
   @Get('companies/:id')
   @ApiOperation({ summary: 'Detalle de empresa' })
-  company(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
+  async company(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
-    return this.svc.getCompany(id);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.getCompany(id, fullUser);
   }
 
   @Post('companies')
@@ -411,16 +471,23 @@ export class AdminController {
 
   @Patch('companies/:id')
   @ApiOperation({ summary: 'Editar empresa' })
-  updateCompany(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateCompanyDto>, @CurrentUser() u: any) {
+  async updateCompany(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateCompanyDto>, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
-    return this.svc.updateCompany(id, dto, u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.updateCompany(id, dto, fullUser);
   }
 
   // --- Branches ---
   @Get('branches/:companyId')
   @ApiOperation({ summary: 'Listar sucursales de empresa' })
-  branches(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
+  async branches(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    // Non-superadmin: verify they belong to this company
+    if (!this.svc.isPlatformAdmin(fullUser)) {
+      const myIds = this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso');
+    }
     return this.svc.listBranches(companyId);
   }
 
@@ -450,11 +517,10 @@ export class AdminController {
   @ApiOperation({ summary: 'Listar usuarios' })
   @ApiQuery({ name: 'search', required: false })
   @ApiQuery({ name: 'companyId', required: false })
-  users(@CurrentUser() u: any, @Query('search') search?: string, @Query('companyId') companyId?: string) {
+  async users(@CurrentUser() u: any, @Query('search') search?: string, @Query('companyId') companyId?: string) {
     this.svc.assertCompanyOrPlatformAdmin(u);
-    // Company admins can only see their own company users
-    const effectiveCompanyId = this.svc.isPlatformAdmin(u) ? companyId : u.companyId;
-    return this.svc.listUsers(search, effectiveCompanyId);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.listUsers(search, companyId, fullUser);
   }
 
   @Post('users')
