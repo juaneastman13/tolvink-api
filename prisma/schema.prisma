@@ -1,7 +1,7 @@
 // =====================================================================
-// TOLVINK — Prisma Schema v4 (Production)
+// TOLVINK — Prisma Schema v4 FINAL (Production)
 // PostgreSQL · Multi-tenant · Freight = 1 viaje
-// Includes: Fields, Trucks, PlantAccess, Independent Chat, User v2
+// ALL models included: Fields, Trucks, PlantAccess, Chat, Tracking, User v2
 // =====================================================================
 
 generator client {
@@ -150,8 +150,9 @@ model Field {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  lots    Lot[]
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lots     Lot[]
+  freights Freight[]
 
   @@index([companyId])
   @@map("fields")
@@ -250,6 +251,7 @@ model Freight {
   // Origin
   originCompanyId String  @map("origin_company_id")
   originLotId     String? @map("origin_lot_id")
+  fieldId         String? @map("field_id")
   originName      String  @db.VarChar(255)
   originLat       Decimal? @db.Decimal(10, 6)
   originLng       Decimal? @db.Decimal(10, 6)
@@ -288,19 +290,22 @@ model Freight {
   destCompany   Company  @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
   originLot     Lot?     @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
   destPlant     Plant?   @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
+  field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)
   requestedBy   User     @relation("FreightRequestedBy", fields: [requestedById], references: [id])
 
-  items         FreightItem[]
-  assignments   FreightAssignment[]
-  documents     FreightDocument[]
-  conversation  Conversation?       @relation("FreightConversation")
-  auditLogs     AuditLog[]
+  items           FreightItem[]
+  assignments     FreightAssignment[]
+  documents       FreightDocument[]
+  conversation    Conversation?       @relation("FreightConversation")
+  auditLogs       AuditLog[]
+  trackingPoints  FreightTracking[]
 
   @@index([status])
   @@index([originCompanyId])
   @@index([destCompanyId])
   @@index([loadDate])
   @@index([code])
+  @@index([fieldId])
   @@map("freights")
 }
 
@@ -369,6 +374,24 @@ model FreightDocument {
   @@index([freightId])
   @@index([freightId, step])
   @@map("freight_documents")
+}
+
+// ======================== FREIGHT TRACKING ============================
+
+model FreightTracking {
+  id        String   @id @default(uuid())
+  freightId String   @map("freight_id")
+  lat       Decimal  @db.Decimal(10, 6)
+  lng       Decimal  @db.Decimal(10, 6)
+  speed     Decimal? @db.Decimal(6, 2)
+  heading   Decimal? @db.Decimal(5, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+
+  @@index([freightId])
+  @@index([createdAt])
+  @@map("freight_tracking")
 }
 
 // ======================== CONVERSATIONS ===============================
