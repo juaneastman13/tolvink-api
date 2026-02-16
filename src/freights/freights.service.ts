@@ -65,13 +65,25 @@ export class FreightsService {
         where: { id: dto.destPlantId, active: true },
         include: { company: true },
       });
-      if (!plant) throw new BadRequestException('Planta no encontrada');
-      destCompanyId = plant.companyId;
-      destPlantId = plant.id;
-      // If customDestName also provided (branch mode) → use branch info for display
-      destName = dto.customDestName || plant.name;
-      destLat = dto.customDestLat || dto.overrideDestLat || plant.lat;
-      destLng = dto.customDestLng || dto.overrideDestLng || plant.lng;
+      if (plant) {
+        destCompanyId = plant.companyId;
+        destPlantId = plant.id;
+        // If customDestName also provided (branch mode) → use branch info for display
+        destName = dto.customDestName || plant.name;
+        destLat = dto.customDestLat || dto.overrideDestLat || plant.lat;
+        destLng = dto.customDestLng || dto.overrideDestLng || plant.lng;
+      } else {
+        // Fallback: destPlantId might be a Company ID (producers select companies as destinations)
+        const company = await this.prisma.company.findFirst({
+          where: { id: dto.destPlantId, type: 'plant', active: true },
+        });
+        if (!company) throw new BadRequestException('Planta no encontrada');
+        destCompanyId = company.id;
+        destPlantId = null;
+        destName = dto.customDestName || company.name;
+        destLat = dto.customDestLat || dto.overrideDestLat || company.lat;
+        destLng = dto.customDestLng || dto.overrideDestLng || company.lng;
+      }
     } else {
       destName = dto.customDestName!;
       destLat = dto.customDestLat || null;

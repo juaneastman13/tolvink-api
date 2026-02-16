@@ -36,46 +36,34 @@ export class CatalogController {
   }
 
   @Get('plants')
-  @ApiOperation({ summary: 'Listar plantas activas (filtradas por acceso para productores)' })
+  @ApiOperation({ summary: 'Listar plantas/empresas planta accesibles' })
   async plants(@CurrentUser() user: any) {
     const isProducer = await this.isProducer(user.sub);
 
     if (isProducer) {
-      // Query access records by user ID directly
+      // Producers see the plant COMPANIES they have access to
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
         where: { producerUserId: user.sub, active: true },
-        select: { allowedPlantIds: true, plantCompanyId: true },
+        select: { plantCompanyId: true },
       });
 
-      const allowedPlantIds: string[] = [];
-      const fullAccessCompanyIds: string[] = [];
+      const companyIds = [...new Set(accessRecords.map(r => r.plantCompanyId))];
+      if (companyIds.length === 0) return [];
 
-      for (const record of accessRecords) {
-        const ids = (record.allowedPlantIds as string[]) || [];
-        if (ids.length > 0) {
-          allowedPlantIds.push(...ids);
-        } else {
-          fullAccessCompanyIds.push(record.plantCompanyId);
-        }
-      }
-
-      if (allowedPlantIds.length === 0 && fullAccessCompanyIds.length === 0) {
-        return [];
-      }
-
-      const where: any = { active: true, OR: [] as any[] };
-      if (allowedPlantIds.length > 0) {
-        where.OR.push({ id: { in: [...new Set(allowedPlantIds)] } });
-      }
-      if (fullAccessCompanyIds.length > 0) {
-        where.OR.push({ companyId: { in: fullAccessCompanyIds } });
-      }
-
-      return this.prisma.plant.findMany({
-        where,
-        select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
-        orderBy: { name: 'asc' },
+      const companies = await this.prisma.company.findMany({
+        where: { id: { in: companyIds }, active: true },
+        select: { id: true, name: true, address: true, lat: true, lng: true },
       });
+
+      // Return formatted like plants — companyId = id since it IS the company
+      return companies.map(c => ({
+        id: c.id,
+        name: c.name,
+        address: c.address,
+        lat: c.lat,
+        lng: c.lng,
+        companyId: c.id,
+      }));
     }
 
     // Non-producer users: all active plants
@@ -92,7 +80,7 @@ export class CatalogController {
     const isProducer = await this.isProducer(user.sub);
 
     if (isProducer) {
-      // Query access records by user ID directly
+      // Producers: branches from plant companies they have access to
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
         where: { producerUserId: user.sub, active: true },
         select: { plantCompanyId: true, allowedBranchIds: true },
@@ -165,7 +153,6 @@ export class CatalogController {
       });
     }
 
-    // Multi-type: find lots from all user's companies
     const allIds = await this.resolveAllCompanyIds(user);
     return this.prisma.lot.findMany({
       where: { active: true, companyId: { in: allIds } },
