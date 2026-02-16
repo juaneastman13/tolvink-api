@@ -65,6 +65,33 @@ export class UpdateUserAdminDto {
   active?: boolean;
 }
 
+export class CreateUserDto {
+  @ApiProperty({ example: 'Juan Pérez' })
+  @IsNotEmpty() @MinLength(2)
+  name: string;
+
+  @ApiProperty({ example: 'juan@email.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ required: false, example: '091234567' })
+  @IsOptional() @IsString()
+  phone?: string;
+
+  @ApiProperty({ example: '1234' })
+  @IsNotEmpty() @MinLength(4)
+  password: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsArray()
+  userTypes?: string[];
+
+  @ApiProperty({ required: false }) @IsOptional()
+  role?: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsUUID()
+  companyId?: string;
+}
+
 // ======================== SERVICE ====================================
 
 @Injectable()
@@ -122,6 +149,43 @@ export class AdminService {
   }
 
   // ---- Users ----
+
+  async createUser(dto: CreateUserDto) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const bcrypt = require('bcryptjs');
+
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    if (existing) throw new BadRequestException('Email ya registrado');
+
+    if (dto.phone) {
+      const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
+      if (phoneExists) throw new BadRequestException('Teléfono ya registrado');
+    }
+
+    if (dto.companyId) {
+      const company = await this.prisma.company.findUnique({ where: { id: dto.companyId } });
+      if (!company) throw new BadRequestException('Empresa no encontrada');
+    }
+
+    const hash = await bcrypt.hash(dto.password, 10);
+
+    return this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        phone: dto.phone,
+        passwordHash: hash,
+        role: (dto.role as any) || 'operator',
+        userTypes: dto.userTypes || [],
+        companyId: dto.companyId || null,
+      },
+      select: {
+        id: true, name: true, email: true, phone: true, role: true,
+        userTypes: true, isSuperAdmin: true, active: true, companyId: true,
+        company: { select: { id: true, name: true, type: true } },
+      },
+    });
+  }
 
   async listUsers(search?: string) {
     const where: any = {};
@@ -266,6 +330,12 @@ export class AdminController {
   @ApiQuery({ name: 'search', required: false })
   users(@CurrentUser() user: any, @Query('search') search?: string) {
     this.check(user); return this.service.listUsers(search);
+  }
+
+  @Post('users')
+  @ApiOperation({ summary: 'Crear usuario desde admin' })
+  createUser(@Body() dto: CreateUserDto, @CurrentUser() user: any) {
+    this.check(user); return this.service.createUser(dto);
   }
 
   @Patch('users/:id')
