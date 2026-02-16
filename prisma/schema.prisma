@@ -136,6 +136,7 @@ model User {
   messagesSent       Message[]
   auditLogs          AuditLog[]
   notifications      Notification[]
+  producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
 
   @@index([companyId])
   @@index([email])
@@ -259,6 +260,7 @@ model PlantProducerAccess {
   id                String   @id @default(uuid())
   plantCompanyId    String   @map("plant_company_id")
   producerCompanyId String   @map("producer_company_id")
+  producerUserId    String?  @map("producer_user_id")
   allowedPlantIds   Json     @default("[]") @map("allowed_plant_ids")
   allowedBranchIds  Json     @default("[]") @map("allowed_branch_ids")
   active            Boolean  @default(true)
@@ -267,10 +269,12 @@ model PlantProducerAccess {
 
   plantCompany    Company @relation("PlantAccessGiven", fields: [plantCompanyId], references: [id], onDelete: Cascade)
   producerCompany Company @relation("ProducerAccessReceived", fields: [producerCompanyId], references: [id], onDelete: Cascade)
+  producerUser    User?   @relation("ProducerAccessUser", fields: [producerUserId], references: [id], onDelete: SetNull)
 
-  @@unique([plantCompanyId, producerCompanyId])
+  @@unique([plantCompanyId, producerUserId])
   @@index([plantCompanyId])
   @@index([producerCompanyId])
+  @@index([producerUserId])
   @@map("plant_producer_access")
 }
 

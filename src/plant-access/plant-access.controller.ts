@@ -1,6 +1,6 @@
 // =====================================================================
 // TOLVINK — PlantProducerAccess Controller + Service
-// Plants enable/disable which producers can send freights
+// Plants enable/disable which producer USERS can send freights
 // =====================================================================
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
@@ -17,6 +17,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 // ======================== DTOs =======================================
 
 export class GrantAccessDto {
+  @ApiProperty({ description: 'ID del usuario productor' })
+  @IsUUID()
+  producerUserId: string;
+
   @ApiProperty({ description: 'ID de empresa productora' })
   @IsUUID()
   producerCompanyId: string;
@@ -121,10 +125,14 @@ export class PlantAccessService {
   async grantAccess(dto: GrantAccessDto, user: any) {
     const plantCoId = await this.resolvePlantCompanyId(user);
 
-    const producer = await this.prisma.company.findFirst({
-      where: { id: dto.producerCompanyId, type: 'producer', active: true },
+    // Validate producer user exists and is a producer
+    const producerUser = await this.prisma.user.findUnique({
+      where: { id: dto.producerUserId },
+      select: { id: true, userTypes: true },
     });
-    if (!producer) throw new BadRequestException('Empresa productora no encontrada');
+    if (!producerUser) throw new BadRequestException('Usuario productor no encontrado');
+    const userTypes = (producerUser.userTypes as string[]) || [];
+    if (!userTypes.includes('producer')) throw new BadRequestException('El usuario no es productor');
 
     const newPlantIds = dto.allowedPlantIds || [];
     const newBranchIds = dto.allowedBranchIds || [];
@@ -147,11 +155,12 @@ export class PlantAccessService {
       }
     }
 
+    // Check existing access by user (new unique constraint)
     const existing = await this.prisma.plantProducerAccess.findUnique({
       where: {
-        plantCompanyId_producerCompanyId: {
+        plantCompanyId_producerUserId: {
           plantCompanyId: plantCoId,
-          producerCompanyId: dto.producerCompanyId,
+          producerUserId: dto.producerUserId,
         },
       },
     });
@@ -176,6 +185,7 @@ export class PlantAccessService {
       data: {
         plantCompanyId: plantCoId,
         producerCompanyId: dto.producerCompanyId,
+        producerUserId: dto.producerUserId,
         active: true,
         allowedPlantIds: newPlantIds,
         allowedBranchIds: newBranchIds,
@@ -183,14 +193,14 @@ export class PlantAccessService {
     });
   }
 
-  async revokeAccess(producerCompanyId: string, user: any) {
+  async revokeAccess(producerUserId: string, user: any) {
     const plantCoId = await this.resolvePlantCompanyId(user);
 
     const access = await this.prisma.plantProducerAccess.findUnique({
       where: {
-        plantCompanyId_producerCompanyId: {
+        plantCompanyId_producerUserId: {
           plantCompanyId: plantCoId,
-          producerCompanyId,
+          producerUserId,
         },
       },
     });
@@ -206,33 +216,18 @@ export class PlantAccessService {
     const plantCoId = await this.resolvePlantCompanyId(user);
     return this.prisma.plantProducerAccess.findMany({
       where: { plantCompanyId: plantCoId },
-      include: { producerCompany: { select: { id: true, name: true, email: true } } },
+      include: {
+        producerCompany: { select: { id: true, name: true, email: true } },
+        producerUser: { select: { id: true, name: true, email: true, phone: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  /** Resolve producer companyId for multi-type users */
-  private async resolveProducerCompanyIdForUser(user: any): Promise<string> {
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
-    });
-    const cbt = (dbUser?.companyByType as any) || {};
-    if (cbt.producer) {
-      const co = await this.prisma.company.findUnique({ where: { id: cbt.producer }, select: { type: true } });
-      if (co?.type === 'producer') return cbt.producer;
-    }
-    if (dbUser?.companyId) {
-      const co = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
-      if (co?.type === 'producer') return dbUser.companyId;
-    }
-    return user.companyId;
-  }
-
   async listForProducer(user: any) {
-    const producerCompanyId = await this.resolveProducerCompanyIdForUser(user);
+    // Query by user ID directly — no company resolution needed
     return this.prisma.plantProducerAccess.findMany({
-      where: { producerCompanyId, active: true },
+      where: { producerUserId: user.sub, active: true },
       include: { plantCompany: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -255,15 +250,6 @@ export class PlantAccessService {
     ]);
 
     return { plants, branches };
-  }
-
-  async hasAccess(plantCompanyId: string, producerCompanyId: string): Promise<boolean> {
-    const access = await this.prisma.plantProducerAccess.findUnique({
-      where: {
-        plantCompanyId_producerCompanyId: { plantCompanyId, producerCompanyId },
-      },
-    });
-    return !!access?.active;
   }
 }
 
@@ -294,15 +280,15 @@ export class PlantAccessController {
 
   @Post('grant')
   @Roles('plant')
-  @ApiOperation({ summary: 'Habilitar productor (solo planta)' })
+  @ApiOperation({ summary: 'Habilitar usuario productor (solo planta)' })
   grant(@Body() dto: GrantAccessDto, @CurrentUser() user: any) {
     return this.service.grantAccess(dto, user);
   }
 
-  @Patch('revoke/:producerCompanyId')
+  @Patch('revoke/:producerUserId')
   @Roles('plant')
-  @ApiOperation({ summary: 'Revocar acceso de productor' })
-  revoke(@Param('producerCompanyId', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+  @ApiOperation({ summary: 'Revocar acceso de usuario productor' })
+  revoke(@Param('producerUserId', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.revokeAccess(id, user);
   }
 

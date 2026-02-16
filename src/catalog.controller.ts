@@ -11,21 +11,14 @@ import { PrismaService } from './database/prisma.service';
 export class CatalogController {
   constructor(private prisma: PrismaService) {}
 
-  /** Resolve producer companyId for multi-type users */
-  private async resolveProducerCompanyId(user: any): Promise<string | null> {
+  /** Check if user is a producer type */
+  private async isProducer(userId: string): Promise<boolean> {
     const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true, userTypes: true },
+      where: { id: userId },
+      select: { userTypes: true },
     });
-    const cbt = (dbUser?.companyByType as any) || {};
     const userTypes = (dbUser?.userTypes as string[]) || [];
-    if (!userTypes.includes('producer')) return null;
-    if (cbt.producer) return cbt.producer;
-    if (dbUser?.companyId) {
-      const co = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
-      if (co?.type === 'producer') return dbUser.companyId;
-    }
-    return user.companyId;
+    return userTypes.includes('producer');
   }
 
   /** Resolve all company IDs for multi-type users */
@@ -45,12 +38,12 @@ export class CatalogController {
   @Get('plants')
   @ApiOperation({ summary: 'Listar plantas activas (filtradas por acceso para productores)' })
   async plants(@CurrentUser() user: any) {
-    // Check if user is a producer (multi-type aware)
-    const producerCompanyId = await this.resolveProducerCompanyId(user);
+    const isProducer = await this.isProducer(user.sub);
 
-    if (producerCompanyId) {
+    if (isProducer) {
+      // Query access records by user ID directly
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
-        where: { producerCompanyId, active: true },
+        where: { producerUserId: user.sub, active: true },
         select: { allowedPlantIds: true, plantCompanyId: true },
       });
 
@@ -62,7 +55,6 @@ export class CatalogController {
         if (ids.length > 0) {
           allowedPlantIds.push(...ids);
         } else {
-          // Backward compat: empty array = all plants from that company
           fullAccessCompanyIds.push(record.plantCompanyId);
         }
       }
@@ -97,12 +89,12 @@ export class CatalogController {
   @Get('branches')
   @ApiOperation({ summary: 'Listar sucursales accesibles' })
   async branches(@CurrentUser() user: any) {
-    const producerCompanyId = await this.resolveProducerCompanyId(user);
+    const isProducer = await this.isProducer(user.sub);
 
-    // Producers: branches from plant companies they have access to
-    if (producerCompanyId) {
+    if (isProducer) {
+      // Query access records by user ID directly
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
-        where: { producerCompanyId, active: true },
+        where: { producerUserId: user.sub, active: true },
         select: { plantCompanyId: true, allowedBranchIds: true },
       });
 
