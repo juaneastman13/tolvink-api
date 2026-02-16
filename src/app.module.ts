@@ -8,12 +8,9 @@ import { HealthModule } from './health/health.module';
 import { CatalogController } from './catalog.controller';
 import { FieldsController } from './fields/fields.controller';
 import { FieldsService } from './fields/fields.service';
-import { TrucksController } from './trucks/trucks.controller';
-import { TrucksService } from './trucks/trucks.service';
-import { PlantAccessController } from './plant-access/plant-access.controller';
-import { PlantAccessService } from './plant-access/plant-access.service';
-import { ConversationsController } from './conversations/conversations.controller';
-import { ConversationsService } from './conversations/conversations.service';
+import { TrucksController, TrucksService } from './trucks/trucks.controller';
+import { PlantAccessController, PlantAccessService } from './plant-access/plant-access.controller';
+import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
 
 @Module({
   imports: [
