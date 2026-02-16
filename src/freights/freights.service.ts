@@ -27,6 +27,26 @@ export class FreightsService {
     return user.companyId;
   }
 
+  /** Resolve effective company type — checks DB userTypes for multi-type users */
+  private async resolveCompanyType(user: any): Promise<string> {
+    if (user.companyType) return user.companyType;
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { userTypes: true, company: { select: { type: true } } },
+    });
+    return dbUser?.company?.type || (dbUser?.userTypes as string[])?.[0] || 'unknown';
+  }
+
+  /** Check if user has a specific type (from JWT or DB userTypes) */
+  private async hasCompanyType(user: any, type: string): Promise<boolean> {
+    if (user.companyType === type) return true;
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { userTypes: true },
+    });
+    return ((dbUser?.userTypes as string[]) || []).includes(type);
+  }
+
   /** All company IDs a user belongs to (multi-type support) */
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
     const ids = new Set<string>();
@@ -284,7 +304,8 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    if (user.companyType !== 'plant') {
+    const isPlant = await this.hasCompanyType(user, 'plant');
+    if (!isPlant) {
       throw new ForbiddenException('Solo la planta puede asignar transportista');
     }
 
@@ -358,12 +379,14 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    if (user.companyType !== 'transporter') {
+    const isTransporter = await this.hasCompanyType(user, 'transporter');
+    if (!isTransporter) {
       throw new ForbiddenException('Solo el transportista puede responder');
     }
 
+    const allIds = await this.resolveAllCompanyIds(user);
     const assignment = freight.assignments[0];
-    if (!assignment || assignment.transportCompanyId !== user.companyId) {
+    if (!assignment || !allIds.includes(assignment.transportCompanyId)) {
       throw new ForbiddenException('Tu empresa no esta asignada a este flete');
     }
 
@@ -455,8 +478,8 @@ export class FreightsService {
     const isOwnFleet = freight.assignments?.some(
       (a) => a.transportCompanyId === freight.originCompanyId,
     );
-    const effectiveType =
-      user.companyType === 'producer' && isOwnFleet ? 'transporter' : user.companyType;
+    const ct = await this.resolveCompanyType(user);
+    const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
@@ -490,7 +513,7 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    let ct = user.companyType;
+    let ct = await this.resolveCompanyType(user);
     const isOwnFleet = freight.assignments?.some(
       (a) => a.transportCompanyId === freight.originCompanyId,
     );
@@ -583,7 +606,7 @@ export class FreightsService {
       );
     }
 
-    const ct = user.companyType;
+    const ct = await this.resolveCompanyType(user);
 
     if (ct === 'transporter') {
       if (freight.transporterFinishedConfirmedAt) {
@@ -666,7 +689,8 @@ export class FreightsService {
       );
     }
 
-    this.stateMachine.validateTransition(freight.status, FreightStatus.finished, user.companyType);
+    const finishCt = await this.resolveCompanyType(user);
+    this.stateMachine.validateTransition(freight.status, FreightStatus.finished, finishCt);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.freight.update({
@@ -699,10 +723,11 @@ export class FreightsService {
       throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
     }
 
+    const cancelCt = await this.resolveCompanyType(user);
     this.stateMachine.validateTransition(
       freight.status,
       FreightStatus.canceled,
-      user.companyType,
+      cancelCt,
       dto.reason,
     );
 
@@ -736,7 +761,8 @@ export class FreightsService {
   // ======================== AUTHORIZE (plant approves own fleet) =======
 
   async authorize(freightId: string, user: any) {
-    if (user.companyType !== 'plant') {
+    const isPlantAuth = await this.hasCompanyType(user, 'plant');
+    if (!isPlantAuth) {
       throw new ForbiddenException('Solo la planta puede autorizar');
     }
 
