@@ -97,12 +97,47 @@ export class CatalogController {
   @Get('branches')
   @ApiOperation({ summary: 'Listar sucursales accesibles' })
   async branches(@CurrentUser() user: any) {
-    // Producers don't use branches — return empty
     const producerCompanyId = await this.resolveProducerCompanyId(user);
-    if (producerCompanyId) return [];
+
+    // Producers: branches from plant companies they have access to
+    if (producerCompanyId) {
+      const accessRecords = await this.prisma.plantProducerAccess.findMany({
+        where: { producerCompanyId, active: true },
+        select: { plantCompanyId: true, allowedBranchIds: true },
+      });
+
+      const allowedBranchIds: string[] = [];
+      const fullAccessCompanyIds: string[] = [];
+
+      for (const record of accessRecords) {
+        const ids = (record.allowedBranchIds as string[]) || [];
+        if (ids.length > 0) {
+          allowedBranchIds.push(...ids);
+        } else {
+          fullAccessCompanyIds.push(record.plantCompanyId);
+        }
+      }
+
+      if (allowedBranchIds.length === 0 && fullAccessCompanyIds.length === 0) {
+        return [];
+      }
+
+      const where: any = { active: true, OR: [] as any[] };
+      if (allowedBranchIds.length > 0) {
+        where.OR.push({ id: { in: [...new Set(allowedBranchIds)] } });
+      }
+      if (fullAccessCompanyIds.length > 0) {
+        where.OR.push({ companyId: { in: fullAccessCompanyIds } });
+      }
+
+      return this.prisma.branch.findMany({
+        where,
+        select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
+        orderBy: { name: 'asc' },
+      });
+    }
 
     // Plant users: own branches
-    const allIds = await this.resolveAllCompanyIds(user);
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
       select: { userTypes: true, companyByType: true },
