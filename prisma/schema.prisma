@@ -85,12 +85,16 @@ model Company {
   address   String?
   phone     String?     @db.VarChar(50)
   email     String?     @db.VarChar(255)
+  rut       String?     @db.VarChar(20)
   active    Boolean     @default(true)
   hasInternalFleet Boolean @default(false) @map("has_internal_fleet")
+  lat       Decimal?    @db.Decimal(10, 6)
+  lng       Decimal?    @db.Decimal(10, 6)
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
   users              User[]
+  branches           Branch[]
   fields             Field[]
   lots               Lot[]
   plants             Plant[]
@@ -135,6 +139,26 @@ model User {
   @@index([email])
   @@index([phone])
   @@map("users")
+}
+
+// ======================== BRANCHES (Sucursales) ======================
+
+model Branch {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(255)
+  companyId String   @map("company_id")
+  address   String?  @db.VarChar(500)
+  reference String?  @db.VarChar(500)
+  lat       Decimal? @db.Decimal(10, 6)
+  lng       Decimal? @db.Decimal(10, 6)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("branches")
 }
 
 // ======================== FIELDS =====================================
