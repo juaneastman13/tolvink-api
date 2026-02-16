@@ -62,6 +62,25 @@ export class ConversationsService {
     });
   }
 
+  async searchUsers(q: string, user: any) {
+    if (!q || q.trim().length < 2) return [];
+    return this.prisma.user.findMany({
+      where: {
+        active: true,
+        id: { not: user.sub },
+        name: { contains: q.trim(), mode: 'insensitive' },
+      },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        company: { select: { id: true, name: true, type: true } },
+      },
+      take: 10,
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async startConversation(dto: StartConversationDto, user: any) {
     const allIds = await this.resolveAllCompanyIds(user);
     const myPrimaryId = allIds[0];
@@ -271,6 +290,13 @@ export class ConversationsController {
   @ApiQuery({ name: 'q', required: true })
   searchCompanies(@Query('q') q: string, @CurrentUser() user: any) {
     return this.service.searchCompanies(q, user);
+  }
+
+  @Get('search-users')
+  @ApiOperation({ summary: 'Buscar usuarios por nombre para iniciar chat' })
+  @ApiQuery({ name: 'q', required: true })
+  searchUsers(@Query('q') q: string, @CurrentUser() user: any) {
+    return this.service.searchUsers(q, user);
   }
 
   @Post('start')

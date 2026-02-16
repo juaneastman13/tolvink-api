@@ -197,9 +197,28 @@ export class PlantAccessService {
     });
   }
 
+  /** Resolve producer companyId for multi-type users */
+  private async resolveProducerCompanyIdForUser(user: any): Promise<string> {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    const cbt = (dbUser?.companyByType as any) || {};
+    if (cbt.producer) {
+      const co = await this.prisma.company.findUnique({ where: { id: cbt.producer }, select: { type: true } });
+      if (co?.type === 'producer') return cbt.producer;
+    }
+    if (dbUser?.companyId) {
+      const co = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
+      if (co?.type === 'producer') return dbUser.companyId;
+    }
+    return user.companyId;
+  }
+
   async listForProducer(user: any) {
+    const producerCompanyId = await this.resolveProducerCompanyIdForUser(user);
     return this.prisma.plantProducerAccess.findMany({
-      where: { producerCompanyId: user.companyId, active: true },
+      where: { producerCompanyId, active: true },
       include: { plantCompany: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
