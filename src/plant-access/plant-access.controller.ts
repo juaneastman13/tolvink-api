@@ -5,7 +5,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
@@ -58,50 +58,64 @@ export class PlantAccessService {
     return user.companyId;
   }
 
-  async searchProducerByPhone(phone: string) {
-    const user = await this.prisma.user.findFirst({
-      where: { phone, active: true },
+  async searchProducers(query: string) {
+    if (!query || query.trim().length < 2) return [];
+
+    const q = query.trim();
+    const users = await this.prisma.user.findMany({
+      where: {
+        active: true,
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q } },
+        ],
+      },
       include: {
         company: { select: { id: true, name: true, type: true } },
       },
+      take: 15,
+      orderBy: { name: 'asc' },
     });
 
-    if (!user) return { found: false, message: 'No se encontró usuario con ese teléfono' };
+    const results: any[] = [];
+    for (const user of users) {
+      const userTypes = (user.userTypes as string[]) || [];
+      if (!userTypes.includes('producer')) continue;
 
-    const userTypes = (user.userTypes as string[]) || [];
-    const cbt = (user.companyByType as any) || {};
+      const cbt = (user.companyByType as any) || {};
+      let producerCompanyId: string | null = null;
+      let producerCompanyName: string | null = null;
 
-    let producerCompanyId: string | null = null;
-    let producerCompanyName: string | null = null;
+      if (cbt.producer) {
+        const company = await this.prisma.company.findUnique({
+          where: { id: cbt.producer },
+          select: { id: true, name: true, type: true },
+        });
+        if (company?.type === 'producer') {
+          producerCompanyId = company.id;
+          producerCompanyName = company.name;
+        }
+      }
 
-    if (cbt.producer) {
-      const company = await this.prisma.company.findUnique({
-        where: { id: cbt.producer },
-        select: { id: true, name: true, type: true },
-      });
-      if (company?.type === 'producer') {
-        producerCompanyId = company.id;
-        producerCompanyName = company.name;
+      if (!producerCompanyId && user.company?.type === 'producer') {
+        producerCompanyId = user.company.id;
+        producerCompanyName = user.company.name;
+      }
+
+      if (producerCompanyId) {
+        results.push({
+          userId: user.id,
+          userName: user.name,
+          phone: user.phone,
+          email: user.email,
+          producerCompanyId,
+          producerCompanyName,
+        });
       }
     }
 
-    if (!producerCompanyId && user.company?.type === 'producer') {
-      producerCompanyId = user.company.id;
-      producerCompanyName = user.company.name;
-    }
-
-    if (!producerCompanyId || !userTypes.includes('producer')) {
-      return { found: false, message: 'El usuario no tiene rol de productor' };
-    }
-
-    return {
-      found: true,
-      userId: user.id,
-      userName: user.name,
-      phone: user.phone,
-      producerCompanyId,
-      producerCompanyName,
-    };
+    return results;
   }
 
   async grantAccess(dto: GrantAccessDto, user: any) {
@@ -264,10 +278,11 @@ export class PlantAccessController {
 
   @Get('search-producer')
   @Roles('plant')
-  @ApiOperation({ summary: 'Buscar productor por teléfono' })
-  searchProducer(@Query('phone') phone: string) {
-    if (!phone?.trim()) throw new BadRequestException('Teléfono requerido');
-    return this.service.searchProducerByPhone(phone.trim());
+  @ApiOperation({ summary: 'Buscar productores por nombre, email o teléfono' })
+  @ApiQuery({ name: 'q', required: true })
+  searchProducer(@Query('q') q: string) {
+    if (!q?.trim() || q.trim().length < 2) throw new BadRequestException('Ingresá al menos 2 caracteres');
+    return this.service.searchProducers(q.trim());
   }
 
   @Get('my-facilities')
