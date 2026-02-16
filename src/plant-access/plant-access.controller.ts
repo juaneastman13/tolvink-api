@@ -40,6 +40,24 @@ export class GrantAccessDto {
 export class PlantAccessService {
   constructor(private prisma: PrismaService) {}
 
+  /** Resolve the plant company ID — checks companyByType.plant from DB first */
+  private async resolvePlantCompanyId(user: any): Promise<string> {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    const cbt = (dbUser?.companyByType as any) || {};
+    if (cbt.plant) {
+      const co = await this.prisma.company.findUnique({ where: { id: cbt.plant }, select: { type: true } });
+      if (co?.type === 'plant') return cbt.plant;
+    }
+    if (dbUser?.companyId) {
+      const co = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
+      if (co?.type === 'plant') return dbUser.companyId;
+    }
+    return user.companyId;
+  }
+
   async searchProducerByPhone(phone: string) {
     const user = await this.prisma.user.findFirst({
       where: { phone, active: true },
@@ -87,9 +105,7 @@ export class PlantAccessService {
   }
 
   async grantAccess(dto: GrantAccessDto, user: any) {
-    if (user.companyType !== 'plant') {
-      throw new ForbiddenException('Solo plantas pueden gestionar accesos');
-    }
+    const plantCoId = await this.resolvePlantCompanyId(user);
 
     const producer = await this.prisma.company.findFirst({
       where: { id: dto.producerCompanyId, type: 'producer', active: true },
@@ -99,31 +115,28 @@ export class PlantAccessService {
     const newPlantIds = dto.allowedPlantIds || [];
     const newBranchIds = dto.allowedBranchIds || [];
 
-    // Validate plant IDs belong to this company
     if (newPlantIds.length) {
       const validCount = await this.prisma.plant.count({
-        where: { id: { in: newPlantIds }, companyId: user.companyId, active: true },
+        where: { id: { in: newPlantIds }, companyId: plantCoId, active: true },
       });
       if (validCount !== newPlantIds.length) {
         throw new BadRequestException('Algunas plantas no pertenecen a tu empresa');
       }
     }
 
-    // Validate branch IDs belong to this company
     if (newBranchIds.length) {
       const validCount = await this.prisma.branch.count({
-        where: { id: { in: newBranchIds }, companyId: user.companyId, active: true },
+        where: { id: { in: newBranchIds }, companyId: plantCoId, active: true },
       });
       if (validCount !== newBranchIds.length) {
         throw new BadRequestException('Algunas sucursales no pertenecen a tu empresa');
       }
     }
 
-    // Check existing record for cumulative merge
     const existing = await this.prisma.plantProducerAccess.findUnique({
       where: {
         plantCompanyId_producerCompanyId: {
-          plantCompanyId: user.companyId,
+          plantCompanyId: plantCoId,
           producerCompanyId: dto.producerCompanyId,
         },
       },
@@ -147,7 +160,7 @@ export class PlantAccessService {
 
     return this.prisma.plantProducerAccess.create({
       data: {
-        plantCompanyId: user.companyId,
+        plantCompanyId: plantCoId,
         producerCompanyId: dto.producerCompanyId,
         active: true,
         allowedPlantIds: newPlantIds,
@@ -157,14 +170,12 @@ export class PlantAccessService {
   }
 
   async revokeAccess(producerCompanyId: string, user: any) {
-    if (user.companyType !== 'plant') {
-      throw new ForbiddenException('Solo plantas pueden gestionar accesos');
-    }
+    const plantCoId = await this.resolvePlantCompanyId(user);
 
     const access = await this.prisma.plantProducerAccess.findUnique({
       where: {
         plantCompanyId_producerCompanyId: {
-          plantCompanyId: user.companyId,
+          plantCompanyId: plantCoId,
           producerCompanyId,
         },
       },
@@ -178,8 +189,9 @@ export class PlantAccessService {
   }
 
   async listForPlant(user: any) {
+    const plantCoId = await this.resolvePlantCompanyId(user);
     return this.prisma.plantProducerAccess.findMany({
-      where: { plantCompanyId: user.companyId },
+      where: { plantCompanyId: plantCoId },
       include: { producerCompany: { select: { id: true, name: true, email: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -194,18 +206,16 @@ export class PlantAccessService {
   }
 
   async getMyFacilities(user: any) {
-    if (user.companyType !== 'plant') {
-      throw new ForbiddenException('Solo plantas pueden consultar sus instalaciones');
-    }
+    const plantCoId = await this.resolvePlantCompanyId(user);
 
     const [plants, branches] = await Promise.all([
       this.prisma.plant.findMany({
-        where: { companyId: user.companyId, active: true },
+        where: { companyId: plantCoId, active: true },
         select: { id: true, name: true, address: true, lat: true, lng: true },
         orderBy: { name: 'asc' },
       }),
       this.prisma.branch.findMany({
-        where: { companyId: user.companyId, active: true },
+        where: { companyId: plantCoId, active: true },
         select: { id: true, name: true, address: true, lat: true, lng: true },
         orderBy: { name: 'asc' },
       }),

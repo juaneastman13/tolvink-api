@@ -1,13 +1,17 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, ForbiddenException, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { PrismaService } from '../../database/prisma.service';
 
 export const ROLES_KEY = 'roles';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+  constructor(
+    private reflector: Reflector,
+    @Inject(PrismaService) private prisma: PrismaService,
+  ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -18,15 +22,23 @@ export class RolesGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest();
     if (!user) throw new ForbiddenException('No autenticado');
 
-    // Check role OR company type
+    // Quick check: JWT role or companyType
     const hasRole = requiredRoles.some(
       (role) => user.role === role || user.companyType === role,
     );
+    if (hasRole) return true;
 
-    if (!hasRole) {
-      throw new ForbiddenException('Sin permisos para esta acción');
+    // Fallback: check userTypes from DB (multi-company users)
+    if (user.sub) {
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.sub },
+        select: { userTypes: true },
+      });
+      const types = (dbUser?.userTypes as string[]) || [];
+      const hasType = requiredRoles.some((role) => types.includes(role));
+      if (hasType) return true;
     }
 
-    return true;
+    throw new ForbiddenException('Sin permisos para esta acción');
   }
 }
