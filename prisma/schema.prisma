@@ -1,6 +1,7 @@
 // =====================================================================
-// TOLVINK — Prisma Schema (Production)
+// TOLVINK — Prisma Schema v4 (Production)
 // PostgreSQL · Multi-tenant · Freight = 1 viaje
+// Includes: Fields, Trucks, PlantAccess, Independent Chat, User v2
 // =====================================================================
 
 generator client {
@@ -32,6 +33,7 @@ enum FreightStatus {
   assigned
   accepted
   in_progress
+  loaded
   finished
   canceled
 }
@@ -58,9 +60,20 @@ enum NotificationType {
   freight_accepted
   freight_rejected
   freight_started
+  freight_loaded
+  freight_confirmed
   freight_finished
   freight_canceled
   message_received
+  conversation_started
+}
+
+enum DocumentStep {
+  request
+  assignment
+  load_confirmation
+  delivery_confirmation
+  cancellation
 }
 
 // ======================== COMPANIES ==================================
@@ -73,17 +86,21 @@ model Company {
   phone     String?     @db.VarChar(50)
   email     String?     @db.VarChar(255)
   active    Boolean     @default(true)
+  hasInternalFleet Boolean @default(false) @map("has_internal_fleet")
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
   users              User[]
-  lots               Lot[]
   fields             Field[]
+  lots               Lot[]
   plants             Plant[]
+  trucks             Truck[]
   freightsAsOrigin   Freight[]           @relation("FreightOriginCompany")
   freightsAsDest     Freight[]           @relation("FreightDestCompany")
   assignments        FreightAssignment[] @relation("AssignmentTransporter")
   notifications      Notification[]
+  plantAccessGiven     PlantProducerAccess[] @relation("PlantAccessGiven")
+  producerAccessReceived PlantProducerAccess[] @relation("ProducerAccessReceived")
 
   @@map("companies")
 }
@@ -109,6 +126,7 @@ model User {
   freightsRequested  Freight[]           @relation("FreightRequestedBy")
   assignmentsMade    FreightAssignment[] @relation("AssignmentAssignedBy")
   assignmentsAsDriver FreightAssignment[] @relation("AssignmentDriver")
+  trucksAssigned     Truck[]             @relation("TruckAssignedUser")
   messagesSent       Message[]
   auditLogs          AuditLog[]
   notifications      Notification[]
@@ -117,26 +135,6 @@ model User {
   @@index([email])
   @@index([phone])
   @@map("users")
-}
-
-// ======================== PLANTS =====================================
-
-model Plant {
-  id        String  @id @default(uuid())
-  name      String  @db.VarChar(255)
-  companyId String  @map("company_id")
-  address   String?
-  lat       Decimal @db.Decimal(10, 6)
-  lng       Decimal @db.Decimal(10, 6)
-  active    Boolean @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  freights Freight[] @relation("FreightDestPlant")
-
-  @@index([companyId])
-  @@map("plants")
 }
 
 // ======================== FIELDS =====================================
@@ -167,8 +165,8 @@ model Lot {
   companyId String   @map("company_id")
   fieldId   String?  @map("field_id")
   hectares  Decimal? @db.Decimal(10, 2)
-  lat       Decimal  @db.Decimal(10, 6)
-  lng       Decimal  @db.Decimal(10, 6)
+  lat       Decimal? @db.Decimal(10, 6)
+  lng       Decimal? @db.Decimal(10, 6)
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -180,6 +178,66 @@ model Lot {
   @@index([companyId])
   @@index([fieldId])
   @@map("lots")
+}
+
+// ======================== PLANTS =====================================
+
+model Plant {
+  id        String  @id @default(uuid())
+  name      String  @db.VarChar(255)
+  companyId String  @map("company_id")
+  address   String?
+  lat       Decimal @db.Decimal(10, 6)
+  lng       Decimal @db.Decimal(10, 6)
+  active    Boolean @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  freights Freight[] @relation("FreightDestPlant")
+
+  @@index([companyId])
+  @@map("plants")
+}
+
+// ======================== TRUCKS =====================================
+
+model Truck {
+  id             String   @id @default(uuid())
+  plate          String   @unique @db.VarChar(20)
+  model          String?  @db.VarChar(100)
+  companyId      String   @map("company_id")
+  assignedUserId String?  @map("assigned_user_id")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignedUser User?                @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignments  FreightAssignment[]
+
+  @@index([companyId])
+  @@index([plate])
+  @@map("trucks")
+}
+
+// ======================== PLANT-PRODUCER ACCESS ======================
+
+model PlantProducerAccess {
+  id                String   @id @default(uuid())
+  plantCompanyId    String   @map("plant_company_id")
+  producerCompanyId String   @map("producer_company_id")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  plantCompany    Company @relation("PlantAccessGiven", fields: [plantCompanyId], references: [id], onDelete: Cascade)
+  producerCompany Company @relation("ProducerAccessReceived", fields: [producerCompanyId], references: [id], onDelete: Cascade)
+
+  @@unique([plantCompanyId, producerCompanyId])
+  @@index([plantCompanyId])
+  @@index([producerCompanyId])
+  @@map("plant_producer_access")
 }
 
 // ======================== FREIGHTS ===================================
@@ -204,8 +262,9 @@ model Freight {
   destLng       Decimal? @db.Decimal(10, 6)
 
   // Schedule
-  loadDate DateTime @map("load_date") @db.Date
-  loadTime String   @map("load_time") @db.VarChar(5)
+  loadDate    DateTime  @map("load_date") @db.Date
+  loadTime    String    @map("load_time") @db.VarChar(5)
+  scheduledAt DateTime? @map("scheduled_at")
 
   // Audit
   requestedById String   @map("requested_by_id")
@@ -216,6 +275,13 @@ model Freight {
   updatedAt DateTime @updatedAt @map("updated_at")
   startedAt DateTime? @map("started_at")
   finishedAt DateTime? @map("finished_at")
+  loadedAt  DateTime? @map("loaded_at")
+
+  // Cross-confirmations
+  transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
+  producerLoadedConfirmedAt      DateTime? @map("producer_loaded_confirmed_at")
+  transporterFinishedConfirmedAt DateTime? @map("transporter_finished_confirmed_at")
+  plantFinishedConfirmedAt       DateTime? @map("plant_finished_confirmed_at")
 
   // Relations
   originCompany Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
@@ -227,7 +293,7 @@ model Freight {
   items         FreightItem[]
   assignments   FreightAssignment[]
   documents     FreightDocument[]
-  conversation  Conversation?
+  conversation  Conversation?       @relation("FreightConversation")
   auditLogs     AuditLog[]
 
   @@index([status])
@@ -262,15 +328,12 @@ model FreightAssignment {
   transportCompanyId  String           @map("transport_company_id")
   status              AssignmentStatus @default(active)
 
-  // Driver (assigned by transporter after accepting)
   driverId    String?  @map("driver_id")
   driverName  String?  @map("driver_name") @db.VarChar(255)
   plate       String?  @db.VarChar(20)
+  truckId     String?  @map("truck_id")
 
-  // Assigned by (plant admin)
   assignedById String  @map("assigned_by_id")
-
-  // Rejection / cancellation
   reason String? @db.VarChar(255)
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -280,29 +343,31 @@ model FreightAssignment {
   transportCompany Company @relation("AssignmentTransporter", fields: [transportCompanyId], references: [id])
   assignedBy       User    @relation("AssignmentAssignedBy", fields: [assignedById], references: [id])
   driver           User?   @relation("AssignmentDriver", fields: [driverId], references: [id])
+  truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
 
   @@index([freightId])
   @@index([transportCompanyId])
   @@index([status])
-  // NOTE: Partial unique index (one active assignment per freight) is in constraints.sql
-  // Prisma doesn't support partial unique indexes natively
+  @@index([truckId])
   @@map("freight_assignments")
 }
 
 // ======================== FREIGHT DOCUMENTS ===========================
 
 model FreightDocument {
-  id        String   @id @default(uuid())
-  freightId String   @map("freight_id")
-  name      String   @db.VarChar(255)
-  url       String   @db.VarChar(500)
-  type      String   @db.VarChar(50) // carta_porte, remito, pesaje, etc.
-  uploadedById String @map("uploaded_by_id")
-  createdAt DateTime @default(now()) @map("created_at")
+  id           String        @id @default(uuid())
+  freightId    String        @map("freight_id")
+  name         String        @db.VarChar(255)
+  url          String        @db.VarChar(500)
+  type         String        @db.VarChar(50)
+  step         DocumentStep?
+  uploadedById String        @map("uploaded_by_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
 
   freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
 
   @@index([freightId])
+  @@index([freightId, step])
   @@map("freight_documents")
 }
 
@@ -310,13 +375,29 @@ model FreightDocument {
 
 model Conversation {
   id        String   @id @default(uuid())
-  freightId String   @unique @map("freight_id")
+  freightId String?  @unique @map("freight_id")
   createdAt DateTime @default(now()) @map("created_at")
 
-  freight  Freight   @relation(fields: [freightId], references: [id], onDelete: Cascade)
-  messages Message[]
+  freight      Freight?                  @relation("FreightConversation", fields: [freightId], references: [id], onDelete: Cascade)
+  messages     Message[]
+  participants ConversationParticipant[]
 
   @@map("conversations")
+}
+
+// ======================== CONVERSATION PARTICIPANTS ===================
+
+model ConversationParticipant {
+  id             String   @id @default(uuid())
+  conversationId String   @map("conversation_id")
+  companyId      String   @map("company_id")
+  joinedAt       DateTime @default(now()) @map("joined_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, companyId])
+  @@index([companyId])
+  @@map("conversation_participants")
 }
 
 // ======================== MESSAGES ====================================
@@ -342,12 +423,12 @@ model AuditLog {
   id         String   @id @default(uuid())
   entityType String   @map("entity_type") @db.VarChar(30)
   entityId   String   @map("entity_id")
-  action     String   @db.VarChar(50) // created, status_changed, assigned, etc.
+  action     String   @db.VarChar(50)
   fromValue  String?  @map("from_value") @db.VarChar(50)
   toValue    String?  @map("to_value") @db.VarChar(50)
   userId     String   @map("user_id")
   reason     String?  @db.VarChar(255)
-  metadata   Json?    // extra context
+  metadata   Json?
   createdAt  DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id])
@@ -368,7 +449,7 @@ model Notification {
   type      NotificationType
   title     String           @db.VarChar(255)
   body      String?          @db.VarChar(500)
-  entityId  String?          @map("entity_id") // freight_id, etc.
+  entityId  String?          @map("entity_id")
   read      Boolean          @default(false)
   createdAt DateTime         @default(now()) @map("created_at")
 
