@@ -173,6 +173,8 @@ model Field {
   address   String?
   lat       Decimal? @db.Decimal(10, 6)
   lng       Decimal? @db.Decimal(10, 6)
+  hectares  Decimal? @db.Decimal(10, 2)
+  comments  String?  @db.Text
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -195,6 +197,7 @@ model Lot {
   hectares  Decimal? @db.Decimal(10, 2)
   lat       Decimal? @db.Decimal(10, 6)
   lng       Decimal? @db.Decimal(10, 6)
+  comments  String?  @db.Text
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -233,7 +236,9 @@ model Plant {
 model Truck {
   id             String   @id @default(uuid())
   plate          String   @unique @db.VarChar(20)
+  brand          String?  @db.VarChar(100)
   model          String?  @db.VarChar(100)
+  capacity       String?  @db.VarChar(50)
   companyId      String   @map("company_id")
   assignedUserId String?  @map("assigned_user_id")
   active         Boolean  @default(true)

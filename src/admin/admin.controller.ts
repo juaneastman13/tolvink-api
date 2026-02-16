@@ -112,7 +112,7 @@ export class UpdateUserDto {
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(public prisma: PrismaService) {}
 
   // --- Permission helpers ---
   isPlatformAdmin(user: any): boolean {
@@ -425,6 +425,129 @@ export class AdminService {
       },
     });
   }
+
+  // ===================== FIELDS (Producer) =====================
+  async listFieldsByCompany(companyId: string) {
+    return this.prisma.field.findMany({
+      where: { companyId, active: true },
+      include: {
+        lots: { where: { active: true }, orderBy: { name: 'asc' } },
+        _count: { select: { lots: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createField(companyId: string, dto: any) {
+    if (!dto.name?.trim()) throw new BadRequestException('Nombre requerido');
+    if (dto.lat == null || dto.lng == null) throw new BadRequestException('Ubicación requerida');
+    return this.prisma.field.create({
+      data: {
+        name: dto.name.trim(),
+        companyId,
+        address: dto.address || null,
+        lat: dto.lat, lng: dto.lng,
+        hectares: dto.hectares || null,
+        comments: dto.comments || null,
+      },
+    });
+  }
+
+  async updateField(fieldId: string, dto: any) {
+    const f = await this.prisma.field.findFirst({ where: { id: fieldId, active: true } });
+    if (!f) throw new NotFoundException('Campo no encontrado');
+    const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.address !== undefined) data.address = dto.address;
+    if (dto.lat !== undefined) data.lat = dto.lat;
+    if (dto.lng !== undefined) data.lng = dto.lng;
+    if (dto.hectares !== undefined) data.hectares = dto.hectares;
+    if (dto.comments !== undefined) data.comments = dto.comments;
+    return this.prisma.field.update({ where: { id: fieldId }, data });
+  }
+
+  async deleteField(fieldId: string) {
+    return this.prisma.field.update({ where: { id: fieldId }, data: { active: false } });
+  }
+
+  // ===================== LOTS (Inside Fields) =====================
+  async listLotsByField(fieldId: string) {
+    return this.prisma.lot.findMany({
+      where: { fieldId, active: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createLot(fieldId: string, companyId: string, dto: any) {
+    if (!dto.name?.trim()) throw new BadRequestException('Nombre requerido');
+    if (dto.lat == null || dto.lng == null) throw new BadRequestException('Ubicación requerida');
+    return this.prisma.lot.create({
+      data: {
+        name: dto.name.trim(),
+        companyId,
+        fieldId,
+        hectares: dto.hectares || null,
+        lat: dto.lat, lng: dto.lng,
+        comments: dto.comments || null,
+      },
+    });
+  }
+
+  async updateLot(lotId: string, dto: any) {
+    const l = await this.prisma.lot.findFirst({ where: { id: lotId, active: true } });
+    if (!l) throw new NotFoundException('Lote no encontrado');
+    const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.hectares !== undefined) data.hectares = dto.hectares;
+    if (dto.lat !== undefined) data.lat = dto.lat;
+    if (dto.lng !== undefined) data.lng = dto.lng;
+    if (dto.comments !== undefined) data.comments = dto.comments;
+    return this.prisma.lot.update({ where: { id: lotId }, data });
+  }
+
+  async deleteLot(lotId: string) {
+    return this.prisma.lot.update({ where: { id: lotId }, data: { active: false } });
+  }
+
+  // ===================== TRUCKS (Transporter) =====================
+  async listTrucksByCompany(companyId: string) {
+    return this.prisma.truck.findMany({
+      where: { companyId, active: true },
+      include: { assignedUser: { select: { id: true, name: true } } },
+      orderBy: { plate: 'asc' },
+    });
+  }
+
+  async createTruck(companyId: string, dto: any) {
+    if (!dto.plate?.trim()) throw new BadRequestException('Patente requerida');
+    const plate = dto.plate.trim().toUpperCase();
+    const existing = await this.prisma.truck.findFirst({ where: { plate, companyId, active: true } });
+    if (existing) throw new BadRequestException(`La patente ${plate} ya existe en esta empresa`);
+    return this.prisma.truck.create({
+      data: {
+        plate,
+        brand: dto.brand || null,
+        model: dto.model || null,
+        capacity: dto.capacity || null,
+        companyId,
+      },
+    });
+  }
+
+  async updateTruck(truckId: string, dto: any) {
+    const t = await this.prisma.truck.findFirst({ where: { id: truckId, active: true } });
+    if (!t) throw new NotFoundException('Vehículo no encontrado');
+    const data: any = {};
+    if (dto.plate !== undefined) data.plate = dto.plate.trim().toUpperCase();
+    if (dto.brand !== undefined) data.brand = dto.brand;
+    if (dto.model !== undefined) data.model = dto.model;
+    if (dto.capacity !== undefined) data.capacity = dto.capacity;
+    return this.prisma.truck.update({ where: { id: truckId }, data });
+  }
+
+  async deleteTruck(truckId: string) {
+    return this.prisma.truck.update({ where: { id: truckId }, data: { active: false } });
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -547,5 +670,94 @@ export class AdminController {
   @ApiOperation({ summary: 'Editar mi perfil' })
   updateMe(@Body() dto: { name?: string; email?: string; phone?: string }, @CurrentUser() u: any) {
     return this.svc.updateSelf(u.sub, dto);
+  }
+
+  // ===================== FIELDS (Producer) =====================
+  @Get('companies/:companyId/fields')
+  @ApiOperation({ summary: 'Listar campos de empresa productora' })
+  async companyFields(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.listFieldsByCompany(companyId);
+  }
+
+  @Post('companies/:companyId/fields')
+  @ApiOperation({ summary: 'Crear campo' })
+  async createCompanyField(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.createField(companyId, dto);
+  }
+
+  @Patch('fields/:id')
+  @ApiOperation({ summary: 'Editar campo' })
+  async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.updateField(id, dto);
+  }
+
+  @Delete('fields/:id')
+  @ApiOperation({ summary: 'Desactivar campo' })
+  async deleteAdminField(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.deleteField(id);
+  }
+
+  // ===================== LOTS =====================
+  @Get('fields/:fieldId/lots')
+  @ApiOperation({ summary: 'Listar lotes de campo' })
+  async fieldLots(@Param('fieldId', ParseUUIDPipe) fieldId: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.listLotsByField(fieldId);
+  }
+
+  @Post('fields/:fieldId/lots')
+  @ApiOperation({ summary: 'Crear lote en campo' })
+  async createFieldLot(@Param('fieldId', ParseUUIDPipe) fieldId: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId } });
+    if (!field) throw new NotFoundException('Campo no encontrado');
+    return this.svc.createLot(fieldId, field.companyId, dto);
+  }
+
+  @Patch('lots/:id')
+  @ApiOperation({ summary: 'Editar lote' })
+  async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.updateLot(id, dto);
+  }
+
+  @Delete('lots/:id')
+  @ApiOperation({ summary: 'Desactivar lote' })
+  async deleteAdminLot(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.deleteLot(id);
+  }
+
+  // ===================== TRUCKS (Transporter) =====================
+  @Get('companies/:companyId/trucks')
+  @ApiOperation({ summary: 'Listar flota de empresa transportista' })
+  async companyTrucks(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.listTrucksByCompany(companyId);
+  }
+
+  @Post('companies/:companyId/trucks')
+  @ApiOperation({ summary: 'Crear vehículo' })
+  async createCompanyTruck(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.createTruck(companyId, dto);
+  }
+
+  @Patch('trucks/:id')
+  @ApiOperation({ summary: 'Editar vehículo' })
+  async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.updateTruck(id, dto);
+  }
+
+  @Delete('trucks/:id')
+  @ApiOperation({ summary: 'Desactivar vehículo' })
+  async deleteAdminTruck(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
+    this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.deleteTruck(id);
   }
 }
