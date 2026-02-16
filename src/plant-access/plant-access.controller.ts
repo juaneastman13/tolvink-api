@@ -193,18 +193,15 @@ export class PlantAccessService {
     });
   }
 
-  async revokeAccess(producerUserId: string, user: any) {
+  async revokeAccess(accessId: string, user: any) {
     const plantCoId = await this.resolvePlantCompanyId(user);
 
     const access = await this.prisma.plantProducerAccess.findUnique({
-      where: {
-        plantCompanyId_producerUserId: {
-          plantCompanyId: plantCoId,
-          producerUserId,
-        },
-      },
+      where: { id: accessId },
     });
-    if (!access) throw new NotFoundException('Relación no encontrada');
+    if (!access || access.plantCompanyId !== plantCoId) {
+      throw new NotFoundException('Relación no encontrada');
+    }
 
     return this.prisma.plantProducerAccess.update({
       where: { id: access.id },
@@ -285,10 +282,10 @@ export class PlantAccessController {
     return this.service.grantAccess(dto, user);
   }
 
-  @Patch('revoke/:producerUserId')
+  @Patch('revoke/:accessId')
   @Roles('plant')
   @ApiOperation({ summary: 'Revocar acceso de usuario productor' })
-  revoke(@Param('producerUserId', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+  revoke(@Param('accessId', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.revokeAccess(id, user);
   }
 
