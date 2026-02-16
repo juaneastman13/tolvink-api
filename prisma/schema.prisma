@@ -259,6 +259,8 @@ model PlantProducerAccess {
   id                String   @id @default(uuid())
   plantCompanyId    String   @map("plant_company_id")
   producerCompanyId String   @map("producer_company_id")
+  allowedPlantIds   Json     @default("[]") @map("allowed_plant_ids")
+  allowedBranchIds  Json     @default("[]") @map("allowed_branch_ids")
   active            Boolean  @default(true)
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
