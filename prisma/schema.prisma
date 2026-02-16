@@ -97,7 +97,9 @@ model User {
   name         String   @db.VarChar(255)
   role         UserRole @default(operator)
   companyId    String?  @map("company_id")
-  phone        String?  @db.VarChar(50)
+  phone        String?  @unique @db.VarChar(50)
+  userTypes    Json     @default("[]") @map("user_types")
+  isSuperAdmin Boolean  @default(false) @map("is_super_admin")
   active       Boolean  @default(true)
   lastLogin    DateTime? @map("last_login")
   createdAt    DateTime @default(now()) @map("created_at")
@@ -113,6 +115,7 @@ model User {
 
   @@index([companyId])
   @@index([email])
+  @@index([phone])
   @@map("users")
 }
 

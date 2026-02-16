@@ -1,10 +1,16 @@
-import { IsEmail, IsNotEmpty, MinLength, MaxLength, IsEnum, IsOptional } from 'class-validator';
+import { IsEmail, IsNotEmpty, MinLength, MaxLength, IsEnum, IsOptional, IsArray, ArrayMinSize, Matches, IsString, ValidateIf } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class LoginDto {
-  @ApiProperty({ example: 'carolina@planta.com' })
+  @ApiProperty({ example: 'carolina@planta.com', required: false })
+  @ValidateIf(o => !o.phone)
   @IsEmail({}, { message: 'Email inválido' })
-  email: string;
+  email?: string;
+
+  @ApiProperty({ example: '091234567', required: false })
+  @ValidateIf(o => !o.email)
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Teléfono inválido. Formato: 09XXXXXXX' })
+  phone?: string;
 
   @ApiProperty({ example: '1234' })
   @IsNotEmpty({ message: 'Contraseña requerida' })
@@ -23,23 +29,20 @@ export class RegisterDto {
   @IsEmail({}, { message: 'Email inválido' })
   email: string;
 
+  @ApiProperty({ example: '091234567' })
+  @IsNotEmpty({ message: 'Teléfono requerido' })
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Teléfono inválido. Formato: 09XXXXXXX' })
+  phone: string;
+
   @ApiProperty({ example: 'securepass' })
   @IsNotEmpty()
   @MinLength(4)
   @MaxLength(128)
   password: string;
 
-  @ApiProperty({ enum: ['producer', 'plant', 'transporter'] })
-  @IsEnum(['producer', 'plant', 'transporter'], { message: 'Tipo inválido' })
-  companyType: string;
-
-  @ApiProperty({ example: 'Est. Las Acacias' })
-  @IsNotEmpty()
-  @MinLength(2)
-  companyName: string;
-
-  @ApiProperty({ enum: ['admin', 'operator'], required: false })
-  @IsOptional()
-  @IsEnum(['admin', 'operator'])
-  role?: string;
+  @ApiProperty({ example: ['producer'], enum: ['producer', 'plant', 'transporter'], isArray: true })
+  @IsArray({ message: 'userTypes debe ser un array' })
+  @ArrayMinSize(1, { message: 'Seleccioná al menos un tipo de usuario' })
+  @IsEnum(['producer', 'plant', 'transporter'], { each: true, message: 'Tipo inválido' })
+  userTypes: string[];
 }
