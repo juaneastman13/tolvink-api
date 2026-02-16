@@ -26,10 +26,8 @@ export class FreightsService {
     });
     if (!plant) throw new BadRequestException('Planta no encontrada');
 
-    // Resolve fieldId from dto or from lot
     const fieldId = dto.fieldId || lot.fieldId || null;
 
-    // Compute scheduledAt
     let scheduledAt: Date | null = null;
     try {
       scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime}:00`);

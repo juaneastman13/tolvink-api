@@ -14,10 +14,9 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     if (!dto.email && !dto.phone) {
-      throw new BadRequestException('Email o teléfono requerido');
+      throw new BadRequestException('Email o telefono requerido');
     }
 
-    // Find user by email or phone
     const where = dto.phone
       ? { phone: dto.phone }
       : { email: dto.email };
@@ -28,15 +27,14 @@ export class AuthService {
     });
 
     if (!user || !user.active) {
-      throw new UnauthorizedException('Credenciales inválidas');
+      throw new UnauthorizedException('Credenciales invalidas');
     }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
-      throw new UnauthorizedException('Credenciales inválidas');
+      throw new UnauthorizedException('Credenciales invalidas');
     }
 
-    // Update last login
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() },
@@ -51,21 +49,18 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
-    // Check email uniqueness
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (emailExists) {
       throw new ConflictException('Email ya registrado');
     }
 
-    // Check phone uniqueness
     const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
     if (phoneExists) {
-      throw new ConflictException('Teléfono ya registrado');
+      throw new ConflictException('Telefono ya registrado');
     }
 
     const hash = await bcrypt.hash(dto.password, 10);
 
-    // Create user WITHOUT company — admin assigns company later
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
@@ -74,7 +69,6 @@ export class AuthService {
         name: dto.name,
         role: 'operator',
         userTypes: dto.userTypes,
-        // companyId stays null — user is "free" until admin links them
       },
       include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
     });

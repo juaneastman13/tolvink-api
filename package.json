@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "npx prisma generate && tsc -p tsconfig.build.json",
+    "prebuild": "npx prisma generate",
+    "build": "npx rimraf dist && npx prisma generate && tsc -p tsconfig.build.json",
     "dev": "nest start --watch",
-    "start": "node dist/main.js",
+    "start": "npx rimraf dist && npx prisma generate && tsc -p tsconfig.build.json && node dist/main.js",
     "start:prod": "node dist/main.js",
     "db:migrate": "npx prisma migrate deploy",
     "db:migrate:dev": "npx prisma migrate dev",
@@ -35,6 +36,7 @@
     "helmet": "^7.1.0",
     "prisma": "^5.8.0",
     "reflect-metadata": "^0.2.1",
+    "rimraf": "^5.0.0",
     "rxjs": "^7.8.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
