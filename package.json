@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "prebuild": "npx prisma generate",
-    "build": "npx rimraf dist && npx prisma generate && tsc -p tsconfig.build.json",
+    "build": "npx prisma generate && npx rimraf dist && tsc -p tsconfig.build.json",
     "dev": "nest start --watch",
-    "start": "npx rimraf dist && npx prisma generate && tsc -p tsconfig.build.json && node dist/main.js",
+    "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
     "db:migrate": "npx prisma migrate deploy",
     "db:migrate:dev": "npx prisma migrate dev",
