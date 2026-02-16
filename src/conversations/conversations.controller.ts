@@ -1,9 +1,9 @@
 // =====================================================================
-// TOLVINK — Conversations Controller + Service v4
-// Conversations tracked by user (not just company) for grouping
+// TOLVINK — Conversations Controller + Service v5
+// User-level tracking, mark-read, freight visibility for all parties
 // =====================================================================
 
-import { Controller, Get, Post, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
@@ -16,14 +16,9 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 // ======================== DTOs =======================================
 
 export class StartConversationDto {
-  @ApiProperty({ description: 'ID de empresa destino' })
+  @ApiProperty({ description: 'ID de usuario destino' })
   @IsUUID()
-  targetCompanyId: string;
-
-  @ApiProperty({ description: 'ID de usuario destino', required: false })
-  @IsOptional()
-  @IsUUID()
-  targetUserId?: string;
+  targetUserId: string;
 }
 
 export class SendMessageDto {
@@ -76,46 +71,35 @@ export class ConversationsService {
   }
 
   async startConversation(dto: StartConversationDto, user: any) {
+    const targetUserId = dto.targetUserId;
+
+    if (targetUserId === user.sub) {
+      throw new BadRequestException('No podés iniciar conversación con vos mismo');
+    }
+
+    // Resolve target user and their company
+    const targetUser = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true, companyId: true },
+    });
+    if (!targetUser) throw new BadRequestException('Usuario no encontrado');
+
     const allIds = await this.resolveAllCompanyIds(user);
     const myPrimaryId = allIds[0];
-    const targetCompanyId = dto.targetCompanyId;
-    const targetUserId = dto.targetUserId || null;
+    const targetCompanyId = targetUser.companyId;
 
-    if (allIds.includes(targetCompanyId)) {
-      throw new BadRequestException('No podés iniciar conversación con tu propia empresa');
-    }
-
-    const target = await this.prisma.company.findFirst({
-      where: { id: targetCompanyId, active: true },
+    // Check existing conversation between these two users (not freight-related)
+    const existing = await this.prisma.conversation.findFirst({
+      where: {
+        freightId: null,
+        AND: [
+          { participants: { some: { userId: user.sub } } },
+          { participants: { some: { userId: targetUserId } } },
+        ],
+      },
+      include: { participants: true },
     });
-    if (!target) throw new BadRequestException('Empresa no encontrada');
-
-    // Check existing: if targetUserId provided, match by user; else by company
-    if (targetUserId) {
-      const existing = await this.prisma.conversation.findFirst({
-        where: {
-          freightId: null,
-          AND: [
-            { participants: { some: { companyId: { in: allIds }, userId: user.sub } } },
-            { participants: { some: { companyId: targetCompanyId, userId: targetUserId } } },
-          ],
-        },
-        include: { participants: true },
-      });
-      if (existing) return existing;
-    } else {
-      const existing = await this.prisma.conversation.findFirst({
-        where: {
-          freightId: null,
-          AND: [
-            { participants: { some: { companyId: { in: allIds } } } },
-            { participants: { some: { companyId: targetCompanyId } } },
-          ],
-        },
-        include: { participants: true },
-      });
-      if (existing && existing.participants.length === 2) return existing;
-    }
+    if (existing) return existing;
 
     return this.prisma.conversation.create({
       data: {
@@ -133,9 +117,27 @@ export class ConversationsService {
   async listConversations(user: any, search?: string) {
     const allIds = await this.resolveAllCompanyIds(user);
 
+    // Find conversations where user is participant OR involved in freight
     const convs = await this.prisma.conversation.findMany({
       where: {
-        participants: { some: { companyId: { in: allIds } } },
+        OR: [
+          // Direct participant
+          { participants: { some: { companyId: { in: allIds } } } },
+          // Freight: user is origin or dest company
+          { freight: { originCompanyId: { in: allIds } } },
+          { freight: { destCompanyId: { in: allIds } } },
+          // Freight: user is assigned transporter
+          {
+            freight: {
+              assignments: {
+                some: {
+                  transportCompanyId: { in: allIds },
+                  status: { in: ['active', 'accepted'] },
+                },
+              },
+            },
+          },
+        ],
       },
       include: {
         participants: true,
@@ -148,6 +150,16 @@ export class ConversationsService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Auto-add user as participant to freight conversations they can see
+    for (const c of convs) {
+      if (c.freight && !c.participants.some(p => allIds.includes(p.companyId))) {
+        await this.prisma.conversationParticipant.create({
+          data: { conversationId: c.id, companyId: allIds[0], userId: user.sub },
+        }).catch(() => {});
+        c.participants.push({ id: 'auto', conversationId: c.id, companyId: allIds[0], userId: user.sub, joinedAt: new Date(), lastReadAt: null } as any);
+      }
+    }
 
     // Collect all company IDs and user IDs for enrichment
     const companyIds = new Set<string>();
@@ -185,7 +197,18 @@ export class ConversationsService {
         ? `Flete ${c.freight.code}`
         : otherParticipants.map(p => p.user?.name || p.company?.name || 'Desconocido').join(', ');
 
-      return { ...c, participants: participantsEnriched, displayName };
+      // Compute unread: compare lastReadAt of my participant vs last message time
+      const myParticipant = c.participants.find(p => allIds.includes(p.companyId));
+      const lastMsg = c.messages?.[0];
+      let unread = false;
+      if (lastMsg && lastMsg.senderId !== user.sub) {
+        const lastReadAt = myParticipant?.lastReadAt;
+        if (!lastReadAt || new Date(lastMsg.createdAt) > new Date(lastReadAt)) {
+          unread = true;
+        }
+      }
+
+      return { ...c, participants: participantsEnriched, displayName, unread };
     });
 
     if (search && search.trim()) {
@@ -201,6 +224,20 @@ export class ConversationsService {
     }
 
     return enriched;
+  }
+
+  async markRead(conversationId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+    const participant = await this.prisma.conversationParticipant.findFirst({
+      where: { conversationId, companyId: { in: allIds } },
+    });
+    if (!participant) return { ok: true };
+
+    await this.prisma.conversationParticipant.update({
+      where: { id: participant.id },
+      data: { lastReadAt: new Date() },
+    });
+    return { ok: true };
   }
 
   async getMessages(conversationId: string, user: any) {
@@ -243,6 +280,14 @@ export class ConversationsService {
       } else {
         throw new ForbiddenException('No participás en esta conversación');
       }
+    }
+
+    // Auto mark as read
+    if (participant) {
+      await this.prisma.conversationParticipant.update({
+        where: { id: participant.id },
+        data: { lastReadAt: new Date() },
+      }).catch(() => {});
     }
 
     return this.prisma.message.findMany({
@@ -289,6 +334,14 @@ export class ConversationsService {
       }
     }
 
+    // Mark as read for sender
+    if (participant) {
+      await this.prisma.conversationParticipant.update({
+        where: { id: participant.id },
+        data: { lastReadAt: new Date() },
+      }).catch(() => {});
+    }
+
     return this.prisma.message.create({
       data: {
         conversationId,
@@ -317,7 +370,7 @@ export class ConversationsController {
   }
 
   @Post('start')
-  @ApiOperation({ summary: 'Iniciar conversación con usuario/empresa' })
+  @ApiOperation({ summary: 'Iniciar conversación con usuario' })
   start(@Body() dto: StartConversationDto, @CurrentUser() user: any) {
     return this.service.startConversation(dto, user);
   }
@@ -327,6 +380,12 @@ export class ConversationsController {
   @ApiQuery({ name: 'search', required: false })
   list(@CurrentUser() user: any, @Query('search') search?: string) {
     return this.service.listConversations(user, search);
+  }
+
+  @Patch(':id/read')
+  @ApiOperation({ summary: 'Marcar conversación como leída' })
+  markRead(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.markRead(id, user);
   }
 
   @Get(':id/messages')
