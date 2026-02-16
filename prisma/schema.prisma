@@ -121,6 +121,7 @@ model User {
   companyId    String?  @map("company_id")
   phone        String?  @unique @db.VarChar(50)
   userTypes    Json     @default("[]") @map("user_types")
+  companyByType Json    @default("{}") @map("company_by_type")
   isSuperAdmin Boolean  @default(false) @map("is_super_admin")
   active       Boolean  @default(true)
   lastLogin    DateTime? @map("last_login")

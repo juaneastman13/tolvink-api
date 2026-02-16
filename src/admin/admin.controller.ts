@@ -1,4 +1,3 @@
-// ADMIN MODULE v2 - 20260216_102317
 // =====================================================================
 // TOLVINK — Admin Module (Controller + Service + DTOs)
 // Simple, clean, no over-engineering
@@ -105,6 +104,7 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
+  @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
 }
 
 // ======================== SERVICE ====================================
@@ -271,6 +271,7 @@ export class AdminService {
       select: {
         id: true, name: true, email: true, phone: true, role: true,
         userTypes: true, isSuperAdmin: true, active: true, companyId: true,
+        companyByType: true,
         createdAt: true,
         company: { select: { id: true, name: true, type: true } },
       },
@@ -308,7 +309,7 @@ export class AdminService {
       },
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true,
+        userTypes: true, active: true, companyId: true, companyByType: true,
         company: { select: { id: true, name: true, type: true } },
       },
     });
@@ -337,13 +338,14 @@ export class AdminService {
     if (dto.userTypes !== undefined) data.userTypes = dto.userTypes;
     if (dto.active !== undefined) data.active = dto.active;
     if (dto.companyId !== undefined) data.companyId = dto.companyId || null;
+    if (dto.companyByType !== undefined) data.companyByType = dto.companyByType || {};
 
     return this.prisma.user.update({
       where: { id: userId },
       data,
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true,
+        userTypes: true, active: true, companyId: true, companyByType: true,
         company: { select: { id: true, name: true, type: true } },
       },
     });
@@ -360,7 +362,7 @@ export class AdminService {
       data,
       select: {
         id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true,
+        userTypes: true, active: true, companyId: true, companyByType: true,
         company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
       },
     });
