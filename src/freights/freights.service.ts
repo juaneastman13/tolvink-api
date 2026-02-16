@@ -61,17 +61,12 @@ export class FreightsService {
           requestedById: user.sub,
           notes: dto.notes,
           items: {
-            create: dto.items.map(i => ({
+            create: dto.items.map((i) => ({
               grain: i.grain as any,
               tons: i.tons,
-              quantity: i.tons,
-              unit: (i.unit as any) || 'toneladas',
-              amount: i.amount || 0,
-              productTypeOther: i.productTypeOther || null,
               notes: i.notes,
             })),
           },
-          // Create conversation WITH participants
           conversation: {
             create: {
               participants: {
@@ -88,13 +83,14 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: f.id,
-          action: 'created', toValue: 'pending_assignment',
+          entityType: 'freight',
+          entityId: f.id,
+          action: 'created',
+          toValue: 'pending_assignment',
           userId: user.sub,
         },
       });
 
-      // If producer provided own truck (flota propia), create self-assignment
       if (dto.truckId) {
         const truck = await tx.truck.findFirst({
           where: { id: dto.truckId, companyId: user.companyId, active: true },
@@ -111,7 +107,6 @@ export class FreightsService {
               driverId: truck.assignedUserId || null,
             },
           });
-          // Update freight status — plant only needs to authorize
           await tx.freight.update({
             where: { id: f.id },
             data: { status: FreightStatus.assigned },
@@ -138,7 +133,14 @@ export class FreightsService {
       where.OR = [
         { originCompanyId: user.companyId },
         { destCompanyId: user.companyId },
-        { assignments: { some: { transportCompanyId: user.companyId, status: { in: ['active', 'accepted'] } } } },
+        {
+          assignments: {
+            some: {
+              transportCompanyId: user.companyId,
+              status: { in: ['active', 'accepted'] },
+            },
+          },
+        },
       ];
     }
 
@@ -247,7 +249,6 @@ export class FreightsService {
         data: { status: FreightStatus.assigned },
       });
 
-      // Add transporter as conversation participant
       if (freight.conversation?.id) {
         await tx.conversationParticipant.upsert({
           where: {
@@ -266,7 +267,8 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'assigned',
           fromValue: freight.status,
           toValue: 'assigned',
@@ -296,7 +298,7 @@ export class FreightsService {
 
     const assignment = freight.assignments[0];
     if (!assignment || assignment.transportCompanyId !== user.companyId) {
-      throw new ForbiddenException('Tu empresa no está asignada a este flete');
+      throw new ForbiddenException('Tu empresa no esta asignada a este flete');
     }
 
     if (dto.action === 'rejected') {
@@ -317,10 +319,13 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight',
+            entityId: freightId,
             action: 'rejected',
-            fromValue: 'assigned', toValue: 'pending_assignment',
-            userId: user.sub, reason: dto.reason,
+            fromValue: 'assigned',
+            toValue: 'pending_assignment',
+            userId: user.sub,
+            reason: dto.reason,
           },
         });
 
@@ -328,7 +333,6 @@ export class FreightsService {
       });
     }
 
-    // ACCEPT
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
 
     const assignmentUpdate: any = { status: AssignmentStatus.accepted };
@@ -337,7 +341,7 @@ export class FreightsService {
       const truck = await this.prisma.truck.findFirst({
         where: { id: dto.truckId, companyId: user.companyId, active: true },
       });
-      if (!truck) throw new BadRequestException('Camión no encontrado o no pertenece a tu empresa');
+      if (!truck) throw new BadRequestException('Camion no encontrado o no pertenece a tu empresa');
 
       assignmentUpdate.truckId = truck.id;
       assignmentUpdate.plate = truck.plate;
@@ -359,9 +363,11 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'accepted',
-          fromValue: 'assigned', toValue: 'accepted',
+          fromValue: 'assigned',
+          toValue: 'accepted',
           userId: user.sub,
           metadata: dto.truckId ? { truckId: dto.truckId } : undefined,
         },
@@ -380,9 +386,11 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Allow producer to start if they have own fleet
-    const isOwnFleet = freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
-    const effectiveType = (user.companyType === 'producer' && isOwnFleet) ? 'transporter' : user.companyType;
+    const isOwnFleet = freight.assignments?.some(
+      (a) => a.transportCompanyId === freight.originCompanyId,
+    );
+    const effectiveType =
+      user.companyType === 'producer' && isOwnFleet ? 'transporter' : user.companyType;
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
@@ -394,9 +402,11 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'started',
-          fromValue: 'accepted', toValue: 'in_progress',
+          fromValue: 'accepted',
+          toValue: 'in_progress',
           userId: user.sub,
         },
       });
@@ -415,8 +425,9 @@ export class FreightsService {
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
     let ct = user.companyType;
-    // Producer with own fleet acts as transporter for confirm_loaded
-    const isOwnFleet = freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+    const isOwnFleet = freight.assignments?.some(
+      (a) => a.transportCompanyId === freight.originCompanyId,
+    );
     if (ct === 'producer' && isOwnFleet && freight.status === FreightStatus.in_progress) {
       ct = 'transporter';
     }
@@ -428,7 +439,7 @@ export class FreightsService {
         );
       }
       if (freight.transporterLoadedConfirmedAt) {
-        throw new BadRequestException('El transportista ya confirmó la carga');
+        throw new BadRequestException('El transportista ya confirmo la carga');
       }
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
@@ -445,9 +456,11 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight',
+            entityId: freightId,
             action: 'confirm_loaded',
-            fromValue: 'in_progress', toValue: 'loaded',
+            fromValue: 'in_progress',
+            toValue: 'loaded',
             userId: user.sub,
             metadata: { confirmedBy: 'transporter' },
           },
@@ -464,7 +477,7 @@ export class FreightsService {
         );
       }
       if (freight.producerLoadedConfirmedAt) {
-        throw new BadRequestException('El productor ya confirmó la carga');
+        throw new BadRequestException('El productor ya confirmo la carga');
       }
 
       return this.prisma.$transaction(async (tx) => {
@@ -475,9 +488,11 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight',
+            entityId: freightId,
             action: 'confirm_loaded',
-            fromValue: 'loaded', toValue: 'loaded',
+            fromValue: 'loaded',
+            toValue: 'loaded',
             userId: user.sub,
             metadata: { confirmedBy: 'producer' },
           },
@@ -498,7 +513,7 @@ export class FreightsService {
 
     if (freight.status !== FreightStatus.loaded) {
       throw new BadRequestException(
-        `Solo se puede confirmar finalización en estado "loaded". Estado actual: "${freight.status}"`,
+        `Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`,
       );
     }
 
@@ -506,7 +521,7 @@ export class FreightsService {
 
     if (ct === 'transporter') {
       if (freight.transporterFinishedConfirmedAt) {
-        throw new BadRequestException('El transportista ya confirmó la entrega');
+        throw new BadRequestException('El transportista ya confirmo la entrega');
       }
 
       const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
@@ -523,7 +538,8 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight',
+            entityId: freightId,
             action: plantAlsoConfirmed ? 'finished' : 'confirm_finished',
             fromValue: 'loaded',
             toValue: plantAlsoConfirmed ? 'finished' : 'loaded',
@@ -538,7 +554,7 @@ export class FreightsService {
 
     if (ct === 'plant') {
       if (freight.plantFinishedConfirmedAt) {
-        throw new BadRequestException('La planta ya confirmó la recepción');
+        throw new BadRequestException('La planta ya confirmo la recepcion');
       }
 
       const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
@@ -555,7 +571,8 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight',
+            entityId: freightId,
             action: transporterAlsoConfirmed ? 'finished' : 'confirm_finished',
             fromValue: 'loaded',
             toValue: transporterAlsoConfirmed ? 'finished' : 'loaded',
@@ -568,7 +585,7 @@ export class FreightsService {
       });
     }
 
-    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
+    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalizacion');
   }
 
   // ======================== FINISH ====================================
@@ -593,9 +610,11 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'finished',
-          fromValue: freight.status, toValue: 'finished',
+          fromValue: freight.status,
+          toValue: 'finished',
           userId: user.sub,
         },
       });
@@ -614,7 +633,12 @@ export class FreightsService {
       throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
     }
 
-    this.stateMachine.validateTransition(freight.status, FreightStatus.canceled, user.companyType, dto.reason);
+    this.stateMachine.validateTransition(
+      freight.status,
+      FreightStatus.canceled,
+      user.companyType,
+      dto.reason,
+    );
 
     return this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.updateMany({
@@ -629,10 +653,13 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'canceled',
-          fromValue: freight.status, toValue: 'canceled',
-          userId: user.sub, reason: dto.reason,
+          fromValue: freight.status,
+          toValue: 'canceled',
+          userId: user.sub,
+          reason: dto.reason,
         },
       });
 
@@ -653,7 +680,7 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.assigned) {
-      throw new BadRequestException('El flete no está en estado asignado');
+      throw new BadRequestException('El flete no esta en estado asignado');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -664,9 +691,11 @@ export class FreightsService {
 
       await tx.auditLog.create({
         data: {
-          entityType: 'freight', entityId: freightId,
+          entityType: 'freight',
+          entityId: freightId,
           action: 'authorized',
-          fromValue: 'assigned', toValue: 'accepted',
+          fromValue: 'assigned',
+          toValue: 'accepted',
           userId: user.sub,
         },
       });
@@ -677,18 +706,27 @@ export class FreightsService {
 
   // ======================== UPDATE FREIGHT ==============================
 
-  async updateFreight(freightId: string, dto: { loadDate?: string; loadTime?: string; notes?: string }, user: any) {
+  async updateFreight(
+    freightId: string,
+    dto: { loadDate?: string; loadTime?: string; notes?: string },
+    user: any,
+  ) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.pending_assignment) {
-      throw new BadRequestException('Solo se puede editar un flete pendiente de asignación');
+      throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
     }
     if (freight.requestedById !== user.sub) {
       throw new ForbiddenException('Solo el solicitante puede editar');
     }
 
     const data: any = {};
-    if (dto.loadDate) { data.loadDate = new Date(dto.loadDate); data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`); }
+    if (dto.loadDate) {
+      data.loadDate = new Date(dto.loadDate);
+      data.scheduledAt = new Date(
+        `${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`,
+      );
+    }
     if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
     if (dto.notes !== undefined) data.notes = dto.notes;
 
@@ -730,7 +768,11 @@ export class FreightsService {
         metadata: true,
         createdAt: true,
         user: {
-          select: { id: true, name: true, company: { select: { name: true, type: true } } },
+          select: {
+            id: true,
+            name: true,
+            company: { select: { name: true, type: true } },
+          },
         },
       },
     });
@@ -738,7 +780,11 @@ export class FreightsService {
 
   // ======================== TRACKING ===================================
 
-  async addTrackingPoint(freightId: string, body: { lat: number; lng: number; speed?: number; heading?: number }, user: any) {
+  async addTrackingPoint(
+    freightId: string,
+    body: { lat: number; lng: number; speed?: number; heading?: number },
+    user: any,
+  ) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.in_progress) {
@@ -775,7 +821,11 @@ export class FreightsService {
 
   // ======================== ADD DOCUMENT ================================
 
-  async addDocument(freightId: string, body: { name: string; url: string; type?: string; step?: string }, user: any) {
+  async addDocument(
+    freightId: string,
+    body: { name: string; url: string; type?: string; step?: string },
+    user: any,
+  ) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
