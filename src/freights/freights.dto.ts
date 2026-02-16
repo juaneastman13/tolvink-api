@@ -43,9 +43,25 @@ export class CreateFreightDto {
   @IsUUID()
   fieldId?: string;
 
-  @ApiProperty()
+  @ApiProperty({ required: false })
+  @IsOptional()
   @IsUUID()
-  destPlantId: string;
+  destPlantId?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre del destino personalizado' })
+  @IsOptional()
+  @MaxLength(255)
+  customDestName?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  customDestLat?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  customDestLng?: number;
 
   @ApiProperty({ example: '2026-02-20' })
   @IsDateString()

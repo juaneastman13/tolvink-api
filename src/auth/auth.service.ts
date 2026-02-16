@@ -104,6 +104,8 @@ export class AuthService {
       phone: user.phone || null,
       role: user.role,
       userTypes: user.userTypes || [],
+      companyByType: user.companyByType || {},
+      roleByType: user.roleByType || {},
       isSuperAdmin: user.isSuperAdmin || false,
       company: user.company || null,
     };

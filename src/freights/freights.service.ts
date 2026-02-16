@@ -13,18 +13,55 @@ export class FreightsService {
 
   // ======================== CREATE ====================================
 
+  private async resolveProducerCompanyId(user: any): Promise<string> {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    const cbt = (dbUser?.companyByType as any) || {};
+    if (cbt.producer) return cbt.producer;
+    if (dbUser?.companyId) {
+      const company = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
+      if (company?.type === 'producer') return dbUser.companyId;
+    }
+    return user.companyId;
+  }
+
   async create(dto: CreateFreightDto, user: any) {
+    if (!dto.destPlantId && !dto.customDestName) {
+      throw new BadRequestException('Debe indicar planta destino o destino personalizado');
+    }
+
+    const producerCompanyId = await this.resolveProducerCompanyId(user);
+
     const lot = await this.prisma.lot.findFirst({
-      where: { id: dto.originLotId, companyId: user.companyId, active: true },
+      where: { id: dto.originLotId, companyId: producerCompanyId, active: true },
       include: { field: true },
     });
     if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
 
-    const plant = await this.prisma.plant.findFirst({
-      where: { id: dto.destPlantId, active: true },
-      include: { company: true },
-    });
-    if (!plant) throw new BadRequestException('Planta no encontrada');
+    let destCompanyId: string | null = null;
+    let destPlantId: string | null = null;
+    let destName: string;
+    let destLat: any;
+    let destLng: any;
+
+    if (dto.destPlantId) {
+      const plant = await this.prisma.plant.findFirst({
+        where: { id: dto.destPlantId, active: true },
+        include: { company: true },
+      });
+      if (!plant) throw new BadRequestException('Planta no encontrada');
+      destCompanyId = plant.companyId;
+      destPlantId = plant.id;
+      destName = plant.name;
+      destLat = dto.overrideDestLat || plant.lat;
+      destLng = dto.overrideDestLng || plant.lng;
+    } else {
+      destName = dto.customDestName!;
+      destLat = dto.customDestLat || null;
+      destLng = dto.customDestLng || null;
+    }
 
     const fieldId = dto.fieldId || lot.fieldId || null;
 
@@ -37,22 +74,25 @@ export class FreightsService {
     const count = await this.prisma.freight.count();
     const code = `FLT-${String(count + 1).padStart(4, '0')}`;
 
+    const participants: { companyId: string }[] = [{ companyId: producerCompanyId }];
+    if (destCompanyId) participants.push({ companyId: destCompanyId });
+
     const freight = await this.prisma.$transaction(async (tx) => {
       const f = await tx.freight.create({
         data: {
           code,
           status: FreightStatus.pending_assignment,
-          originCompanyId: user.companyId,
+          originCompanyId: producerCompanyId,
           originLotId: lot.id,
           fieldId,
           originName: lot.name,
           originLat: dto.overrideOriginLat || lot.lat,
           originLng: dto.overrideOriginLng || lot.lng,
-          destCompanyId: plant.companyId,
-          destPlantId: plant.id,
-          destName: plant.name,
-          destLat: dto.overrideDestLat || plant.lat,
-          destLng: dto.overrideDestLng || plant.lng,
+          destCompanyId,
+          destPlantId,
+          destName,
+          destLat,
+          destLng,
           loadDate: new Date(dto.loadDate),
           loadTime: dto.loadTime,
           scheduledAt,
@@ -67,12 +107,7 @@ export class FreightsService {
           },
           conversation: {
             create: {
-              participants: {
-                create: [
-                  { companyId: user.companyId },
-                  { companyId: plant.companyId },
-                ],
-              },
+              participants: { create: participants },
             },
           },
         },
@@ -91,13 +126,13 @@ export class FreightsService {
 
       if (dto.truckId) {
         const truck = await tx.truck.findFirst({
-          where: { id: dto.truckId, companyId: user.companyId, active: true },
+          where: { id: dto.truckId, companyId: producerCompanyId, active: true },
         });
         if (truck) {
           await tx.freightAssignment.create({
             data: {
               freightId: f.id,
-              transportCompanyId: user.companyId,
+              transportCompanyId: producerCompanyId,
               status: AssignmentStatus.accepted,
               assignedById: user.sub,
               truckId: truck.id,

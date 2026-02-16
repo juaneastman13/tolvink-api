@@ -6,9 +6,31 @@ import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fi
 export class FieldsService {
   constructor(private prisma: PrismaService) {}
 
+  private async resolveProducerCompanyId(user: any): Promise<string> {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    if (!dbUser) throw new ForbiddenException('Usuario no encontrado');
+
+    const cbt = (dbUser.companyByType as any) || {};
+    if (cbt.producer) return cbt.producer;
+
+    if (dbUser.companyId) {
+      const company = await this.prisma.company.findUnique({
+        where: { id: dbUser.companyId },
+        select: { type: true },
+      });
+      if (company?.type === 'producer') return dbUser.companyId;
+    }
+
+    throw new ForbiddenException('No tenés empresa productora asociada');
+  }
+
   async getFields(user: any) {
+    const companyId = await this.resolveProducerCompanyId(user);
     return this.prisma.field.findMany({
-      where: { companyId: user.companyId, active: true },
+      where: { companyId, active: true },
       include: {
         lots: {
           where: { active: true },
@@ -21,10 +43,11 @@ export class FieldsService {
   }
 
   async createField(user: any, dto: CreateFieldDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
     return this.prisma.field.create({
       data: {
         name: dto.name,
-        companyId: user.companyId,
+        companyId,
         address: dto.address || null,
         lat: dto.lat || null,
         lng: dto.lng || null,
@@ -33,8 +56,9 @@ export class FieldsService {
   }
 
   async updateField(user: any, fieldId: string, dto: UpdateFieldDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
     const field = await this.prisma.field.findFirst({
-      where: { id: fieldId, companyId: user.companyId, active: true },
+      where: { id: fieldId, companyId, active: true },
     });
     if (!field) throw new NotFoundException('Campo no encontrado');
 
@@ -50,8 +74,9 @@ export class FieldsService {
   }
 
   async getLots(user: any, fieldId: string) {
+    const companyId = await this.resolveProducerCompanyId(user);
     const field = await this.prisma.field.findFirst({
-      where: { id: fieldId, companyId: user.companyId, active: true },
+      where: { id: fieldId, companyId, active: true },
     });
     if (!field) throw new NotFoundException('Campo no encontrado');
 
@@ -63,19 +88,19 @@ export class FieldsService {
   }
 
   async createLot(user: any, fieldId: string, dto: CreateLotDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
     const field = await this.prisma.field.findFirst({
-      where: { id: fieldId, companyId: user.companyId, active: true },
+      where: { id: fieldId, companyId, active: true },
     });
     if (!field) throw new NotFoundException('Campo no encontrado');
 
-    // Use field location as default if lot doesn't have its own
     const lat = dto.lat ?? field.lat;
     const lng = dto.lng ?? field.lng;
 
     return this.prisma.lot.create({
       data: {
         name: dto.name,
-        companyId: user.companyId,
+        companyId,
         fieldId: fieldId,
         hectares: dto.hectares || null,
         lat: lat || 0,
@@ -85,8 +110,9 @@ export class FieldsService {
   }
 
   async updateLot(user: any, fieldId: string, lotId: string, dto: UpdateLotDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
     const lot = await this.prisma.lot.findFirst({
-      where: { id: lotId, fieldId, companyId: user.companyId, active: true },
+      where: { id: lotId, fieldId, companyId, active: true },
     });
     if (!lot) throw new NotFoundException('Lote no encontrado');
 

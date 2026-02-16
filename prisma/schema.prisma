@@ -288,7 +288,7 @@ model Freight {
   originLng       Decimal? @db.Decimal(10, 6)
 
   // Destination
-  destCompanyId String  @map("dest_company_id")
+  destCompanyId String?  @map("dest_company_id")
   destPlantId   String? @map("dest_plant_id")
   destName      String  @db.VarChar(255)
   destLat       Decimal? @db.Decimal(10, 6)
@@ -318,7 +318,7 @@ model Freight {
 
   // Relations
   originCompany Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
-  destCompany   Company  @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
+  destCompany   Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
   originLot     Lot?     @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
   destPlant     Plant?   @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
   field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)
