@@ -192,10 +192,14 @@ export class ConversationsService {
         user: p.userId ? (userMap.get(p.userId) || null) : null,
       }));
 
-      const otherParticipants = participantsEnriched.filter(p => !allIds.includes(p.companyId));
+      const otherParticipants = participantsEnriched.filter(p => p.userId ? p.userId !== user.sub : !allIds.includes(p.companyId));
+      const lastMsgSender = c.messages?.[0]?.sender;
       const displayName = c.freight
         ? `Flete ${c.freight.code}`
-        : otherParticipants.map(p => p.user?.name || p.company?.name || 'Desconocido').join(', ');
+        : otherParticipants.map(p => p.user?.name || '').filter(Boolean).join(', ')
+          || (lastMsgSender?.id !== user.sub ? lastMsgSender?.name : null)
+          || otherParticipants.map(p => p.company?.name || '').filter(Boolean).join(', ')
+          || 'Chat';
 
       // Compute unread: compare lastReadAt of my participant vs last message time
       const myParticipant = c.participants.find(p => allIds.includes(p.companyId));
