@@ -13,39 +13,54 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    if (!dto.email && !dto.phone) {
-      throw new BadRequestException('Email o telefono requerido');
+    try {
+      if (!dto.email && !dto.phone) {
+        throw new BadRequestException('Email o telefono requerido');
+      }
+
+      const where = dto.phone
+        ? { phone: dto.phone }
+        : { email: dto.email };
+
+      console.log('[AUTH SERVICE] Login attempt:', where);
+
+      const user = await this.prisma.user.findFirst({
+        where,
+        include: {
+          company: {
+            select: { id: true, name: true, type: true, hasInternalFleet: true }
+          }
+        },
+      });
+
+      console.log('[AUTH SERVICE] User found:', user ? { id: user.id, hasCompany: !!user.company } : 'null');
+
+      if (!user || !user.active) {
+        throw new UnauthorizedException('Credenciales invalidas');
+      }
+
+      const valid = await bcrypt.compare(dto.password, user.passwordHash);
+      if (!valid) {
+        throw new UnauthorizedException('Credenciales invalidas');
+      }
+
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      });
+
+      const token = await this.signToken(user);
+
+      console.log('[AUTH SERVICE] Login successful for user:', user.id);
+
+      return {
+        access_token: token,
+        user: this.buildUserResponse(user),
+      };
+    } catch (error) {
+      console.error('[AUTH SERVICE] Login error:', error);
+      throw error;
     }
-
-    const where = dto.phone
-      ? { phone: dto.phone }
-      : { email: dto.email };
-
-    const user = await this.prisma.user.findFirst({
-      where,
-      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
-    });
-
-    if (!user || !user.active) {
-      throw new UnauthorizedException('Credenciales invalidas');
-    }
-
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) {
-      throw new UnauthorizedException('Credenciales invalidas');
-    }
-
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLogin: new Date() },
-    });
-
-    const token = await this.signToken(user);
-
-    return {
-      access_token: token,
-      user: this.buildUserResponse(user),
-    };
   }
 
   async register(dto: RegisterDto) {
@@ -95,11 +110,20 @@ export class AuthService {
   }
 
   private async signToken(user: any): Promise<string> {
-    return this.jwt.signAsync({
-      sub: user.id,
-      role: user.role,
-      companyId: user.companyId || user.company?.id,
-      companyType: user.company?.type,
-    });
+    try {
+      const payload = {
+        sub: user.id,
+        role: user.role,
+        companyId: user.companyId || user.company?.id || null,
+        companyType: user.company?.type || null,
+      };
+
+      console.log('[AUTH SERVICE] Signing token with payload:', payload);
+
+      return this.jwt.signAsync(payload);
+    } catch (error) {
+      console.error('[AUTH SERVICE] Token signing error:', error);
+      throw error;
+    }
   }
 }
