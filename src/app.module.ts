@@ -11,6 +11,7 @@ import { FieldsService } from './fields/fields.service';
 import { TrucksController, TrucksService } from './trucks/trucks.controller';
 import { PlantAccessController, PlantAccessService } from './plant-access/plant-access.controller';
 import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
+import { AdminController, AdminService } from './admin/admin.controller';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ConversationsController, ConversationsService } from './conversations/c
     TrucksController,
     PlantAccessController,
     ConversationsController,
+    AdminController,
   ],
   providers: [
     PrismaService,
@@ -33,6 +35,7 @@ import { ConversationsController, ConversationsService } from './conversations/c
     TrucksService,
     PlantAccessService,
     ConversationsService,
+    AdminService,
   ],
 })
 export class AppModule {}
