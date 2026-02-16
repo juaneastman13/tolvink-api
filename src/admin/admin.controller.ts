@@ -1,3 +1,4 @@
+// ADMIN MODULE v2 - 20260216_102317
 // =====================================================================
 // TOLVINK — Admin Module (Controller + Service + DTOs)
 // Simple, clean, no over-engineering
