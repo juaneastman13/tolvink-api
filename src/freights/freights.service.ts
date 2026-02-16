@@ -27,6 +27,20 @@ export class FreightsService {
     return user.companyId;
   }
 
+  /** All company IDs a user belongs to (multi-type support) */
+  private async resolveAllCompanyIds(user: any): Promise<string[]> {
+    const ids = new Set<string>();
+    if (user.companyId) ids.add(user.companyId);
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    if (dbUser?.companyId) ids.add(dbUser.companyId);
+    const cbt = (dbUser?.companyByType as any) || {};
+    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    return Array.from(ids);
+  }
+
   async create(dto: CreateFreightDto, user: any) {
     if (!dto.destPlantId && !dto.customDestName) {
       throw new BadRequestException('Debe indicar planta destino o destino personalizado');
@@ -54,13 +68,19 @@ export class FreightsService {
       if (!plant) throw new BadRequestException('Planta no encontrada');
       destCompanyId = plant.companyId;
       destPlantId = plant.id;
-      destName = plant.name;
-      destLat = dto.overrideDestLat || plant.lat;
-      destLng = dto.overrideDestLng || plant.lng;
+      // If customDestName also provided (branch mode) → use branch info for display
+      destName = dto.customDestName || plant.name;
+      destLat = dto.customDestLat || dto.overrideDestLat || plant.lat;
+      destLng = dto.customDestLng || dto.overrideDestLng || plant.lng;
     } else {
       destName = dto.customDestName!;
       destLat = dto.customDestLat || null;
       destLng = dto.customDestLng || null;
+      // Allow explicit destCompanyId for custom dests linked to a company
+      if (dto.destCompanyId) {
+        const co = await this.prisma.company.findFirst({ where: { id: dto.destCompanyId, active: true } });
+        if (co) destCompanyId = co.id;
+      }
     }
 
     const fieldId = dto.fieldId || lot.fieldId || null;
@@ -163,13 +183,14 @@ export class FreightsService {
     const where: any = {};
 
     if (user.role !== 'platform_admin') {
+      const allIds = await this.resolveAllCompanyIds(user);
       where.OR = [
-        { originCompanyId: user.companyId },
-        { destCompanyId: user.companyId },
+        { originCompanyId: { in: allIds } },
+        { destCompanyId: { in: allIds } },
         {
           assignments: {
             some: {
-              transportCompanyId: user.companyId,
+              transportCompanyId: { in: allIds },
               status: { in: ['active', 'accepted'] },
             },
           },

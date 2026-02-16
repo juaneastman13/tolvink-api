@@ -1,6 +1,6 @@
 // =====================================================================
-// TOLVINK — Conversations Controller + Service v2
-// Independent chat + freight chat with search
+// TOLVINK — Conversations Controller + Service v3
+// Independent chat + freight chat with search + company name search
 // =====================================================================
 
 import { Controller, Get, Post, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
@@ -34,11 +34,40 @@ export class SendMessageDto {
 export class ConversationsService {
   constructor(private prisma: PrismaService) {}
 
+  private async resolveAllCompanyIds(user: any): Promise<string[]> {
+    const ids = new Set<string>();
+    if (user.companyId) ids.add(user.companyId);
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { companyId: true, companyByType: true },
+    });
+    if (dbUser?.companyId) ids.add(dbUser.companyId);
+    const cbt = (dbUser?.companyByType as any) || {};
+    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    return Array.from(ids);
+  }
+
+  async searchCompanies(q: string, user: any) {
+    if (!q || q.trim().length < 2) return [];
+    const allIds = await this.resolveAllCompanyIds(user);
+    return this.prisma.company.findMany({
+      where: {
+        active: true,
+        id: { notIn: allIds },
+        name: { contains: q.trim(), mode: 'insensitive' },
+      },
+      select: { id: true, name: true, type: true },
+      take: 10,
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async startConversation(dto: StartConversationDto, user: any) {
-    const myCompanyId = user.companyId;
+    const allIds = await this.resolveAllCompanyIds(user);
+    const myPrimaryId = allIds[0];
     const targetId = dto.targetCompanyId;
 
-    if (myCompanyId === targetId) {
+    if (allIds.includes(targetId)) {
       throw new BadRequestException('No podés iniciar conversación con tu propia empresa');
     }
 
@@ -47,20 +76,16 @@ export class ConversationsService {
     });
     if (!target) throw new BadRequestException('Empresa no encontrada');
 
-    // Check if conversation already exists between these two companies
+    // Check if conversation already exists between any of user's companies and target
     const existing = await this.prisma.conversation.findFirst({
       where: {
         freightId: null,
         AND: [
-          { participants: { some: { companyId: myCompanyId } } },
+          { participants: { some: { companyId: { in: allIds } } } },
           { participants: { some: { companyId: targetId } } },
         ],
       },
-      include: {
-        participants: {
-          include: { conversation: false },
-        },
-      },
+      include: { participants: true },
     });
 
     if (existing && existing.participants.length === 2) {
@@ -71,30 +96,24 @@ export class ConversationsService {
       data: {
         participants: {
           create: [
-            { companyId: myCompanyId },
+            { companyId: myPrimaryId },
             { companyId: targetId },
           ],
         },
       },
-      include: {
-        participants: true,
-      },
+      include: { participants: true },
     });
   }
 
   async listConversations(user: any, search?: string) {
-    const where: any = {
-      participants: { some: { companyId: user.companyId } },
-    };
+    const allIds = await this.resolveAllCompanyIds(user);
 
     const convs = await this.prisma.conversation.findMany({
-      where,
+      where: {
+        participants: { some: { companyId: { in: allIds } } },
+      },
       include: {
-        participants: {
-          include: {
-            // We need company name for display
-          },
-        },
+        participants: true,
         messages: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -115,27 +134,20 @@ export class ConversationsService {
     });
     const companyMap = new Map(companies.map(c => [c.id, c]));
 
-    // Build enriched response
     const enriched = convs.map(c => {
       const participantsWithCompany = c.participants.map(p => ({
         ...p,
         company: companyMap.get(p.companyId) || null,
       }));
 
-      // Build display name
-      const otherParticipants = participantsWithCompany.filter(p => p.companyId !== user.companyId);
+      const otherParticipants = participantsWithCompany.filter(p => !allIds.includes(p.companyId));
       const displayName = c.freight
         ? `Flete ${c.freight.code}`
         : otherParticipants.map(p => p.company?.name || 'Desconocido').join(', ');
 
-      return {
-        ...c,
-        participants: participantsWithCompany,
-        displayName,
-      };
+      return { ...c, participants: participantsWithCompany, displayName };
     });
 
-    // Apply search filter if provided
     if (search && search.trim()) {
       const s = search.toLowerCase().trim();
       return enriched.filter(c =>
@@ -149,12 +161,12 @@ export class ConversationsService {
   }
 
   async getMessages(conversationId: string, user: any) {
-    // Verify user's company is participant
+    const allIds = await this.resolveAllCompanyIds(user);
+
     const participant = await this.prisma.conversationParticipant.findFirst({
-      where: { conversationId, companyId: user.companyId },
+      where: { conversationId, companyId: { in: allIds } },
     });
 
-    // Fallback: check if it's a freight conversation where user's company is involved
     if (!participant) {
       const conv = await this.prisma.conversation.findUnique({
         where: { id: conversationId },
@@ -162,26 +174,24 @@ export class ConversationsService {
       });
       if (conv?.freight) {
         const isInvolved =
-          conv.freight.originCompanyId === user.companyId ||
-          conv.freight.destCompanyId === user.companyId;
+          allIds.includes(conv.freight.originCompanyId) ||
+          (conv.freight.destCompanyId && allIds.includes(conv.freight.destCompanyId));
 
         if (isInvolved) {
-          // Auto-add as participant
           await this.prisma.conversationParticipant.create({
-            data: { conversationId, companyId: user.companyId },
-          }).catch(() => {}); // ignore if already exists
+            data: { conversationId, companyId: allIds[0] },
+          }).catch(() => {});
         } else {
-          // Check if transporter
           const assignment = await this.prisma.freightAssignment.findFirst({
             where: {
               freightId: conv.freight.id,
-              transportCompanyId: user.companyId,
+              transportCompanyId: { in: allIds },
               status: { in: ['active', 'accepted'] },
             },
           });
           if (assignment) {
             await this.prisma.conversationParticipant.create({
-              data: { conversationId, companyId: user.companyId },
+              data: { conversationId, companyId: allIds[0] },
             }).catch(() => {});
           } else {
             throw new ForbiddenException('No participás en esta conversación');
@@ -200,33 +210,33 @@ export class ConversationsService {
   }
 
   async sendMessage(conversationId: string, dto: SendMessageDto, user: any) {
-    // Verify access (same logic as getMessages)
+    const allIds = await this.resolveAllCompanyIds(user);
+
     const participant = await this.prisma.conversationParticipant.findFirst({
-      where: { conversationId, companyId: user.companyId },
+      where: { conversationId, companyId: { in: allIds } },
     });
 
     if (!participant) {
-      // Try auto-join for freight conversations
       const conv = await this.prisma.conversation.findUnique({
         where: { id: conversationId },
         include: { freight: true },
       });
       if (conv?.freight) {
         const isInvolved =
-          conv.freight.originCompanyId === user.companyId ||
-          conv.freight.destCompanyId === user.companyId;
+          allIds.includes(conv.freight.originCompanyId) ||
+          (conv.freight.destCompanyId && allIds.includes(conv.freight.destCompanyId));
 
         const isTransporter = await this.prisma.freightAssignment.findFirst({
           where: {
             freightId: conv.freight.id,
-            transportCompanyId: user.companyId,
+            transportCompanyId: { in: allIds },
             status: { in: ['active', 'accepted'] },
           },
         });
 
         if (isInvolved || isTransporter) {
           await this.prisma.conversationParticipant.create({
-            data: { conversationId, companyId: user.companyId },
+            data: { conversationId, companyId: allIds[0] },
           }).catch(() => {});
         } else {
           throw new ForbiddenException('No participás en esta conversación');
@@ -255,6 +265,13 @@ export class ConversationsService {
 @Controller('conversations')
 export class ConversationsController {
   constructor(private service: ConversationsService) {}
+
+  @Get('search-companies')
+  @ApiOperation({ summary: 'Buscar empresas por nombre para iniciar chat' })
+  @ApiQuery({ name: 'q', required: true })
+  searchCompanies(@Query('q') q: string, @CurrentUser() user: any) {
+    return this.service.searchCompanies(q, user);
+  }
 
   @Post('start')
   @ApiOperation({ summary: 'Iniciar conversación con otra empresa' })

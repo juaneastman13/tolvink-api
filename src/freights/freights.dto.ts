@@ -48,6 +48,11 @@ export class CreateFreightDto {
   @IsUUID()
   destPlantId?: string;
 
+  @ApiProperty({ required: false, description: 'ID de empresa destino (para destinos custom vinculados)' })
+  @IsOptional()
+  @IsUUID()
+  destCompanyId?: string;
+
   @ApiProperty({ required: false, description: 'Nombre del destino personalizado' })
   @IsOptional()
   @MaxLength(255)
