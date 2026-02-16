@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Get } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './auth.dto';
@@ -7,6 +7,16 @@ import { LoginDto, RegisterDto } from './auth.dto';
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
+
+  @Get('ping')
+  @ApiOperation({ summary: 'Simple ping endpoint' })
+  ping() {
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      message: 'Auth controller is working',
+    };
+  }
 
   @Post('login')
   @ApiOperation({ summary: 'Login con email y contraseña' })
