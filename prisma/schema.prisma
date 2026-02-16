@@ -381,6 +381,7 @@ model FreightDocument {
 model FreightTracking {
   id        String   @id @default(uuid())
   freightId String   @map("freight_id")
+  userId    String?  @map("user_id")
   lat       Decimal  @db.Decimal(10, 6)
   lng       Decimal  @db.Decimal(10, 6)
   speed     Decimal? @db.Decimal(6, 2)
@@ -393,21 +394,6 @@ model FreightTracking {
   @@index([createdAt])
   @@map("freight_tracking")
 }
-
-// ======================== CONVERSATIONS ===============================
-
-model Conversation {
-  id        String   @id @default(uuid())
-  freightId String?  @unique @map("freight_id")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  freight      Freight?                  @relation("FreightConversation", fields: [freightId], references: [id], onDelete: Cascade)
-  messages     Message[]
-  participants ConversationParticipant[]
-
-  @@map("conversations")
-}
-
 // ======================== CONVERSATION PARTICIPANTS ===================
 
 model ConversationParticipant {
