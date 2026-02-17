@@ -344,6 +344,7 @@ model Freight {
   @@index([loadDate])
   @@index([code])
   @@index([fieldId])
+  @@index([requestedById])
   @@map("freights")
 }
 
@@ -392,6 +393,7 @@ model FreightAssignment {
   @@index([transportCompanyId])
   @@index([status])
   @@index([truckId])
+  @@index([driverId])
   @@map("freight_assignments")
 }
 
