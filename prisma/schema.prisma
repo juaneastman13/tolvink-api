@@ -52,6 +52,7 @@ enum GrainType {
   Girasol
   Sorgo
   Cebada
+  Otros
 }
 
 enum NotificationType {

@@ -163,7 +163,7 @@ export class FreightsService {
           notes: dto.notes,
           items: {
             create: dto.items.map((i) => ({
-              grain: i.grain as any,
+              grain: (i.grain === 'Maíz' ? 'Maiz' : i.grain) as any,
               tons: i.tons,
               notes: i.notes,
             })),
