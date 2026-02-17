@@ -9,9 +9,9 @@ export class LoginDto {
   @IsString()
   phone?: string;
 
-  @IsNotEmpty({ message: 'Password requerido' })
+  @IsOptional()
   @IsString()
-  password: string;
+  password?: string;
 }
 
 export class RegisterDto {
@@ -28,10 +28,9 @@ export class RegisterDto {
   @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 digitos)' })
   phone: string;
 
-  @IsNotEmpty({ message: 'Password requerido' })
+  @IsOptional()
   @IsString()
-  @MinLength(8, { message: 'Password mínimo 8 caracteres' })
-  password: string;
+  password?: string;
 
   @IsArray({ message: 'userTypes debe ser un array' })
   @ArrayMinSize(1, { message: 'Selecciona al menos un tipo' })

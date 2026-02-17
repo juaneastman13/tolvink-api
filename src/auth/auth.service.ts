@@ -36,8 +36,12 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales invalidas');
     }
 
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) {
+    if (user.passwordHash && dto.password) {
+      const valid = await bcrypt.compare(dto.password, user.passwordHash);
+      if (!valid) {
+        throw new UnauthorizedException('Credenciales invalidas');
+      }
+    } else if (user.passwordHash && !dto.password) {
       throw new UnauthorizedException('Credenciales invalidas');
     }
 
@@ -66,7 +70,7 @@ export class AuthService {
       throw new ConflictException('Telefono ya registrado');
     }
 
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
 
     const user = await this.prisma.user.create({
       data: {
