@@ -6,39 +6,63 @@ import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fi
 export class FieldsService {
   constructor(private prisma: PrismaService) {}
 
-  private async resolveProducerCompanyId(user: any): Promise<string> {
+  /** Resolve ALL producer company IDs the user belongs to */
+  private async resolveAllProducerCompanyIds(user: any): Promise<string[]> {
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
       select: { companyId: true, companyByType: true },
     });
     if (!dbUser) throw new ForbiddenException('Usuario no encontrado');
 
+    const ids = new Set<string>();
     const cbt = (dbUser.companyByType as any) || {};
-    if (cbt.producer) return cbt.producer;
 
+    // Add producer company from companyByType
+    if (cbt.producer) ids.add(cbt.producer);
+
+    // Add primary companyId if it's a producer type
     if (dbUser.companyId) {
       const company = await this.prisma.company.findUnique({
         where: { id: dbUser.companyId },
         select: { type: true },
       });
-      if (company?.type === 'producer') return dbUser.companyId;
+      if (company?.type === 'producer') ids.add(dbUser.companyId);
     }
 
-    throw new ForbiddenException('No tenés empresa productora asociada');
+    // Also check all values in companyByType that are producer-type companies
+    for (const compId of Object.values(cbt)) {
+      if (compId && typeof compId === 'string' && !ids.has(compId)) {
+        const co = await this.prisma.company.findUnique({
+          where: { id: compId },
+          select: { type: true },
+        });
+        if (co?.type === 'producer') ids.add(compId);
+      }
+    }
+
+    return Array.from(ids);
+  }
+
+  private async resolveProducerCompanyId(user: any): Promise<string> {
+    const ids = await this.resolveAllProducerCompanyIds(user);
+    if (ids.length === 0) throw new ForbiddenException('No tenés empresa productora asociada');
+    return ids[0];
   }
 
   async getFields(user: any) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    if (companyIds.length === 0) return [];
     return this.prisma.field.findMany({
-      where: { companyId, active: true },
+      where: { companyId: { in: companyIds }, active: true },
       include: {
+        company: { select: { id: true, name: true } },
         lots: {
           where: { active: true },
           select: { id: true, name: true, hectares: true, lat: true, lng: true },
           orderBy: { name: 'asc' },
         },
       },
-      orderBy: { name: 'asc' },
+      orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
     });
   }
 
