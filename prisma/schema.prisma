@@ -136,6 +136,7 @@ model User {
   messagesSent       Message[]
   auditLogs          AuditLog[]
   notifications      Notification[]
+  pushSubscriptions  PushSubscription[]
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
 
   @@index([companyId])
@@ -523,4 +524,21 @@ model Notification {
   @@index([userId, read])
   @@index([createdAt])
   @@map("notifications")
+}
+
+// ======================== PUSH SUBSCRIPTIONS ===========================
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  endpoint  String   @db.Text
+  p256dh    String   @db.VarChar(255)
+  auth      String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+  @@index([userId])
+  @@map("push_subscriptions")
 }

@@ -1,14 +1,16 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { FreightStateMachine } from './freight-state-machine.service';
+import { NotificationService } from '../notifications/notification.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
-import { FreightStatus, AssignmentStatus } from '@prisma/client';
+import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/client';
 
 @Injectable()
 export class FreightsService {
   constructor(
     private prisma: PrismaService,
     private stateMachine: FreightStateMachine,
+    private notifications: NotificationService,
   ) {}
 
   // ======================== CREATE ====================================
@@ -202,6 +204,17 @@ export class FreightsService {
       return f;
     });
 
+    // Notify dest company about new freight
+    if (destCompanyId) {
+      const grain = dto.items?.[0]?.grain || 'producto';
+      this.notifications.notifyCompany(
+        destCompanyId, NotificationType.freight_created,
+        'Nuevo flete solicitado',
+        `${grain} desde ${lot.name}`,
+        freight.id, user.sub,
+      ).catch(() => {});
+    }
+
     return freight;
   }
 
@@ -367,6 +380,14 @@ export class FreightsService {
       return updated;
     });
 
+    // Notify transporter about assignment
+    this.notifications.notifyCompany(
+      dto.transportCompanyId, NotificationType.freight_assigned,
+      'Te asignaron un flete',
+      `${freight.code} → ${freight.destName || 'destino'}`,
+      freightId, user.sub,
+    ).catch(() => {});
+
     return result;
   }
 
@@ -395,7 +416,7 @@ export class FreightsService {
         throw new BadRequestException('Motivo obligatorio para rechazar');
       }
 
-      return this.prisma.$transaction(async (tx) => {
+      const result = await this.prisma.$transaction(async (tx) => {
         await tx.freightAssignment.update({
           where: { id: assignment.id },
           data: { status: AssignmentStatus.rejected, reason: dto.reason },
@@ -420,6 +441,18 @@ export class FreightsService {
 
         return updated;
       });
+
+      // Notify origin company about rejection
+      if (freight.originCompanyId) {
+        this.notifications.notifyCompany(
+          freight.originCompanyId, NotificationType.freight_rejected,
+          'Flete rechazado',
+          `${freight.code}: ${dto.reason}`,
+          freightId, user.sub,
+        ).catch(() => {});
+      }
+
+      return result;
     }
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
@@ -439,7 +472,7 @@ export class FreightsService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const acceptResult = await this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.update({
         where: { id: assignment.id },
         data: assignmentUpdate,
@@ -464,6 +497,19 @@ export class FreightsService {
 
       return updated;
     });
+
+    // Notify origin + dest companies about acceptance
+    const notifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
+    for (const cid of notifyIds) {
+      this.notifications.notifyCompany(
+        cid, NotificationType.freight_accepted,
+        'Flete aceptado',
+        `${freight.code} fue aceptado por el transportista`,
+        freightId, user.sub,
+      ).catch(() => {});
+    }
+
+    return acceptResult;
   }
 
   // ======================== START =====================================
@@ -483,7 +529,7 @@ export class FreightsService {
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
-    return this.prisma.$transaction(async (tx) => {
+    const startResult = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.in_progress, startedAt: new Date() },
@@ -502,6 +548,19 @@ export class FreightsService {
 
       return updated;
     });
+
+    // Notify origin + dest companies
+    const startNotifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
+    for (const cid of startNotifyIds) {
+      this.notifications.notifyCompany(
+        cid, NotificationType.freight_started,
+        'Flete en camino',
+        `${freight.code} inició el viaje`,
+        freightId, user.sub,
+      ).catch(() => {});
+    }
+
+    return startResult;
   }
 
   // ======================== CONFIRM LOADED ============================
@@ -533,7 +592,7 @@ export class FreightsService {
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
 
-      return this.prisma.$transaction(async (tx) => {
+      const loadedResult = await this.prisma.$transaction(async (tx) => {
         const updated = await tx.freight.update({
           where: { id: freightId },
           data: {
@@ -557,6 +616,18 @@ export class FreightsService {
 
         return updated;
       });
+
+      // Notify origin company (producer) to confirm load
+      if (freight.originCompanyId) {
+        this.notifications.notifyCompany(
+          freight.originCompanyId, NotificationType.freight_loaded,
+          'Carga confirmada',
+          `${freight.code}: el transportista confirmó la carga`,
+          freightId, user.sub,
+        ).catch(() => {});
+      }
+
+      return loadedResult;
     }
 
     if (ct === 'producer') {
@@ -569,7 +640,7 @@ export class FreightsService {
         throw new BadRequestException('El productor ya confirmo la carga');
       }
 
-      return this.prisma.$transaction(async (tx) => {
+      const prodLoadResult = await this.prisma.$transaction(async (tx) => {
         const updated = await tx.freight.update({
           where: { id: freightId },
           data: { producerLoadedConfirmedAt: new Date() },
@@ -589,6 +660,18 @@ export class FreightsService {
 
         return updated;
       });
+
+      // Notify dest company
+      if (freight.destCompanyId) {
+        this.notifications.notifyCompany(
+          freight.destCompanyId, NotificationType.freight_confirmed,
+          'Carga confirmada',
+          `${freight.code}: el productor confirmó la carga`,
+          freightId, user.sub,
+        ).catch(() => {});
+      }
+
+      return prodLoadResult;
     }
 
     throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
@@ -615,7 +698,7 @@ export class FreightsService {
 
       const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
 
-      return this.prisma.$transaction(async (tx) => {
+      const tFinishResult = await this.prisma.$transaction(async (tx) => {
         const data: any = { transporterFinishedConfirmedAt: new Date() };
         if (plantAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
@@ -639,6 +722,19 @@ export class FreightsService {
 
         return updated;
       });
+
+      // Notify dest company (plant)
+      if (freight.destCompanyId) {
+        const nType = plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+        this.notifications.notifyCompany(
+          freight.destCompanyId, nType,
+          plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
+          `${freight.code}: el transportista confirmó la entrega`,
+          freightId, user.sub,
+        ).catch(() => {});
+      }
+
+      return tFinishResult;
     }
 
     if (ct === 'plant') {
@@ -648,7 +744,7 @@ export class FreightsService {
 
       const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
 
-      return this.prisma.$transaction(async (tx) => {
+      const pFinishResult = await this.prisma.$transaction(async (tx) => {
         const data: any = { plantFinishedConfirmedAt: new Date() };
         if (transporterAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'plant');
@@ -672,6 +768,25 @@ export class FreightsService {
 
         return updated;
       });
+
+      // Notify origin company + transporter
+      const finishNotifyIds = [freight.originCompanyId].filter(Boolean) as string[];
+      // Also get transporter company from assignment
+      const activeAssignment = await this.prisma.freightAssignment.findFirst({
+        where: { freightId, status: { in: ['active', 'accepted'] } },
+      });
+      if (activeAssignment?.transportCompanyId) finishNotifyIds.push(activeAssignment.transportCompanyId);
+      const nType = transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      for (const cid of finishNotifyIds) {
+        this.notifications.notifyCompany(
+          cid, nType,
+          transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
+          `${freight.code}: la planta confirmó la recepción`,
+          freightId, user.sub,
+        ).catch(() => {});
+      }
+
+      return pFinishResult;
     }
 
     throw new ForbiddenException('Solo transportista o planta pueden confirmar finalizacion');
@@ -692,7 +807,7 @@ export class FreightsService {
     const finishCt = await this.resolveCompanyType(user);
     this.stateMachine.validateTransition(freight.status, FreightStatus.finished, finishCt);
 
-    return this.prisma.$transaction(async (tx) => {
+    const finishResult = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.finished, finishedAt: new Date() },
@@ -711,12 +826,28 @@ export class FreightsService {
 
       return updated;
     });
+
+    // Notify all parties
+    const fNotifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
+    for (const cid of fNotifyIds) {
+      this.notifications.notifyCompany(
+        cid, NotificationType.freight_finished,
+        'Flete finalizado',
+        `${freight.code} fue marcado como finalizado`,
+        freightId, user.sub,
+      ).catch(() => {});
+    }
+
+    return finishResult;
   }
 
   // ======================== CANCEL ====================================
 
   async cancel(freightId: string, dto: CancelFreightDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+    });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
     if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
@@ -731,7 +862,7 @@ export class FreightsService {
       dto.reason,
     );
 
-    return this.prisma.$transaction(async (tx) => {
+    const cancelResult = await this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.updateMany({
         where: { freightId, status: { in: ['active', 'accepted'] } },
         data: { status: AssignmentStatus.canceled, reason: 'Flete cancelado' },
@@ -756,6 +887,24 @@ export class FreightsService {
 
       return updated;
     });
+
+    // Notify all parties about cancellation
+    const cancelNotifyIds = new Set<string>();
+    if (freight.originCompanyId) cancelNotifyIds.add(freight.originCompanyId);
+    if (freight.destCompanyId) cancelNotifyIds.add(freight.destCompanyId);
+    for (const a of (freight as any).assignments || []) {
+      if (a.transportCompanyId) cancelNotifyIds.add(a.transportCompanyId);
+    }
+    for (const cid of cancelNotifyIds) {
+      this.notifications.notifyCompany(
+        cid, NotificationType.freight_canceled,
+        'Flete cancelado',
+        `${freight.code}: ${dto.reason}`,
+        freightId, user.sub,
+      ).catch(() => {});
+    }
+
+    return cancelResult;
   }
 
   // ======================== AUTHORIZE (plant approves own fleet) =======

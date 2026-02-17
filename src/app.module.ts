@@ -12,6 +12,7 @@ import { TrucksController, TrucksService } from './trucks/trucks.controller';
 import { PlantAccessController, PlantAccessService } from './plant-access/plant-access.controller';
 import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
 import { AdminController, AdminService } from './admin/admin.controller';
+import { NotificationModule } from './notifications/notification.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AdminController, AdminService } from './admin/admin.controller';
     AuthModule,
     FreightsModule,
     HealthModule,
+    NotificationModule,
   ],
   controllers: [
     CatalogController,
