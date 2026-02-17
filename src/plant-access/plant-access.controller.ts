@@ -75,7 +75,7 @@ export class PlantAccessService {
     return user.companyId;
   }
 
-  async searchProducers(query: string) {
+  async searchUsers(query: string, type: string = 'producer') {
     if (!query || query.trim().length < 2) return [];
 
     const q = query.trim();
@@ -98,36 +98,36 @@ export class PlantAccessService {
     const results: any[] = [];
     for (const user of users) {
       const userTypes = (user.userTypes as string[]) || [];
-      if (!userTypes.includes('producer')) continue;
+      if (!userTypes.includes(type)) continue;
 
       const cbt = (user.companyByType as any) || {};
-      let producerCompanyId: string | null = null;
-      let producerCompanyName: string | null = null;
+      let companyId: string | null = null;
+      let companyName: string | null = null;
 
-      if (cbt.producer) {
+      if (cbt[type]) {
         const company = await this.prisma.company.findUnique({
-          where: { id: cbt.producer },
+          where: { id: cbt[type] },
           select: { id: true, name: true, type: true },
         });
-        if (company?.type === 'producer') {
-          producerCompanyId = company.id;
-          producerCompanyName = company.name;
+        if (company) {
+          companyId = company.id;
+          companyName = company.name;
         }
       }
 
-      if (!producerCompanyId && user.company?.type === 'producer') {
-        producerCompanyId = user.company.id;
-        producerCompanyName = user.company.name;
+      if (!companyId && user.company) {
+        companyId = user.company.id;
+        companyName = user.company.name;
       }
 
-      if (producerCompanyId) {
+      if (companyId) {
         results.push({
           userId: user.id,
           userName: user.name,
           phone: user.phone,
           email: user.email,
-          producerCompanyId,
-          producerCompanyName,
+          producerCompanyId: companyId,
+          producerCompanyName: companyName,
         });
       }
     }
@@ -141,14 +141,14 @@ export class PlantAccessService {
       ? dto.plantCompanyId
       : await this.resolvePlantCompanyId(user);
 
-    // Validate producer user exists and is a producer
+    // Validate user exists and is a producer or transporter
     const producerUser = await this.prisma.user.findUnique({
       where: { id: dto.producerUserId },
       select: { id: true, userTypes: true },
     });
-    if (!producerUser) throw new BadRequestException('Usuario productor no encontrado');
+    if (!producerUser) throw new BadRequestException('Usuario no encontrado');
     const userTypes = (producerUser.userTypes as string[]) || [];
-    if (!userTypes.includes('producer')) throw new BadRequestException('El usuario no es productor');
+    if (!userTypes.includes('producer') && !userTypes.includes('transporter')) throw new BadRequestException('El usuario no es productor ni transportista');
 
     const newPlantIds = dto.allowedPlantIds || [];
     const newBranchIds = dto.allowedBranchIds || [];
@@ -341,11 +341,12 @@ export class PlantAccessController {
 
   @Get('search-producer')
   @Roles('plant', 'platform_admin')
-  @ApiOperation({ summary: 'Buscar productores por nombre, email o teléfono' })
+  @ApiOperation({ summary: 'Buscar usuarios por nombre, email o teléfono' })
   @ApiQuery({ name: 'q', required: true })
-  searchProducer(@Query('q') q: string) {
+  @ApiQuery({ name: 'type', required: false })
+  searchProducer(@Query('q') q: string, @Query('type') type?: string) {
     if (!q?.trim() || q.trim().length < 2) throw new BadRequestException('Ingresá al menos 2 caracteres');
-    return this.service.searchProducers(q.trim());
+    return this.service.searchUsers(q.trim(), type || 'producer');
   }
 
   @Get('my-facilities')
