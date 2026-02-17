@@ -6,14 +6,27 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // Validate critical env vars at startup
+  const required = ['DATABASE_URL', 'JWT_SECRET'];
+  for (const key of required) {
+    if (!process.env[key]) {
+      throw new Error(`Missing required environment variable: ${key}`);
+    }
+  }
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
 
   // Security
-  app.use(helmet());
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    hsts: { maxAge: 31536000, includeSubDomains: true },
+  }));
 
-  // CORS
+  // CORS — explicit whitelist only
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()) || ['http://localhost:3000'];
   app.enableCors({
     origin: corsOrigins,
@@ -32,8 +45,8 @@ async function bootstrap() {
     transform: true,
   }));
 
-  // Swagger (only in non-production or if explicitly enabled)
-  if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_SWAGGER === 'true') {
+  // Swagger — only in development
+  if (process.env.NODE_ENV === 'development') {
     const config = new DocumentBuilder()
       .setTitle('Tolvink API')
       .setDescription('API de gestión de fletes de granos')

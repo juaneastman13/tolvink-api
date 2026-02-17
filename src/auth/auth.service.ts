@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bcrypt = require('bcryptjs');
@@ -7,60 +7,52 @@ import { LoginDto, RegisterDto } from './auth.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
   ) {}
 
   async login(dto: LoginDto) {
-    try {
-      if (!dto.email && !dto.phone) {
-        throw new BadRequestException('Email o telefono requerido');
-      }
-
-      const where = dto.phone
-        ? { phone: dto.phone }
-        : { email: dto.email };
-
-      console.log('[AUTH SERVICE] Login attempt:', where);
-
-      const user = await this.prisma.user.findFirst({
-        where,
-        include: {
-          company: {
-            select: { id: true, name: true, type: true, hasInternalFleet: true }
-          }
-        },
-      });
-
-      console.log('[AUTH SERVICE] User found:', user ? { id: user.id, hasCompany: !!user.company } : 'null');
-
-      if (!user || !user.active) {
-        throw new UnauthorizedException('Credenciales invalidas');
-      }
-
-      const valid = await bcrypt.compare(dto.password, user.passwordHash);
-      if (!valid) {
-        throw new UnauthorizedException('Credenciales invalidas');
-      }
-
-      await this.prisma.user.update({
-        where: { id: user.id },
-        data: { lastLogin: new Date() },
-      });
-
-      const token = await this.signToken(user);
-
-      console.log('[AUTH SERVICE] Login successful for user:', user.id);
-
-      return {
-        access_token: token,
-        user: this.buildUserResponse(user),
-      };
-    } catch (error) {
-      console.error('[AUTH SERVICE] Login error:', error);
-      throw error;
+    if (!dto.email && !dto.phone) {
+      throw new BadRequestException('Email o telefono requerido');
     }
+
+    const where = dto.phone
+      ? { phone: dto.phone }
+      : { email: dto.email };
+
+    const user = await this.prisma.user.findFirst({
+      where,
+      include: {
+        company: {
+          select: { id: true, name: true, type: true, hasInternalFleet: true }
+        }
+      },
+    });
+
+    if (!user || !user.active) {
+      throw new UnauthorizedException('Credenciales invalidas');
+    }
+
+    const valid = await bcrypt.compare(dto.password, user.passwordHash);
+    if (!valid) {
+      throw new UnauthorizedException('Credenciales invalidas');
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastLogin: new Date() },
+    });
+
+    const token = await this.signToken(user);
+    this.logger.log(`User ${user.id} logged in`);
+
+    return {
+      access_token: token,
+      user: this.buildUserResponse(user),
+    };
   }
 
   async register(dto: RegisterDto) {
@@ -112,20 +104,12 @@ export class AuthService {
   }
 
   private async signToken(user: any): Promise<string> {
-    try {
-      const payload = {
-        sub: user.id,
-        role: user.role,
-        companyId: user.companyId || user.company?.id || null,
-        companyType: user.company?.type || null,
-      };
-
-      console.log('[AUTH SERVICE] Signing token with payload:', payload);
-
-      return this.jwt.signAsync(payload);
-    } catch (error) {
-      console.error('[AUTH SERVICE] Token signing error:', error);
-      throw error;
-    }
+    const payload = {
+      sub: user.id,
+      role: user.role,
+      companyId: user.companyId || user.company?.id || null,
+      companyType: user.company?.type || null,
+    };
+    return this.jwt.signAsync(payload);
   }
 }

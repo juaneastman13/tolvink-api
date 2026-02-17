@@ -30,7 +30,7 @@ export class RegisterDto {
 
   @IsNotEmpty({ message: 'Password requerido' })
   @IsString()
-  @MinLength(4, { message: 'Password minimo 4 caracteres' })
+  @MinLength(8, { message: 'Password mínimo 8 caracteres' })
   password: string;
 
   @IsArray({ message: 'userTypes debe ser un array' })

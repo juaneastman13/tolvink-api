@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ValidateNested, IsNumber, Min, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -61,11 +61,13 @@ export class CreateFreightDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
+  @Min(-90) @Max(90)
   customDestLat?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
+  @Min(-180) @Max(180)
   customDestLng?: number;
 
   @ApiProperty({ example: '2026-02-20' })
@@ -93,18 +95,22 @@ export class CreateFreightDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(-90) @Max(90)
   overrideOriginLat?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(-180) @Max(180)
   overrideOriginLng?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(-90) @Max(90)
   overrideDestLat?: number;
 
   @IsOptional()
   @IsNumber()
+  @Min(-180) @Max(180)
   overrideDestLng?: number;
 }
 
