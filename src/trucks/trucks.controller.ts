@@ -42,7 +42,7 @@ export class TrucksService {
 
   async create(dto: CreateTruckDto, user: any) {
     // Allow transporters and producers
-    if (user.companyType !== 'transporter' && user.companyType !== 'producer') {
+    if (user.companyType !== 'transporter' && user.companyType !== 'producer' && user.role !== 'admin') {
       throw new ForbiddenException('Solo transportistas o productores pueden crear camiones');
     }
 
@@ -100,21 +100,21 @@ export class TrucksController {
   constructor(private service: TrucksService) {}
 
   @Post()
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'admin')
   @ApiOperation({ summary: 'Registrar camión' })
   create(@Body() dto: CreateTruckDto, @CurrentUser() user: any) {
     return this.service.create(dto, user);
   }
 
   @Get()
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'admin')
   @ApiOperation({ summary: 'Listar camiones de la empresa' })
   list(@CurrentUser() user: any) {
     return this.service.list(user);
   }
 
   @Patch(':id/deactivate')
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'admin')
   @ApiOperation({ summary: 'Desactivar camión' })
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.deactivate(id, user);

@@ -10,33 +10,42 @@ export class FieldsService {
   private async resolveAllProducerCompanyIds(user: any): Promise<string[]> {
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
+      select: { companyId: true, companyByType: true, role: true },
     });
     if (!dbUser) throw new ForbiddenException('Usuario no encontrado');
 
     const ids = new Set<string>();
     const cbt = (dbUser.companyByType as any) || {};
+    const isAdmin = dbUser.role === 'admin' || user.role === 'admin';
 
     // Add producer company from companyByType
     if (cbt.producer) ids.add(cbt.producer);
 
-    // Add primary companyId if it's a producer type
+    // Add primary companyId — always for admin, only if producer type otherwise
     if (dbUser.companyId) {
-      const company = await this.prisma.company.findUnique({
-        where: { id: dbUser.companyId },
-        select: { type: true },
-      });
-      if (company?.type === 'producer') ids.add(dbUser.companyId);
+      if (isAdmin) {
+        ids.add(dbUser.companyId);
+      } else {
+        const company = await this.prisma.company.findUnique({
+          where: { id: dbUser.companyId },
+          select: { type: true },
+        });
+        if (company?.type === 'producer') ids.add(dbUser.companyId);
+      }
     }
 
     // Also check all values in companyByType that are producer-type companies
     for (const compId of Object.values(cbt)) {
       if (compId && typeof compId === 'string' && !ids.has(compId)) {
-        const co = await this.prisma.company.findUnique({
-          where: { id: compId },
-          select: { type: true },
-        });
-        if (co?.type === 'producer') ids.add(compId);
+        if (isAdmin) {
+          ids.add(compId);
+        } else {
+          const co = await this.prisma.company.findUnique({
+            where: { id: compId },
+            select: { type: true },
+          });
+          if (co?.type === 'producer') ids.add(compId);
+        }
       }
     }
 
