@@ -544,3 +544,18 @@ model PushSubscription {
   @@index([userId])
   @@map("push_subscriptions")
 }
+
+// ======================== ANALYTICS ==================================
+model AnalyticsEvent {
+  id        String   @id @default(uuid())
+  event     String   @db.VarChar(100)
+  data      Json     @default("{}")
+  userId    String?  @map("user_id")
+  sessionId String?  @map("session_id") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([event])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("analytics_events")
+}

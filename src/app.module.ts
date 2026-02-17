@@ -13,6 +13,7 @@ import { PlantAccessController, PlantAccessService } from './plant-access/plant-
 import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
 import { AdminController, AdminService } from './admin/admin.controller';
 import { NotificationModule } from './notifications/notification.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { NotificationModule } from './notifications/notification.module';
     FreightsModule,
     HealthModule,
     NotificationModule,
+    AnalyticsModule,
   ],
   controllers: [
     CatalogController,
