@@ -230,11 +230,15 @@ export class PlantAccessService {
     });
   }
 
-  async listForPlant(user: any, plantCompanyId?: string) {
+  async listForPlant(user: any, plantCompanyId?: string, producerCompanyId?: string) {
     const isAdmin = this.isPlatformAdmin(user);
+    const where: any = {};
 
-    // Admin with no specific company: return ALL access records
-    if (isAdmin && !plantCompanyId) {
+    if (plantCompanyId) where.plantCompanyId = plantCompanyId;
+    if (producerCompanyId) where.producerCompanyId = producerCompanyId;
+
+    // Admin with no filters: return ALL access records
+    if (isAdmin && !plantCompanyId && !producerCompanyId) {
       return this.prisma.plantProducerAccess.findMany({
         include: {
           plantCompany: { select: { id: true, name: true } },
@@ -245,12 +249,13 @@ export class PlantAccessService {
       });
     }
 
-    const plantCoId = isAdmin && plantCompanyId
-      ? plantCompanyId
-      : await this.resolvePlantCompanyId(user);
+    // Non-admin without specific plant → use their own plant company
+    if (!isAdmin && !plantCompanyId) {
+      where.plantCompanyId = await this.resolvePlantCompanyId(user);
+    }
 
     return this.prisma.plantProducerAccess.findMany({
-      where: { plantCompanyId: plantCoId },
+      where,
       include: {
         plantCompany: { select: { id: true, name: true } },
         producerCompany: { select: { id: true, name: true, email: true } },
@@ -369,8 +374,9 @@ export class PlantAccessController {
   @Roles('plant', 'platform_admin')
   @ApiOperation({ summary: 'Listar productores habilitados' })
   @ApiQuery({ name: 'plantCompanyId', required: false })
-  listProducers(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string) {
-    return this.service.listForPlant(user, plantCompanyId);
+  @ApiQuery({ name: 'producerCompanyId', required: false })
+  listProducers(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string, @Query('producerCompanyId') producerCompanyId?: string) {
+    return this.service.listForPlant(user, plantCompanyId, producerCompanyId);
   }
 
   @Get('plants')
