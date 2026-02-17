@@ -1,6 +1,7 @@
 // =====================================================================
 // TOLVINK — PlantProducerAccess Controller + Service
 // Plants enable/disable which producer USERS can send freights
+// Platform admins can manage access for ALL companies
 // =====================================================================
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
@@ -36,6 +37,11 @@ export class GrantAccessDto {
   @IsArray()
   @IsUUID('4', { each: true })
   allowedBranchIds?: string[];
+
+  @ApiProperty({ description: 'ID de empresa planta (solo admin general)', required: false })
+  @IsOptional()
+  @IsUUID()
+  plantCompanyId?: string;
 }
 
 // ======================== SERVICE ====================================
@@ -44,8 +50,15 @@ export class GrantAccessDto {
 export class PlantAccessService {
   constructor(private prisma: PrismaService) {}
 
+  private isPlatformAdmin(user: any): boolean {
+    return user.role === 'platform_admin';
+  }
+
   /** Resolve the plant company ID — checks companyByType.plant from DB first */
-  private async resolvePlantCompanyId(user: any): Promise<string> {
+  private async resolvePlantCompanyId(user: any, overrideId?: string): Promise<string> {
+    // Platform admin can specify any company
+    if (this.isPlatformAdmin(user) && overrideId) return overrideId;
+
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
       select: { companyId: true, companyByType: true },
@@ -123,7 +136,10 @@ export class PlantAccessService {
   }
 
   async grantAccess(dto: GrantAccessDto, user: any) {
-    const plantCoId = await this.resolvePlantCompanyId(user);
+    const isAdmin = this.isPlatformAdmin(user);
+    const plantCoId = isAdmin && dto.plantCompanyId
+      ? dto.plantCompanyId
+      : await this.resolvePlantCompanyId(user);
 
     // Validate producer user exists and is a producer
     const producerUser = await this.prisma.user.findUnique({
@@ -138,20 +154,21 @@ export class PlantAccessService {
     const newBranchIds = dto.allowedBranchIds || [];
 
     if (newPlantIds.length) {
-      const validCount = await this.prisma.plant.count({
-        where: { id: { in: newPlantIds }, companyId: plantCoId, active: true },
-      });
+      // Admin skips company ownership check on plants
+      const whereClause: any = { id: { in: newPlantIds }, active: true };
+      if (!isAdmin) whereClause.companyId = plantCoId;
+      const validCount = await this.prisma.plant.count({ where: whereClause });
       if (validCount !== newPlantIds.length) {
-        throw new BadRequestException('Algunas plantas no pertenecen a tu empresa');
+        throw new BadRequestException('Algunas plantas no son válidas');
       }
     }
 
     if (newBranchIds.length) {
-      const validCount = await this.prisma.branch.count({
-        where: { id: { in: newBranchIds }, companyId: plantCoId, active: true },
-      });
+      const whereClause: any = { id: { in: newBranchIds }, active: true };
+      if (!isAdmin) whereClause.companyId = plantCoId;
+      const validCount = await this.prisma.branch.count({ where: whereClause });
       if (validCount !== newBranchIds.length) {
-        throw new BadRequestException('Algunas sucursales no pertenecen a tu empresa');
+        throw new BadRequestException('Algunas sucursales no son válidas');
       }
     }
 
@@ -194,13 +211,17 @@ export class PlantAccessService {
   }
 
   async revokeAccess(accessId: string, user: any) {
-    const plantCoId = await this.resolvePlantCompanyId(user);
-
     const access = await this.prisma.plantProducerAccess.findUnique({
       where: { id: accessId },
     });
-    if (!access || access.plantCompanyId !== plantCoId) {
-      throw new NotFoundException('Relación no encontrada');
+    if (!access) throw new NotFoundException('Relación no encontrada');
+
+    // Platform admin can revoke any access; plant users only their own
+    if (!this.isPlatformAdmin(user)) {
+      const plantCoId = await this.resolvePlantCompanyId(user);
+      if (access.plantCompanyId !== plantCoId) {
+        throw new NotFoundException('Relación no encontrada');
+      }
     }
 
     return this.prisma.plantProducerAccess.update({
@@ -209,11 +230,29 @@ export class PlantAccessService {
     });
   }
 
-  async listForPlant(user: any) {
-    const plantCoId = await this.resolvePlantCompanyId(user);
+  async listForPlant(user: any, plantCompanyId?: string) {
+    const isAdmin = this.isPlatformAdmin(user);
+
+    // Admin with no specific company: return ALL access records
+    if (isAdmin && !plantCompanyId) {
+      return this.prisma.plantProducerAccess.findMany({
+        include: {
+          plantCompany: { select: { id: true, name: true } },
+          producerCompany: { select: { id: true, name: true, email: true } },
+          producerUser: { select: { id: true, name: true, email: true, phone: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    const plantCoId = isAdmin && plantCompanyId
+      ? plantCompanyId
+      : await this.resolvePlantCompanyId(user);
+
     return this.prisma.plantProducerAccess.findMany({
       where: { plantCompanyId: plantCoId },
       include: {
+        plantCompany: { select: { id: true, name: true } },
         producerCompany: { select: { id: true, name: true, email: true } },
         producerUser: { select: { id: true, name: true, email: true, phone: true } },
       },
@@ -230,8 +269,29 @@ export class PlantAccessService {
     });
   }
 
-  async getMyFacilities(user: any) {
-    const plantCoId = await this.resolvePlantCompanyId(user);
+  async getMyFacilities(user: any, plantCompanyId?: string) {
+    const isAdmin = this.isPlatformAdmin(user);
+
+    // Admin with no specific company: return ALL plants and branches
+    if (isAdmin && !plantCompanyId) {
+      const [plants, branches] = await Promise.all([
+        this.prisma.plant.findMany({
+          where: { active: true },
+          select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.branch.findMany({
+          where: { active: true },
+          select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
+          orderBy: { name: 'asc' },
+        }),
+      ]);
+      return { plants, branches };
+    }
+
+    const plantCoId = isAdmin && plantCompanyId
+      ? plantCompanyId
+      : await this.resolvePlantCompanyId(user);
 
     const [plants, branches] = await Promise.all([
       this.prisma.plant.findMany({
@@ -248,6 +308,14 @@ export class PlantAccessService {
 
     return { plants, branches };
   }
+
+  async listPlantCompanies() {
+    return this.prisma.company.findMany({
+      where: { type: 'plant' },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -259,8 +327,15 @@ export class PlantAccessService {
 export class PlantAccessController {
   constructor(private service: PlantAccessService) {}
 
+  @Get('plant-companies')
+  @Roles('platform_admin')
+  @ApiOperation({ summary: 'Listar empresas tipo planta (solo admin general)' })
+  listPlantCompanies() {
+    return this.service.listPlantCompanies();
+  }
+
   @Get('search-producer')
-  @Roles('plant')
+  @Roles('plant', 'platform_admin')
   @ApiOperation({ summary: 'Buscar productores por nombre, email o teléfono' })
   @ApiQuery({ name: 'q', required: true })
   searchProducer(@Query('q') q: string) {
@@ -269,31 +344,33 @@ export class PlantAccessController {
   }
 
   @Get('my-facilities')
-  @Roles('plant')
-  @ApiOperation({ summary: 'Plantas y sucursales de mi empresa' })
-  myFacilities(@CurrentUser() user: any) {
-    return this.service.getMyFacilities(user);
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Plantas y sucursales de mi empresa (o de empresa indicada para admin)' })
+  @ApiQuery({ name: 'plantCompanyId', required: false })
+  myFacilities(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string) {
+    return this.service.getMyFacilities(user, plantCompanyId);
   }
 
   @Post('grant')
-  @Roles('plant')
-  @ApiOperation({ summary: 'Habilitar usuario productor (solo planta)' })
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Habilitar usuario productor' })
   grant(@Body() dto: GrantAccessDto, @CurrentUser() user: any) {
     return this.service.grantAccess(dto, user);
   }
 
   @Patch('revoke/:accessId')
-  @Roles('plant')
+  @Roles('plant', 'platform_admin')
   @ApiOperation({ summary: 'Revocar acceso de usuario productor' })
   revoke(@Param('accessId', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.revokeAccess(id, user);
   }
 
   @Get('producers')
-  @Roles('plant')
-  @ApiOperation({ summary: 'Listar productores habilitados (vista planta)' })
-  listProducers(@CurrentUser() user: any) {
-    return this.service.listForPlant(user);
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Listar productores habilitados' })
+  @ApiQuery({ name: 'plantCompanyId', required: false })
+  listProducers(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string) {
+    return this.service.listForPlant(user, plantCompanyId);
   }
 
   @Get('plants')

@@ -94,6 +94,9 @@ export class CreateUserDto {
 
   @ApiProperty({ required: false }) @IsOptional() @IsUUID()
   companyId?: string;
+
+  @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
+  @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
 }
 
 export class UpdateUserDto {
@@ -363,6 +366,8 @@ export class AdminService {
         role: (dto.role as any) || 'operator',
         userTypes: dto.userTypes || [],
         companyId: dto.companyId || null,
+        companyByType: dto.companyByType || {},
+        roleByType: dto.roleByType || {},
       },
       select: {
         id: true, name: true, email: true, phone: true, role: true,
