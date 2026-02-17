@@ -242,7 +242,7 @@ export class PlantAccessService {
       return this.prisma.plantProducerAccess.findMany({
         include: {
           plantCompany: { select: { id: true, name: true } },
-          producerCompany: { select: { id: true, name: true, email: true } },
+          producerCompany: { select: { id: true, name: true, email: true, type: true } },
           producerUser: { select: { id: true, name: true, email: true, phone: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -258,7 +258,7 @@ export class PlantAccessService {
       where,
       include: {
         plantCompany: { select: { id: true, name: true } },
-        producerCompany: { select: { id: true, name: true, email: true } },
+        producerCompany: { select: { id: true, name: true, email: true, type: true } },
         producerUser: { select: { id: true, name: true, email: true, phone: true } },
       },
       orderBy: { createdAt: 'desc' },
