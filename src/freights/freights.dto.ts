@@ -10,6 +10,7 @@ export class FreightItemDto {
   @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)' })
   @IsNumber()
   @Min(0.1, { message: 'Cantidad debe ser mayor a 0' })
+  @Type(() => Number)
   tons: number;
 
   @ApiProperty({ required: false, enum: ['toneladas', 'cantidad', 'metros', 'm3'], default: 'toneladas' })
@@ -21,6 +22,7 @@ export class FreightItemDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Type(() => Number)
   amount?: number;
 
   @ApiProperty({ required: false, description: 'Descripción si tipo = Otros' })
@@ -68,12 +70,14 @@ export class CreateFreightDto {
   @IsOptional()
   @IsNumber()
   @Min(-90) @Max(90)
+  @Type(() => Number)
   customDestLat?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
   @Min(-180) @Max(180)
+  @Type(() => Number)
   customDestLng?: number;
 
   @ApiProperty({ example: '2026-02-20' })
@@ -102,21 +106,25 @@ export class CreateFreightDto {
   @IsOptional()
   @IsNumber()
   @Min(-90) @Max(90)
+  @Type(() => Number)
   overrideOriginLat?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(-180) @Max(180)
+  @Type(() => Number)
   overrideOriginLng?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(-90) @Max(90)
+  @Type(() => Number)
   overrideDestLat?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(-180) @Max(180)
+  @Type(() => Number)
   overrideDestLng?: number;
 }
 
