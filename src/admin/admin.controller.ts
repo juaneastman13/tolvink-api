@@ -123,7 +123,7 @@ export class AdminService {
   }
 
   isCompanyAdmin(user: any): boolean {
-    return user.role === 'admin';
+    return user.role === 'admin' || user.role === 'gerente';
   }
 
   assertPlatformAdmin(user: any) {
@@ -138,13 +138,15 @@ export class AdminService {
     }
   }
 
-  // Extract all company IDs a user belongs to (from companyId + companyByType)
-  getUserCompanyIds(user: any): string[] {
+  // Extract all company IDs a user belongs to (from memberships)
+  async getUserCompanyIds(user: any): Promise<string[]> {
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
-    if (user.companyByType && typeof user.companyByType === 'object') {
-      Object.values(user.companyByType).forEach((v: any) => { if (v) ids.add(v); });
-    }
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub || user.id, active: true },
+      select: { companyId: true },
+    });
+    for (const m of memberships) ids.add(m.companyId);
     return Array.from(ids);
   }
 
@@ -153,7 +155,7 @@ export class AdminService {
     if (this.isPlatformAdmin(jwtUser)) return jwtUser;
     const full = await this.prisma.user.findUnique({
       where: { id: jwtUser.sub },
-      select: { id: true, role: true, companyId: true, companyByType: true, roleByType: true, userTypes: true, isSuperAdmin: true },
+      select: { id: true, role: true, companyId: true, isSuperAdmin: true },
     });
     if (!full) throw new ForbiddenException('Usuario no encontrado');
     return { ...jwtUser, ...full, sub: full.id };
@@ -176,7 +178,7 @@ export class AdminService {
 
     // Non-superadmin: only see their own companies
     if (callerUser && !this.isPlatformAdmin(callerUser)) {
-      const myIds = this.getUserCompanyIds(callerUser);
+      const myIds = await this.getUserCompanyIds(callerUser);
       if (myIds.length === 0) return [];
       where.id = { in: myIds };
     }
@@ -204,7 +206,7 @@ export class AdminService {
   async getCompany(id: string, callerUser?: any) {
     // Non-superadmin: verify they belong to this company
     if (callerUser && !this.isPlatformAdmin(callerUser)) {
-      const myIds = this.getUserCompanyIds(callerUser);
+      const myIds = await this.getUserCompanyIds(callerUser);
       if (!myIds.includes(id)) throw new ForbiddenException('Sin acceso a esta empresa');
     }
     const c = await this.prisma.company.findUnique({
@@ -237,7 +239,7 @@ export class AdminService {
   async updateCompany(id: string, dto: Partial<CreateCompanyDto>, user: any) {
     // Non-superadmin can only edit companies they belong to
     if (!this.isPlatformAdmin(user)) {
-      const myIds = this.getUserCompanyIds(user);
+      const myIds = await this.getUserCompanyIds(user);
       if (!myIds.includes(id)) throw new ForbiddenException('No podés editar esta empresa');
     }
     const company = await this.prisma.company.findUnique({ where: { id } });
@@ -304,7 +306,7 @@ export class AdminService {
 
     // Non-superadmin: only see users from their own companies
     if (callerUser && !this.isPlatformAdmin(callerUser)) {
-      const myIds = this.getUserCompanyIds(callerUser);
+      const myIds = await this.getUserCompanyIds(callerUser);
       if (myIds.length === 0) return [];
       where.companyId = { in: myIds };
     } else if (companyId) {
@@ -357,7 +359,9 @@ export class AdminService {
 
     const hash = await bcrypt.hash(dto.password, 10);
 
-    return this.prisma.user.create({
+    const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+
+    const user = await this.prisma.user.create({
       data: {
         name: dto.name,
         email: dto.email,
@@ -366,6 +370,7 @@ export class AdminService {
         role: (dto.role as any) || 'operator',
         userTypes: dto.userTypes || [],
         companyId: dto.companyId || null,
+        activeCompanyId: dto.companyId || null,
         companyByType: dto.companyByType || {},
         roleByType: dto.roleByType || {},
       },
@@ -375,6 +380,28 @@ export class AdminService {
         company: { select: { id: true, name: true, type: true } },
       },
     });
+
+    // Create UserCompany membership
+    if (dto.companyId) {
+      await (this.prisma as any).userCompany.create({
+        data: { userId: user.id, companyId: dto.companyId, role: membershipRole },
+      }).catch(() => {});
+    }
+
+    // Create additional memberships from companyByType
+    if (dto.companyByType && typeof dto.companyByType === 'object') {
+      for (const [type, coId] of Object.entries(dto.companyByType)) {
+        if (coId && coId !== dto.companyId) {
+          const rbt = (dto.roleByType as any) || {};
+          const role = rbt[type] === 'admin' ? 'gerente' : 'operario';
+          await (this.prisma as any).userCompany.create({
+            data: { userId: user.id, companyId: coId, role },
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return user;
   }
 
   async updateUser(userId: string, dto: UpdateUserDto, callerUser: any) {
@@ -403,7 +430,7 @@ export class AdminService {
     if (dto.companyByType !== undefined) data.companyByType = dto.companyByType || {};
     if (dto.roleByType !== undefined) data.roleByType = dto.roleByType || {};
 
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data,
       select: {
@@ -412,6 +439,33 @@ export class AdminService {
         company: { select: { id: true, name: true, type: true } },
       },
     });
+
+    // Sync memberships if companyId changed
+    if (dto.companyId !== undefined && dto.companyId) {
+      const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+      await (this.prisma as any).userCompany.upsert({
+        where: { userId_companyId: { userId, companyId: dto.companyId } },
+        create: { userId, companyId: dto.companyId, role: membershipRole },
+        update: { active: true, role: membershipRole },
+      }).catch(() => {});
+    }
+
+    // Sync additional memberships from companyByType
+    if (dto.companyByType && typeof dto.companyByType === 'object') {
+      for (const [type, coId] of Object.entries(dto.companyByType)) {
+        if (coId && typeof coId === 'string') {
+          const rbt = (dto.roleByType as any) || {};
+          const role = rbt[type] === 'admin' ? 'gerente' : 'operario';
+          await (this.prisma as any).userCompany.upsert({
+            where: { userId_companyId: { userId, companyId: coId } },
+            create: { userId, companyId: coId, role },
+            update: { active: true, role },
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return updated;
   }
 
   // Self-edit: any user can edit their own name/email/phone
@@ -613,7 +667,7 @@ export class AdminController {
     const fullUser = await this.svc.resolveFullUser(u);
     // Non-superadmin: verify they belong to this company
     if (!this.svc.isPlatformAdmin(fullUser)) {
-      const myIds = this.svc.getUserCompanyIds(fullUser);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
       if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso');
     }
     return this.svc.listBranches(companyId);

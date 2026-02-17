@@ -1,9 +1,9 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bcrypt = require('bcryptjs');
 import { PrismaService } from '../database/prisma.service';
-import { LoginDto, RegisterDto } from './auth.dto';
+import { LoginDto, RegisterDto, SwitchCompanyDto } from './auth.dto';
 
 @Injectable()
 export class AuthService {
@@ -26,14 +26,44 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({
       where,
       include: {
-        company: {
-          select: { id: true, name: true, type: true, hasInternalFleet: true }
-        }
+        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        memberships: {
+          where: { active: true },
+          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
     if (!user || !user.active) {
       throw new UnauthorizedException('Credenciales invalidas');
+    }
+
+    // Auto-migrate: if user has no memberships but has companyId, create one
+    if (user.memberships.length === 0 && user.companyId) {
+      await this.prisma.userCompany.create({
+        data: {
+          userId: user.id,
+          companyId: user.companyId,
+          role: user.role === 'admin' || user.role === 'platform_admin' ? 'gerente' : 'operario',
+        },
+      }).catch(() => {}); // ignore if already exists
+      // Re-fetch
+      (user as any).memberships = await this.prisma.userCompany.findMany({
+        where: { userId: user.id, active: true },
+        include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
+
+    // Set activeCompanyId if not set
+    if (!user.activeCompanyId && user.memberships.length > 0) {
+      const firstCompanyId = user.memberships[0].companyId;
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { activeCompanyId: firstCompanyId },
+      });
+      (user as any).activeCompanyId = firstCompanyId;
     }
 
     await this.prisma.user.update({
@@ -72,7 +102,14 @@ export class AuthService {
         role: 'operator',
         userTypes: dto.userTypes,
       },
-      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+      include: {
+        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        memberships: {
+          where: { active: true },
+          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     const token = await this.signToken(user);
@@ -83,27 +120,106 @@ export class AuthService {
     };
   }
 
+  async switchCompany(userId: string, dto: SwitchCompanyDto) {
+    // Verify membership exists
+    const membership = await this.prisma.userCompany.findFirst({
+      where: { userId, companyId: dto.companyId, active: true },
+      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+    });
+    if (!membership) {
+      throw new BadRequestException('No pertenecés a esta empresa');
+    }
+
+    // Update activeCompanyId
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { activeCompanyId: dto.companyId },
+      include: {
+        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        memberships: {
+          where: { active: true },
+          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    const token = await this.signToken(user);
+    this.logger.log(`User ${userId} switched to company ${dto.companyId}`);
+
+    return {
+      access_token: token,
+      user: this.buildUserResponse(user),
+    };
+  }
+
+  async getMyCompanies(userId: string) {
+    return this.prisma.userCompany.findMany({
+      where: { userId, active: true },
+      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
   private buildUserResponse(user: any) {
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    const activeCompanyId = user.activeCompanyId || user.companyId || memberships[0]?.companyId || null;
+    const activeMembership = memberships.find((m: any) => m.companyId === activeCompanyId);
+    const activeCompany = activeMembership?.company || user.company || null;
+
+    // Derive userTypes from memberships
+    const userTypes = [...new Set(memberships.map((m: any) => m.company?.type).filter(Boolean))];
+
+    // Derive companyByType from memberships (backward compat)
+    const companyByType: any = {};
+    for (const m of memberships) {
+      if (m.company?.type && !companyByType[m.company.type]) {
+        companyByType[m.company.type] = m.companyId;
+      }
+    }
+
+    // Derive roleByType from memberships (backward compat)
+    const roleByType: any = {};
+    for (const m of memberships) {
+      if (m.company?.type) {
+        roleByType[m.company.type] = m.role;
+      }
+    }
+
     return {
       id: user.id,
       name: user.name,
       email: user.email,
       phone: user.phone || null,
-      role: user.role,
-      userTypes: user.userTypes || [],
-      companyByType: user.companyByType || {},
-      roleByType: user.roleByType || {},
+      role: user.isSuperAdmin ? 'platform_admin' : (activeMembership?.role || user.role || 'operario'),
+      userTypes: userTypes.length > 0 ? userTypes : (user.userTypes || []),
+      companyByType,
+      roleByType,
       isSuperAdmin: user.isSuperAdmin || false,
-      company: user.company || null,
+      company: activeCompany,
+      activeCompanyId,
+      companies: memberships.map((m: any) => ({
+        id: m.id,
+        companyId: m.companyId,
+        companyName: m.company?.name || '',
+        companyType: m.company?.type || '',
+        role: m.role,
+        hasInternalFleet: m.company?.hasInternalFleet || false,
+      })),
     };
   }
 
   private async signToken(user: any): Promise<string> {
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    const activeCompanyId = user.activeCompanyId || user.companyId || memberships[0]?.companyId || null;
+    const activeMembership = memberships.find((m: any) => m.companyId === activeCompanyId);
+    const activeCompany = activeMembership?.company || user.company;
+
     const payload = {
       sub: user.id,
-      role: user.role,
-      companyId: user.companyId || user.company?.id || null,
-      companyType: user.company?.type || null,
+      role: user.isSuperAdmin ? 'platform_admin' : (activeMembership?.role || user.role || 'operario'),
+      companyId: activeCompanyId,
+      companyType: activeCompany?.type || null,
     };
     return this.jwt.signAsync(payload);
   }

@@ -54,24 +54,17 @@ export class PlantAccessService {
     return user.role === 'platform_admin';
   }
 
-  /** Resolve the plant company ID — checks companyByType.plant from DB first */
+  /** Resolve the plant company ID — checks memberships first */
   private async resolvePlantCompanyId(user: any, overrideId?: string): Promise<string> {
-    // Platform admin can specify any company
     if (this.isPlatformAdmin(user) && overrideId) return overrideId;
 
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      include: { company: { select: { id: true, type: true } } },
     });
-    const cbt = (dbUser?.companyByType as any) || {};
-    if (cbt.plant) {
-      const co = await this.prisma.company.findUnique({ where: { id: cbt.plant }, select: { type: true } });
-      if (co?.type === 'plant') return cbt.plant;
-    }
-    if (dbUser?.companyId) {
-      const co = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
-      if (co?.type === 'plant') return dbUser.companyId;
-    }
+    const plantMembership = memberships.find((m: any) => m.company?.type === 'plant');
+    if (plantMembership) return plantMembership.companyId;
+
     return user.companyId;
   }
 
@@ -88,46 +81,27 @@ export class PlantAccessService {
           { phone: { contains: q } },
         ],
       },
-      include: {
-        company: { select: { id: true, name: true, type: true } },
-      },
       take: 15,
       orderBy: { name: 'asc' },
     });
 
     const results: any[] = [];
     for (const user of users) {
-      const userTypes = (user.userTypes as string[]) || [];
-      if (!userTypes.includes(type)) continue;
+      // Check memberships for the requested type
+      const memberships = await (this.prisma as any).userCompany.findMany({
+        where: { userId: user.id, active: true },
+        include: { company: { select: { id: true, name: true, type: true } } },
+      });
+      const typedMembership = memberships.find((m: any) => m.company?.type === type);
 
-      const cbt = (user.companyByType as any) || {};
-      let companyId: string | null = null;
-      let companyName: string | null = null;
-
-      if (cbt[type]) {
-        const company = await this.prisma.company.findUnique({
-          where: { id: cbt[type] },
-          select: { id: true, name: true, type: true },
-        });
-        if (company) {
-          companyId = company.id;
-          companyName = company.name;
-        }
-      }
-
-      if (!companyId && user.company) {
-        companyId = user.company.id;
-        companyName = user.company.name;
-      }
-
-      if (companyId) {
+      if (typedMembership) {
         results.push({
           userId: user.id,
           userName: user.name,
           phone: user.phone,
           email: user.email,
-          producerCompanyId: companyId,
-          producerCompanyName: companyName,
+          producerCompanyId: typedMembership.companyId,
+          producerCompanyName: typedMembership.company?.name || '',
         });
       }
     }

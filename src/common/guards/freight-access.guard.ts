@@ -13,13 +13,27 @@ export class FreightAccessGuard implements CanActivate {
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
+
+    // Get all companies from memberships
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      select: { companyId: true },
     });
-    if (dbUser?.companyId) ids.add(dbUser.companyId);
-    const cbt = (dbUser?.companyByType as any) || {};
-    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    for (const m of memberships) {
+      ids.add(m.companyId);
+    }
+
+    // Fallback: also check legacy companyByType
+    if (ids.size <= 1) {
+      const dbUser = await this.prisma.user.findUnique({
+        where: { id: user.sub },
+        select: { companyId: true, companyByType: true },
+      });
+      if (dbUser?.companyId) ids.add(dbUser.companyId);
+      const cbt = (dbUser?.companyByType as any) || {};
+      Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    }
+
     return Array.from(ids);
   }
 

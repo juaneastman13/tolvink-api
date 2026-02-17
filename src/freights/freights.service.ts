@@ -16,50 +16,46 @@ export class FreightsService {
   // ======================== CREATE ====================================
 
   private async resolveProducerCompanyId(user: any): Promise<string> {
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      include: { company: { select: { id: true, type: true } } },
     });
-    const cbt = (dbUser?.companyByType as any) || {};
-    if (cbt.producer) return cbt.producer;
-    if (dbUser?.companyId) {
-      const company = await this.prisma.company.findUnique({ where: { id: dbUser.companyId }, select: { type: true } });
-      if (company?.type === 'producer') return dbUser.companyId;
-    }
+    const producerMembership = memberships.find((m: any) => m.company?.type === 'producer');
+    if (producerMembership) return producerMembership.companyId;
+    if (user.companyType === 'producer' && user.companyId) return user.companyId;
     return user.companyId;
   }
 
-  /** Resolve effective company type — checks DB userTypes for multi-type users */
+  /** Resolve effective company type — from JWT or memberships */
   private async resolveCompanyType(user: any): Promise<string> {
     if (user.companyType) return user.companyType;
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { userTypes: true, company: { select: { type: true } } },
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      include: { company: { select: { type: true } } },
     });
-    return dbUser?.company?.type || (dbUser?.userTypes as string[])?.[0] || 'unknown';
+    if (memberships.length > 0) return memberships[0].company?.type || 'unknown';
+    return 'unknown';
   }
 
-  /** Check if user has a specific type (from JWT or DB userTypes) */
+  /** Check if user has a specific type (from JWT or memberships) */
   private async hasCompanyType(user: any, type: string): Promise<boolean> {
     if (user.companyType === type) return true;
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { userTypes: true },
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      include: { company: { select: { type: true } } },
     });
-    return ((dbUser?.userTypes as string[]) || []).includes(type);
+    return memberships.some((m: any) => m.company?.type === type);
   }
 
-  /** All company IDs a user belongs to (multi-type support) */
+  /** All company IDs a user belongs to (from memberships) */
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: user.sub, active: true },
+      select: { companyId: true },
     });
-    if (dbUser?.companyId) ids.add(dbUser.companyId);
-    const cbt = (dbUser?.companyByType as any) || {};
-    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    for (const m of memberships) ids.add(m.companyId);
     return Array.from(ids);
   }
 

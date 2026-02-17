@@ -95,6 +95,8 @@ model Company {
   updatedAt DateTime    @updatedAt @map("updated_at")
 
   users              User[]
+  activeUsers        User[]              @relation("UserActiveCompany")
+  memberships        UserCompany[]
   branches           Branch[]
   fields             Field[]
   lots               Lot[]
@@ -129,7 +131,11 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
+  activeCompanyId String?  @map("active_company_id")
+
   company            Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  activeCompany      Company?            @relation("UserActiveCompany", fields: [activeCompanyId], references: [id], onDelete: SetNull)
+  memberships        UserCompany[]
   freightsRequested  Freight[]           @relation("FreightRequestedBy")
   assignmentsMade    FreightAssignment[] @relation("AssignmentAssignedBy")
   assignmentsAsDriver FreightAssignment[] @relation("AssignmentDriver")
@@ -141,6 +147,7 @@ model User {
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
 
   @@index([companyId])
+  @@index([activeCompanyId])
   @@index([email])
   @@index([phone])
   @@map("users")
@@ -544,6 +551,26 @@ model PushSubscription {
   @@unique([userId, endpoint])
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+// ======================== USER-COMPANY MEMBERSHIPS ===================
+
+model UserCompany {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  companyId String   @map("company_id")
+  role      String   @default("operario") @db.VarChar(20)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([userId])
+  @@index([companyId])
+  @@map("user_companies")
 }
 
 // ======================== ANALYTICS ==================================

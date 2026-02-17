@@ -22,21 +22,24 @@ export class RolesGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest();
     if (!user) throw new ForbiddenException('No autenticado');
 
-    // Quick check: JWT role or companyType
-    const hasRole = requiredRoles.some(
-      (role) => user.role === role || user.companyType === role,
-    );
-    if (hasRole) return true;
+    // Platform admin passes all checks
+    if (user.role === 'platform_admin') return true;
 
-    // Fallback: check userTypes from DB (multi-company users)
+    // Quick check: JWT companyType matches a required role (type-based: plant, producer, transporter)
+    const hasType = requiredRoles.some(
+      (role) => user.companyType === role,
+    );
+    if (hasType) return true;
+
+    // Fallback: check all memberships from DB
     if (user.sub) {
-      const dbUser = await this.prisma.user.findUnique({
-        where: { id: user.sub },
-        select: { userTypes: true },
+      const memberships = await (this.prisma as any).userCompany.findMany({
+        where: { userId: user.sub, active: true },
+        include: { company: { select: { type: true } } },
       });
-      const types = (dbUser?.userTypes as string[]) || [];
-      const hasType = requiredRoles.some((role) => types.includes(role));
-      if (hasType) return true;
+      const types = memberships.map((m: any) => m.company?.type).filter(Boolean);
+      const hasDbType = requiredRoles.some((role) => types.includes(role));
+      if (hasDbType) return true;
     }
 
     throw new ForbiddenException('Sin permisos para esta acción');

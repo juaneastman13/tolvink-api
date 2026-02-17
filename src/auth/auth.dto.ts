@@ -14,6 +14,12 @@ export class LoginDto {
   password?: string;
 }
 
+export class SwitchCompanyDto {
+  @IsNotEmpty({ message: 'companyId requerido' })
+  @IsString()
+  companyId: string;
+}
+
 export class RegisterDto {
   @IsNotEmpty({ message: 'Nombre requerido' })
   @IsString()
