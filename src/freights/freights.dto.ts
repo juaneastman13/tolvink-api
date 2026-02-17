@@ -34,9 +34,15 @@ export class FreightItemDto {
 }
 
 export class CreateFreightDto {
-  @ApiProperty()
+  @ApiProperty({ required: false, description: 'ID del lote de origen (opcional si se indica ubicación en mapa)' })
+  @IsOptional()
   @IsUUID()
-  originLotId: string;
+  originLotId?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre del origen personalizado (cuando no se selecciona lote)' })
+  @IsOptional()
+  @MaxLength(255)
+  customOriginName?: string;
 
   @ApiProperty({ required: false, description: 'ID del campo' })
   @IsOptional()

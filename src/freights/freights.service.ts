@@ -70,11 +70,16 @@ export class FreightsService {
 
     const producerCompanyId = await this.resolveProducerCompanyId(user);
 
-    const lot = await this.prisma.lot.findFirst({
-      where: { id: dto.originLotId, companyId: producerCompanyId, active: true },
-      include: { field: true },
-    });
-    if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
+    let lot: any = null;
+    if (dto.originLotId) {
+      lot = await this.prisma.lot.findFirst({
+        where: { id: dto.originLotId, companyId: producerCompanyId, active: true },
+        include: { field: true },
+      });
+      if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
+    } else if (!dto.overrideOriginLat || !dto.overrideOriginLng) {
+      throw new BadRequestException('Debe indicar un lote de origen o una ubicación en el mapa');
+    }
 
     let destCompanyId: string | null = null;
     let destPlantId: string | null = null;
@@ -117,7 +122,7 @@ export class FreightsService {
       }
     }
 
-    const fieldId = dto.fieldId || lot.fieldId || null;
+    const fieldId = dto.fieldId || lot?.fieldId || null;
 
     let scheduledAt: Date | null = null;
     try {
@@ -131,17 +136,21 @@ export class FreightsService {
     const participants: { companyId: string }[] = [{ companyId: producerCompanyId }];
     if (destCompanyId) participants.push({ companyId: destCompanyId });
 
+    const originName = lot ? lot.name : (dto.customOriginName || 'Origen personalizado');
+    const originLat = dto.overrideOriginLat || lot?.lat || null;
+    const originLng = dto.overrideOriginLng || lot?.lng || null;
+
     const freight = await this.prisma.$transaction(async (tx) => {
       const f = await tx.freight.create({
         data: {
           code,
           status: FreightStatus.pending_assignment,
           originCompanyId: producerCompanyId,
-          originLotId: lot.id,
+          originLotId: lot?.id || null,
           fieldId,
-          originName: lot.name,
-          originLat: dto.overrideOriginLat || lot.lat,
-          originLng: dto.overrideOriginLng || lot.lng,
+          originName,
+          originLat,
+          originLng,
           destCompanyId,
           destPlantId,
           destName,
