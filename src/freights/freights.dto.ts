@@ -3,8 +3,8 @@ import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class FreightItemDto {
-  @ApiProperty({ enum: ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] })
-  @IsEnum(['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'])
+  @ApiProperty({ enum: ['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] })
+  @IsEnum(['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'])
   grain: string;
 
   @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)' })
