@@ -114,7 +114,7 @@ model Company {
 model User {
   id           String   @id @default(uuid())
   email        String   @unique @db.VarChar(255)
-  passwordHash String   @map("password_hash") @db.VarChar(255)
+  passwordHash String?  @map("password_hash") @db.VarChar(255)
   name         String   @db.VarChar(255)
   role         UserRole @default(operator)
   companyId    String?  @map("company_id")

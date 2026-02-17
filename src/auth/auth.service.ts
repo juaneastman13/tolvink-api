@@ -36,15 +36,6 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales invalidas');
     }
 
-    if (user.passwordHash && dto.password) {
-      const valid = await bcrypt.compare(dto.password, user.passwordHash);
-      if (!valid) {
-        throw new UnauthorizedException('Credenciales invalidas');
-      }
-    } else if (user.passwordHash && !dto.password) {
-      throw new UnauthorizedException('Credenciales invalidas');
-    }
-
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() },
