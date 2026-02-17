@@ -354,7 +354,7 @@ model Freight {
 model FreightItem {
   id        String    @id @default(uuid())
   freightId String    @map("freight_id")
-  grain     GrainType
+  grain     String    @db.VarChar(50)
   tons      Decimal   @db.Decimal(10, 2)
   notes     String?
   createdAt DateTime  @default(now()) @map("created_at")
