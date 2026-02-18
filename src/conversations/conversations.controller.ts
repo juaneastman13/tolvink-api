@@ -143,7 +143,7 @@ export class ConversationsService {
         freight: { select: { id: true, code: true, status: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: 50,
     });
 
     // Batch auto-add user as participant to freight conversations they can see
@@ -291,7 +291,7 @@ export class ConversationsService {
       }).catch(() => {});
     }
 
-    const take = pagination?.take || 50;
+    const take = Math.min(pagination?.take || 50, 100);
     const where: any = { conversationId };
 
     // Cursor-based pagination: load messages older than `before`

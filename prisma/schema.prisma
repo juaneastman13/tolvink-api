@@ -609,5 +609,8 @@ model AnalyticsEvent {
   @@index([event])
   @@index([userId])
   @@index([createdAt])
+  @@index([event, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
   @@map("analytics_events")
 }

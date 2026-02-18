@@ -115,22 +115,22 @@ class AnalyticsController {
       if (to) where.createdAt.lte = new Date(to);
     }
 
-    const events = await this.prisma.analyticsEvent.groupBy({
-      by: ['event'],
-      where,
-      _count: { event: true },
-      orderBy: { _count: { event: 'desc' } },
-    });
-
-    const uniqueSessions = await this.prisma.analyticsEvent.groupBy({
-      by: ['sessionId'],
-      where: { ...where, sessionId: { not: null } },
-    });
-
-    const uniqueUsers = await this.prisma.analyticsEvent.groupBy({
-      by: ['userId'],
-      where: { ...where, userId: { not: null } },
-    });
+    const [events, uniqueSessions, uniqueUsers] = await Promise.all([
+      this.prisma.analyticsEvent.groupBy({
+        by: ['event'],
+        where,
+        _count: { event: true },
+        orderBy: { _count: { event: 'desc' } },
+      }),
+      this.prisma.analyticsEvent.groupBy({
+        by: ['sessionId'],
+        where: { ...where, sessionId: { not: null } },
+      }),
+      this.prisma.analyticsEvent.groupBy({
+        by: ['userId'],
+        where: { ...where, userId: { not: null } },
+      }),
+    ]);
 
     return {
       events: events.map(e => ({ event: e.event, count: e._count.event })),

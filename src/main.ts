@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
+import * as compression from 'compression';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bodyParser = require('body-parser');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -43,6 +44,9 @@ async function bootstrap() {
     crossOriginEmbedderPolicy: false,
     hsts: { maxAge: 31536000, includeSubDomains: true },
   }));
+
+  // Gzip compression — ~60-70% bandwidth reduction on JSON responses
+  app.use(compression());
 
   // Body size limits (prevent DoS with large payloads)
   app.use(bodyParser.json({ limit: '10mb' }));
