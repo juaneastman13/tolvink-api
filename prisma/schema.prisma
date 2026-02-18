@@ -489,6 +489,7 @@ model Message {
   sender       User         @relation(fields: [senderId], references: [id])
 
   @@index([conversationId])
+  @@index([senderId])
   @@index([createdAt])
   @@map("messages")
 }

@@ -12,14 +12,11 @@ class HealthController {
   @Get()
   async check() {
     try {
-      await this.prisma.$queryRaw`SELECT 1`;
-
-      // Pool stats from PostgreSQL
+      // Lightweight DB ping — single query, no subqueries
       const poolInfo: any[] = await this.prisma.$queryRaw`
-        SELECT count(*)::int as active_connections,
-               (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') as max_connections
+        SELECT count(*)::int as active_connections
         FROM pg_stat_activity
-        WHERE datname = current_database()
+        WHERE datname = current_database() AND state = 'active'
       `;
 
       const mem = process.memoryUsage();
@@ -29,7 +26,6 @@ class HealthController {
         db: 'connected',
         pool: {
           active: poolInfo[0]?.active_connections || 0,
-          max: poolInfo[0]?.max_connections || 0,
         },
         memory: {
           heapMB: Math.round(mem.heapUsed / 1024 / 1024),

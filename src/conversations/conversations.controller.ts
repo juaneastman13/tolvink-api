@@ -112,16 +112,13 @@ export class ConversationsService {
   async listConversations(user: any, search?: string) {
     const allIds = await this.resolveAllCompanyIds(user);
 
-    // Find conversations where user is participant OR involved in freight
+    // Find conversations where user is participant OR involved in freight (limited to 100)
     const convs = await this.prisma.conversation.findMany({
       where: {
         OR: [
-          // Direct participant
           { participants: { some: { companyId: { in: allIds } } } },
-          // Freight: user is origin or dest company
           { freight: { originCompanyId: { in: allIds } } },
           { freight: { destCompanyId: { in: allIds } } },
-          // Freight: user is assigned transporter
           {
             freight: {
               assignments: {
@@ -144,14 +141,17 @@ export class ConversationsService {
         freight: { select: { id: true, code: true, status: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
 
-    // Auto-add user as participant to freight conversations they can see
-    for (const c of convs) {
-      if (c.freight && !c.participants.some(p => allIds.includes(p.companyId))) {
-        await this.prisma.conversationParticipant.create({
-          data: { conversationId: c.id, companyId: allIds[0], userId: user.sub },
-        }).catch(() => {});
+    // Batch auto-add user as participant to freight conversations they can see
+    const toAdd = convs.filter(c => c.freight && !c.participants.some(p => allIds.includes(p.companyId)));
+    if (toAdd.length > 0) {
+      await (this.prisma as any).conversationParticipant.createMany({
+        data: toAdd.map(c => ({ conversationId: c.id, companyId: allIds[0], userId: user.sub })),
+        skipDuplicates: true,
+      }).catch(() => {});
+      for (const c of toAdd) {
         c.participants.push({ id: 'auto', conversationId: c.id, companyId: allIds[0], userId: user.sub, joinedAt: new Date(), lastReadAt: null } as any);
       }
     }

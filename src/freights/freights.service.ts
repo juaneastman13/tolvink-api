@@ -243,7 +243,7 @@ export class FreightsService {
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
-          documents: { orderBy: { createdAt: 'desc' } },
+          documents: { orderBy: { createdAt: 'desc' }, take: 10 },
         },
       }),
       this.prisma.freight.count({ where }),

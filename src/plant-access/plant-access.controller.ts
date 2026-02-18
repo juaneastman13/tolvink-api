@@ -218,7 +218,7 @@ export class PlantAccessService {
     if (plantCompanyId) where.plantCompanyId = plantCompanyId;
     if (producerCompanyId) where.producerCompanyId = producerCompanyId;
 
-    // Admin with no filters: return ALL access records
+    // Admin with no filters: return access records (limited)
     if (isAdmin && !plantCompanyId && !producerCompanyId) {
       return this.prisma.plantProducerAccess.findMany({
         include: {
@@ -227,6 +227,7 @@ export class PlantAccessService {
           producerUser: { select: { id: true, name: true, email: true, phone: true } },
         },
         orderBy: { createdAt: 'desc' },
+        take: 200,
       });
     }
 
