@@ -168,7 +168,7 @@ export class SseService {
 
   /** Heartbeat + timeout cleanup */
   heartbeat() {
-    const payload = `: heartbeat\n\n`;
+    const payload = `event: ping\ndata: {}\n\n`;
     const now = Date.now();
     const dead: SseClient[] = [];
     for (const client of this.allClients) {

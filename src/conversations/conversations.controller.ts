@@ -8,6 +8,7 @@ import { Injectable, BadRequestException, NotFoundException, ForbiddenException 
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { SseService } from '../sse/sse.service';
@@ -440,6 +441,7 @@ export class ConversationsController {
 
   @Post(':id/typing')
   @HttpCode(204)
+  @Throttle({ default: { ttl: 2000, limit: 1 } }) // 1 req per 2s per user
   @ApiOperation({ summary: 'Indicar que el usuario está escribiendo' })
   typing(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.typing(id, user);
