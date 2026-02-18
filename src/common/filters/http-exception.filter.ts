@@ -1,6 +1,7 @@
 import { ExceptionFilter, Catch, ArgumentsHost, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
-import * as Sentry from '@sentry/node';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const Sentry = require('@sentry/node');
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {

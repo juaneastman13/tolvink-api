@@ -2,8 +2,10 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
-import * as bodyParser from 'body-parser';
-import * as Sentry from '@sentry/node';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const bodyParser = require('body-parser');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const Sentry = require('@sentry/node');
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
