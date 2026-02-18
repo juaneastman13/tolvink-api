@@ -1,47 +1,38 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { CurrentUser } from './common/decorators/current-user.decorator';
+import { CompanyResolutionService } from './common/services/company-resolution.service';
 import { PrismaService } from './database/prisma.service';
+
+const MAX_CATALOG = 500;
 
 @ApiTags('Catalog')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('catalog')
 export class CatalogController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
   /** Check if user is a producer type */
   private async isProducer(userId: string): Promise<boolean> {
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { userTypes: true },
-    });
-    const userTypes = (dbUser?.userTypes as string[]) || [];
-    return userTypes.includes('producer');
-  }
-
-  /** Resolve all company IDs for multi-type users */
-  private async resolveAllCompanyIds(user: any): Promise<string[]> {
-    const ids = new Set<string>();
-    if (user.companyId) ids.add(user.companyId);
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
-    });
-    if (dbUser?.companyId) ids.add(dbUser.companyId);
-    const cbt = (dbUser?.companyByType as any) || {};
-    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
-    return Array.from(ids);
+    return this.companyRes.hasCompanyType({ sub: userId }, 'producer');
   }
 
   @Get('plants')
   @ApiOperation({ summary: 'Listar plantas/empresas planta accesibles' })
-  async plants(@CurrentUser() user: any) {
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  async plants(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
+    const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
+    const s = parseInt(skip || '0', 10) || 0;
+
     const isProducer = await this.isProducer(user.sub);
 
     if (isProducer) {
-      // Producers see the plant COMPANIES they have access to
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
         where: { producerUserId: user.sub, active: true },
         select: { plantCompanyId: true },
@@ -53,9 +44,10 @@ export class CatalogController {
       const companies = await this.prisma.company.findMany({
         where: { id: { in: companyIds }, active: true },
         select: { id: true, name: true, address: true, lat: true, lng: true },
+        take: t,
+        skip: s,
       });
 
-      // Return formatted like plants — companyId = id since it IS the company
       return companies.map(c => ({
         id: c.id,
         name: c.name,
@@ -66,21 +58,26 @@ export class CatalogController {
       }));
     }
 
-    // Non-producer users: all active plants
     return this.prisma.plant.findMany({
       where: { active: true },
       select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
       orderBy: { name: 'asc' },
+      take: t,
+      skip: s,
     });
   }
 
   @Get('branches')
   @ApiOperation({ summary: 'Listar sucursales accesibles' })
-  async branches(@CurrentUser() user: any) {
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  async branches(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
+    const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
+    const s = parseInt(skip || '0', 10) || 0;
+
     const isProducer = await this.isProducer(user.sub);
 
     if (isProducer) {
-      // Producers: branches from plant companies they have access to
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
         where: { producerUserId: user.sub, active: true },
         select: { plantCompanyId: true, allowedBranchIds: true },
@@ -114,60 +111,76 @@ export class CatalogController {
         where,
         select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
         orderBy: { name: 'asc' },
+        take: t,
+        skip: s,
       });
     }
 
-    // Plant users: own branches
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { userTypes: true, companyByType: true },
-    });
-    const userTypes = (dbUser?.userTypes as string[]) || [];
-    const cbt = (dbUser?.companyByType as any) || {};
-
-    if (userTypes.includes('plant') || user.companyType === 'plant') {
-      const plantCoId = cbt.plant || user.companyId;
+    // Plant users: own branches via membership
+    const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+    if (isPlant) {
+      const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
       return this.prisma.branch.findMany({
         where: { companyId: plantCoId, active: true },
         select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
         orderBy: { name: 'asc' },
+        take: t,
+        skip: s,
       });
     }
 
-    // Admin or others: all branches
+    // Admin or others: all branches (with limit)
     return this.prisma.branch.findMany({
       where: { active: true },
       select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
       orderBy: { name: 'asc' },
+      take: t,
+      skip: s,
     });
   }
 
   @Get('lots')
   @ApiOperation({ summary: 'Listar lotes del usuario' })
-  async lots(@CurrentUser() user: any) {
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  async lots(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
+    const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
+    const s = parseInt(skip || '0', 10) || 0;
+
     if (user.role === 'platform_admin') {
       return this.prisma.lot.findMany({
         where: { active: true },
         select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true },
         orderBy: { name: 'asc' },
+        take: t,
+        skip: s,
       });
     }
 
-    const allIds = await this.resolveAllCompanyIds(user);
+    const allIds = await this.companyRes.resolveAllCompanyIds(user);
     return this.prisma.lot.findMany({
       where: { active: true, companyId: { in: allIds } },
       select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true },
       orderBy: { name: 'asc' },
+      take: t,
+      skip: s,
     });
   }
 
   @Get('transport-companies')
   @ApiOperation({ summary: 'Listar empresas transportistas activas' })
-  async transportCompanies() {
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  async transportCompanies(@Query('take') take?: string, @Query('skip') skip?: string) {
+    const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
+    const s = parseInt(skip || '0', 10) || 0;
+
     return this.prisma.company.findMany({
       where: { type: 'transporter', active: true },
       select: { id: true, name: true, address: true, phone: true },
       orderBy: { name: 'asc' },
+      take: t,
+      skip: s,
     });
   }
 }

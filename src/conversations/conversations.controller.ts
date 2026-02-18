@@ -9,6 +9,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger'
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -32,19 +33,13 @@ export class SendMessageDto {
 
 @Injectable()
 export class ConversationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
-    const ids = new Set<string>();
-    if (user.companyId) ids.add(user.companyId);
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true },
-    });
-    if (dbUser?.companyId) ids.add(dbUser.companyId);
-    const cbt = (dbUser?.companyByType as any) || {};
-    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
-    return Array.from(ids);
+    return this.companyRes.resolveAllCompanyIds(user);
   }
 
   async searchUsers(q: string, user: any) {

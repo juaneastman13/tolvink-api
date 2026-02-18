@@ -10,6 +10,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger'
 import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -48,24 +49,19 @@ export class GrantAccessDto {
 
 @Injectable()
 export class PlantAccessService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
   private isPlatformAdmin(user: any): boolean {
     return user.role === 'platform_admin';
   }
 
-  /** Resolve the plant company ID — checks memberships first */
+  /** Resolve the plant company ID — delegates to shared service */
   private async resolvePlantCompanyId(user: any, overrideId?: string): Promise<string> {
     if (this.isPlatformAdmin(user) && overrideId) return overrideId;
-
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      include: { company: { select: { id: true, type: true } } },
-    });
-    const plantMembership = memberships.find((m: any) => m.company?.type === 'plant');
-    if (plantMembership) return plantMembership.companyId;
-
-    return user.companyId;
+    return this.companyRes.resolvePlantCompanyId(user);
   }
 
   async searchUsers(query: string, type: string = 'producer') {
@@ -85,14 +81,25 @@ export class PlantAccessService {
       orderBy: { name: 'asc' },
     });
 
+    if (users.length === 0) return [];
+
+    // Batch query: all memberships for matched users in ONE query (fixes N+1)
+    const userIds = users.map(u => u.id);
+    const memberships = await (this.prisma as any).userCompany.findMany({
+      where: { userId: { in: userIds }, active: true },
+      include: { company: { select: { id: true, name: true, type: true } } },
+    });
+
+    const membershipMap = new Map<string, any[]>();
+    for (const m of memberships) {
+      if (!membershipMap.has(m.userId)) membershipMap.set(m.userId, []);
+      membershipMap.get(m.userId)!.push(m);
+    }
+
     const results: any[] = [];
     for (const user of users) {
-      // Check memberships for the requested type
-      const memberships = await (this.prisma as any).userCompany.findMany({
-        where: { userId: user.id, active: true },
-        include: { company: { select: { id: true, name: true, type: true } } },
-      });
-      const typedMembership = memberships.find((m: any) => m.company?.type === type);
+      const userMemberships = membershipMap.get(user.id) || [];
+      const typedMembership = userMemberships.find((m: any) => m.company?.type === type);
 
       if (typedMembership) {
         results.push({

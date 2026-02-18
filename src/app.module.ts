@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { DatabaseModule } from './database/database.module';
 import { PrismaService } from './database/prisma.service';
+import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { FreightsModule } from './freights/freights.module';
 import { HealthModule } from './health/health.module';
@@ -18,7 +21,10 @@ import { AnalyticsModule } from './analytics/analytics.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Global rate limiting: 100 req/min per IP (applied via APP_GUARD)
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     DatabaseModule,
+    CommonModule,
     AuthModule,
     FreightsModule,
     HealthModule,
@@ -35,6 +41,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
   ],
   providers: [
     PrismaService,
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     FieldsService,
     TrucksService,
     PlantAccessService,

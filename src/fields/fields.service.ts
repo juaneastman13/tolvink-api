@@ -1,61 +1,23 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fields.dto';
 
 @Injectable()
 export class FieldsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
-  /** Resolve ALL producer company IDs the user belongs to */
   private async resolveAllProducerCompanyIds(user: any): Promise<string[]> {
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      select: { companyId: true, companyByType: true, role: true },
-    });
-    if (!dbUser) throw new ForbiddenException('Usuario no encontrado');
-
-    const ids = new Set<string>();
-    const cbt = (dbUser.companyByType as any) || {};
-    const isAdmin = dbUser.role === 'admin' || user.role === 'admin';
-
-    // Add producer company from companyByType
-    if (cbt.producer) ids.add(cbt.producer);
-
-    // Add primary companyId — always for admin, only if producer type otherwise
-    if (dbUser.companyId) {
-      if (isAdmin) {
-        ids.add(dbUser.companyId);
-      } else {
-        const company = await this.prisma.company.findUnique({
-          where: { id: dbUser.companyId },
-          select: { type: true },
-        });
-        if (company?.type === 'producer') ids.add(dbUser.companyId);
-      }
-    }
-
-    // Also check all values in companyByType that are producer-type companies
-    for (const compId of Object.values(cbt)) {
-      if (compId && typeof compId === 'string' && !ids.has(compId)) {
-        if (isAdmin) {
-          ids.add(compId);
-        } else {
-          const co = await this.prisma.company.findUnique({
-            where: { id: compId },
-            select: { type: true },
-          });
-          if (co?.type === 'producer') ids.add(compId);
-        }
-      }
-    }
-
-    return Array.from(ids);
+    return this.companyRes.resolveAllProducerCompanyIds(user);
   }
 
   private async resolveProducerCompanyId(user: any): Promise<string> {
-    const ids = await this.resolveAllProducerCompanyIds(user);
-    if (ids.length === 0) throw new ForbiddenException('No tenés empresa productora asociada');
-    return ids[0];
+    const id = await this.companyRes.resolveProducerCompanyId(user);
+    if (!id) throw new ForbiddenException('No tenés empresa productora asociada');
+    return id;
   }
 
   async getFields(user: any) {

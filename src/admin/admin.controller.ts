@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -115,7 +116,10 @@ export class UpdateUserDto {
 
 @Injectable()
 export class AdminService {
-  constructor(public prisma: PrismaService) {}
+  constructor(
+    public prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
   // --- Permission helpers ---
   isPlatformAdmin(user: any): boolean {
@@ -138,16 +142,8 @@ export class AdminService {
     }
   }
 
-  // Extract all company IDs a user belongs to (from memberships)
   async getUserCompanyIds(user: any): Promise<string[]> {
-    const ids = new Set<string>();
-    if (user.companyId) ids.add(user.companyId);
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub || user.id, active: true },
-      select: { companyId: true },
-    });
-    for (const m of memberships) ids.add(m.companyId);
-    return Array.from(ids);
+    return this.companyRes.resolveAllCompanyIds({ sub: user.sub || user.id, companyId: user.companyId });
   }
 
   // Fetch full user from DB (JWT only has sub, role, companyId)

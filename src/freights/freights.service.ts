@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
@@ -9,55 +10,16 @@ import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/clien
 export class FreightsService {
   constructor(
     private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
     private stateMachine: FreightStateMachine,
     private notifications: NotificationService,
   ) {}
 
-  // ======================== CREATE ====================================
-
-  private async resolveProducerCompanyId(user: any): Promise<string> {
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      include: { company: { select: { id: true, type: true } } },
-    });
-    const producerMembership = memberships.find((m: any) => m.company?.type === 'producer');
-    if (producerMembership) return producerMembership.companyId;
-    if (user.companyType === 'producer' && user.companyId) return user.companyId;
-    return user.companyId;
-  }
-
-  /** Resolve effective company type — from JWT or memberships */
-  private async resolveCompanyType(user: any): Promise<string> {
-    if (user.companyType) return user.companyType;
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      include: { company: { select: { type: true } } },
-    });
-    if (memberships.length > 0) return memberships[0].company?.type || 'unknown';
-    return 'unknown';
-  }
-
-  /** Check if user has a specific type (from JWT or memberships) */
-  private async hasCompanyType(user: any, type: string): Promise<boolean> {
-    if (user.companyType === type) return true;
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      include: { company: { select: { type: true } } },
-    });
-    return memberships.some((m: any) => m.company?.type === type);
-  }
-
-  /** All company IDs a user belongs to (from memberships) */
-  private async resolveAllCompanyIds(user: any): Promise<string[]> {
-    const ids = new Set<string>();
-    if (user.companyId) ids.add(user.companyId);
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      select: { companyId: true },
-    });
-    for (const m of memberships) ids.add(m.companyId);
-    return Array.from(ids);
-  }
+  // Delegate to shared CompanyResolutionService
+  private resolveProducerCompanyId(user: any) { return this.companyRes.resolveProducerCompanyId(user); }
+  private resolveCompanyType(user: any) { return this.companyRes.resolveCompanyType(user); }
+  private hasCompanyType(user: any, type: string) { return this.companyRes.hasCompanyType(user, type); }
+  private resolveAllCompanyIds(user: any) { return this.companyRes.resolveAllCompanyIds(user); }
 
   async create(dto: CreateFreightDto, user: any) {
     if (!dto.destPlantId && !dto.customDestName) {
@@ -126,9 +88,6 @@ export class FreightsService {
       if (isNaN(scheduledAt.getTime())) scheduledAt = null;
     } catch { scheduledAt = null; }
 
-    const count = await this.prisma.freight.count();
-    const code = `FLT-${String(count + 1).padStart(4, '0')}`;
-
     const participants: { companyId: string }[] = [{ companyId: producerCompanyId }];
     if (destCompanyId) participants.push({ companyId: destCompanyId });
 
@@ -137,6 +96,16 @@ export class FreightsService {
     const originLng = dto.overrideOriginLng || lot?.lng || null;
 
     const freight = await this.prisma.$transaction(async (tx) => {
+      // Generate code inside transaction (fixes race condition)
+      const lastFreight = await tx.freight.findFirst({
+        orderBy: { code: 'desc' },
+        select: { code: true },
+      });
+      const lastNum = lastFreight?.code
+        ? parseInt(lastFreight.code.replace('FLT-', ''), 10) || 0
+        : 0;
+      const code = `FLT-${String(lastNum + 1).padStart(4, '0')}`;
+
       const f = await tx.freight.create({
         data: {
           code,

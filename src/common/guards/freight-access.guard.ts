@@ -5,37 +5,14 @@
 
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { CompanyResolutionService } from '../services/company-resolution.service';
 
 @Injectable()
 export class FreightAccessGuard implements CanActivate {
-  constructor(private prisma: PrismaService) {}
-
-  private async resolveAllCompanyIds(user: any): Promise<string[]> {
-    const ids = new Set<string>();
-    if (user.companyId) ids.add(user.companyId);
-
-    // Get all companies from memberships
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      select: { companyId: true },
-    });
-    for (const m of memberships) {
-      ids.add(m.companyId);
-    }
-
-    // Fallback: also check legacy companyByType
-    if (ids.size <= 1) {
-      const dbUser = await this.prisma.user.findUnique({
-        where: { id: user.sub },
-        select: { companyId: true, companyByType: true },
-      });
-      if (dbUser?.companyId) ids.add(dbUser.companyId);
-      const cbt = (dbUser?.companyByType as any) || {};
-      Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
-    }
-
-    return Array.from(ids);
-  }
+  constructor(
+    private prisma: PrismaService,
+    private companyRes: CompanyResolutionService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -67,7 +44,7 @@ export class FreightAccessGuard implements CanActivate {
       throw new ForbiddenException('Flete no encontrado');
     }
 
-    const allIds = await this.resolveAllCompanyIds(user);
+    const allIds = await this.companyRes.resolveAllCompanyIds(user);
     const isOrigin = allIds.includes(freight.originCompanyId);
     const isDest = freight.destCompanyId ? allIds.includes(freight.destCompanyId) : false;
     const isTransporter = freight.assignments.some(a => allIds.includes(a.transportCompanyId));
