@@ -1091,4 +1091,22 @@ export class FreightsService {
       },
     });
   }
+
+  // ======================== DELETE DOCUMENT ==============================
+
+  async deleteDocument(freightId: string, docId: string, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (freight.status === 'finished') {
+      throw new ForbiddenException('No se pueden eliminar archivos de un flete finalizado');
+    }
+
+    const doc = await this.prisma.freightDocument.findFirst({
+      where: { id: docId, freightId },
+    });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+
+    await this.prisma.freightDocument.delete({ where: { id: docId } });
+    return { ok: true };
+  }
 }

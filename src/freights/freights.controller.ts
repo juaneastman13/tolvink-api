@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
@@ -168,5 +168,16 @@ export class FreightsController {
     @CurrentUser() user: any,
   ) {
     return this.service.addDocument(id, body, user);
+  }
+
+  @Delete(':id/documents/:docId')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Eliminar documento/foto del flete' })
+  deleteDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.deleteDocument(id, docId, user);
   }
 }
