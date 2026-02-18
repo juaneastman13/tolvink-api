@@ -84,11 +84,11 @@ export class SseService {
     }
   }
 
-  /** Broadcast freight update to all involved companies */
+  /** Broadcast freight update to all involved companies (including actor) */
   async broadcastFreightUpdate(
     freightId: string,
     data: { id: string; code: string; status: string },
-    excludeUserId?: string,
+    _excludeUserId?: string, // kept for API compat, no longer used
   ) {
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
@@ -114,7 +114,7 @@ export class SseService {
       const clients = this.byCompany.get(cid);
       if (!clients) continue;
       for (const c of clients) {
-        if (c.userId !== excludeUserId && !sent.has(c)) {
+        if (!sent.has(c)) {
           c.res.write(payload);
           sent.add(c);
         }
