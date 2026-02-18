@@ -1,7 +1,7 @@
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler, HttpException } from '@nestjs/common';
 import { Observable } from 'rxjs';
 
-const LIMIT = 120;
+const LIMIT = 2000;
 const WINDOW_MS = 60000;
 
 @Injectable()
