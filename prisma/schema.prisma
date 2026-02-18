@@ -347,9 +347,6 @@ model Freight {
   auditLogs       AuditLog[]
   trackingPoints  FreightTracking[]
 
-  @@index([status])
-  @@index([originCompanyId])
-  @@index([destCompanyId])
   @@index([loadDate])
   @@index([code])
   @@index([fieldId])
@@ -401,8 +398,7 @@ model FreightAssignment {
   truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
 
   @@index([freightId])
-  @@index([transportCompanyId])
-  @@index([status])
+  @@index([transportCompanyId, status])
   @@index([truckId])
   @@index([driverId])
   @@map("freight_assignments")
@@ -475,7 +471,7 @@ model ConversationParticipant {
 
   @@unique([conversationId, companyId])
   @@index([companyId])
-  @@index([userId])
+  @@index([conversationId, userId])
   @@map("conversation_participants")
 }
 
@@ -491,9 +487,7 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User         @relation(fields: [senderId], references: [id])
 
-  @@index([conversationId])
   @@index([senderId])
-  @@index([createdAt])
   @@index([conversationId, createdAt])
   @@map("messages")
 }

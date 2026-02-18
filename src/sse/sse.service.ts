@@ -10,53 +10,77 @@ interface SseClient {
 }
 
 const MAX_CLIENTS_PER_USER = 3;
-const CLIENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes no activity → dead
+const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class SseService {
   private readonly logger = new Logger(SseService.name);
-  private clients: SseClient[] = [];
+  // O(1) lookup indexes instead of flat array scan
+  private byUser = new Map<string, Set<SseClient>>();
+  private byCompany = new Map<string, Set<SseClient>>();
+  private allClients = new Set<SseClient>();
 
   constructor(private prisma: PrismaService) {}
 
+  private addToIndex(client: SseClient) {
+    // User index
+    let userSet = this.byUser.get(client.userId);
+    if (!userSet) { userSet = new Set(); this.byUser.set(client.userId, userSet); }
+    userSet.add(client);
+    // Company index
+    for (const cid of client.companyIds) {
+      let coSet = this.byCompany.get(cid);
+      if (!coSet) { coSet = new Set(); this.byCompany.set(cid, coSet); }
+      coSet.add(client);
+    }
+    this.allClients.add(client);
+  }
+
+  private removeFromIndex(client: SseClient) {
+    const userSet = this.byUser.get(client.userId);
+    if (userSet) { userSet.delete(client); if (userSet.size === 0) this.byUser.delete(client.userId); }
+    for (const cid of client.companyIds) {
+      const coSet = this.byCompany.get(cid);
+      if (coSet) { coSet.delete(client); if (coSet.size === 0) this.byCompany.delete(cid); }
+    }
+    this.allClients.delete(client);
+  }
+
   addClient(userId: string, companyIds: string[], res: Response) {
-    // Evict oldest connections if user exceeds max
-    const userClients = this.clients.filter((c) => c.userId === userId);
-    if (userClients.length >= MAX_CLIENTS_PER_USER) {
-      const oldest = userClients[0];
+    // Evict oldest if user exceeds max
+    const userSet = this.byUser.get(userId);
+    if (userSet && userSet.size >= MAX_CLIENTS_PER_USER) {
+      const oldest = userSet.values().next().value;
       try { oldest.res.end(); } catch {}
-      this.clients = this.clients.filter((c) => c !== oldest);
+      this.removeFromIndex(oldest);
       this.logger.log(`SSE evicted oldest client for user=${userId}`);
     }
 
     const client: SseClient = { userId, companyIds, res, lastActivity: Date.now() };
-    this.clients.push(client);
-    this.logger.log(`SSE client connected: user=${userId} (${this.clients.length} total)`);
+    this.addToIndex(client);
+    this.logger.log(`SSE client connected: user=${userId} (${this.allClients.size} total)`);
 
-    // Remove on disconnect
     res.on('close', () => {
-      this.clients = this.clients.filter((c) => c !== client);
-      this.logger.log(`SSE client disconnected: user=${userId} (${this.clients.length} total)`);
+      this.removeFromIndex(client);
+      this.logger.log(`SSE client disconnected: user=${userId} (${this.allClients.size} total)`);
     });
   }
 
-  /** Send event to a specific user (all their tabs) */
+  /** Send event to a specific user — O(1) lookup */
   emitToUser(userId: string, event: string, data: any) {
+    const clients = this.byUser.get(userId);
+    if (!clients || clients.size === 0) return;
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.clients) {
-      if (client.userId === userId) {
-        client.res.write(payload);
-      }
-    }
+    for (const c of clients) c.res.write(payload);
   }
 
-  /** Send event to all users of a company */
+  /** Send event to all users of a company — O(k) where k = company clients */
   emitToCompany(companyId: string, event: string, data: any, excludeUserId?: string) {
+    const clients = this.byCompany.get(companyId);
+    if (!clients || clients.size === 0) return;
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.clients) {
-      if (client.companyIds.includes(companyId) && client.userId !== excludeUserId) {
-        client.res.write(payload);
-      }
+    for (const c of clients) {
+      if (c.userId !== excludeUserId) c.res.write(payload);
     }
   }
 
@@ -66,7 +90,6 @@ export class SseService {
     data: { id: string; code: string; status: string },
     excludeUserId?: string,
   ) {
-    // Find all companies involved in this freight
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
       select: {
@@ -83,19 +106,23 @@ export class SseService {
     const companyIds = new Set<string>();
     companyIds.add(freight.originCompanyId);
     if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
-    for (const a of freight.assignments) {
-      companyIds.add(a.transportCompanyId);
-    }
+    for (const a of freight.assignments) companyIds.add(a.transportCompanyId);
 
     const payload = `event: freight:updated\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const client of this.clients) {
-      if (client.userId !== excludeUserId && client.companyIds.some((id) => companyIds.has(id))) {
-        client.res.write(payload);
+    const sent = new Set<SseClient>();
+    for (const cid of companyIds) {
+      const clients = this.byCompany.get(cid);
+      if (!clients) continue;
+      for (const c of clients) {
+        if (c.userId !== excludeUserId && !sent.has(c)) {
+          c.res.write(payload);
+          sent.add(c);
+        }
       }
     }
   }
 
-  /** Broadcast to conversation participants */
+  /** Broadcast to conversation participants — O(1) per user */
   async broadcastMessage(conversationId: string, senderId: string) {
     const participants = await this.prisma.conversationParticipant.findMany({
       where: { conversationId },
@@ -106,22 +133,17 @@ export class SseService {
     const payload = `event: message:new\ndata: ${JSON.stringify(data)}\n\n`;
     for (const p of participants) {
       if (p.userId && p.userId !== senderId) {
-        for (const client of this.clients) {
-          if (client.userId === p.userId) {
-            client.res.write(payload);
-          }
-        }
+        this.emitToUser(p.userId, 'message:new', data);
       }
     }
   }
 
-  /** Send heartbeat to all clients (keep connections alive) + timeout cleanup */
+  /** Heartbeat + timeout cleanup */
   heartbeat() {
     const payload = `: heartbeat\n\n`;
     const now = Date.now();
     const dead: SseClient[] = [];
-    for (const client of this.clients) {
-      // Timeout: no activity for 5 min → likely dead rural connection
+    for (const client of this.allClients) {
       if (now - client.lastActivity > CLIENT_TIMEOUT_MS) {
         dead.push(client);
         try { client.res.end(); } catch {}
@@ -135,12 +157,12 @@ export class SseService {
       }
     }
     if (dead.length > 0) {
-      this.clients = this.clients.filter((c) => !dead.includes(c));
-      this.logger.log(`Cleaned ${dead.length} dead SSE clients (${this.clients.length} remaining)`);
+      for (const c of dead) this.removeFromIndex(c);
+      this.logger.log(`Cleaned ${dead.length} dead SSE clients (${this.allClients.size} remaining)`);
     }
   }
 
   getClientCount(): number {
-    return this.clients.length;
+    return this.allClients.size;
   }
 }

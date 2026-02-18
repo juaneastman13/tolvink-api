@@ -157,15 +157,20 @@ export class AdminService {
     return { ...jwtUser, ...full, sub: full.id };
   }
 
-  // --- Stats ---
+  // --- Stats (cached 60s) ---
+  private _statsCache: { data: any; ts: number } | null = null;
   async getStats() {
+    const now = Date.now();
+    if (this._statsCache && now - this._statsCache.ts < 60000) return this._statsCache.data;
     const [users, companies, branches, freights] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.company.count(),
       this.prisma.branch.count(),
       this.prisma.freight.count(),
     ]);
-    return { users, companies, branches, freights };
+    const data = { users, companies, branches, freights };
+    this._statsCache = { data, ts: now };
+    return data;
   }
 
   // --- Companies ---

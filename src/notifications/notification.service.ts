@@ -77,7 +77,6 @@ export class NotificationService {
     entityId?: string,
     excludeUserId?: string,
   ) {
-    // Single query: direct companyId OR active membership
     const users = await this.prisma.user.findMany({
       where: {
         active: true,
@@ -88,14 +87,22 @@ export class NotificationService {
       },
       select: { id: true },
     });
-    const userIds = new Set(users.map((u: any) => u.id));
+    const userIds = Array.from(new Set(users.map((u: any) => u.id)))
+      .filter(uid => uid !== excludeUserId);
 
-    if (excludeUserId) userIds.delete(excludeUserId);
+    if (userIds.length === 0) return;
 
-    const promises = Array.from(userIds).map((uid) =>
-      this.notify(uid, type, title, body, entityId, companyId),
-    );
-    await Promise.allSettled(promises);
+    // Batch insert all notifications in one query instead of N individual creates
+    await this.prisma.notification.createMany({
+      data: userIds.map(userId => ({ userId, type, title, body, entityId, companyId })),
+    });
+
+    // Fire-and-forget: push + SSE per user (non-blocking)
+    for (const uid of userIds) {
+      this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
+        .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
+      this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
+    }
   }
 
   // ======================== GET NOTIFICATIONS ============================

@@ -356,21 +356,19 @@ export class ConversationsService {
       }
     }
 
-    // Mark as read for sender
-    if (participant) {
-      await this.prisma.conversationParticipant.update({
-        where: { id: participant.id },
-        data: { lastReadAt: new Date() },
-      }).catch(() => {});
-    }
-
-    const message = await this.prisma.message.create({
-      data: {
-        conversationId,
-        senderId: user.sub,
-        text: dto.text,
-      },
-      include: { sender: { select: { id: true, name: true } } },
+    // Transaction: mark read + create message in single round-trip
+    const now = new Date();
+    const message = await this.prisma.$transaction(async (tx) => {
+      if (participant) {
+        await tx.conversationParticipant.update({
+          where: { id: participant.id },
+          data: { lastReadAt: now },
+        }).catch(() => {});
+      }
+      return tx.message.create({
+        data: { conversationId, senderId: user.sub, text: dto.text },
+        include: { sender: { select: { id: true, name: true } } },
+      });
     });
 
     // SSE: notify conversation participants about new message

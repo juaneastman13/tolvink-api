@@ -1011,6 +1011,7 @@ export class FreightsService {
     return this.prisma.auditLog.findMany({
       where: { entityType: 'freight', entityId: freightId },
       orderBy: { createdAt: 'asc' },
+      take: 200,
       select: {
         id: true,
         action: true,
@@ -1056,12 +1057,14 @@ export class FreightsService {
   }
 
   async getTrackingPoints(freightId: string) {
-    return this.prisma.freightTracking.findMany({
+    // Fetch most recent 500 points (desc) then reverse for chronological order
+    const points = await this.prisma.freightTracking.findMany({
       where: { freightId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: 500,
       select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
+    return points.reverse();
   }
 
   async getLastPosition(freightId: string) {
