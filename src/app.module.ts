@@ -22,8 +22,10 @@ import { SseModule } from './sse/sse.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    // Global rate limiting: 100 req/min per IP (applied via APP_GUARD)
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
+    // Global rate limiting: 500 req/min (applied via APP_GUARD)
+    // With 15s polling (freights + notifications + chat) = ~12 req/min baseline
+    // + user actions = ~50-100 req/min normal usage per user
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 500 }]),
     DatabaseModule,
     CommonModule,
     AuthModule,
