@@ -443,6 +443,7 @@ model FreightTracking {
 
   @@index([freightId])
   @@index([createdAt])
+  @@index([freightId, createdAt])
   @@map("freight_tracking")
 }
 
@@ -537,6 +538,7 @@ model Notification {
   company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
   @@index([userId, read])
+  @@index([userId, read, createdAt])
   @@index([createdAt])
   @@map("notifications")
 }

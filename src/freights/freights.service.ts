@@ -248,7 +248,7 @@ export class FreightsService {
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
-          documents: { orderBy: { createdAt: 'desc' }, take: 10 },
+          _count: { select: { documents: true } },
         },
       }),
       this.prisma.freight.count({ where }),
@@ -1058,6 +1058,7 @@ export class FreightsService {
     return this.prisma.freightTracking.findMany({
       where: { freightId },
       orderBy: { createdAt: 'asc' },
+      take: 500,
       select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
   }

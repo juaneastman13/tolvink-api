@@ -6,7 +6,11 @@ interface SseClient {
   userId: string;
   companyIds: string[];
   res: Response;
+  lastActivity: number;
 }
+
+const MAX_CLIENTS_PER_USER = 3;
+const CLIENT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes no activity → dead
 
 @Injectable()
 export class SseService {
@@ -16,7 +20,16 @@ export class SseService {
   constructor(private prisma: PrismaService) {}
 
   addClient(userId: string, companyIds: string[], res: Response) {
-    const client: SseClient = { userId, companyIds, res };
+    // Evict oldest connections if user exceeds max
+    const userClients = this.clients.filter((c) => c.userId === userId);
+    if (userClients.length >= MAX_CLIENTS_PER_USER) {
+      const oldest = userClients[0];
+      try { oldest.res.end(); } catch {}
+      this.clients = this.clients.filter((c) => c !== oldest);
+      this.logger.log(`SSE evicted oldest client for user=${userId}`);
+    }
+
+    const client: SseClient = { userId, companyIds, res, lastActivity: Date.now() };
     this.clients.push(client);
     this.logger.log(`SSE client connected: user=${userId} (${this.clients.length} total)`);
 
@@ -102,20 +115,28 @@ export class SseService {
     }
   }
 
-  /** Send heartbeat to all clients (keep connections alive) */
+  /** Send heartbeat to all clients (keep connections alive) + timeout cleanup */
   heartbeat() {
     const payload = `: heartbeat\n\n`;
+    const now = Date.now();
     const dead: SseClient[] = [];
     for (const client of this.clients) {
+      // Timeout: no activity for 5 min → likely dead rural connection
+      if (now - client.lastActivity > CLIENT_TIMEOUT_MS) {
+        dead.push(client);
+        try { client.res.end(); } catch {}
+        continue;
+      }
       try {
         client.res.write(payload);
+        client.lastActivity = now;
       } catch {
         dead.push(client);
       }
     }
     if (dead.length > 0) {
       this.clients = this.clients.filter((c) => !dead.includes(c));
-      this.logger.log(`Cleaned ${dead.length} dead SSE clients`);
+      this.logger.log(`Cleaned ${dead.length} dead SSE clients (${this.clients.length} remaining)`);
     }
   }
 
