@@ -3,6 +3,7 @@ import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
+import { SseService } from '../sse/sse.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
 import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/client';
 
@@ -13,6 +14,7 @@ export class FreightsService {
     private companyRes: CompanyResolutionService,
     private stateMachine: FreightStateMachine,
     private notifications: NotificationService,
+    private sse: SseService,
   ) {}
 
   // Delegate to shared CompanyResolutionService
@@ -189,6 +191,9 @@ export class FreightsService {
       ).catch(() => {});
     }
 
+    // SSE: notify all involved parties
+    this.sse.broadcastFreightUpdate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub).catch(() => {});
+
     return freight;
   }
 
@@ -363,6 +368,9 @@ export class FreightsService {
       freightId, user.sub,
     ).catch(() => {});
 
+    // SSE
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(() => {});
+
     return result;
   }
 
@@ -427,6 +435,9 @@ export class FreightsService {
         ).catch(() => {});
       }
 
+      // SSE
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'pending_assignment' }, user.sub).catch(() => {});
+
       return result;
     }
 
@@ -484,6 +495,9 @@ export class FreightsService {
       ).catch(() => {});
     }
 
+    // SSE
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(() => {});
+
     return acceptResult;
   }
 
@@ -534,6 +548,9 @@ export class FreightsService {
         freightId, user.sub,
       ).catch(() => {});
     }
+
+    // SSE
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub).catch(() => {});
 
     return startResult;
   }
@@ -602,6 +619,9 @@ export class FreightsService {
         ).catch(() => {});
       }
 
+      // SSE
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(() => {});
+
       return loadedResult;
     }
 
@@ -645,6 +665,9 @@ export class FreightsService {
           freightId, user.sub,
         ).catch(() => {});
       }
+
+      // SSE
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(() => {});
 
       return prodLoadResult;
     }
@@ -709,6 +732,9 @@ export class FreightsService {
         ).catch(() => {});
       }
 
+      // SSE
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(() => {});
+
       return tFinishResult;
     }
 
@@ -761,6 +787,9 @@ export class FreightsService {
         ).catch(() => {});
       }
 
+      // SSE
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(() => {});
+
       return pFinishResult;
     }
 
@@ -812,6 +841,9 @@ export class FreightsService {
         freightId, user.sub,
       ).catch(() => {});
     }
+
+    // SSE
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub).catch(() => {});
 
     return finishResult;
   }
@@ -878,6 +910,9 @@ export class FreightsService {
         freightId, user.sub,
       ).catch(() => {});
     }
+
+    // SSE
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'canceled' }, user.sub).catch(() => {});
 
     return cancelResult;
   }

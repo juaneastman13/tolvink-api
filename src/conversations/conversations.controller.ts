@@ -10,6 +10,7 @@ import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
+import { SseService } from '../sse/sse.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -36,6 +37,7 @@ export class ConversationsService {
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
+    private sse: SseService,
   ) {}
 
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
@@ -362,7 +364,7 @@ export class ConversationsService {
       }).catch(() => {});
     }
 
-    return this.prisma.message.create({
+    const message = await this.prisma.message.create({
       data: {
         conversationId,
         senderId: user.sub,
@@ -370,6 +372,11 @@ export class ConversationsService {
       },
       include: { sender: { select: { id: true, name: true } } },
     });
+
+    // SSE: notify conversation participants about new message
+    this.sse.broadcastMessage(conversationId, user.sub).catch(() => {});
+
+    return message;
   }
 }
 

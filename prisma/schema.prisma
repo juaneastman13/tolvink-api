@@ -354,6 +354,8 @@ model Freight {
   @@index([code])
   @@index([fieldId])
   @@index([requestedById])
+  @@index([status, originCompanyId])
+  @@index([status, destCompanyId])
   @@map("freights")
 }
 
@@ -491,6 +493,7 @@ model Message {
   @@index([conversationId])
   @@index([senderId])
   @@index([createdAt])
+  @@index([conversationId, createdAt])
   @@map("messages")
 }
 
@@ -572,6 +575,7 @@ model UserCompany {
   @@unique([userId, companyId])
   @@index([userId])
   @@index([companyId])
+  @@index([userId, active])
   @@map("user_companies")
 }
 

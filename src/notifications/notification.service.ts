@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { ConfigService } from '@nestjs/config';
+import { SseService } from '../sse/sse.service';
 import * as webpush from 'web-push';
 import { NotificationType } from '@prisma/client';
 
@@ -12,6 +13,7 @@ export class NotificationService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    @Inject(forwardRef(() => SseService)) private sse: SseService,
   ) {
     const publicKey = this.config.get<string>('VAPID_PUBLIC_KEY');
     const privateKey = this.config.get<string>('VAPID_PRIVATE_KEY');
@@ -58,6 +60,9 @@ export class NotificationService {
     // Send push (fire-and-forget, log errors)
     this.sendPush(userId, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
       .catch((e) => this.logger.error(`Push send failed for user ${userId}: ${e.message}`));
+
+    // SSE: notify user about new notification
+    this.sse.emitToUser(userId, 'notification:new', { type, title, entityId });
 
     return notification;
   }
@@ -132,22 +137,25 @@ export class NotificationService {
     if (!this.pushEnabled) return;
 
     const subs = await this.prisma.pushSubscription.findMany({ where: { userId } });
+    if (subs.length === 0) return;
 
-    for (const sub of subs) {
-      try {
-        await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify(payload),
-        );
-      } catch (err: any) {
-        // 404 or 410 = subscription expired, remove it
-        if (err.statusCode === 404 || err.statusCode === 410) {
-          await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
-          this.logger.log(`Removed expired subscription for user ${userId}`);
-        } else {
-          this.logger.error(`Push failed for user ${userId}: ${err.message}`);
-        }
-      }
-    }
+    // Send all push notifications in parallel (not sequential)
+    await Promise.allSettled(
+      subs.map((sub) =>
+        webpush
+          .sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify(payload),
+          )
+          .catch(async (err: any) => {
+            if (err.statusCode === 404 || err.statusCode === 410) {
+              await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+              this.logger.log(`Removed expired subscription for user ${userId}`);
+            } else {
+              this.logger.error(`Push failed for user ${userId}: ${err.message}`);
+            }
+          }),
+      ),
+    );
   }
 }

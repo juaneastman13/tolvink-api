@@ -17,6 +17,7 @@ import { ConversationsController, ConversationsService } from './conversations/c
 import { AdminController, AdminService } from './admin/admin.controller';
 import { NotificationModule } from './notifications/notification.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { SseModule } from './sse/sse.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     HealthModule,
     NotificationModule,
     AnalyticsModule,
+    SseModule,
   ],
   controllers: [
     CatalogController,
