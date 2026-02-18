@@ -23,21 +23,21 @@ export class CompanyResolutionService {
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
 
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { userId: user.sub, active: true },
-      select: { companyId: true },
-    });
-    for (const m of memberships) ids.add(m.companyId);
-
-    if (ids.size <= 1) {
-      const dbUser = await this.prisma.user.findUnique({
+    // Parallel: memberships + user data in single round-trip
+    const [memberships, dbUser] = await Promise.all([
+      (this.prisma as any).userCompany.findMany({
+        where: { userId: user.sub, active: true },
+        select: { companyId: true },
+      }),
+      this.prisma.user.findUnique({
         where: { id: user.sub },
         select: { companyId: true, companyByType: true },
-      });
-      if (dbUser?.companyId) ids.add(dbUser.companyId);
-      const cbt = (dbUser?.companyByType as any) || {};
-      Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
-    }
+      }),
+    ]);
+    for (const m of memberships) ids.add(m.companyId);
+    if (dbUser?.companyId) ids.add(dbUser.companyId);
+    const cbt = (dbUser?.companyByType as any) || {};
+    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
 
     const result = Array.from(ids);
     cache?.set(key, result);

@@ -242,7 +242,9 @@ export class FreightsService {
           conversation: { select: { id: true } },
           assignments: {
             where: { status: { in: ['active', 'accepted'] } },
-            include: {
+            take: 1,
+            select: {
+              id: true, status: true,
               transportCompany: { select: { id: true, name: true } },
               driver: { select: { id: true, name: true, phone: true } },
               truck: { select: { id: true, plate: true, model: true } },
@@ -279,7 +281,7 @@ export class FreightsService {
             truck: { select: { id: true, plate: true, model: true } },
           },
         },
-        documents: { orderBy: { createdAt: 'desc' } },
+        documents: { orderBy: { createdAt: 'desc' }, take: 20 },
         conversation: { select: { id: true } },
       },
     });

@@ -329,11 +329,11 @@ export class AdminService {
       select: {
         id: true, name: true, email: true, phone: true, role: true,
         userTypes: true, isSuperAdmin: true, active: true, companyId: true,
-        companyByType: true, roleByType: true,
         createdAt: true,
         company: { select: { id: true, name: true, type: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 200,
     });
   }
 

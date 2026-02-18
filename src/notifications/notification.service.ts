@@ -77,23 +77,18 @@ export class NotificationService {
     entityId?: string,
     excludeUserId?: string,
   ) {
-    // Two targeted queries instead of scanning all users:
-    // 1. Users with direct companyId (legacy)
-    const directUsers = await this.prisma.user.findMany({
-      where: { companyId, active: true },
+    // Single query: direct companyId OR active membership
+    const users = await this.prisma.user.findMany({
+      where: {
+        active: true,
+        OR: [
+          { companyId },
+          { memberships: { some: { companyId, active: true } } },
+        ],
+      },
       select: { id: true },
     });
-
-    // 2. Users with active membership in this company (UserCompany)
-    const memberships = await (this.prisma as any).userCompany.findMany({
-      where: { companyId, active: true },
-      select: { userId: true },
-    });
-
-    const userIds = new Set([
-      ...directUsers.map((u: any) => u.id),
-      ...memberships.map((m: any) => m.userId),
-    ]);
+    const userIds = new Set(users.map((u: any) => u.id));
 
     if (excludeUserId) userIds.delete(excludeUserId);
 
