@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -90,6 +90,8 @@ export class CreateFreightDto {
 
   @ApiProperty({ type: [FreightItemDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: 'Debe incluir al menos un producto' })
+  @ArrayMaxSize(20, { message: 'Máximo 20 productos por flete' })
   @ValidateNested({ each: true })
   @Type(() => FreightItemDto)
   items: FreightItemDto[];

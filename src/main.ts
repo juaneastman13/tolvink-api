@@ -64,6 +64,9 @@ async function bootstrap() {
     logger.log('Swagger enabled at /docs');
   }
 
+  // Graceful shutdown (Prisma disconnect, etc.)
+  app.enableShutdownHooks();
+
   // Railway requires binding to 0.0.0.0
   const port = process.env.PORT || 4000;
   await app.listen(port, '0.0.0.0');
