@@ -466,6 +466,8 @@ model ConversationParticipant {
   userId         String?   @map("user_id")
   joinedAt       DateTime  @default(now()) @map("joined_at")
   lastReadAt     DateTime? @map("last_read_at")
+  pinnedAt       DateTime? @map("pinned_at")
+  markedUnread   Boolean   @default(false) @map("marked_unread")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 

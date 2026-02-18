@@ -245,7 +245,11 @@ export class ConversationsService {
         }
       }
 
-      return { ...c, participants: participantsEnriched, displayName, unread };
+      // Include pin and marked-unread flags
+      const pinnedAt = myParticipant?.pinnedAt || null;
+      const markedUnread = myParticipant?.markedUnread || false;
+
+      return { ...c, participants: participantsEnriched, displayName, unread, pinnedAt, markedUnread };
     });
 
     if (search && search.trim()) {
@@ -284,6 +288,38 @@ export class ConversationsService {
   async typing(conversationId: string, user: any) {
     await this.sse.broadcastTyping(conversationId, user.sub, user.name || 'Usuario');
     return { ok: true };
+  }
+
+  async pinConversation(conversationId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+    const participant = await this.prisma.conversationParticipant.findFirst({
+      where: { conversationId, companyId: { in: allIds } },
+    });
+    if (!participant) throw new ForbiddenException('No participás en esta conversación');
+
+    const newPinnedAt = participant.pinnedAt ? null : new Date();
+    await this.prisma.conversationParticipant.update({
+      where: { id: participant.id },
+      data: { pinnedAt: newPinnedAt },
+    });
+
+    return { pinned: !!newPinnedAt };
+  }
+
+  async toggleMarkUnread(conversationId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+    const participant = await this.prisma.conversationParticipant.findFirst({
+      where: { conversationId, companyId: { in: allIds } },
+    });
+    if (!participant) throw new ForbiddenException('No participás en esta conversación');
+
+    const newMarkedUnread = !participant.markedUnread;
+    await this.prisma.conversationParticipant.update({
+      where: { id: participant.id },
+      data: { markedUnread: newMarkedUnread },
+    });
+
+    return { markedUnread: newMarkedUnread };
   }
 
   async getMessages(conversationId: string, user: any, pagination?: { take?: number; before?: string }) {
@@ -491,6 +527,18 @@ export class ConversationsController {
   @ApiOperation({ summary: 'Indicar que el usuario está escribiendo' })
   typing(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.typing(id, user);
+  }
+
+  @Patch(':id/pin')
+  @ApiOperation({ summary: 'Fijar/desfijar conversación' })
+  pinConversation(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.pinConversation(id, user);
+  }
+
+  @Patch(':id/mark-unread')
+  @ApiOperation({ summary: 'Marcar/desmarcar conversación como no leída' })
+  toggleMarkUnread(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.toggleMarkUnread(id, user);
   }
 
   @Post(':id/messages')
