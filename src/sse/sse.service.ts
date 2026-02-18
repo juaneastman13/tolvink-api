@@ -138,6 +138,34 @@ export class SseService {
     }
   }
 
+  /** Broadcast typing indicator to conversation participants */
+  async broadcastTyping(conversationId: string, userId: string, userName: string) {
+    const participants = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    const data = { conversationId, userId, userName };
+    for (const p of participants) {
+      if (p.userId && p.userId !== userId) {
+        this.emitToUser(p.userId, 'typing', data);
+      }
+    }
+  }
+
+  /** Notify other participants that user read the conversation */
+  async broadcastRead(conversationId: string, readByUserId: string) {
+    const participants = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    const data = { conversationId, readByUserId, readAt: new Date().toISOString() };
+    for (const p of participants) {
+      if (p.userId && p.userId !== readByUserId) {
+        this.emitToUser(p.userId, 'read', data);
+      }
+    }
+  }
+
   /** Heartbeat + timeout cleanup */
   heartbeat() {
     const payload = `: heartbeat\n\n`;

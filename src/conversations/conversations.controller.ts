@@ -3,7 +3,7 @@
 // User-level tracking, mark-read, freight visibility for all parties
 // =====================================================================
 
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
@@ -238,6 +238,15 @@ export class ConversationsService {
       where: { id: participant.id },
       data: { lastReadAt: new Date() },
     });
+
+    // SSE: notify other participants that this user read the conversation
+    this.sse.broadcastRead(conversationId, user.sub).catch(() => {});
+
+    return { ok: true };
+  }
+
+  async typing(conversationId: string, user: any) {
+    await this.sse.broadcastTyping(conversationId, user.sub, user.name || 'Usuario');
     return { ok: true };
   }
 
@@ -427,6 +436,13 @@ export class ConversationsController {
       take: take ? Math.min(parseInt(take) || 50, 100) : 50,
       before: before || undefined,
     });
+  }
+
+  @Post(':id/typing')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Indicar que el usuario está escribiendo' })
+  typing(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.typing(id, user);
   }
 
   @Post(':id/messages')
