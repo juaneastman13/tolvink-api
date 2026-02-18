@@ -55,8 +55,9 @@ export class NotificationService {
       data: { userId, type, title, body, entityId, companyId },
     });
 
-    // Send push (fire-and-forget)
-    this.sendPush(userId, { title, body, url: entityId ? `/freight/${entityId}` : '/' }).catch(() => {});
+    // Send push (fire-and-forget, log errors)
+    this.sendPush(userId, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
+      .catch((e) => this.logger.error(`Push send failed for user ${userId}: ${e.message}`));
 
     return notification;
   }

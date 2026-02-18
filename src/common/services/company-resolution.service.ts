@@ -1,20 +1,25 @@
 // =====================================================================
 // TOLVINK — Shared Company Resolution Service
-// Single source of truth for resolving user → company relationships
+// With per-request caching via AsyncLocalStorage
 // =====================================================================
 
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { requestCache } from '../request-cache';
 
 @Injectable()
 export class CompanyResolutionService {
   constructor(private prisma: PrismaService) {}
 
-  /**
-   * All company IDs a user belongs to (from UserCompany memberships).
-   * Falls back to legacy companyByType JSON if no memberships found.
-   */
+  private getCache(): Map<string, any> | undefined {
+    return requestCache.getStore();
+  }
+
   async resolveAllCompanyIds(user: { sub: string; companyId?: string }): Promise<string[]> {
+    const cache = this.getCache();
+    const key = `allIds:${user.sub}`;
+    if (cache?.has(key)) return cache.get(key);
+
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
 
@@ -24,7 +29,6 @@ export class CompanyResolutionService {
     });
     for (const m of memberships) ids.add(m.companyId);
 
-    // Fallback: legacy companyByType JSON (transition period)
     if (ids.size <= 1) {
       const dbUser = await this.prisma.user.findUnique({
         where: { id: user.sub },
@@ -35,41 +39,43 @@ export class CompanyResolutionService {
       Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
     }
 
-    return Array.from(ids);
+    const result = Array.from(ids);
+    cache?.set(key, result);
+    return result;
   }
 
-  /**
-   * Resolve producer company ID for the user.
-   * Checks memberships for a company of type 'producer'.
-   */
   async resolveProducerCompanyId(user: { sub: string; companyId?: string; companyType?: string }): Promise<string> {
+    const cache = this.getCache();
+    const key = `producerId:${user.sub}`;
+    if (cache?.has(key)) return cache.get(key);
+
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId: user.sub, active: true },
       include: { company: { select: { id: true, type: true } } },
     });
-    const producerMembership = memberships.find((m: any) => m.company?.type === 'producer');
-    if (producerMembership) return producerMembership.companyId;
-    if (user.companyType === 'producer' && user.companyId) return user.companyId;
-    return user.companyId || '';
+    const pm = memberships.find((m: any) => m.company?.type === 'producer');
+    const result = pm?.companyId || (user.companyType === 'producer' && user.companyId ? user.companyId : user.companyId || '');
+
+    cache?.set(key, result);
+    return result;
   }
 
-  /**
-   * Resolve plant company ID for the user.
-   * Checks memberships for a company of type 'plant'.
-   */
   async resolvePlantCompanyId(user: { sub: string; companyId?: string }): Promise<string> {
+    const cache = this.getCache();
+    const key = `plantId:${user.sub}`;
+    if (cache?.has(key)) return cache.get(key);
+
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId: user.sub, active: true },
       include: { company: { select: { id: true, type: true } } },
     });
-    const plantMembership = memberships.find((m: any) => m.company?.type === 'plant');
-    if (plantMembership) return plantMembership.companyId;
-    return user.companyId || '';
+    const pm = memberships.find((m: any) => m.company?.type === 'plant');
+    const result = pm?.companyId || user.companyId || '';
+
+    cache?.set(key, result);
+    return result;
   }
 
-  /**
-   * Check if user has a specific company type (from JWT or memberships).
-   */
   async hasCompanyType(user: { sub: string; companyType?: string }, type: string): Promise<boolean> {
     if (user.companyType === type) return true;
     const memberships = await (this.prisma as any).userCompany.findMany({
@@ -79,9 +85,6 @@ export class CompanyResolutionService {
     return memberships.some((m: any) => m.company?.type === type);
   }
 
-  /**
-   * Resolve the effective company type for a user (from JWT or first membership).
-   */
   async resolveCompanyType(user: { sub: string; companyType?: string }): Promise<string> {
     if (user.companyType) return user.companyType;
     const memberships = await (this.prisma as any).userCompany.findMany({
@@ -92,11 +95,11 @@ export class CompanyResolutionService {
     return 'unknown';
   }
 
-  /**
-   * Resolve all producer company IDs (for fields service).
-   * Includes admin fallback logic.
-   */
   async resolveAllProducerCompanyIds(user: { sub: string; companyId?: string; role?: string }): Promise<string[]> {
+    const cache = this.getCache();
+    const key = `allProducerIds:${user.sub}`;
+    if (cache?.has(key)) return cache.get(key);
+
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId: user.sub, active: true },
       include: { company: { select: { id: true, type: true } } },
@@ -106,16 +109,13 @@ export class CompanyResolutionService {
     const isAdmin = user.role === 'admin' || user.role === 'platform_admin' || user.role === 'gerente';
 
     for (const m of memberships) {
-      if (m.company?.type === 'producer' || isAdmin) {
-        ids.add(m.companyId);
-      }
+      if (m.company?.type === 'producer' || isAdmin) ids.add(m.companyId);
     }
 
-    // Fallback: primary companyId if no memberships
-    if (ids.size === 0 && user.companyId) {
-      ids.add(user.companyId);
-    }
+    if (ids.size === 0 && user.companyId) ids.add(user.companyId);
 
-    return Array.from(ids);
+    const result = Array.from(ids);
+    cache?.set(key, result);
+    return result;
   }
 }

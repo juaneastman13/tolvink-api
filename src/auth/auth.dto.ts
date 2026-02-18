@@ -43,3 +43,9 @@ export class RegisterDto {
   @IsString({ each: true })
   userTypes: string[];
 }
+
+export class RefreshTokenDto {
+  @IsNotEmpty({ message: 'refreshToken requerido' })
+  @IsString()
+  refreshToken: string;
+}

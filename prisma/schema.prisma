@@ -144,6 +144,7 @@ model User {
   auditLogs          AuditLog[]
   notifications      Notification[]
   pushSubscriptions  PushSubscription[]
+  refreshTokens      RefreshToken[]
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
 
   @@index([companyId])
@@ -571,6 +572,22 @@ model UserCompany {
   @@index([userId])
   @@index([companyId])
   @@map("user_companies")
+}
+
+// ======================== REFRESH TOKENS ==============================
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique @db.VarChar(255)
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 // ======================== ANALYTICS ==================================

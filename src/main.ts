@@ -9,6 +9,8 @@ const Sentry = require('@sentry/node');
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { UserRateLimitInterceptor } from './common/interceptors/user-rate-limit.interceptor';
+import { requestCache } from './common/request-cache';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -46,6 +48,11 @@ async function bootstrap() {
   app.use(bodyParser.json({ limit: '10mb' }));
   app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
+  // Request-scoped cache (AsyncLocalStorage) — must be before guards/interceptors
+  app.use((req: any, res: any, next: any) => {
+    requestCache.run(new Map(), () => next());
+  });
+
   // Request timeout — 30s max per request
   app.use((req: any, res: any, next: any) => {
     res.setTimeout(30000, () => {
@@ -70,7 +77,7 @@ async function bootstrap() {
 
   // Global exception filter + request logging
   app.useGlobalFilters(new GlobalExceptionFilter());
-  app.useGlobalInterceptors(new LoggingInterceptor());
+  app.useGlobalInterceptors(new LoggingInterceptor(), new UserRateLimitInterceptor());
 
   // Validation pipe
   app.useGlobalPipes(new ValidationPipe({
