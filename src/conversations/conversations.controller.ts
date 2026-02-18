@@ -33,6 +33,14 @@ export class SendMessageDto {
 
 // ======================== SERVICE ====================================
 
+// In-memory cache for conversation participants (TTL 5min)
+interface ParticipantsCache {
+  companyIds: string[];
+  timestamp: number;
+}
+const participantsCache = new Map<string, ParticipantsCache>();
+const PARTICIPANTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 @Injectable()
 export class ConversationsService {
   constructor(
@@ -43,6 +51,29 @@ export class ConversationsService {
 
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
     return this.companyRes.resolveAllCompanyIds(user);
+  }
+
+  /** Get conversation participants with 5min cache */
+  private async getConversationCompanyIds(conversationId: string): Promise<string[]> {
+    const cached = participantsCache.get(conversationId);
+    if (cached && Date.now() - cached.timestamp < PARTICIPANTS_CACHE_TTL_MS) {
+      return cached.companyIds;
+    }
+
+    const participants = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+      select: { companyId: true },
+    });
+
+    const companyIds = participants.map(p => p.companyId);
+    participantsCache.set(conversationId, { companyIds, timestamp: Date.now() });
+
+    return companyIds;
+  }
+
+  /** Invalidate participants cache for a conversation */
+  private invalidateParticipantsCache(conversationId: string) {
+    participantsCache.delete(conversationId);
   }
 
   async searchUsers(q: string, user: any) {
@@ -112,10 +143,13 @@ export class ConversationsService {
     });
   }
 
-  async listConversations(user: any, search?: string) {
+  async listConversations(user: any, search?: string, skip?: number, take?: number) {
     const allIds = await this.resolveAllCompanyIds(user);
 
-    // Find conversations where user is participant OR involved in freight (limited to 100)
+    const takeNum = Math.min(take || 50, 100); // Max 100 conversations per request
+    const skipNum = skip || 0;
+
+    // Find conversations where user is participant OR involved in freight
     const convs = await this.prisma.conversation.findMany({
       where: {
         OR: [
@@ -144,7 +178,8 @@ export class ConversationsService {
         freight: { select: { id: true, code: true, status: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      skip: skipNum,
+      take: takeNum,
     });
 
     // Batch auto-add user as participant to freight conversations they can see
@@ -366,20 +401,19 @@ export class ConversationsService {
       }
     }
 
-    // Transaction: mark read + create message in single round-trip
-    const now = new Date();
-    const message = await this.prisma.$transaction(async (tx) => {
-      if (participant) {
-        await tx.conversationParticipant.update({
-          where: { id: participant.id },
-          data: { lastReadAt: now },
-        }).catch(() => {});
-      }
-      return tx.message.create({
-        data: { conversationId, senderId: user.sub, text: dto.text },
-        include: { sender: { select: { id: true, name: true } } },
-      });
+    // Create message (no transaction needed)
+    const message = await this.prisma.message.create({
+      data: { conversationId, senderId: user.sub, text: dto.text },
+      include: { sender: { select: { id: true, name: true } } },
     });
+
+    // Fire-and-forget: mark read (async, no await)
+    if (participant) {
+      this.prisma.conversationParticipant.update({
+        where: { id: participant.id },
+        data: { lastReadAt: new Date() },
+      }).catch(() => {});
+    }
 
     // SSE: notify conversation participants about new message
     this.sse.broadcastMessage(conversationId, user.sub).catch(() => {});
@@ -413,8 +447,20 @@ export class ConversationsController {
   @Get()
   @ApiOperation({ summary: 'Listar conversaciones' })
   @ApiQuery({ name: 'search', required: false })
-  list(@CurrentUser() user: any, @Query('search') search?: string) {
-    return this.service.listConversations(user, search);
+  @ApiQuery({ name: 'skip', required: false, description: 'Offset for pagination' })
+  @ApiQuery({ name: 'take', required: false, description: 'Limit for pagination (max 100)' })
+  list(
+    @CurrentUser() user: any,
+    @Query('search') search?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.service.listConversations(
+      user,
+      search,
+      skip ? parseInt(skip) || 0 : 0,
+      take ? parseInt(take) || 50 : 50,
+    );
   }
 
   @Patch(':id/read')
