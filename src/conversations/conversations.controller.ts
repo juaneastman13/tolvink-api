@@ -239,7 +239,7 @@ export class ConversationsService {
     return { ok: true };
   }
 
-  async getMessages(conversationId: string, user: any) {
+  async getMessages(conversationId: string, user: any, pagination?: { take?: number; before?: string }) {
     const allIds = await this.resolveAllCompanyIds(user);
 
     const participant = await this.prisma.conversationParticipant.findFirst({
@@ -281,19 +281,40 @@ export class ConversationsService {
       }
     }
 
-    // Auto mark as read
-    if (participant) {
+    // Auto mark as read (only on first page load, not when loading older messages)
+    if (participant && !pagination?.before) {
       await this.prisma.conversationParticipant.update({
         where: { id: participant.id },
         data: { lastReadAt: new Date() },
       }).catch(() => {});
     }
 
-    return this.prisma.message.findMany({
-      where: { conversationId },
+    const take = pagination?.take || 50;
+    const where: any = { conversationId };
+
+    // Cursor-based pagination: load messages older than `before`
+    if (pagination?.before) {
+      const cursorMsg = await this.prisma.message.findUnique({
+        where: { id: pagination.before },
+        select: { createdAt: true },
+      });
+      if (cursorMsg) {
+        where.createdAt = { lt: cursorMsg.createdAt };
+      }
+    }
+
+    const messages = await this.prisma.message.findMany({
+      where,
       include: { sender: { select: { id: true, name: true } } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
+      take,
     });
+
+    // Return in chronological order + hasMore flag
+    return {
+      messages: messages.reverse(),
+      hasMore: messages.length === take,
+    };
   }
 
   async sendMessage(conversationId: string, dto: SendMessageDto, user: any) {
@@ -388,9 +409,19 @@ export class ConversationsController {
   }
 
   @Get(':id/messages')
-  @ApiOperation({ summary: 'Obtener mensajes de conversación' })
-  messages(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.getMessages(id, user);
+  @ApiOperation({ summary: 'Obtener mensajes de conversación (paginado)' })
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'before', required: false, description: 'Cursor: message ID to load messages before' })
+  messages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+    @Query('take') take?: string,
+    @Query('before') before?: string,
+  ) {
+    return this.service.getMessages(id, user, {
+      take: take ? Math.min(parseInt(take) || 50, 100) : 50,
+      before: before || undefined,
+    });
   }
 
   @Post(':id/messages')

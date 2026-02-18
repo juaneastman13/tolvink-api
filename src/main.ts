@@ -2,12 +2,24 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
+import * as bodyParser from 'body-parser';
+import * as Sentry from '@sentry/node';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // Initialize Sentry error tracking
+  if (process.env.SENTRY_DSN) {
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'development',
+      tracesSampleRate: 0.1,
+    });
+    logger.log('Sentry initialized');
+  }
 
   // Validate critical env vars at startup
   const required = ['DATABASE_URL', 'JWT_SECRET'];
@@ -27,6 +39,20 @@ async function bootstrap() {
     crossOriginEmbedderPolicy: false,
     hsts: { maxAge: 31536000, includeSubDomains: true },
   }));
+
+  // Body size limits (prevent DoS with large payloads)
+  app.use(bodyParser.json({ limit: '10mb' }));
+  app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
+
+  // Request timeout — 30s max per request
+  app.use((req: any, res: any, next: any) => {
+    res.setTimeout(30000, () => {
+      if (!res.headersSent) {
+        res.status(408).json({ message: 'Request timeout' });
+      }
+    });
+    next();
+  });
 
   // CORS — explicit whitelist only
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()) || ['http://localhost:3000'];
