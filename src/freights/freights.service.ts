@@ -243,14 +243,13 @@ export class FreightsService {
           assignments: {
             where: { status: { in: ['active', 'accepted'] } },
             take: 1,
-            select: {
-              id: true, status: true,
+            include: {
               transportCompany: { select: { id: true, name: true } },
               driver: { select: { id: true, name: true, phone: true } },
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
-          _count: { select: { documents: true } },
+          documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true } },
         },
       }),
       this.prisma.freight.count({ where }),
