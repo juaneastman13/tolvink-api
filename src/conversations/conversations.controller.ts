@@ -41,6 +41,14 @@ interface ParticipantsCache {
 const participantsCache = new Map<string, ParticipantsCache>();
 const PARTICIPANTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Periodic cleanup: evict stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of participantsCache) {
+    if (now - entry.timestamp > PARTICIPANTS_CACHE_TTL_MS) participantsCache.delete(key);
+  }
+}, PARTICIPANTS_CACHE_TTL_MS);
+
 @Injectable()
 export class ConversationsService {
   constructor(
