@@ -31,6 +31,10 @@ export class CreateCompanyDto {
   @ApiProperty({ enum: ['producer', 'plant', 'transporter'] }) @IsNotEmpty()
   type: string;
 
+  @ApiProperty({ required: false, type: [String], description: 'Multi-type support: array of CompanyType values' })
+  @IsOptional() @IsArray() @IsString({ each: true })
+  types?: string[];
+
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(255)
   address?: string;
 
@@ -222,10 +226,15 @@ export class AdminService {
   }
 
   async createCompany(dto: CreateCompanyDto) {
-    return this.prisma.company.create({
+    // If types[] provided, set type (primary) to first element; otherwise set types from type
+    const primaryType = dto.types && dto.types.length > 0 ? dto.types[0] : dto.type;
+    const typesArray = dto.types && dto.types.length > 0 ? dto.types : [dto.type];
+
+    return (this.prisma.company as any).create({
       data: {
         name: dto.name,
-        type: dto.type as any,
+        type: primaryType,
+        types: typesArray,
         address: dto.address,
         phone: dto.phone,
         email: dto.email,
@@ -256,7 +265,16 @@ export class AdminService {
     if (dto.lat !== undefined) data.lat = dto.lat;
     if (dto.lng !== undefined) data.lng = dto.lng;
 
-    return this.prisma.company.update({ where: { id }, data });
+    // Multi-type support: if types[] provided, sync type (primary) and types
+    if (dto.types !== undefined && Array.isArray(dto.types) && dto.types.length > 0) {
+      data.type = dto.types[0]; // Primary type = first element
+      data.types = dto.types;
+    } else if (dto.type !== undefined) {
+      data.type = dto.type;
+      data.types = [dto.type]; // Sync types from single type
+    }
+
+    return (this.prisma.company as any).update({ where: { id }, data });
   }
 
   // --- Branches ---

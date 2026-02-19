@@ -8,6 +8,18 @@ import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto } from './auth
 
 const REFRESH_TOKEN_DAYS = 7;
 
+// Company select with types field (Json field not yet in generated Prisma client)
+const COMPANY_SELECT = { id: true, name: true, type: true, types: true, hasInternalFleet: true } as any;
+
+/** Helper: get all types for a company (from types[] array or fallback to type) */
+function getCompanyTypes(company: any): string[] {
+  if (!company) return [];
+  const arr = Array.isArray(company.types) && company.types.length > 0
+    ? company.types
+    : (company.type ? [company.type] : []);
+  return arr;
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -26,13 +38,13 @@ export class AuthService {
       ? { phone: dto.phone }
       : { email: dto.email };
 
-    const user = await this.prisma.user.findFirst({
+    const user = await (this.prisma.user as any).findFirst({
       where,
       include: {
-        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        company: { select: COMPANY_SELECT },
         memberships: {
           where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          include: { company: { select: COMPANY_SELECT } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -51,9 +63,9 @@ export class AuthService {
           role: user.role === 'admin' || user.role === 'platform_admin' ? 'gerente' : 'operario',
         },
       }).catch(() => {});
-      (user as any).memberships = await this.prisma.userCompany.findMany({
+      user.memberships = await (this.prisma.userCompany as any).findMany({
         where: { userId: user.id, active: true },
-        include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+        include: { company: { select: COMPANY_SELECT } },
         orderBy: { createdAt: 'asc' },
       });
     }
@@ -62,15 +74,26 @@ export class AuthService {
       const firstCompanyId = user.memberships[0].companyId;
       await this.prisma.user.update({
         where: { id: user.id },
-        data: { activeCompanyId: firstCompanyId },
+        data: { activeCompanyId: firstCompanyId, companyId: firstCompanyId }, // Legacy field — kept in sync with activeCompanyId
       });
-      (user as any).activeCompanyId = firstCompanyId;
+      user.activeCompanyId = firstCompanyId;
+      user.companyId = firstCompanyId;
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { lastLogin: new Date() },
-    });
+    // Legacy field — kept in sync with activeCompanyId
+    const activeId = user.activeCompanyId || user.companyId;
+    if (activeId && user.companyId !== activeId) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date(), companyId: activeId },
+      });
+      user.companyId = activeId;
+    } else {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lastLogin: new Date() },
+      });
+    }
 
     const token = await this.signToken(user);
     const refreshToken = await this.createRefreshToken(user.id);
@@ -92,16 +115,20 @@ export class AuthService {
 
     const hash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
 
-    const user = await this.prisma.user.create({
+    // Validate userTypes values
+    const validTypes = ['producer', 'plant', 'transporter'];
+    const userTypes = (dto.userTypes || []).filter((t: string) => validTypes.includes(t));
+
+    const user = await (this.prisma.user as any).create({
       data: {
         email: dto.email, phone: dto.phone, passwordHash: hash,
-        name: dto.name, role: 'operator', userTypes: dto.userTypes,
+        name: dto.name, role: 'operator', userTypes,
       },
       include: {
-        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        company: { select: COMPANY_SELECT },
         memberships: {
           where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          include: { company: { select: COMPANY_SELECT } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -118,24 +145,47 @@ export class AuthService {
   }
 
   async switchCompany(userId: string, dto: SwitchCompanyDto) {
-    const membership = await this.prisma.userCompany.findFirst({
+    // Get old activeCompanyId for audit log
+    const currentUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { activeCompanyId: true, companyId: true },
+    });
+    const oldCompanyId = currentUser?.activeCompanyId || currentUser?.companyId || null;
+
+    const membership = await (this.prisma.userCompany as any).findFirst({
       where: { userId, companyId: dto.companyId, active: true },
-      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+      include: { company: { select: COMPANY_SELECT } },
     });
     if (!membership) throw new BadRequestException('No pertenecés a esta empresa');
 
-    const user = await this.prisma.user.update({
+    // Legacy field — kept in sync with activeCompanyId
+    const user = await (this.prisma.user as any).update({
       where: { id: userId },
-      data: { activeCompanyId: dto.companyId },
+      data: { activeCompanyId: dto.companyId, companyId: dto.companyId },
       include: {
-        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        company: { select: COMPANY_SELECT },
         memberships: {
           where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          include: { company: { select: COMPANY_SELECT } },
           orderBy: { createdAt: 'asc' },
         },
       },
     });
+
+    // Invalidate ALL existing refresh tokens for this user (security: old sessions)
+    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(() => {});
+
+    // Audit log entry for company switch
+    await this.prisma.auditLog.create({
+      data: {
+        entityType: 'user',
+        entityId: userId,
+        action: 'switch_company',
+        fromValue: oldCompanyId || undefined,
+        toValue: dto.companyId,
+        userId,
+      },
+    }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
 
     const token = await this.signToken(user);
     const refreshToken = await this.createRefreshToken(user.id);
@@ -161,13 +211,13 @@ export class AuthService {
     // Rotation: delete used token
     await (this.prisma as any).refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
 
-    const user = await this.prisma.user.findUnique({
+    const user = await (this.prisma.user as any).findUnique({
       where: { id: stored.userId },
       include: {
-        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        company: { select: COMPANY_SELECT },
         memberships: {
           where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+          include: { company: { select: COMPANY_SELECT } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -193,9 +243,9 @@ export class AuthService {
   }
 
   async getMyCompanies(userId: string) {
-    return this.prisma.userCompany.findMany({
+    return (this.prisma.userCompany as any).findMany({
       where: { userId, active: true },
-      include: { company: { select: { id: true, name: true, type: true, hasInternalFleet: true } } },
+      include: { company: { select: COMPANY_SELECT } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -219,15 +269,33 @@ export class AuthService {
     const activeMembership = memberships.find((m: any) => m.companyId === activeCompanyId);
     const activeCompany = activeMembership?.company || user.company || null;
 
-    const userTypes = [...new Set(memberships.map((m: any) => m.company?.type).filter(Boolean))];
+    // Derive userTypes from actual memberships (not stored field) — includes multi-type support
+    const typeSet = new Set<string>();
+    for (const m of memberships) {
+      for (const t of getCompanyTypes(m.company)) typeSet.add(t);
+    }
+    const userTypes = Array.from(typeSet);
+
+    // Derive companyByType from actual memberships
     const companyByType: any = {};
     for (const m of memberships) {
-      if (m.company?.type && !companyByType[m.company.type]) companyByType[m.company.type] = m.companyId;
+      for (const t of getCompanyTypes(m.company)) {
+        if (!companyByType[t]) companyByType[t] = m.companyId;
+      }
     }
+
     const roleByType: any = {};
     for (const m of memberships) {
-      if (m.company?.type) roleByType[m.company.type] = m.role;
+      for (const t of getCompanyTypes(m.company)) {
+        roleByType[t] = m.role;
+      }
     }
+
+    // Include company types if available
+    const companyResponse = activeCompany ? {
+      ...activeCompany,
+      types: getCompanyTypes(activeCompany),
+    } : null;
 
     return {
       id: user.id, name: user.name, email: user.email, phone: user.phone || null,
@@ -235,10 +303,11 @@ export class AuthService {
       userTypes: userTypes.length > 0 ? userTypes : (user.userTypes || []),
       companyByType, roleByType,
       isSuperAdmin: user.isSuperAdmin || false,
-      company: activeCompany, activeCompanyId,
+      company: companyResponse, activeCompanyId,
       companies: memberships.map((m: any) => ({
         id: m.id, companyId: m.companyId, companyName: m.company?.name || '',
         companyType: m.company?.type || '', role: m.role,
+        companyTypes: getCompanyTypes(m.company),
         hasInternalFleet: m.company?.hasInternalFleet || false,
       })),
     };
@@ -250,11 +319,16 @@ export class AuthService {
     const activeMembership = memberships.find((m: any) => m.companyId === activeCompanyId);
     const activeCompany = activeMembership?.company || user.company;
 
+    // companyType: use primary type from the active company
+    const companyTypes = getCompanyTypes(activeCompany);
+    const companyType = companyTypes[0] || activeCompany?.type || null;
+
     const payload = {
       sub: user.id,
       role: user.isSuperAdmin ? 'platform_admin' : (activeMembership?.role || user.role || 'operario'),
       companyId: activeCompanyId,
-      companyType: activeCompany?.type || null,
+      companyType,
+      companyTypes, // Include all types in JWT for multi-type context
     };
     return this.jwt.signAsync(payload);
   }

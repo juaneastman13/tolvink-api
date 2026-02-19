@@ -15,6 +15,15 @@ export class CompanyResolutionService {
     return requestCache.getStore();
   }
 
+  /** Helper: get all types for a company (from types[] array or fallback to type) */
+  private getCompanyTypes(company: any): string[] {
+    if (!company) return [];
+    const arr = Array.isArray(company.types) && company.types.length > 0
+      ? company.types
+      : (company.type ? [company.type] : []);
+    return arr;
+  }
+
   /** Shared: fetch memberships with company type once per request */
   private async getMemberships(userId: string): Promise<any[]> {
     const cache = this.getCache();
@@ -23,7 +32,7 @@ export class CompanyResolutionService {
 
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId, active: true },
-      include: { company: { select: { id: true, type: true } } },
+      include: { company: { select: { id: true, type: true, types: true } } },
     });
     cache?.set(key, memberships);
     return memberships;
@@ -60,7 +69,10 @@ export class CompanyResolutionService {
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    const pm = memberships.find((m: any) => m.company?.type === 'producer');
+    // Check both type and types[] for multi-type support
+    const pm = memberships.find((m: any) =>
+      m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer'),
+    );
     const result = pm?.companyId || (user.companyType === 'producer' && user.companyId ? user.companyId : user.companyId || '');
 
     cache?.set(key, result);
@@ -73,7 +85,10 @@ export class CompanyResolutionService {
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    const pm = memberships.find((m: any) => m.company?.type === 'plant');
+    // Check both type and types[] for multi-type support
+    const pm = memberships.find((m: any) =>
+      m.company?.type === 'plant' || this.getCompanyTypes(m.company).includes('plant'),
+    );
     const result = pm?.companyId || user.companyId || '';
 
     cache?.set(key, result);
@@ -87,7 +102,11 @@ export class CompanyResolutionService {
 
     if (user.companyType === type) { cache?.set(key, true); return true; }
     const memberships = await this.getMemberships(user.sub);
-    const result = memberships.some((m: any) => m.company?.type === type);
+    // Check both company.type and company.types[] array for multi-type support
+    const result = memberships.some((m: any) => {
+      if (m.company?.type === type) return true;
+      return this.getCompanyTypes(m.company).includes(type);
+    });
     cache?.set(key, result);
     return result;
   }
@@ -99,9 +118,15 @@ export class CompanyResolutionService {
 
     if (user.companyType) { cache?.set(key, user.companyType); return user.companyType; }
     const memberships = await this.getMemberships(user.sub);
-    const result = memberships.length > 0 ? memberships[0].company?.type || 'unknown' : 'unknown';
-    cache?.set(key, result);
-    return result;
+    // Prefer types[] array if available, fallback to type field
+    if (memberships.length > 0) {
+      const types = this.getCompanyTypes(memberships[0].company);
+      const result = types[0] || memberships[0].company?.type || 'unknown';
+      cache?.set(key, result);
+      return result;
+    }
+    cache?.set(key, 'unknown');
+    return 'unknown';
   }
 
   async resolveAllProducerCompanyIds(user: { sub: string; companyId?: string; role?: string }): Promise<string[]> {
@@ -114,7 +139,9 @@ export class CompanyResolutionService {
     const isAdmin = user.role === 'admin' || user.role === 'platform_admin' || user.role === 'gerente';
 
     for (const m of memberships) {
-      if (m.company?.type === 'producer' || isAdmin) ids.add(m.companyId);
+      // Check both type and types[] for multi-type support
+      const isProducer = m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer');
+      if (isProducer || isAdmin) ids.add(m.companyId);
     }
     if (ids.size === 0 && user.companyId) ids.add(user.companyId);
 

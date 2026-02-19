@@ -82,7 +82,8 @@ enum DocumentStep {
 model Company {
   id        String      @id @default(uuid())
   name      String      @db.VarChar(255)
-  type      CompanyType
+  type      CompanyType // Legacy: use types[] for multi-type support
+  types     Json        @default("[]") @map("company_types")
   address   String?
   phone     String?     @db.VarChar(50)
   email     String?     @db.VarChar(255)
