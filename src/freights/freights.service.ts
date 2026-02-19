@@ -186,7 +186,7 @@ export class FreightsService {
       this.notifications.notifyCompany(
         destCompanyId, NotificationType.freight_created,
         'Nuevo flete solicitado',
-        `${grain} desde ${lot.name}`,
+        `${grain} desde ${lot?.name || originName}`,
         freight.id, user.sub,
       ).catch(() => {});
     }
