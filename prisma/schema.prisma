@@ -282,7 +282,7 @@ model PlantProducerAccess {
   producerCompany Company @relation("ProducerAccessReceived", fields: [producerCompanyId], references: [id], onDelete: Cascade)
   producerUser    User?   @relation("ProducerAccessUser", fields: [producerUserId], references: [id], onDelete: SetNull)
 
-  @@unique([plantCompanyId, producerUserId])
+  @@unique([plantCompanyId, producerCompanyId])
   @@index([plantCompanyId])
   @@index([producerCompanyId])
   @@index([producerUserId])

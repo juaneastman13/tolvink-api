@@ -19,9 +19,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 // ======================== DTOs =======================================
 
 export class GrantAccessDto {
-  @ApiProperty({ description: 'ID del usuario productor' })
+  @ApiProperty({ description: 'ID del usuario productor (referencia, no determina acceso)', required: false })
+  @IsOptional()
   @IsUUID()
-  producerUserId: string;
+  producerUserId?: string;
 
   @ApiProperty({ description: 'ID de empresa productora' })
   @IsUUID()
@@ -122,14 +123,16 @@ export class PlantAccessService {
       ? dto.plantCompanyId
       : await this.resolvePlantCompanyId(user);
 
-    // Validate user exists and is a producer or transporter
-    const producerUser = await this.prisma.user.findUnique({
-      where: { id: dto.producerUserId },
-      select: { id: true, userTypes: true },
+    // Validate producer company exists and is active
+    const producerCompany = await this.prisma.company.findUnique({
+      where: { id: dto.producerCompanyId },
+      select: { id: true, type: true, types: true, active: true },
     });
-    if (!producerUser) throw new BadRequestException('Usuario no encontrado');
-    const userTypes = (producerUser.userTypes as string[]) || [];
-    if (!userTypes.includes('producer') && !userTypes.includes('transporter')) throw new BadRequestException('El usuario no es productor ni transportista');
+    if (!producerCompany || !producerCompany.active) throw new BadRequestException('Empresa productora no encontrada');
+    const companyTypes = Array.isArray(producerCompany.types) && (producerCompany.types as string[]).length > 0
+      ? (producerCompany.types as string[])
+      : [producerCompany.type];
+    if (!companyTypes.includes('producer') && !companyTypes.includes('transporter')) throw new BadRequestException('La empresa no es productora ni transportista');
 
     const newPlantIds = dto.allowedPlantIds || [];
     const newBranchIds = dto.allowedBranchIds || [];
@@ -153,12 +156,12 @@ export class PlantAccessService {
       }
     }
 
-    // Check existing access by user (new unique constraint)
+    // Check existing access by company (unique constraint: plantCompanyId + producerCompanyId)
     const existing = await this.prisma.plantProducerAccess.findUnique({
       where: {
-        plantCompanyId_producerUserId: {
+        plantCompanyId_producerCompanyId: {
           plantCompanyId: plantCoId,
-          producerUserId: dto.producerUserId,
+          producerCompanyId: dto.producerCompanyId,
         },
       },
     });
@@ -248,9 +251,12 @@ export class PlantAccessService {
   }
 
   async listForProducer(user: any) {
-    // Query by user ID directly — no company resolution needed
+    // Query by producer company IDs — all users in the company see the same access
+    const producerCompanyIds = await this.companyRes.resolveAllProducerCompanyIds(user);
+    if (producerCompanyIds.length === 0) return [];
+
     return this.prisma.plantProducerAccess.findMany({
-      where: { producerUserId: user.sub, active: true },
+      where: { producerCompanyId: { in: producerCompanyIds }, active: true },
       include: { plantCompany: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
