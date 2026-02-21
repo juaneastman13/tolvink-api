@@ -200,20 +200,44 @@ export class CatalogController {
   }
 
   @Get('transport-companies')
-  @ApiOperation({ summary: 'Listar empresas transportistas activas' })
+  @ApiOperation({ summary: 'Listar empresas transportistas con acceso a la planta' })
   @ApiQuery({ name: 'take', required: false })
   @ApiQuery({ name: 'skip', required: false })
-  async transportCompanies(@Query('take') take?: string, @Query('skip') skip?: string) {
+  async transportCompanies(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `transport:${s}:${t}`;
+    const key = `transport:${user.companyId}:${s}:${t}`;
 
-    return cached(key, () => this.prisma.company.findMany({
-      where: { type: 'transporter', active: true },
-      select: { id: true, name: true, address: true, phone: true },
-      orderBy: { name: 'asc' },
-      take: t,
-      skip: s,
-    }));
+    return cached(key, async () => {
+      const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+
+      if (isPlant) {
+        const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
+        const accessRecords = await this.prisma.plantProducerAccess.findMany({
+          where: { plantCompanyId: plantCoId, active: true },
+          select: { producerCompanyId: true },
+        });
+
+        const companyIds = [...new Set(accessRecords.map(r => r.producerCompanyId))];
+        if (companyIds.length === 0) return [];
+
+        return this.prisma.company.findMany({
+          where: { id: { in: companyIds }, type: 'transporter', active: true },
+          select: { id: true, name: true, address: true, phone: true },
+          orderBy: { name: 'asc' },
+          take: t,
+          skip: s,
+        });
+      }
+
+      // Admin or others: all transporters
+      return this.prisma.company.findMany({
+        where: { type: 'transporter', active: true },
+        select: { id: true, name: true, address: true, phone: true },
+        orderBy: { name: 'asc' },
+        take: t,
+        skip: s,
+      });
+    });
   }
 }
