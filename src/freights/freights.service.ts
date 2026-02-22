@@ -189,9 +189,11 @@ export class FreightsService {
               ...(isMulti ? { tripNumber: 1, tripStatus: 'pending' } : {}),
             },
           });
+          // Multi-truck: stay at pending_assignment until all slots filled
+          const newStatus = isMulti ? FreightStatus.pending_assignment : FreightStatus.assigned;
           await tx.freight.update({
             where: { id: f.id },
-            data: { status: FreightStatus.assigned, assignedTruckCount: 1 } as any,
+            data: { status: newStatus, assignedTruckCount: 1 } as any,
           });
         }
       }
@@ -1224,17 +1226,30 @@ export class FreightsService {
   // ======================== MULTI-TRUCK (v6.0) ==========================
 
   private async deriveFreightStatus(tx: any, freightId: string): Promise<FreightStatus> {
+    const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true } });
+    const truckCount = freight?.truckCount || 1;
+
     const assignments = await (tx.freightAssignment as any).findMany({
       where: { freightId, status: { in: ['active', 'accepted'] } },
       select: { tripStatus: true },
     });
     if (assignments.length === 0) return FreightStatus.pending_assignment;
-    const ss = assignments.map((a: any) => a.tripStatus);
-    if (ss.every((s: string) => s === 'finished')) return FreightStatus.finished;
-    if (ss.some((s: string) => s === 'loaded')) return FreightStatus.loaded;
-    if (ss.some((s: string) => s === 'in_progress')) return FreightStatus.in_progress;
-    if (ss.some((s: string) => s === 'accepted')) return FreightStatus.accepted;
-    return FreightStatus.assigned;
+
+    // If not all truck slots are filled, stay at pending_assignment
+    if (assignments.length < truckCount) return FreightStatus.pending_assignment;
+
+    // All slots filled — derive status from the MINIMUM tripStatus across all assignments
+    // Status hierarchy: pending < accepted < in_progress < loaded < finished
+    const statusOrder: Record<string, number> = { pending: 0, accepted: 1, in_progress: 2, loaded: 3, finished: 4 };
+    const statusFromRank: Record<number, FreightStatus> = {
+      0: FreightStatus.assigned,    // all assigned but pending acceptance
+      1: FreightStatus.accepted,
+      2: FreightStatus.in_progress,
+      3: FreightStatus.loaded,
+      4: FreightStatus.finished,
+    };
+    const minRank = Math.min(...assignments.map((a: any) => statusOrder[a.tripStatus] ?? 0));
+    return statusFromRank[minRank] ?? FreightStatus.assigned;
   }
 
   async assignMulti(freightId: string, dto: AssignMultiTruckDto, user: any) {
@@ -1314,9 +1329,10 @@ export class FreightsService {
         }
 
         const newCount = existingCount + dto.trucks.length;
+        const newStatus = await this.deriveFreightStatus(tx, freightId);
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: FreightStatus.assigned, assignedTruckCount: newCount, isMultiTruck: true } as any,
+          data: { status: newStatus, assignedTruckCount: newCount, isMultiTruck: true } as any,
         });
 
         await tx.auditLog.create({
@@ -1325,7 +1341,7 @@ export class FreightsService {
             entityId: freightId,
             action: 'assigned_multi',
             fromValue: freight.status,
-            toValue: 'assigned',
+            toValue: newStatus,
             userId: user.sub,
             metadata: { trucksAssigned: dto.trucks.length, totalAssigned: newCount },
           },
