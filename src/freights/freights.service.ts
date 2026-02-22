@@ -306,9 +306,13 @@ export class FreightsService {
     this.stateMachine.validateTransition(freight.status, FreightStatus.assigned, 'plant');
 
     const transport = await this.prisma.company.findFirst({
-      where: { id: dto.transportCompanyId, type: 'transporter', active: true },
+      where: { id: dto.transportCompanyId, active: true },
+      select: { id: true, type: true, types: true },
     });
     if (!transport) throw new BadRequestException('Empresa transportista no encontrada');
+    const tTypes = Array.isArray(transport.types) && (transport.types as string[]).length > 0
+      ? (transport.types as string[]) : [transport.type];
+    if (!tTypes.includes('transporter')) throw new BadRequestException('La empresa no es transportista');
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.updateMany({
@@ -316,14 +320,20 @@ export class FreightsService {
         data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
       });
 
-      const assignment = await tx.freightAssignment.create({
-        data: {
-          freightId,
-          transportCompanyId: dto.transportCompanyId,
-          status: AssignmentStatus.active,
-          assignedById: user.sub,
-        },
-      });
+      const assignData: any = {
+        freightId,
+        transportCompanyId: dto.transportCompanyId,
+        status: AssignmentStatus.active,
+        assignedById: user.sub,
+      };
+      if (dto.truckId) {
+        const truck = await tx.truck.findFirst({ where: { id: dto.truckId, companyId: dto.transportCompanyId, active: true } });
+        if (truck) {
+          assignData.truckId = truck.id;
+          assignData.plate = truck.plate;
+        }
+      }
+      const assignment = await tx.freightAssignment.create({ data: assignData });
 
       const updated = await tx.freight.update({
         where: { id: freightId },

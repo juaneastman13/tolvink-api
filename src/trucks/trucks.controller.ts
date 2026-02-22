@@ -4,9 +4,9 @@
 // Transporters and Producers with own fleet can manage trucks
 // =====================================================================
 
-import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, MaxLength, IsUUID, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
@@ -69,9 +69,12 @@ export class TrucksService {
     });
   }
 
-  async list(user: any) {
+  async list(user: any, companyId?: string) {
+    // Plant/admin can query trucks of a specific company (for own-fleet assignment)
+    const targetCompanyId = companyId && (user.role === 'platform_admin' || user.companyType === 'plant' || (Array.isArray(user.companyTypes) && user.companyTypes.includes('plant')))
+      ? companyId : user.companyId;
     return this.prisma.truck.findMany({
-      where: { companyId: user.companyId, active: true },
+      where: { companyId: targetCompanyId, active: true },
       include: { assignedUser: { select: { id: true, name: true } } },
       orderBy: { plate: 'asc' },
     });
@@ -107,10 +110,11 @@ export class TrucksController {
   }
 
   @Get()
-  @Roles('transporter', 'producer', 'admin')
+  @Roles('transporter', 'producer', 'plant', 'admin')
   @ApiOperation({ summary: 'Listar camiones de la empresa' })
-  list(@CurrentUser() user: any) {
-    return this.service.list(user);
+  @ApiQuery({ name: 'companyId', required: false })
+  list(@CurrentUser() user: any, @Query('companyId') companyId?: string) {
+    return this.service.list(user, companyId);
   }
 
   @Patch(':id/deactivate')

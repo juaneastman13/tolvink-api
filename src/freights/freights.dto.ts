@@ -134,6 +134,11 @@ export class AssignFreightDto {
   @ApiProperty({ description: 'ID de empresa transportista' })
   @IsUUID()
   transportCompanyId: string;
+
+  @ApiProperty({ required: false, description: 'ID del camión (flota propia)' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
 }
 
 export class RespondAssignmentDto {

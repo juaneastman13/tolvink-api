@@ -248,31 +248,39 @@ export class CatalogController {
         if (companyIds.length === 0) return [];
 
         const companies = await this.prisma.company.findMany({
-          where: { id: { in: companyIds }, type: 'transporter', active: true },
-          select: { id: true, name: true, address: true, phone: true },
+          where: { id: { in: companyIds }, active: true },
+          select: { id: true, name: true, address: true, phone: true, type: true, types: true },
           orderBy: { name: 'asc' },
-          take: t,
-          skip: s,
         });
 
-        return companies.map(c => {
+        // Filter to companies that have transporter type (legacy or types[])
+        const transportCompanies = companies.filter(c => {
+          const cTypes = Array.isArray(c.types) && (c.types as string[]).length > 0
+            ? (c.types as string[]) : [c.type];
+          return cTypes.includes('transporter');
+        });
+
+        return transportCompanies.slice(s, s + t).map(c => {
           const access = companyAccess.get(c.id);
           return {
-            ...c,
+            id: c.id, name: c.name, address: c.address, phone: c.phone,
             companyWide: access?.companyWide || false,
             accessUsers: access?.companyWide ? [] : (access?.users || []),
           };
         });
       }
 
-      // Admin or others: all transporters
-      return this.prisma.company.findMany({
-        where: { type: 'transporter', active: true },
-        select: { id: true, name: true, address: true, phone: true },
+      // Admin or others: all transporters (legacy type + types[])
+      const all = await this.prisma.company.findMany({
+        where: { active: true },
+        select: { id: true, name: true, address: true, phone: true, type: true, types: true },
         orderBy: { name: 'asc' },
-        take: t,
-        skip: s,
       });
+      return all.filter(c => {
+        const cTypes = Array.isArray(c.types) && (c.types as string[]).length > 0
+          ? (c.types as string[]) : [c.type];
+        return cTypes.includes('transporter');
+      }).slice(s, s + t).map(c => ({ id: c.id, name: c.name, address: c.address, phone: c.phone }));
     });
   }
 }
