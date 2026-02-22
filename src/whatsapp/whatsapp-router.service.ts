@@ -8,7 +8,6 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
-import { CompanyResolutionService } from '../common/services/company-resolution.service';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -41,7 +40,6 @@ export class WhatsAppRouterService {
     private wa: WhatsAppService,
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
-    private companyRes: CompanyResolutionService,
   ) {}
 
   // ======================== MAIN ENTRY POINT ============================
@@ -228,17 +226,51 @@ export class WhatsAppRouterService {
   // ======================== SHOW ACTIVE FREIGHTS ========================
 
   async showActiveFreights(phone: string, user: any) {
-    const synUser = this.buildSyntheticUser(user);
+    // Resolve the user's active company — only show freights for that company
+    const activeCompanyId = user.activeCompanyId || user.companyId;
 
-    const result = await this.freights.findAll(synUser, {
-      page: 1,
-      limit: 10,
-      status: undefined,
-    } as any);
+    if (!activeCompanyId) {
+      await this.wa.sendText(phone, 'No tenes una empresa activa configurada.');
+      return;
+    }
 
-    const activeFreights = result.data.filter((f: any) =>
-      !['finished', 'canceled'].includes(f.status),
-    );
+    // Query freights where the active company participates
+    const activeFreights = await this.prisma.freight.findMany({
+      where: {
+        status: { notIn: ['finished', 'canceled'] },
+        OR: [
+          { originCompanyId: activeCompanyId },
+          { destCompanyId: activeCompanyId },
+          {
+            assignments: {
+              some: {
+                transportCompanyId: activeCompanyId,
+                status: { in: ['active', 'accepted'] },
+              },
+            },
+          },
+          {
+            assignments: {
+              some: {
+                driverId: user.id,
+                status: { in: ['active', 'accepted'] },
+              },
+            },
+          },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      include: {
+        items: true,
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          include: {
+            transportCompany: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
 
     if (activeFreights.length === 0) {
       await this.wa.sendText(phone, 'No tenes fletes activos en este momento.');
@@ -307,18 +339,17 @@ export class WhatsAppRouterService {
       return;
     }
 
-    // Verify access (user must belong to one of the participating companies)
-    const synUser = this.buildSyntheticUser(user);
-    const allIds = await this.companyRes.resolveAllCompanyIds(synUser);
+    // Verify access using active company only
+    const activeCompanyId = user.activeCompanyId || user.companyId;
     const isDriver = freight.assignments.some(a => a.driverId === user.id);
-    const hasAccess = allIds.some(id =>
-      id === freight.originCompanyId ||
-      id === freight.destCompanyId ||
-      freight.assignments.some(a => a.transportCompanyId === id),
-    ) || isDriver;
+    const hasAccess =
+      activeCompanyId === freight.originCompanyId ||
+      activeCompanyId === freight.destCompanyId ||
+      freight.assignments.some(a => a.transportCompanyId === activeCompanyId) ||
+      isDriver;
 
     if (!hasAccess) {
-      await this.wa.sendText(phone, 'No tenes acceso a este flete.');
+      await this.wa.sendText(phone, 'No tenes acceso a este flete con tu empresa activa.');
       return;
     }
 
@@ -344,8 +375,8 @@ export class WhatsAppRouterService {
     if (loadDate) text += `📅 ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `📝 ${freight.notes}\n`;
 
-    // Determine pending actions based on user role
-    const buttons = await this.getActionButtons(freight, user, allIds);
+    // Determine pending actions based on user's active company role
+    const buttons = this.getActionButtons(freight, user, activeCompanyId);
 
     if (buttons.length > 0) {
       await this.wa.sendButtons(phone, text, buttons);
@@ -356,15 +387,15 @@ export class WhatsAppRouterService {
 
   // ======================== GET ACTION BUTTONS ==========================
 
-  private async getActionButtons(freight: any, user: any, allCompanyIds: string[]) {
+  private getActionButtons(freight: any, user: any, activeCompanyId: string) {
     const buttons: { id: string; title: string }[] = [];
     const assignment = freight.assignments?.[0];
     const isOwnFleet = assignment?.transportCompanyId === freight.originCompanyId;
 
-    // Determine user's role in this freight
-    const isOrigin = allCompanyIds.includes(freight.originCompanyId);
-    const isDest = freight.destCompanyId && allCompanyIds.includes(freight.destCompanyId);
-    const isTransporter = assignment && allCompanyIds.includes(assignment.transportCompanyId);
+    // Determine user's role in this freight based on active company
+    const isOrigin = activeCompanyId === freight.originCompanyId;
+    const isDest = activeCompanyId === freight.destCompanyId;
+    const isTransporter = assignment && activeCompanyId === assignment.transportCompanyId;
     const isDriver = assignment?.driverId === user.id;
     const isTransporterRole = isTransporter || isDriver || (isOrigin && isOwnFleet);
 
