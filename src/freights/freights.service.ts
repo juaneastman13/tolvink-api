@@ -186,7 +186,7 @@ export class FreightsService {
               plate: truck.plate,
               driverId: truck.assignedUserId || null,
               driverName: (truck as any).assignedUser?.name || null,
-              ...(isMulti ? { tripNumber: 1, tripStatus: 'accepted' } : {}),
+              ...(isMulti ? { tripNumber: 1, tripStatus: 'pending' } : {}),
             },
           });
           await tx.freight.update({
@@ -1416,11 +1416,13 @@ export class FreightsService {
       if (!a) throw new ForbiddenException('No sos el chofer asignado');
     } else {
       const isTransporter = await this.hasCompanyType(user, 'transporter');
-      if (!isTransporter) throw new ForbiddenException('Solo el transportista puede responder');
+      const isPlant = await this.hasCompanyType(user, 'plant');
+      if (!isTransporter && !isPlant) throw new ForbiddenException('Solo el transportista o la planta pueden responder');
     }
 
+    // Find assignment: 'active' (external transport) or 'accepted' (own-fleet pending authorization)
     const assignment: any = await (this.prisma.freightAssignment as any).findFirst({
-      where: { id: assignmentId, freightId, status: 'active' },
+      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
     });
     if (!assignment) throw new NotFoundException('Asignación no encontrada o no activa');
 
