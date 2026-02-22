@@ -1404,6 +1404,93 @@ export class FreightsService {
     return result;
   }
 
+  async updateAssignment(freightId: string, assignmentId: string, dto: any, user: any) {
+    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    const isPlant = await this.hasCompanyType(user, 'plant');
+    if (!isPlant) throw new ForbiddenException('Solo la planta puede editar asignaciones');
+
+    const assignment: any = await (this.prisma.freightAssignment as any).findFirst({
+      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+    });
+    if (!assignment) throw new NotFoundException('Asignación no encontrada');
+
+    // Only allow editing pending trips
+    if (assignment.tripStatus && assignment.tripStatus !== 'pending') {
+      throw new BadRequestException('Solo se pueden editar viajes pendientes');
+    }
+
+    const updateData: any = {};
+
+    if (dto.transportCompanyId && dto.transportCompanyId !== assignment.transportCompanyId) {
+      const company = await this.prisma.company.findUnique({ where: { id: dto.transportCompanyId } });
+      if (!company) throw new NotFoundException('Empresa transportista no encontrada');
+      updateData.transportCompanyId = dto.transportCompanyId;
+      // Reset truck/driver when changing company
+      updateData.truckId = null;
+      updateData.plate = null;
+      updateData.driverId = null;
+      updateData.driverName = null;
+    }
+
+    if (dto.truckId) {
+      const companyId = dto.transportCompanyId || assignment.transportCompanyId;
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: dto.truckId, companyId, active: true },
+        include: { assignedUser: { select: { id: true, name: true } } },
+      });
+      if (!truck) throw new NotFoundException('Camión no encontrado');
+      updateData.truckId = truck.id;
+      updateData.plate = truck.plate;
+      // If truck has assigned driver, use it as default
+      if (!dto.driverId && (truck as any).assignedUser) {
+        updateData.driverId = (truck as any).assignedUser.id;
+        updateData.driverName = (truck as any).assignedUser.name;
+      }
+    } else if (dto.truckId === null) {
+      updateData.truckId = null;
+      updateData.plate = null;
+    }
+
+    if (dto.driverId) {
+      const driver = await this.prisma.user.findUnique({ where: { id: dto.driverId }, select: { id: true, name: true } });
+      if (!driver) throw new NotFoundException('Chofer no encontrado');
+      updateData.driverId = driver.id;
+      updateData.driverName = driver.name;
+    } else if (dto.driverId === null) {
+      updateData.driverId = null;
+      updateData.driverName = null;
+    }
+
+    if (dto.tons !== undefined) {
+      updateData.tons = dto.tons;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      throw new BadRequestException('No hay cambios para aplicar');
+    }
+
+    const updated = await (this.prisma.freightAssignment as any).update({
+      where: { id: assignmentId },
+      data: updateData,
+      include: { transportCompany: { select: { id: true, name: true } }, truck: true, driver: { select: { id: true, name: true, phone: true } } },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        entityType: 'freight',
+        entityId: freightId,
+        action: 'assignment_updated',
+        userId: user.sub,
+        metadata: { assignmentId, changes: updateData },
+      },
+    });
+
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(() => {});
+    return updated;
+  }
+
   async respondTrip(freightId: string, assignmentId: string, dto: RespondTripDto, user: any) {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');

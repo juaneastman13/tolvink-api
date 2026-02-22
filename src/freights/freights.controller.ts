@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -167,6 +167,19 @@ export class FreightsController {
     @CurrentUser() user: any,
   ) {
     return this.service.cancelAssignment(id, aId, body.reason || '', user);
+  }
+
+  @Patch(':id/assignments/:aId')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Editar una asignación pendiente (solo planta)' })
+  updateAssignment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @Body() dto: UpdateAssignmentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.updateAssignment(id, aId, dto, user);
   }
 
   @Post(':id/assignments/:aId/respond')

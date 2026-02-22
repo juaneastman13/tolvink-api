@@ -216,6 +216,30 @@ export class AssignMultiTruckDto {
   trucks: TruckAssignmentDto[];
 }
 
+export class UpdateAssignmentDto {
+  @ApiProperty({ required: false, description: 'ID de empresa transportista' })
+  @IsOptional()
+  @IsUUID()
+  transportCompanyId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del camión' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del chofer' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
+  @ApiProperty({ required: false, description: 'Toneladas para este camión' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.1)
+  @Type(() => Number)
+  tons?: number;
+}
+
 export class RespondTripDto {
   @ApiProperty({ enum: ['accepted', 'rejected'] })
   @IsEnum(['accepted', 'rejected'])
