@@ -415,7 +415,7 @@ export class FreightsService {
         });
 
         return updated;
-      });
+      }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
       this.logger.error(`assign() failed for freight ${freightId}: ${err.message}`, err.stack);
@@ -1332,7 +1332,7 @@ export class FreightsService {
         });
 
         return updated;
-      });
+      }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
       this.logger.error(`assignMulti() failed for freight ${freightId}: ${err.message}`, err.stack);
