@@ -288,40 +288,23 @@ export class WhatsAppFlowService {
         return;
       }
 
-      // Fetch plants the producer has access to via PlantProducerAccess
+      // Fetch plant companies the producer has access to via PlantProducerAccess
       const accessRecords = await this.prisma.plantProducerAccess.findMany({
         where: { producerCompanyId: state.producerCompanyId, active: true },
-        select: { plantCompanyId: true, allowedPlantIds: true },
+        select: { plantCompanyId: true },
       });
 
-      let plants: any[] = [];
+      let plantCompanies: any[] = [];
       if (accessRecords.length > 0) {
-        // Collect specific plant IDs from access records
-        const specificPlantIds: string[] = [];
-        const plantCompanyIds: string[] = [];
-        for (const ar of accessRecords) {
-          const allowed = Array.isArray(ar.allowedPlantIds) ? ar.allowedPlantIds as string[] : [];
-          if (allowed.length > 0) {
-            specificPlantIds.push(...allowed);
-          } else {
-            plantCompanyIds.push(ar.plantCompanyId);
-          }
-        }
-
-        plants = await this.prisma.plant.findMany({
-          where: {
-            active: true,
-            OR: [
-              ...(specificPlantIds.length > 0 ? [{ id: { in: specificPlantIds } }] : []),
-              ...(plantCompanyIds.length > 0 ? [{ companyId: { in: plantCompanyIds } }] : []),
-            ],
-          },
-          include: { company: { select: { id: true, name: true } } },
+        const plantCompanyIds = [...new Set(accessRecords.map(ar => ar.plantCompanyId))];
+        plantCompanies = await this.prisma.company.findMany({
+          where: { id: { in: plantCompanyIds }, active: true },
+          select: { id: true, name: true },
           take: 10,
         });
       }
 
-      if (plants.length === 0) {
+      if (plantCompanies.length === 0) {
         await this.updateState(session.id, 'awaiting_dest_name', { ...state, tons });
         await this.wa.sendText(phone,
           'No tenes plantas habilitadas.\n' +
@@ -335,10 +318,9 @@ export class WhatsAppFlowService {
         'Seleccionar planta',
         [{
           title: 'Plantas disponibles',
-          rows: plants.map((p: any) => ({
-            id: `plant:${p.id}`,
-            title: p.name.slice(0, 24),
-            description: p.company?.name?.slice(0, 72) || '',
+          rows: plantCompanies.map((c: any) => ({
+            id: `plant:${c.id}`,
+            title: c.name.slice(0, 24),
           })),
         }],
       );
@@ -503,8 +485,14 @@ export class WhatsAppFlowService {
       // Show summary for confirmation
       let destName = finalState.customDestName || 'Destino';
       if (finalState.destPlantId) {
-        const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-        destName = plant?.name || destName;
+        // destPlantId may be a Plant ID or a Company ID — try company first (most common)
+        const company = await this.prisma.company.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
+        if (company) {
+          destName = company.name;
+        } else {
+          const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
+          destName = plant?.name || destName;
+        }
       }
       let originName = finalState.customOriginName || 'Origen';
       if (finalState.originLotId) {
