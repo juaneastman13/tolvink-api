@@ -237,7 +237,7 @@ export class FreightsService {
           originLot: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
           originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-          destCompany: { select: { id: true, name: true } },
+          destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
           requestedBy: { select: { id: true, name: true } },
           conversation: { select: { id: true } },
           assignments: {
@@ -269,7 +269,7 @@ export class FreightsService {
         destPlant: true,
         field: { select: { id: true, name: true } },
         originCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
-        destCompany: { select: { id: true, name: true, type: true } },
+        destCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
         requestedBy: { select: { id: true, name: true } },
         assignments: {
           orderBy: { createdAt: 'desc' },
@@ -1000,7 +1000,7 @@ export class FreightsService {
         originLot: { select: { id: true, name: true } },
         destPlant: { select: { id: true, name: true } },
         originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-        destCompany: { select: { id: true, name: true } },
+        destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
         requestedBy: { select: { id: true, name: true } },
         conversation: { select: { id: true } },
         assignments: {
