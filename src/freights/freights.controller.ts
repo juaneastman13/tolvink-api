@@ -171,7 +171,7 @@ export class FreightsController {
 
   @Post(':id/assignments/:aId/respond')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter')
+  @Roles('transporter', 'plant')
   @ApiOperation({ summary: 'Aceptar o rechazar una asignación per-trip' })
   respondTrip(
     @Param('id', ParseUUIDPipe) id: string,
