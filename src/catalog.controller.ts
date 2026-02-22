@@ -223,18 +223,45 @@ export class CatalogController {
         const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
           where: { plantCompanyId: plantCoId, active: true },
-          select: { producerCompanyId: true },
+          select: {
+            producerCompanyId: true,
+            producerUserId: true,
+            producerUser: { select: { id: true, name: true, phone: true } },
+          },
         });
 
-        const companyIds = [...new Set(accessRecords.map(r => r.producerCompanyId))];
+        // Group by company: track company-wide vs user-specific access
+        const companyAccess = new Map<string, { companyWide: boolean; users: any[] }>();
+        for (const r of accessRecords) {
+          if (!companyAccess.has(r.producerCompanyId)) {
+            companyAccess.set(r.producerCompanyId, { companyWide: false, users: [] });
+          }
+          const entry = companyAccess.get(r.producerCompanyId)!;
+          if (!r.producerUserId) {
+            entry.companyWide = true;
+          } else if (r.producerUser) {
+            entry.users.push({ id: r.producerUser.id, name: r.producerUser.name, phone: r.producerUser.phone });
+          }
+        }
+
+        const companyIds = [...companyAccess.keys()];
         if (companyIds.length === 0) return [];
 
-        return this.prisma.company.findMany({
+        const companies = await this.prisma.company.findMany({
           where: { id: { in: companyIds }, type: 'transporter', active: true },
           select: { id: true, name: true, address: true, phone: true },
           orderBy: { name: 'asc' },
           take: t,
           skip: s,
+        });
+
+        return companies.map(c => {
+          const access = companyAccess.get(c.id);
+          return {
+            ...c,
+            companyWide: access?.companyWide || false,
+            accessUsers: access?.companyWide ? [] : (access?.users || []),
+          };
         });
       }
 
