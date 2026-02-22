@@ -181,6 +181,14 @@ export class WhatsAppRouterService {
           await this.showActiveFreights(phone, user);
           break;
         }
+        case 'create_freight': {
+          await this.flow.startFlow('create_freight', phone, user);
+          break;
+        }
+        case 'show_help': {
+          await this.showMainMenu(phone, user);
+          break;
+        }
         default: {
           await this.wa.sendText(phone, 'Accion no reconocida. Escribi *menu* para ver opciones.');
         }
@@ -217,8 +225,8 @@ export class WhatsAppRouterService {
       'Que necesitas hacer?',
       [
         { id: 'active_freights', title: 'Mis fletes' },
-        { id: 'menu:crear', title: 'Crear flete' },
-        { id: 'menu:ayuda', title: 'Ayuda' },
+        { id: 'create_freight', title: 'Crear flete' },
+        { id: 'show_help', title: 'Ayuda' },
       ],
     );
   }

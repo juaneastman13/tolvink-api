@@ -220,17 +220,15 @@ export class WhatsAppFlowService {
 
   private async createFreightStart(phone: string, session: any, user: any) {
     // Check if user is a producer
-    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
-    const isProducer = userTypes.includes('producer') || user.company?.type === 'producer' ||
-      user.memberships?.some((m: any) => m.company?.type === 'producer' || (Array.isArray(m.company?.types) && m.company.types.includes('producer')));
-
-    if (!isProducer) {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) {
       await this.wa.sendText(phone, 'Solo los productores pueden crear fletes.');
       await this.endFlow(session.id);
       return;
     }
 
-    await this.updateStep(session.id, 'awaiting_grain');
+    // Store producer company ID in flow state for later steps
+    await this.updateState(session.id, 'awaiting_grain', { producerCompanyId });
     await this.wa.sendList(phone,
       'Vamos a crear un nuevo flete.\n\nQue grano vas a enviar?',
       'Seleccionar grano',
@@ -290,17 +288,44 @@ export class WhatsAppFlowService {
         return;
       }
 
-      // Fetch available plants
-      const synUser = this.buildSyntheticUser(user);
-      const plants = await this.prisma.plant.findMany({
-        where: { active: true },
-        include: { company: { select: { id: true, name: true } } },
-        take: 10,
+      // Fetch plants the producer has access to via PlantProducerAccess
+      const accessRecords = await this.prisma.plantProducerAccess.findMany({
+        where: { producerCompanyId: state.producerCompanyId, active: true },
+        select: { plantCompanyId: true, allowedPlantIds: true },
       });
+
+      let plants: any[] = [];
+      if (accessRecords.length > 0) {
+        // Collect specific plant IDs from access records
+        const specificPlantIds: string[] = [];
+        const plantCompanyIds: string[] = [];
+        for (const ar of accessRecords) {
+          const allowed = Array.isArray(ar.allowedPlantIds) ? ar.allowedPlantIds as string[] : [];
+          if (allowed.length > 0) {
+            specificPlantIds.push(...allowed);
+          } else {
+            plantCompanyIds.push(ar.plantCompanyId);
+          }
+        }
+
+        plants = await this.prisma.plant.findMany({
+          where: {
+            active: true,
+            OR: [
+              ...(specificPlantIds.length > 0 ? [{ id: { in: specificPlantIds } }] : []),
+              ...(plantCompanyIds.length > 0 ? [{ companyId: { in: plantCompanyIds } }] : []),
+            ],
+          },
+          include: { company: { select: { id: true, name: true } } },
+          take: 10,
+        });
+      }
 
       if (plants.length === 0) {
         await this.updateState(session.id, 'awaiting_dest_name', { ...state, tons });
-        await this.wa.sendText(phone, 'No hay plantas registradas. Escribi el nombre del destino:');
+        await this.wa.sendText(phone,
+          'No tenes plantas habilitadas.\n' +
+          'Escribi el nombre del destino o pedi acceso a una planta desde la app.');
         return;
       }
 
@@ -325,6 +350,8 @@ export class WhatsAppFlowService {
       let plantId: string | null = null;
       if (type === 'list_reply' && payload.id?.startsWith('plant:')) {
         plantId = payload.id.split(':')[1];
+      } else if (type === 'button_reply' && payload.id?.startsWith('plant:')) {
+        plantId = payload.id.split(':')[1];
       }
 
       if (!plantId) {
@@ -332,18 +359,19 @@ export class WhatsAppFlowService {
         return;
       }
 
-      // Fetch available fields/lots for this producer
-      const synUser = this.buildSyntheticUser(user);
+      // Fetch available lots for this producer's company
       const lots = await this.prisma.lot.findMany({
-        where: { companyId: synUser.companyId, active: true },
+        where: { companyId: state.producerCompanyId, active: true },
         include: { field: { select: { id: true, name: true } } },
         take: 10,
       });
 
       if (lots.length === 0) {
-        // No lots → skip to date
-        await this.updateState(session.id, 'awaiting_date', { ...state, destPlantId: plantId });
-        await this.wa.sendText(phone, 'No tenes lotes registrados. Se usara origen generico.\n\nFecha de carga? (dd/mm/aaaa o "hoy" o "manana")');
+        // No lots → ask for custom origin name
+        await this.updateState(session.id, 'awaiting_origin_name', { ...state, destPlantId: plantId });
+        await this.wa.sendText(phone,
+          'No tenes lotes registrados.\n' +
+          'Escribi el nombre del campo/lugar de origen:');
         return;
       }
 
@@ -360,6 +388,50 @@ export class WhatsAppFlowService {
           })),
         }],
       );
+      return;
+    }
+
+    // ---- Step: Custom Dest Name (no plants available) ----
+    if (step === 'awaiting_dest_name') {
+      if (type !== 'text' || !payload.body?.trim()) {
+        await this.wa.sendText(phone, 'Escribi el nombre del destino:');
+        return;
+      }
+      const customDestName = payload.body.trim();
+      // Fetch lots for producer
+      const lots = await this.prisma.lot.findMany({
+        where: { companyId: state.producerCompanyId, active: true },
+        include: { field: { select: { id: true, name: true } } },
+        take: 10,
+      });
+
+      if (lots.length === 0) {
+        await this.updateState(session.id, 'awaiting_origin_name', { ...state, customDestName });
+        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen:');
+        return;
+      }
+
+      await this.updateState(session.id, 'awaiting_lot', { ...state, customDestName });
+      await this.wa.sendList(phone, 'Desde que lote se carga?', 'Seleccionar lote', [{
+        title: 'Tus lotes',
+        rows: lots.map((l: any) => ({
+          id: `lot:${l.id}`,
+          title: l.name.slice(0, 24),
+          description: l.field?.name?.slice(0, 72) || '',
+        })),
+      }]);
+      return;
+    }
+
+    // ---- Step: Custom Origin Name (no lots available) ----
+    if (step === 'awaiting_origin_name') {
+      if (type !== 'text' || !payload.body?.trim()) {
+        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen:');
+        return;
+      }
+      const customOriginName = payload.body.trim();
+      await this.updateState(session.id, 'awaiting_date', { ...state, customOriginName });
+      await this.wa.sendText(phone, 'Fecha de carga? (dd/mm/aaaa o "hoy" o "manana")');
       return;
     }
 
@@ -429,11 +501,15 @@ export class WhatsAppFlowService {
       const finalState = { ...state, loadTime };
 
       // Show summary for confirmation
-      const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-      let lotName = 'Origen generico';
+      let destName = finalState.customDestName || 'Destino';
+      if (finalState.destPlantId) {
+        const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
+        destName = plant?.name || destName;
+      }
+      let originName = finalState.customOriginName || 'Origen';
       if (finalState.originLotId) {
         const lot = await this.prisma.lot.findUnique({ where: { id: finalState.originLotId }, select: { name: true } });
-        lotName = lot?.name || lotName;
+        originName = lot?.name || originName;
       }
 
       const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
@@ -443,7 +519,7 @@ export class WhatsAppFlowService {
         `*Resumen del flete:*\n` +
         `━━━━━━━━━━━━━━━\n` +
         `📦 ${finalState.grain} · ${finalState.tons} tn\n` +
-        `📍 ${lotName} → ${plant?.name || 'Planta'}\n` +
+        `📍 ${originName} → ${destName}\n` +
         `📅 ${dateFormatted} ${loadTime}\n\n` +
         `Confirmas la creacion?`,
         [
@@ -471,13 +547,32 @@ export class WhatsAppFlowService {
 
       // Execute freight creation
       const synUser = this.buildSyntheticUser(user);
-      const dto = {
+      // Ensure synUser resolves as producer with the correct company
+      synUser.companyId = state.producerCompanyId;
+      synUser.companyType = 'producer';
+      synUser.userType = 'producer';
+
+      const dto: any = {
         items: [{ grain: state.grain, tons: parseFloat(state.tons) }],
-        destPlantId: state.destPlantId,
-        originLotId: state.originLotId || undefined,
         loadDate: state.loadDate,
         loadTime: state.loadTime,
       };
+
+      // Destination: plant ID or custom name
+      if (state.destPlantId) {
+        dto.destPlantId = state.destPlantId;
+      } else if (state.customDestName) {
+        dto.customDestName = state.customDestName;
+      }
+
+      // Origin: lot ID or custom origin name (with dummy coords for validation)
+      if (state.originLotId) {
+        dto.originLotId = state.originLotId;
+      } else {
+        dto.customOriginName = state.customOriginName || 'Origen WhatsApp';
+        dto.overrideOriginLat = -34.0;
+        dto.overrideOriginLng = -56.0;
+      }
 
       const freight = await this.freights.create(dto as any, synUser);
       await this.wa.sendText(phone,
@@ -510,6 +605,33 @@ export class WhatsAppFlowService {
 
   private async endFlow(sessionId: string) {
     await this.prisma.whatsAppSession.delete({ where: { id: sessionId } }).catch(() => {});
+  }
+
+  /** Resolve the producer company ID from user data */
+  private resolveProducerCompanyId(user: any): string | null {
+    // Check memberships for a producer company
+    if (user.memberships?.length > 0) {
+      const pm = user.memberships.find((m: any) =>
+        m.company?.type === 'producer' ||
+        (Array.isArray(m.company?.types) && m.company.types.includes('producer')),
+      );
+      if (pm) return pm.companyId;
+    }
+
+    // Check userTypes + companyByType
+    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
+    const companyByType = (user.companyByType as any) || {};
+    if (userTypes.includes('producer') && companyByType.producer) {
+      return companyByType.producer;
+    }
+
+    // Fallback to company type
+    if (user.company?.type === 'producer') {
+      return user.companyId;
+    }
+
+    // Fallback to activeCompanyId
+    return user.activeCompanyId || user.companyId || null;
   }
 
   private buildSyntheticUser(dbUser: any): any {
