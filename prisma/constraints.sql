@@ -3,12 +3,13 @@
 -- These constraints can't be expressed in Prisma schema directly
 -- =====================================================================
 
--- Only ONE active or accepted assignment per freight
--- This replaces the @@unique in Prisma which doesn't support partial indexes
+-- Unique active assignment per freight + trip_number (supports multi-truck)
+-- Each trip_number can only have ONE active/accepted assignment per freight
+DROP INDEX IF EXISTS "idx_one_active_assignment";
 DROP INDEX IF EXISTS "freight_assignments_freight_id_status_key";
 
 CREATE UNIQUE INDEX idx_one_active_assignment
-  ON freight_assignments (freight_id)
+  ON freight_assignments (freight_id, trip_number)
   WHERE status IN ('active', 'accepted');
 
 -- Cancel reason must exist when freight is canceled

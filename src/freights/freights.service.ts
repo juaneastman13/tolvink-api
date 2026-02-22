@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
@@ -9,6 +9,8 @@ import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/clien
 
 @Injectable()
 export class FreightsService {
+  private readonly logger = new Logger(FreightsService.name);
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
@@ -337,77 +339,84 @@ export class FreightsService {
       ? (transport.types as string[]) : [transport.type];
     if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      await tx.freightAssignment.updateMany({
-        where: { freightId, status: { in: ['active', 'accepted'] } },
-        data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
-      });
+    let result;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
+        });
 
-      const assignData: any = {
-        freightId,
-        transportCompanyId: dto.transportCompanyId,
-        status: AssignmentStatus.active,
-        assignedById: user.sub,
-      };
-      if (dto.truckId) {
-        const truck = await tx.truck.findFirst({ where: { id: dto.truckId, companyId: dto.transportCompanyId, active: true } });
-        if (truck) {
-          assignData.truckId = truck.id;
-          assignData.plate = truck.plate;
+        const assignData: any = {
+          freightId,
+          transportCompanyId: dto.transportCompanyId,
+          status: AssignmentStatus.active,
+          assignedById: user.sub,
+        };
+        if (dto.truckId) {
+          const truck = await tx.truck.findFirst({ where: { id: dto.truckId, companyId: dto.transportCompanyId, active: true } });
+          if (truck) {
+            assignData.truckId = truck.id;
+            assignData.plate = truck.plate;
+          }
         }
-      }
-      if (dto.driverId) {
-        const driverMembership = await tx.userCompany.findFirst({
-          where: { userId: dto.driverId, companyId: dto.transportCompanyId, role: 'chofer', active: true },
-          include: { user: { select: { id: true, name: true } } },
-        });
-        if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
-        assignData.driverId = driverMembership.user.id;
-        assignData.driverName = driverMembership.user.name;
-        // Auto queue position: next in driver's queue
-        const maxPos: any = await (tx.freightAssignment as any).aggregate({
-          _max: { queuePosition: true },
-          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-        });
-        assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
-      }
-      const assignment = await tx.freightAssignment.create({ data: assignData });
+        if (dto.driverId) {
+          const driverMembership = await tx.userCompany.findFirst({
+            where: { userId: dto.driverId, companyId: dto.transportCompanyId, role: 'chofer', active: true },
+            include: { user: { select: { id: true, name: true } } },
+          });
+          if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
+          assignData.driverId = driverMembership.user.id;
+          assignData.driverName = driverMembership.user.name;
+          // Auto queue position: next in driver's queue
+          const maxPos: any = await (tx.freightAssignment as any).aggregate({
+            _max: { queuePosition: true },
+            where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+          });
+          assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+        }
+        const assignment = await tx.freightAssignment.create({ data: assignData });
 
-      const updated = await tx.freight.update({
-        where: { id: freightId },
-        data: { status: FreightStatus.assigned },
-      });
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data: { status: FreightStatus.assigned },
+        });
 
-      if (freight.conversation?.id) {
-        await tx.conversationParticipant.upsert({
-          where: {
-            conversationId_companyId: {
+        if (freight.conversation?.id) {
+          await tx.conversationParticipant.upsert({
+            where: {
+              conversationId_companyId: {
+                conversationId: freight.conversation.id,
+                companyId: dto.transportCompanyId,
+              },
+            },
+            create: {
               conversationId: freight.conversation.id,
               companyId: dto.transportCompanyId,
             },
+            update: {},
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight',
+            entityId: freightId,
+            action: 'assigned',
+            fromValue: freight.status,
+            toValue: 'assigned',
+            userId: user.sub,
+            metadata: { transportCompanyId: dto.transportCompanyId, assignmentId: assignment.id },
           },
-          create: {
-            conversationId: freight.conversation.id,
-            companyId: dto.transportCompanyId,
-          },
-          update: {},
         });
-      }
 
-      await tx.auditLog.create({
-        data: {
-          entityType: 'freight',
-          entityId: freightId,
-          action: 'assigned',
-          fromValue: freight.status,
-          toValue: 'assigned',
-          userId: user.sub,
-          metadata: { transportCompanyId: dto.transportCompanyId, assignmentId: assignment.id },
-        },
+        return updated;
       });
-
-      return updated;
-    });
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
+      this.logger.error(`assign() failed for freight ${freightId}: ${err.message}`, err.stack);
+      throw new BadRequestException(`Error al asignar transportista: ${err.message}`);
+    }
 
     // Notify transporter about assignment
     this.notifications.notifyCompany(
@@ -1238,86 +1247,93 @@ export class FreightsService {
       throw new BadRequestException('Solo se puede asignar en estado pending_assignment o assigned');
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const existingCount = await tx.freightAssignment.count({
-        where: { freightId, status: { in: ['active', 'accepted'] } },
-      });
-      let tripNumber = existingCount;
-
-      for (const truck of dto.trucks) {
-        const transport = await tx.company.findFirst({
-          where: { id: truck.transportCompanyId, active: true },
-          select: { id: true, type: true, types: true, hasInternalFleet: true },
+    let result;
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        const existingCount = await tx.freightAssignment.count({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
         });
-        if (!transport) throw new BadRequestException(`Empresa transportista ${truck.transportCompanyId} no encontrada`);
-        const tTypes = Array.isArray(transport.types) && (transport.types as string[]).length > 0
-          ? (transport.types as string[]) : [transport.type];
-        if (!tTypes.includes('transporter') && !transport.hasInternalFleet) {
-          throw new BadRequestException('La empresa no es transportista');
-        }
+        let tripNumber = existingCount;
 
-        tripNumber++;
-        const assignData: any = {
-          freightId,
-          transportCompanyId: truck.transportCompanyId,
-          status: AssignmentStatus.active,
-          assignedById: user.sub,
-          tripNumber,
-          tripStatus: 'pending',
-        };
-
-        if (truck.tons) assignData.tons = truck.tons;
-        if (truck.truckId) {
-          const t = await tx.truck.findFirst({ where: { id: truck.truckId, companyId: truck.transportCompanyId, active: true } });
-          if (t) { assignData.truckId = t.id; assignData.plate = t.plate; }
-        }
-
-        if (truck.driverId) {
-          const dm = await tx.userCompany.findFirst({
-            where: { userId: truck.driverId, companyId: truck.transportCompanyId, role: 'chofer', active: true },
-            include: { user: { select: { id: true, name: true } } },
+        for (const truck of dto.trucks) {
+          const transport = await tx.company.findFirst({
+            where: { id: truck.transportCompanyId, active: true },
+            select: { id: true, type: true, types: true, hasInternalFleet: true },
           });
-          if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa');
-          assignData.driverId = dm.user.id;
-          assignData.driverName = dm.user.name;
-          const maxPos: any = await (tx.freightAssignment as any).aggregate({
-            _max: { queuePosition: true },
-            where: { driverId: truck.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-          });
-          assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+          if (!transport) throw new BadRequestException(`Empresa transportista ${truck.transportCompanyId} no encontrada`);
+          const tTypes = Array.isArray(transport.types) && (transport.types as string[]).length > 0
+            ? (transport.types as string[]) : [transport.type];
+          if (!tTypes.includes('transporter') && !transport.hasInternalFleet) {
+            throw new BadRequestException('La empresa no es transportista');
+          }
+
+          tripNumber++;
+          const assignData: any = {
+            freightId,
+            transportCompanyId: truck.transportCompanyId,
+            status: AssignmentStatus.active,
+            assignedById: user.sub,
+            tripNumber,
+            tripStatus: 'pending',
+          };
+
+          if (truck.tons) assignData.tons = truck.tons;
+          if (truck.truckId) {
+            const t = await tx.truck.findFirst({ where: { id: truck.truckId, companyId: truck.transportCompanyId, active: true } });
+            if (t) { assignData.truckId = t.id; assignData.plate = t.plate; }
+          }
+
+          if (truck.driverId) {
+            const dm = await tx.userCompany.findFirst({
+              where: { userId: truck.driverId, companyId: truck.transportCompanyId, role: 'chofer', active: true },
+              include: { user: { select: { id: true, name: true } } },
+            });
+            if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa');
+            assignData.driverId = dm.user.id;
+            assignData.driverName = dm.user.name;
+            const maxPos: any = await (tx.freightAssignment as any).aggregate({
+              _max: { queuePosition: true },
+              where: { driverId: truck.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+            });
+            assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+          }
+
+          await tx.freightAssignment.create({ data: assignData });
+
+          if (freight.conversation?.id) {
+            await tx.conversationParticipant.upsert({
+              where: { conversationId_companyId: { conversationId: freight.conversation.id, companyId: truck.transportCompanyId } },
+              create: { conversationId: freight.conversation.id, companyId: truck.transportCompanyId },
+              update: {},
+            });
+          }
         }
 
-        await tx.freightAssignment.create({ data: assignData });
+        const newCount = existingCount + dto.trucks.length;
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data: { status: FreightStatus.assigned, assignedTruckCount: newCount, isMultiTruck: true } as any,
+        });
 
-        if (freight.conversation?.id) {
-          await tx.conversationParticipant.upsert({
-            where: { conversationId_companyId: { conversationId: freight.conversation.id, companyId: truck.transportCompanyId } },
-            create: { conversationId: freight.conversation.id, companyId: truck.transportCompanyId },
-            update: {},
-          });
-        }
-      }
+        await tx.auditLog.create({
+          data: {
+            entityType: 'freight',
+            entityId: freightId,
+            action: 'assigned_multi',
+            fromValue: freight.status,
+            toValue: 'assigned',
+            userId: user.sub,
+            metadata: { trucksAssigned: dto.trucks.length, totalAssigned: newCount },
+          },
+        });
 
-      const newCount = existingCount + dto.trucks.length;
-      const updated = await tx.freight.update({
-        where: { id: freightId },
-        data: { status: FreightStatus.assigned, assignedTruckCount: newCount, isMultiTruck: true } as any,
+        return updated;
       });
-
-      await tx.auditLog.create({
-        data: {
-          entityType: 'freight',
-          entityId: freightId,
-          action: 'assigned_multi',
-          fromValue: freight.status,
-          toValue: 'assigned',
-          userId: user.sub,
-          metadata: { trucksAssigned: dto.trucks.length, totalAssigned: newCount },
-        },
-      });
-
-      return updated;
-    });
+    } catch (err) {
+      if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
+      this.logger.error(`assignMulti() failed for freight ${freightId}: ${err.message}`, err.stack);
+      throw new BadRequestException(`Error al asignar camiones: ${err.message}`);
+    }
 
     const notifiedCompanies = new Set<string>();
     for (const truck of dto.trucks) {
