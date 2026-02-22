@@ -172,8 +172,10 @@ export class FreightsService {
       if (dto.truckId) {
         const truck = await tx.truck.findFirst({
           where: { id: dto.truckId, companyId: producerCompanyId, active: true },
+          include: { assignedUser: { select: { id: true, name: true } } },
         });
         if (truck) {
+          const isMulti = (dto.truckCount || 1) > 1;
           await tx.freightAssignment.create({
             data: {
               freightId: f.id,
@@ -183,6 +185,8 @@ export class FreightsService {
               truckId: truck.id,
               plate: truck.plate,
               driverId: truck.assignedUserId || null,
+              driverName: (truck as any).assignedUser?.name || null,
+              ...(isMulti ? { tripNumber: 1, tripStatus: 'accepted' } : {}),
             },
           });
           await tx.freight.update({
