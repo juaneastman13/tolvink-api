@@ -1,6 +1,10 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { FreightStatus } from '@prisma/client';
 
+// TripStatus enum not available locally (prisma generate EPERM) — use string literals
+// Railway regenerates on deploy
+type TripStatus = 'pending' | 'accepted' | 'in_progress' | 'loaded' | 'finished' | 'canceled';
+
 // =====================================================================
 // TOLVINK — Freight State Machine v2
 // Added: loaded state, cross-confirmation flow
@@ -68,11 +72,33 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
   canceled: [],   // terminal
 };
 
+// ======================== TRIP-LEVEL TRANSITIONS (v6.0) ================
+const TRIP_TRANSITIONS: Record<TripStatus, { to: TripStatus; requiredRole?: string[] }[]> = {
+  pending:     [{ to: 'accepted' }, { to: 'canceled' }],
+  accepted:    [{ to: 'in_progress' }, { to: 'canceled' }],
+  in_progress: [{ to: 'loaded' }],
+  loaded:      [{ to: 'finished' }],
+  finished:    [],
+  canceled:    [],
+};
+
 @Injectable()
 export class FreightStateMachine {
 
   getAllowedTransitions(currentStatus: FreightStatus): FreightStatus[] {
     return (TRANSITIONS[currentStatus] || []).map(t => t.to);
+  }
+
+  validateTripTransition(currentStatus: TripStatus, newStatus: TripStatus): void {
+    const allowed = TRIP_TRANSITIONS[currentStatus];
+    if (!allowed || allowed.length === 0) {
+      throw new BadRequestException(`El viaje en estado "${currentStatus}" no admite más transiciones`);
+    }
+    const transition = allowed.find(t => t.to === newStatus);
+    if (!transition) {
+      const valid = allowed.map(t => t.to).join(', ');
+      throw new BadRequestException(`Transición de viaje inválida: ${currentStatus} → ${newStatus}. Permitidas: ${valid}`);
+    }
   }
 
   validateTransition(

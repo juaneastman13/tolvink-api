@@ -100,6 +100,14 @@ export class CreateFreightDto {
   @MaxLength(1000)
   notes?: string;
 
+  @ApiProperty({ required: false, description: 'Cantidad de camiones necesarios', minimum: 1, maximum: 50 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  @Type(() => Number)
+  truckCount?: number;
+
   @ApiProperty({ required: false, description: 'ID del camión (flota propia del productor)' })
   @IsOptional()
   @IsUUID()
@@ -172,4 +180,59 @@ export class CancelFreightDto {
   @IsNotEmpty({ message: 'Motivo obligatorio' })
   @MaxLength(255)
   reason: string;
+}
+
+// ======================== MULTI-TRUCK DTOs ==============================
+
+export class TruckAssignmentDto {
+  @ApiProperty({ description: 'ID de empresa transportista' })
+  @IsUUID()
+  transportCompanyId: string;
+
+  @ApiProperty({ required: false, description: 'ID del camión' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del chofer' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
+  @ApiProperty({ required: false, description: 'Toneladas para este camión' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.1)
+  @Type(() => Number)
+  tons?: number;
+}
+
+export class AssignMultiTruckDto {
+  @ApiProperty({ type: [TruckAssignmentDto], description: 'Lista de camiones a asignar' })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Debe incluir al menos un camión' })
+  @ValidateNested({ each: true })
+  @Type(() => TruckAssignmentDto)
+  trucks: TruckAssignmentDto[];
+}
+
+export class RespondTripDto {
+  @ApiProperty({ enum: ['accepted', 'rejected'] })
+  @IsEnum(['accepted', 'rejected'])
+  action: 'accepted' | 'rejected';
+
+  @ApiProperty({ required: false, maxLength: 255 })
+  @IsOptional()
+  @MaxLength(255)
+  reason?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
 }

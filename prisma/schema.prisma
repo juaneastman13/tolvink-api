@@ -45,6 +45,15 @@ enum AssignmentStatus {
   canceled
 }
 
+enum TripStatus {
+  pending
+  accepted
+  in_progress
+  loaded
+  finished
+  canceled
+}
+
 enum GrainType {
   Soja
   Maiz
@@ -327,6 +336,11 @@ model Freight {
   finishedAt DateTime? @map("finished_at")
   loadedAt  DateTime? @map("loaded_at")
 
+  // Multi-truck support (v6.0)
+  truckCount          Int       @default(1)     @map("truck_count")
+  assignedTruckCount  Int       @default(0)     @map("assigned_truck_count")
+  isMultiTruck        Boolean   @default(false) @map("is_multi_truck")
+
   // Cross-confirmations
   transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
   producerLoadedConfirmedAt      DateTime? @map("producer_loaded_confirmed_at")
@@ -390,6 +404,18 @@ model FreightAssignment {
   reason String? @db.VarChar(255)
   queuePosition Int @default(0) @map("queue_position")
 
+  // Multi-truck trip lifecycle (v6.0)
+  tripStatus                      TripStatus  @default(pending) @map("trip_status")
+  tripNumber                      Int         @default(1)       @map("trip_number")
+  tons                            Decimal?    @db.Decimal(10, 2)
+  startedAt                       DateTime?   @map("trip_started_at")
+  loadedAt                        DateTime?   @map("trip_loaded_at")
+  finishedAt                      DateTime?   @map("trip_finished_at")
+  transporterLoadedConfirmedAt    DateTime?   @map("trip_transporter_loaded_confirmed_at")
+  producerLoadedConfirmedAt       DateTime?   @map("trip_producer_loaded_confirmed_at")
+  transporterFinishedConfirmedAt  DateTime?   @map("trip_transporter_finished_confirmed_at")
+  plantFinishedConfirmedAt        DateTime?   @map("trip_plant_finished_confirmed_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -400,6 +426,7 @@ model FreightAssignment {
   truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
 
   @@index([freightId])
+  @@index([freightId, tripStatus])
   @@index([transportCompanyId, status])
   @@index([truckId])
   @@index([driverId])

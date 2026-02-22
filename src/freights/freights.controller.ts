@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -128,6 +128,94 @@ export class FreightsController {
   @ApiOperation({ summary: 'Autorizar viaje con flota propia (solo planta)' })
   authorize(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.authorize(id, user);
+  }
+
+  // ======================== MULTI-TRUCK ENDPOINTS (v6.0) ================
+
+  @Post(':id/assign-multi')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Asignar múltiples camiones a un flete' })
+  assignMulti(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignMultiTruckDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.assignMulti(id, dto, user);
+  }
+
+  @Post(':id/assign-truck')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Agregar un camión a un flete multi-truck' })
+  assignTruck(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TruckAssignmentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.assignTruck(id, dto, user);
+  }
+
+  @Post(':id/assignments/:aId/cancel')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Cancelar una asignación de camión específica' })
+  cancelAssignment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @Body() body: { reason?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.cancelAssignment(id, aId, body.reason || '', user);
+  }
+
+  @Post(':id/assignments/:aId/respond')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter')
+  @ApiOperation({ summary: 'Aceptar o rechazar una asignación per-trip' })
+  respondTrip(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @Body() dto: RespondTripDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.respondTrip(id, aId, dto, user);
+  }
+
+  @Post(':id/assignments/:aId/start')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'producer')
+  @ApiOperation({ summary: 'Iniciar viaje de un camión específico' })
+  startTrip(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.startTrip(id, aId, user);
+  }
+
+  @Post(':id/assignments/:aId/confirm-loaded')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'producer')
+  @ApiOperation({ summary: 'Confirmar carga de un camión específico' })
+  confirmTripLoaded(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.confirmTripLoaded(id, aId, user);
+  }
+
+  @Post(':id/assignments/:aId/confirm-finished')
+  @UseGuards(FreightAccessGuard)
+  @Roles('transporter', 'plant')
+  @ApiOperation({ summary: 'Confirmar entrega de un camión específico' })
+  confirmTripFinished(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('aId', ParseUUIDPipe) aId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.confirmTripFinished(id, aId, user);
   }
 
   @Patch(':id')
