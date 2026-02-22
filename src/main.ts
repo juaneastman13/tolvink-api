@@ -48,12 +48,9 @@ async function bootstrap() {
   // Gzip compression — ~60-70% bandwidth reduction on JSON responses
   app.use(compression());
 
-  // WhatsApp webhook: capture raw body for HMAC signature verification
-  // Must be before global body parser to intercept the raw buffer
-  app.use('/api/whatsapp/webhook', bodyParser.json({
-    limit: '1mb',
-    verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; },
-  }));
+  // WhatsApp webhook (Twilio): parse urlencoded body before global parser
+  // Twilio sends application/x-www-form-urlencoded
+  app.use('/api/whatsapp', bodyParser.urlencoded({ limit: '1mb', extended: true }));
 
   // Body size limits (prevent DoS with large payloads)
   app.use(bodyParser.json({ limit: '10mb' }));
