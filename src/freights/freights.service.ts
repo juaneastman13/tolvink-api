@@ -1432,9 +1432,9 @@ export class FreightsService {
     });
     if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
-    // Only allow editing pending trips
-    if (assignment.tripStatus && assignment.tripStatus !== 'pending') {
-      throw new BadRequestException('Solo se pueden editar viajes pendientes');
+    // Only allow editing trips that haven't started yet
+    if (assignment.tripStatus && !['pending', 'accepted'].includes(assignment.tripStatus)) {
+      throw new BadRequestException('Solo se pueden editar viajes que no hayan iniciado');
     }
 
     const updateData: any = {};
