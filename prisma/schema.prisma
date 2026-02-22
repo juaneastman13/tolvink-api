@@ -156,6 +156,7 @@ model User {
   pushSubscriptions  PushSubscription[]
   refreshTokens      RefreshToken[]
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
+  whatsappSessions   WhatsAppSession[]
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -639,4 +640,39 @@ model AnalyticsEvent {
   @@index([sessionId, createdAt])
   @@index([userId, createdAt])
   @@map("analytics_events")
+}
+
+// ======================== WHATSAPP =====================================
+
+model WhatsAppSession {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  phone     String    @db.VarChar(50)
+  flowType  String?   @map("flow_type") @db.VarChar(50)
+  flowState Json?     @map("flow_state")
+  flowStep  String?   @map("flow_step") @db.VarChar(50)
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([phone])
+  @@index([userId])
+  @@map("whatsapp_sessions")
+}
+
+model WhatsAppMessageLog {
+  id          String   @id @default(uuid())
+  waMessageId String?  @map("wa_message_id") @db.VarChar(100)
+  phone       String   @db.VarChar(50)
+  direction   String   @db.VarChar(10)
+  type        String   @db.VarChar(30)
+  content     Json?
+  status      String?  @db.VarChar(20)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([phone])
+  @@index([waMessageId])
+  @@map("whatsapp_message_logs")
 }

@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../database/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from '../sse/sse.service';
@@ -9,10 +10,12 @@ import { NotificationType } from '@prisma/client';
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
   private pushEnabled = false;
+  private _waService: any = undefined; // lazy-loaded to avoid circular dependency
 
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private moduleRef: ModuleRef,
     @Inject(forwardRef(() => SseService)) private sse: SseService,
   ) {
     const publicKey = this.config.get<string>('VAPID_PUBLIC_KEY');
@@ -61,6 +64,10 @@ export class NotificationService {
     this.sendPush(userId, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
       .catch((e) => this.logger.error(`Push send failed for user ${userId}: ${e.message}`));
 
+    // WhatsApp notification (fire-and-forget)
+    this.sendWhatsApp(userId, type, title, body, entityId)
+      .catch((e) => this.logger.error(`WhatsApp send failed for user ${userId}: ${e.message}`));
+
     // SSE: notify user about new notification
     this.sse.emitToUser(userId, 'notification:new', { type, title, entityId });
 
@@ -97,10 +104,12 @@ export class NotificationService {
       data: userIds.map(userId => ({ userId, type, title, body, entityId, companyId })),
     });
 
-    // Fire-and-forget: push + SSE per user (non-blocking)
+    // Fire-and-forget: push + SSE + WhatsApp per user (non-blocking)
     for (const uid of userIds) {
       this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
         .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
+      this.sendWhatsApp(uid, type, title, body, entityId)
+        .catch((e) => this.logger.error(`WhatsApp send failed for user ${uid}: ${e.message}`));
       this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
     }
   }
@@ -131,6 +140,85 @@ export class NotificationService {
       where: { userId, read: false },
       data: { read: true },
     });
+  }
+
+  // ======================== WHATSAPP =====================================
+
+  /** Lazily resolve WhatsAppService to avoid circular dependency */
+  private getWhatsAppService(): any {
+    if (this._waService === undefined) {
+      try {
+        // Dynamic import to avoid circular module dependency
+        const { WhatsAppService } = require('../whatsapp/whatsapp.service');
+        this._waService = this.moduleRef.get(WhatsAppService, { strict: false });
+      } catch {
+        this._waService = null;
+      }
+    }
+    return this._waService;
+  }
+
+  private async sendWhatsApp(
+    userId: string,
+    type: NotificationType,
+    title: string,
+    body: string,
+    entityId?: string,
+  ) {
+    const wa = this.getWhatsAppService();
+    if (!wa || !wa.isEnabled()) return;
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { phone: true },
+    });
+    if (!user?.phone) return;
+
+    // Build message with action buttons based on notification type
+    const buttons = this.getWhatsAppButtons(type, entityId);
+
+    const text = `*${title}*\n${body}`;
+
+    if (buttons.length > 0 && entityId) {
+      await wa.sendButtons(user.phone, text, buttons);
+    } else {
+      await wa.sendText(user.phone, text);
+    }
+  }
+
+  private getWhatsAppButtons(type: NotificationType, entityId?: string): Array<{ id: string; title: string }> {
+    if (!entityId) return [];
+
+    switch (type) {
+      case 'freight_assigned':
+        return [
+          { id: `accept:${entityId}`, title: 'Aceptar' },
+          { id: `reject:${entityId}`, title: 'Rechazar' },
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
+      case 'freight_loaded':
+        return [
+          { id: `confirm_loaded:${entityId}`, title: 'Confirmar carga' },
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
+      case 'freight_confirmed':
+        return [
+          { id: `confirm_finished:${entityId}`, title: 'Confirmar entrega' },
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
+      case 'freight_created':
+      case 'freight_accepted':
+      case 'freight_started':
+      case 'freight_finished':
+        return [
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
+      case 'freight_rejected':
+      case 'freight_canceled':
+        return [];
+      default:
+        return [];
+    }
   }
 
   // ======================== WEB PUSH =====================================

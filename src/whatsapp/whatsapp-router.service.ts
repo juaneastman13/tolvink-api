@@ -1,0 +1,470 @@
+// =====================================================================
+// TOLVINK — WhatsApp Message Router
+// Routes incoming WhatsApp messages to appropriate handlers
+// =====================================================================
+
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../database/prisma.service';
+import { WhatsAppService } from './whatsapp.service';
+import { WhatsAppFlowService } from './whatsapp-flow.service';
+import { FreightsService } from '../freights/freights.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
+
+const STATUS_LABELS: Record<string, string> = {
+  draft: 'Borrador',
+  pending_assignment: 'Sin asignar',
+  assigned: 'Asignado',
+  accepted: 'Aceptado',
+  in_progress: 'En camino',
+  loaded: 'Cargado',
+  finished: 'Finalizado',
+  canceled: 'Cancelado',
+};
+
+const STATUS_EMOJI: Record<string, string> = {
+  draft: '📝',
+  pending_assignment: '⏳',
+  assigned: '📋',
+  accepted: '✅',
+  in_progress: '🚛',
+  loaded: '📦',
+  finished: '🏁',
+  canceled: '❌',
+};
+
+@Injectable()
+export class WhatsAppRouterService {
+  private readonly logger = new Logger(WhatsAppRouterService.name);
+
+  constructor(
+    private prisma: PrismaService,
+    private wa: WhatsAppService,
+    private flow: WhatsAppFlowService,
+    private freights: FreightsService,
+    private companyRes: CompanyResolutionService,
+  ) {}
+
+  // ======================== MAIN ENTRY POINT ============================
+
+  async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
+    try {
+      // Mark as read
+      this.wa.markRead(waMessageId).catch(() => {});
+
+      // Find user by phone
+      const normalized = this.wa.normalizePhone(phone);
+      const user = await this.findUserByPhone(phone);
+
+      if (!user) {
+        await this.wa.sendText(phone,
+          'Este numero no esta registrado en Tolvink.\n\n' +
+          'Registrate en la app primero: https://tolvink.vercel.app',
+        );
+        return;
+      }
+
+      // Check for active flow
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (session?.flowType) {
+        // Handle cancel command inside any flow
+        if (type === 'text' && /^(cancelar|salir|exit|cancel)$/i.test(payload.body?.trim())) {
+          await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
+          await this.wa.sendText(phone, 'Operacion cancelada.');
+          await this.showMainMenu(phone, user);
+          return;
+        }
+
+        await this.flow.continueFlow(session, type, payload, phone, user);
+        return;
+      }
+
+      // Route by message type
+      if (type === 'button_reply') {
+        await this.handleButtonReply(phone, user, payload.id, payload.title);
+      } else if (type === 'list_reply') {
+        await this.handleListReply(phone, user, payload.id, payload.title);
+      } else if (type === 'text') {
+        await this.handleText(phone, user, payload.body || '');
+      } else {
+        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto. Escribi *menu* para ver las opciones.');
+      }
+    } catch (e) {
+      this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
+      await this.wa.sendText(phone, 'Ocurrio un error procesando tu mensaje. Intenta de nuevo.');
+    }
+  }
+
+  // ======================== TEXT HANDLER =================================
+
+  private async handleText(phone: string, user: any, text: string) {
+    const t = text.trim();
+
+    // Freight code lookup
+    if (/^FLT-\d{4,}$/i.test(t)) {
+      await this.showFreightByCode(phone, user, t.toUpperCase());
+      return;
+    }
+
+    // Intent matching
+    if (/^(estado|status|mis fletes|fletes)$/i.test(t)) {
+      await this.showActiveFreights(phone, user);
+      return;
+    }
+
+    if (/^(crear|nuevo|nuevo flete|solicitar)$/i.test(t)) {
+      await this.flow.startFlow('create_freight', phone, user);
+      return;
+    }
+
+    if (/^(ayuda|help|menu|hola|hi|inicio)$/i.test(t)) {
+      await this.showMainMenu(phone, user);
+      return;
+    }
+
+    // Default: show menu
+    await this.showMainMenu(phone, user);
+  }
+
+  // ======================== BUTTON REPLY HANDLER ========================
+
+  private async handleButtonReply(phone: string, user: any, buttonId: string, title: string) {
+    // Button ID format: "action:entityId" or "action:entityId:extra"
+    const parts = buttonId.split(':');
+    const action = parts[0];
+    const entityId = parts[1] || '';
+
+    const synUser = this.buildSyntheticUser(user);
+
+    try {
+      switch (action) {
+        case 'accept': {
+          await this.freights.respond(entityId, { action: 'accepted' } as any, synUser);
+          await this.wa.sendText(phone, '✅ Flete aceptado correctamente.');
+          break;
+        }
+        case 'reject': {
+          // Start reject flow (needs reason)
+          await this.flow.startFlow('reject_freight', phone, user, { freightId: entityId });
+          break;
+        }
+        case 'start': {
+          await this.freights.start(entityId, synUser);
+          await this.wa.sendText(phone, '🚛 Viaje iniciado. Buen camino!');
+          break;
+        }
+        case 'confirm_loaded': {
+          // Start loaded flow (needs tons)
+          await this.flow.startFlow('confirm_loaded', phone, user, { freightId: entityId });
+          break;
+        }
+        case 'confirm_finished': {
+          await this.freights.confirmFinished(entityId, synUser);
+          await this.wa.sendText(phone, '🏁 Entrega confirmada.');
+          break;
+        }
+        case 'cancel': {
+          // Start cancel flow (needs reason)
+          await this.flow.startFlow('cancel_freight', phone, user, { freightId: entityId });
+          break;
+        }
+        case 'detail': {
+          await this.showFreightDetail(phone, user, entityId);
+          break;
+        }
+        case 'menu': {
+          await this.showMainMenu(phone, user);
+          break;
+        }
+        case 'active_freights': {
+          await this.showActiveFreights(phone, user);
+          break;
+        }
+        default: {
+          await this.wa.sendText(phone, 'Accion no reconocida. Escribi *menu* para ver opciones.');
+        }
+      }
+    } catch (e) {
+      this.logger.error(`Button action "${action}" failed: ${e.message}`);
+      await this.wa.sendText(phone, `Error: ${e.message}`);
+    }
+  }
+
+  // ======================== LIST REPLY HANDLER ==========================
+
+  private async handleListReply(phone: string, user: any, listId: string, title: string) {
+    // List IDs: "freight:uuid" or "action:freightId"
+    const parts = listId.split(':');
+    const type = parts[0];
+    const id = parts.slice(1).join(':');
+
+    if (type === 'freight') {
+      await this.showFreightDetail(phone, user, id);
+    } else {
+      // Treat as button reply for action-based lists
+      await this.handleButtonReply(phone, user, listId, title);
+    }
+  }
+
+  // ======================== SHOW MAIN MENU ==============================
+
+  async showMainMenu(phone: string, user: any) {
+    const name = user.name?.split(' ')[0] || 'usuario';
+
+    await this.wa.sendButtons(phone,
+      `Hola ${name}! Soy el asistente de *Tolvink*.\n\n` +
+      'Que necesitas hacer?',
+      [
+        { id: 'active_freights', title: 'Mis fletes' },
+        { id: 'menu:crear', title: 'Crear flete' },
+        { id: 'menu:ayuda', title: 'Ayuda' },
+      ],
+    );
+  }
+
+  // ======================== SHOW ACTIVE FREIGHTS ========================
+
+  async showActiveFreights(phone: string, user: any) {
+    const synUser = this.buildSyntheticUser(user);
+
+    const result = await this.freights.findAll(synUser, {
+      page: 1,
+      limit: 10,
+      status: undefined,
+    } as any);
+
+    const activeFreights = result.data.filter((f: any) =>
+      !['finished', 'canceled'].includes(f.status),
+    );
+
+    if (activeFreights.length === 0) {
+      await this.wa.sendText(phone, 'No tenes fletes activos en este momento.');
+      return;
+    }
+
+    // Build list message
+    const rows = activeFreights.slice(0, 10).map((f: any) => {
+      const grain = f.items?.[0]?.grain || 'Sin grano';
+      const tons = f.items?.[0]?.tons || '?';
+      const emoji = STATUS_EMOJI[f.status] || '';
+      const label = STATUS_LABELS[f.status] || f.status;
+
+      return {
+        id: `freight:${f.id}`,
+        title: f.code,
+        description: `${emoji} ${label} | ${grain} ${tons}tn`,
+      };
+    });
+
+    await this.wa.sendList(phone,
+      `Tenes *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:`,
+      'Ver fletes',
+      [{ title: 'Fletes activos', rows }],
+    );
+  }
+
+  // ======================== SHOW FREIGHT BY CODE ========================
+
+  private async showFreightByCode(phone: string, user: any, code: string) {
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: { id: true },
+    });
+
+    if (!freight) {
+      await this.wa.sendText(phone, `No se encontro el flete ${code}.`);
+      return;
+    }
+
+    await this.showFreightDetail(phone, user, freight.id);
+  }
+
+  // ======================== SHOW FREIGHT DETAIL =========================
+
+  async showFreightDetail(phone: string, user: any, freightId: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: {
+        items: true,
+        originCompany: { select: { id: true, name: true } },
+        destCompany: { select: { id: true, name: true } },
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          include: {
+            transportCompany: { select: { id: true, name: true } },
+            driver: { select: { id: true, name: true } },
+            truck: { select: { id: true, plate: true } },
+          },
+        },
+      },
+    });
+
+    if (!freight) {
+      await this.wa.sendText(phone, 'Flete no encontrado.');
+      return;
+    }
+
+    // Verify access (user must belong to one of the participating companies)
+    const synUser = this.buildSyntheticUser(user);
+    const allIds = await this.companyRes.resolveAllCompanyIds(synUser);
+    const isDriver = freight.assignments.some(a => a.driverId === user.id);
+    const hasAccess = allIds.some(id =>
+      id === freight.originCompanyId ||
+      id === freight.destCompanyId ||
+      freight.assignments.some(a => a.transportCompanyId === id),
+    ) || isDriver;
+
+    if (!hasAccess) {
+      await this.wa.sendText(phone, 'No tenes acceso a este flete.');
+      return;
+    }
+
+    const emoji = STATUS_EMOJI[freight.status] || '';
+    const statusLabel = STATUS_LABELS[freight.status] || freight.status;
+
+    // Build detail text
+    const items = freight.items.map((i: any) => `${i.grain} ${i.tons}tn`).join(', ');
+    const assignment = freight.assignments[0];
+    const transportLine = assignment
+      ? `🚚 ${assignment.transportCompany?.name || 'Transportista'}${assignment.truck ? ` (${assignment.truck.plate})` : ''}${assignment.driver ? ` - ${assignment.driver.name}` : ''}`
+      : '🚚 Sin transportista asignado';
+
+    const loadDate = freight.loadDate
+      ? new Date(freight.loadDate).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      : '';
+
+    let text = `*${freight.code}* — ${emoji} ${statusLabel}\n`;
+    text += '━━━━━━━━━━━━━━━\n';
+    text += `📦 ${items}\n`;
+    text += `📍 ${freight.originName || freight.originCompany?.name || 'Origen'} → ${freight.destName || freight.destCompany?.name || 'Destino'}\n`;
+    text += `${transportLine}\n`;
+    if (loadDate) text += `📅 ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
+    if (freight.notes) text += `📝 ${freight.notes}\n`;
+
+    // Determine pending actions based on user role
+    const buttons = await this.getActionButtons(freight, user, allIds);
+
+    if (buttons.length > 0) {
+      await this.wa.sendButtons(phone, text, buttons);
+    } else {
+      await this.wa.sendText(phone, text);
+    }
+  }
+
+  // ======================== GET ACTION BUTTONS ==========================
+
+  private async getActionButtons(freight: any, user: any, allCompanyIds: string[]) {
+    const buttons: { id: string; title: string }[] = [];
+    const assignment = freight.assignments?.[0];
+    const isOwnFleet = assignment?.transportCompanyId === freight.originCompanyId;
+
+    // Determine user's role in this freight
+    const isOrigin = allCompanyIds.includes(freight.originCompanyId);
+    const isDest = freight.destCompanyId && allCompanyIds.includes(freight.destCompanyId);
+    const isTransporter = assignment && allCompanyIds.includes(assignment.transportCompanyId);
+    const isDriver = assignment?.driverId === user.id;
+    const isTransporterRole = isTransporter || isDriver || (isOrigin && isOwnFleet);
+
+    switch (freight.status) {
+      case 'assigned':
+        if (isTransporterRole) {
+          buttons.push({ id: `accept:${freight.id}`, title: 'Aceptar' });
+          buttons.push({ id: `reject:${freight.id}`, title: 'Rechazar' });
+        }
+        break;
+
+      case 'accepted':
+        if (isTransporterRole) {
+          buttons.push({ id: `start:${freight.id}`, title: 'Iniciar viaje' });
+        }
+        break;
+
+      case 'in_progress':
+        if (isTransporterRole) {
+          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'Confirmar carga' });
+        }
+        break;
+
+      case 'loaded':
+        if (isTransporterRole && !freight.transporterFinishedConfirmedAt) {
+          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'Confirmar entrega' });
+        }
+        if (isDest && !freight.plantFinishedConfirmedAt) {
+          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'Confirmar recepcion' });
+        }
+        if (isOrigin && !isOwnFleet && !freight.producerLoadedConfirmedAt) {
+          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'Confirmar carga' });
+        }
+        break;
+    }
+
+    // Max 3 buttons — trim if needed
+    return buttons.slice(0, 3);
+  }
+
+  // ======================== USER LOOKUP =================================
+
+  private async findUserByPhone(phone: string): Promise<any | null> {
+    const normalized = this.wa.normalizePhone(phone);
+
+    // Try multiple formats
+    const variants = [
+      normalized,
+      '+' + normalized,
+      '0' + normalized.slice(3), // 598 → 0xx
+    ];
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        active: true,
+        OR: variants.map(p => ({ phone: p })),
+      },
+      include: {
+        company: { select: { id: true, name: true, type: true, types: true } },
+        memberships: {
+          where: { active: true },
+          include: { company: { select: { id: true, name: true, type: true, types: true } } },
+        },
+      },
+    });
+
+    return user;
+  }
+
+  // ======================== BUILD SYNTHETIC USER ========================
+
+  buildSyntheticUser(dbUser: any): any {
+    // Build a user object compatible with FreightsService methods
+    const companyByType = (dbUser.companyByType as any) || {};
+    const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];
+
+    // Determine primary company type from memberships
+    let companyType = 'unknown';
+    let companyId = dbUser.activeCompanyId || dbUser.companyId || '';
+
+    if (userTypes.length > 0) {
+      companyType = userTypes[0];
+    } else if (dbUser.company?.type) {
+      companyType = dbUser.company.type;
+    } else if (dbUser.memberships?.length > 0) {
+      const firstMembership = dbUser.memberships[0];
+      const types = Array.isArray(firstMembership.company?.types) && firstMembership.company.types.length > 0
+        ? firstMembership.company.types
+        : [firstMembership.company?.type];
+      companyType = types[0] || 'unknown';
+      companyId = companyId || firstMembership.companyId;
+    }
+
+    return {
+      sub: dbUser.id,
+      role: dbUser.role || 'operator',
+      companyId,
+      companyType,
+      userType: companyType,
+      activeCompanyId: dbUser.activeCompanyId,
+    };
+  }
+}

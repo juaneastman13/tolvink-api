@@ -18,6 +18,7 @@ import { AdminController, AdminService } from './admin/admin.controller';
 import { NotificationModule } from './notifications/notification.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SseModule } from './sse/sse.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { SseModule } from './sse/sse.module';
     NotificationModule,
     AnalyticsModule,
     SseModule,
+    WhatsAppModule,
   ],
   controllers: [
     CatalogController,
