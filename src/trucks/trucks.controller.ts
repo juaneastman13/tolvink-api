@@ -41,9 +41,12 @@ export class TrucksService {
   constructor(private prisma: PrismaService) {}
 
   async create(dto: CreateTruckDto, user: any) {
-    // Allow transporters and producers
-    if (user.companyType !== 'transporter' && user.companyType !== 'producer' && user.role !== 'admin') {
-      throw new ForbiddenException('Solo transportistas o productores pueden crear camiones');
+    // Allow transporters, producers, and plants (own fleet)
+    const ct = user.companyType;
+    const cts = Array.isArray(user.companyTypes) ? user.companyTypes : [];
+    const allowed = ['transporter', 'producer', 'plant'];
+    if (!allowed.includes(ct) && !cts.some((t: string) => allowed.includes(t)) && user.role !== 'platform_admin') {
+      throw new ForbiddenException('Solo transportistas, productores o plantas pueden crear camiones');
     }
 
     // Check unique plate
@@ -103,7 +106,7 @@ export class TrucksController {
   constructor(private service: TrucksService) {}
 
   @Post()
-  @Roles('transporter', 'producer', 'admin')
+  @Roles('transporter', 'producer', 'plant', 'admin')
   @ApiOperation({ summary: 'Registrar camión' })
   create(@Body() dto: CreateTruckDto, @CurrentUser() user: any) {
     return this.service.create(dto, user);
@@ -118,7 +121,7 @@ export class TrucksController {
   }
 
   @Patch(':id/deactivate')
-  @Roles('transporter', 'producer', 'admin')
+  @Roles('transporter', 'producer', 'plant', 'admin')
   @ApiOperation({ summary: 'Desactivar camión' })
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.deactivate(id, user);
