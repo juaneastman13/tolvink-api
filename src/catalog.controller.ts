@@ -45,7 +45,7 @@ export class CatalogController {
   async plants(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `plants:${user.companyId}:${s}:${t}`;
+    const key = `plants:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
       const isProducer = await this.isProducer(user.sub);
@@ -56,7 +56,11 @@ export class CatalogController {
         if (producerCompanyIds.length === 0) return [];
 
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
-          where: { producerCompanyId: { in: producerCompanyIds }, active: true },
+          where: {
+            producerCompanyId: { in: producerCompanyIds },
+            active: true,
+            OR: [{ producerUserId: null }, { producerUserId: user.sub }],
+          },
           select: { plantCompanyId: true },
         });
 
@@ -97,7 +101,7 @@ export class CatalogController {
   async branches(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `branches:${user.companyId}:${s}:${t}`;
+    const key = `branches:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
       const isProducer = await this.isProducer(user.sub);
@@ -107,7 +111,11 @@ export class CatalogController {
         if (producerCompanyIds.length === 0) return [];
 
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
-          where: { producerCompanyId: { in: producerCompanyIds }, active: true },
+          where: {
+            producerCompanyId: { in: producerCompanyIds },
+            active: true,
+            OR: [{ producerUserId: null }, { producerUserId: user.sub }],
+          },
           select: { plantCompanyId: true, allowedBranchIds: true },
         });
 

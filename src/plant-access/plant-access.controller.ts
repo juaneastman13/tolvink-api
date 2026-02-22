@@ -65,6 +65,36 @@ export class PlantAccessService {
     return this.companyRes.resolvePlantCompanyId(user);
   }
 
+  async searchCompanies(query: string, type: string = 'producer') {
+    if (!query || query.trim().length < 2) return [];
+
+    const q = query.trim();
+    const companies = await this.prisma.company.findMany({
+      where: {
+        active: true,
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q } },
+        ],
+      },
+      select: { id: true, name: true, type: true, types: true, email: true, phone: true, address: true },
+      take: 15,
+      orderBy: { name: 'asc' },
+    });
+
+    return companies
+      .filter(c => c.type === type || (Array.isArray(c.types) && (c.types as string[]).includes(type)))
+      .map(c => ({
+        companyId: c.id,
+        companyName: c.name,
+        phone: c.phone,
+        email: c.email,
+        address: c.address,
+        companyType: c.type,
+      }));
+  }
+
   async searchUsers(query: string, type: string = 'producer') {
     if (!query || query.trim().length < 2) return [];
 
@@ -84,7 +114,6 @@ export class PlantAccessService {
 
     if (users.length === 0) return [];
 
-    // Batch query: all memberships for matched users in ONE query (fixes N+1)
     const userIds = users.map(u => u.id);
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId: { in: userIds }, active: true },
@@ -99,15 +128,13 @@ export class PlantAccessService {
 
     const matchesType = (company: any, t: string) => {
       if (company?.type === t) return true;
-      const arr = company?.types;
-      return Array.isArray(arr) && arr.includes(t);
+      return Array.isArray(company?.types) && company.types.includes(t);
     };
 
     const results: any[] = [];
     for (const user of users) {
       const userMemberships = membershipMap.get(user.id) || [];
       const typedMembership = userMemberships.find((m: any) => matchesType(m.company, type));
-
       if (typedMembership) {
         results.push({
           userId: user.id,
@@ -119,7 +146,6 @@ export class PlantAccessService {
         });
       }
     }
-
     return results;
   }
 
@@ -162,13 +188,12 @@ export class PlantAccessService {
       }
     }
 
-    // Check existing access by company (unique constraint: plantCompanyId + producerCompanyId)
-    const existing = await this.prisma.plantProducerAccess.findUnique({
+    // Check existing access (company-wide if no userId, user-specific if userId set)
+    const existing = await this.prisma.plantProducerAccess.findFirst({
       where: {
-        plantCompanyId_producerCompanyId: {
-          plantCompanyId: plantCoId,
-          producerCompanyId: dto.producerCompanyId,
-        },
+        plantCompanyId: plantCoId,
+        producerCompanyId: dto.producerCompanyId,
+        producerUserId: dto.producerUserId || null,
       },
     });
 
@@ -257,12 +282,19 @@ export class PlantAccessService {
   }
 
   async listForProducer(user: any) {
-    // Query by producer company IDs — all users in the company see the same access
+    // Company-wide access (producerUserId=null) OR user-specific access
     const producerCompanyIds = await this.companyRes.resolveAllProducerCompanyIds(user);
     if (producerCompanyIds.length === 0) return [];
 
     return this.prisma.plantProducerAccess.findMany({
-      where: { producerCompanyId: { in: producerCompanyIds }, active: true },
+      where: {
+        producerCompanyId: { in: producerCompanyIds },
+        active: true,
+        OR: [
+          { producerUserId: null },
+          { producerUserId: user.sub },
+        ],
+      },
       include: { plantCompany: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -331,6 +363,16 @@ export class PlantAccessController {
   @ApiOperation({ summary: 'Listar empresas tipo planta (solo admin general)' })
   listPlantCompanies() {
     return this.service.listPlantCompanies();
+  }
+
+  @Get('search-company')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Buscar empresas por nombre, email o teléfono' })
+  @ApiQuery({ name: 'q', required: true })
+  @ApiQuery({ name: 'type', required: false })
+  searchCompany(@Query('q') q: string, @Query('type') type?: string) {
+    if (!q?.trim() || q.trim().length < 2) throw new BadRequestException('Ingresá al menos 2 caracteres');
+    return this.service.searchCompanies(q.trim(), type || 'producer');
   }
 
   @Get('search-producer')
