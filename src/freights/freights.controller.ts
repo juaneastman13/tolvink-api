@@ -40,6 +40,14 @@ export class FreightsController {
     });
   }
 
+  @Get('drivers')
+  @Roles('transporter', 'producer', 'plant', 'admin')
+  @ApiOperation({ summary: 'Listar choferes disponibles de una empresa' })
+  @ApiQuery({ name: 'companyId', required: true })
+  getDrivers(@Query('companyId', ParseUUIDPipe) companyId: string) {
+    return this.service.getAvailableDrivers(companyId);
+  }
+
   @Get(':id')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Detalle de flete' })

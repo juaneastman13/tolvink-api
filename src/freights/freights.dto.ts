@@ -139,6 +139,11 @@ export class AssignFreightDto {
   @IsOptional()
   @IsUUID()
   truckId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del chofer asignado' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
 }
 
 export class RespondAssignmentDto {
@@ -155,6 +160,11 @@ export class RespondAssignmentDto {
   @IsOptional()
   @IsUUID()
   truckId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del chofer asignado' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
 }
 
 export class CancelFreightDto {

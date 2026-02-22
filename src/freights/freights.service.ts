@@ -23,7 +23,17 @@ export class FreightsService {
   private hasCompanyType(user: any, type: string) { return this.companyRes.hasCompanyType(user, type); }
   private resolveAllCompanyIds(user: any) { return this.companyRes.resolveAllCompanyIds(user); }
 
+  // Helper: verify a chofer is the assigned driver for a freight
+  private async assertDriverAccess(freightId: string, userId: string) {
+    const assignment = await this.prisma.freightAssignment.findFirst({
+      where: { freightId, driverId: userId, status: { in: ['active', 'accepted'] } },
+    });
+    if (!assignment) throw new ForbiddenException('No sos el chofer asignado a este flete');
+  }
+
   async create(dto: CreateFreightDto, user: any) {
+    if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden crear fletes');
+
     if (!dto.destPlantId && !dto.customDestName) {
       throw new BadRequestException('Debe indicar planta destino o destino personalizado');
     }
@@ -219,6 +229,15 @@ export class FreightsService {
             },
           },
         },
+        // Chofer: can also see freights assigned directly to them
+        {
+          assignments: {
+            some: {
+              driverId: user.sub,
+              status: { in: ['active', 'accepted'] },
+            },
+          },
+        },
       ];
     }
 
@@ -333,6 +352,19 @@ export class FreightsService {
           assignData.plate = truck.plate;
         }
       }
+      if (dto.driverId) {
+        const driverMembership = await tx.userCompany.findFirst({
+          where: { userId: dto.driverId, companyId: dto.transportCompanyId, role: 'chofer', active: true },
+          include: { user: { select: { id: true, name: true } } },
+        });
+        if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
+        const busyAssignment = await tx.freightAssignment.findFirst({
+          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+        });
+        if (busyAssignment) throw new BadRequestException('El chofer ya está asignado a otro flete activo');
+        assignData.driverId = driverMembership.user.id;
+        assignData.driverName = driverMembership.user.name;
+      }
       const assignment = await tx.freightAssignment.create({ data: assignData });
 
       const updated = await tx.freight.update({
@@ -379,6 +411,16 @@ export class FreightsService {
       freightId, user.sub,
     ).catch(() => {});
 
+    // Notify driver personally if assigned
+    if (dto.driverId) {
+      this.notifications.notify(
+        dto.driverId, NotificationType.freight_assigned,
+        'Te asignaron un flete',
+        `${freight.code} → ${freight.destName || 'destino'}`,
+        freightId,
+      ).catch(() => {});
+    }
+
     // SSE
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(() => {});
 
@@ -394,14 +436,19 @@ export class FreightsService {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    const isTransporter = await this.hasCompanyType(user, 'transporter');
-    if (!isTransporter) {
-      throw new ForbiddenException('Solo el transportista puede responder');
+    // Chofer can only respond to their own assigned freights
+    if (user.role === 'chofer') {
+      await this.assertDriverAccess(freightId, user.sub);
+    } else {
+      const isTransporter = await this.hasCompanyType(user, 'transporter');
+      if (!isTransporter) {
+        throw new ForbiddenException('Solo el transportista puede responder');
+      }
     }
 
     const allIds = await this.resolveAllCompanyIds(user);
     const assignment = freight.assignments[0];
-    if (!assignment || !allIds.includes(assignment.transportCompanyId)) {
+    if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
       throw new ForbiddenException('Tu empresa no esta asignada a este flete');
     }
 
@@ -464,9 +511,23 @@ export class FreightsService {
 
       assignmentUpdate.truckId = truck.id;
       assignmentUpdate.plate = truck.plate;
-      if (truck.assignedUserId) {
+      if (truck.assignedUserId && !dto.driverId) {
         assignmentUpdate.driverId = truck.assignedUserId;
       }
+    }
+
+    if (dto.driverId) {
+      const driverMembership = await this.prisma.userCompany.findFirst({
+        where: { userId: dto.driverId, companyId: user.companyId, role: 'chofer', active: true },
+        include: { user: { select: { id: true, name: true } } },
+      });
+      if (!driverMembership) throw new BadRequestException('Chofer no encontrado en tu empresa');
+      const busyAssignment = await this.prisma.freightAssignment.findFirst({
+        where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+      });
+      if (busyAssignment) throw new BadRequestException('El chofer ya está asignado a otro flete activo');
+      assignmentUpdate.driverId = driverMembership.user.id;
+      assignmentUpdate.driverName = driverMembership.user.name;
     }
 
     const acceptResult = await this.prisma.$transaction(async (tx) => {
@@ -506,6 +567,16 @@ export class FreightsService {
       ).catch(() => {});
     }
 
+    // Notify driver personally if assigned
+    if (dto.driverId) {
+      this.notifications.notify(
+        dto.driverId, NotificationType.freight_assigned,
+        'Te asignaron un flete',
+        `${freight.code} → ${freight.destName || 'destino'}`,
+        freightId,
+      ).catch(() => {});
+    }
+
     // SSE
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(() => {});
 
@@ -515,6 +586,8 @@ export class FreightsService {
   // ======================== START =====================================
 
   async start(freightId: string, user: any) {
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
       include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
@@ -569,6 +642,8 @@ export class FreightsService {
   // ======================== CONFIRM LOADED ============================
 
   async confirmLoaded(freightId: string, user: any) {
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
       include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
@@ -689,6 +764,8 @@ export class FreightsService {
   // ======================== CONFIRM FINISHED ==========================
 
   async confirmFinished(freightId: string, user: any) {
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
@@ -862,6 +939,8 @@ export class FreightsService {
   // ======================== CANCEL ====================================
 
   async cancel(freightId: string, dto: CancelFreightDto, user: any) {
+    if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden cancelar fletes');
+
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
       include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
@@ -973,6 +1052,8 @@ export class FreightsService {
     dto: { loadDate?: string; loadTime?: string; notes?: string },
     user: any,
   ) {
+    if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
+
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.pending_assignment) {
@@ -1013,6 +1094,40 @@ export class FreightsService {
         },
       },
     });
+  }
+
+  // ======================== AVAILABLE DRIVERS ===========================
+
+  async getAvailableDrivers(companyId: string) {
+    const memberships = await this.prisma.userCompany.findMany({
+      where: { companyId, role: 'chofer', active: true },
+      include: { user: { select: { id: true, name: true, phone: true, active: true } } },
+    });
+
+    const drivers = memberships.filter(m => m.user.active).map(m => m.user);
+
+    // Check busy status: driver assigned to an active freight
+    const busyAssignments = await this.prisma.freightAssignment.findMany({
+      where: {
+        driverId: { in: drivers.map(d => d.id) },
+        status: { in: ['active', 'accepted'] },
+        freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } },
+      },
+      select: { driverId: true, freight: { select: { code: true } } },
+    });
+
+    const busyMap = new Map<string, string>();
+    for (const a of busyAssignments) {
+      if (a.driverId) busyMap.set(a.driverId, a.freight.code);
+    }
+
+    return drivers.map(d => ({
+      id: d.id,
+      name: d.name,
+      phone: d.phone,
+      busy: busyMap.has(d.id),
+      currentFreightCode: busyMap.get(d.id) || null,
+    }));
   }
 
   // ======================== AUDIT LOG ==================================

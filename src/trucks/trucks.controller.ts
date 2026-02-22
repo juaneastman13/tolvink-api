@@ -94,6 +94,68 @@ export class TrucksService {
       data: { active: false },
     });
   }
+
+  // ======================== DRIVER CRUD ================================
+
+  async createDriver(body: { name: string; phone?: string; email?: string }, user: any) {
+    if (!body.name?.trim()) throw new BadRequestException('Nombre obligatorio');
+
+    const email = body.email?.trim().toLowerCase() || `chofer_${Date.now()}@tolvink.internal`;
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new BadRequestException('Ya existe un usuario con ese email');
+
+    if (body.phone?.trim()) {
+      const existingPhone = await this.prisma.user.findFirst({ where: { phone: body.phone.trim() } });
+      if (existingPhone) throw new BadRequestException('Ya existe un usuario con ese teléfono');
+    }
+
+    const driver = await this.prisma.user.create({
+      data: {
+        name: body.name.trim(),
+        email,
+        phone: body.phone?.trim() || null,
+        companyId: user.companyId,
+        activeCompanyId: user.companyId,
+        role: 'operator',
+      },
+    });
+
+    await this.prisma.userCompany.create({
+      data: {
+        userId: driver.id,
+        companyId: user.companyId,
+        role: 'chofer',
+      },
+    });
+
+    return { id: driver.id, name: driver.name, phone: driver.phone, email: driver.email };
+  }
+
+  async listDrivers(user: any) {
+    const memberships = await this.prisma.userCompany.findMany({
+      where: { companyId: user.companyId, role: 'chofer', active: true },
+      include: { user: { select: { id: true, name: true, phone: true, email: true, active: true } } },
+    });
+    return memberships.filter(m => m.user.active).map(m => ({
+      id: m.user.id,
+      name: m.user.name,
+      phone: m.user.phone,
+      email: m.user.email,
+    }));
+  }
+
+  async deactivateDriver(driverId: string, user: any) {
+    const membership = await this.prisma.userCompany.findFirst({
+      where: { userId: driverId, companyId: user.companyId, role: 'chofer' },
+    });
+    if (!membership) throw new NotFoundException('Chofer no encontrado');
+
+    await this.prisma.userCompany.update({
+      where: { id: membership.id },
+      data: { active: false },
+    });
+    return { ok: true };
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -125,5 +187,28 @@ export class TrucksController {
   @ApiOperation({ summary: 'Desactivar camión' })
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.deactivate(id, user);
+  }
+
+  // ======================== DRIVER ENDPOINTS =============================
+
+  @Post('drivers')
+  @Roles('transporter', 'producer', 'plant', 'admin')
+  @ApiOperation({ summary: 'Registrar chofer para la empresa' })
+  createDriver(@Body() body: { name: string; phone?: string; email?: string }, @CurrentUser() user: any) {
+    return this.service.createDriver(body, user);
+  }
+
+  @Get('drivers')
+  @Roles('transporter', 'producer', 'plant', 'admin')
+  @ApiOperation({ summary: 'Listar choferes de la empresa' })
+  listDrivers(@CurrentUser() user: any) {
+    return this.service.listDrivers(user);
+  }
+
+  @Patch('drivers/:id/deactivate')
+  @Roles('transporter', 'producer', 'plant', 'admin')
+  @ApiOperation({ summary: 'Desactivar chofer' })
+  deactivateDriver(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.deactivateDriver(id, user);
   }
 }
