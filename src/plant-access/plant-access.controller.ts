@@ -88,7 +88,7 @@ export class PlantAccessService {
     const userIds = users.map(u => u.id);
     const memberships = await (this.prisma as any).userCompany.findMany({
       where: { userId: { in: userIds }, active: true },
-      include: { company: { select: { id: true, name: true, type: true } } },
+      include: { company: { select: { id: true, name: true, type: true, types: true } } },
     });
 
     const membershipMap = new Map<string, any[]>();
@@ -97,10 +97,16 @@ export class PlantAccessService {
       membershipMap.get(m.userId)!.push(m);
     }
 
+    const matchesType = (company: any, t: string) => {
+      if (company?.type === t) return true;
+      const arr = company?.types;
+      return Array.isArray(arr) && arr.includes(t);
+    };
+
     const results: any[] = [];
     for (const user of users) {
       const userMemberships = membershipMap.get(user.id) || [];
-      const typedMembership = userMemberships.find((m: any) => m.company?.type === type);
+      const typedMembership = userMemberships.find((m: any) => matchesType(m.company, type));
 
       if (typedMembership) {
         results.push({
