@@ -388,6 +388,7 @@ model FreightAssignment {
 
   assignedById String  @map("assigned_by_id")
   reason String? @db.VarChar(255)
+  queuePosition Int @default(0) @map("queue_position")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

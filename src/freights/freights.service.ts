@@ -358,12 +358,14 @@ export class FreightsService {
           include: { user: { select: { id: true, name: true } } },
         });
         if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
-        const busyAssignment = await tx.freightAssignment.findFirst({
-          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-        });
-        if (busyAssignment) throw new BadRequestException('El chofer ya está asignado a otro flete activo');
         assignData.driverId = driverMembership.user.id;
         assignData.driverName = driverMembership.user.name;
+        // Auto queue position: next in driver's queue
+        const maxPos: any = await (tx.freightAssignment as any).aggregate({
+          _max: { queuePosition: true },
+          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+        });
+        assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
       }
       const assignment = await tx.freightAssignment.create({ data: assignData });
 
@@ -522,12 +524,14 @@ export class FreightsService {
         include: { user: { select: { id: true, name: true } } },
       });
       if (!driverMembership) throw new BadRequestException('Chofer no encontrado en tu empresa');
-      const busyAssignment = await this.prisma.freightAssignment.findFirst({
-        where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-      });
-      if (busyAssignment) throw new BadRequestException('El chofer ya está asignado a otro flete activo');
       assignmentUpdate.driverId = driverMembership.user.id;
       assignmentUpdate.driverName = driverMembership.user.name;
+      // Auto queue position: next in driver's queue
+      const maxPos: any = await (this.prisma.freightAssignment as any).aggregate({
+        _max: { queuePosition: true },
+        where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+      });
+      assignmentUpdate.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
     }
 
     const acceptResult = await this.prisma.$transaction(async (tx) => {
@@ -1106,28 +1110,94 @@ export class FreightsService {
 
     const drivers = memberships.filter(m => m.user.active).map(m => m.user);
 
-    // Check busy status: driver assigned to an active freight
-    const busyAssignments = await this.prisma.freightAssignment.findMany({
+    // Get all active assignments for these drivers (queue support)
+    // Cast to any: queuePosition field added to schema but Prisma client not regenerated locally
+    const activeAssignments: any[] = await (this.prisma.freightAssignment as any).findMany({
       where: {
         driverId: { in: drivers.map(d => d.id) },
         status: { in: ['active', 'accepted'] },
         freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } },
       },
-      select: { driverId: true, freight: { select: { code: true } } },
+      select: { driverId: true, queuePosition: true, freight: { select: { id: true, code: true, status: true, destName: true } } },
+      orderBy: { queuePosition: 'asc' },
     });
 
-    const busyMap = new Map<string, string>();
-    for (const a of busyAssignments) {
-      if (a.driverId) busyMap.set(a.driverId, a.freight.code);
+    const driverFreightsMap = new Map<string, any[]>();
+    for (const a of activeAssignments) {
+      if (!a.driverId) continue;
+      if (!driverFreightsMap.has(a.driverId)) driverFreightsMap.set(a.driverId, []);
+      driverFreightsMap.get(a.driverId)!.push({
+        id: a.freight.id,
+        code: a.freight.code,
+        status: a.freight.status,
+        destName: a.freight.destName,
+        queuePosition: a.queuePosition,
+      });
     }
 
-    return drivers.map(d => ({
-      id: d.id,
-      name: d.name,
-      phone: d.phone,
-      busy: busyMap.has(d.id),
-      currentFreightCode: busyMap.get(d.id) || null,
+    return drivers.map(d => {
+      const af = driverFreightsMap.get(d.id) || [];
+      return {
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        busy: af.length > 0,
+        currentFreightCode: af[0]?.code || null,
+        activeFreights: af,
+      };
+    });
+  }
+
+  // ======================== DRIVER QUEUE ================================
+
+  async getDriverQueue(driverId: string) {
+    // Cast to any: queuePosition field added to schema but Prisma client not regenerated locally
+    const assignments: any[] = await (this.prisma.freightAssignment as any).findMany({
+      where: {
+        driverId,
+        status: { in: ['active', 'accepted'] },
+        freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } },
+      },
+      include: {
+        freight: {
+          select: { id: true, code: true, status: true, destName: true, items: { select: { grain: true, tons: true }, take: 1 } },
+        },
+      },
+      orderBy: { queuePosition: 'asc' },
+    });
+
+    return assignments.map((a: any) => ({
+      freightId: a.freight.id,
+      assignmentId: a.id,
+      code: a.freight.code,
+      status: a.freight.status,
+      destName: a.freight.destName,
+      grain: a.freight.items?.[0]?.grain || '',
+      tons: a.freight.items?.[0]?.tons || 0,
+      queuePosition: a.queuePosition,
     }));
+  }
+
+  async reorderDriverQueue(driverId: string, orderedFreightIds: string[], user: any) {
+    // Only plant gerente can reorder
+    const isPlant = await this.hasCompanyType(user, 'plant');
+    const isAdmin = user.role === 'platform_admin';
+    if (!isPlant && !isAdmin) throw new ForbiddenException('Solo la planta puede reordenar la cola');
+
+    await this.prisma.$transaction(async (tx) => {
+      for (let i = 0; i < orderedFreightIds.length; i++) {
+        await (tx.freightAssignment as any).updateMany({
+          where: {
+            driverId,
+            freightId: orderedFreightIds[i],
+            status: { in: ['active', 'accepted'] },
+          },
+          data: { queuePosition: i + 1 },
+        });
+      }
+    });
+
+    return { ok: true };
   }
 
   // ======================== AUDIT LOG ==================================

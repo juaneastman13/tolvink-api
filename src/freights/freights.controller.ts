@@ -146,6 +146,24 @@ export class FreightsController {
     return this.service.addTrackingPoint(id, body, user);
   }
 
+  @Get('drivers/:driverId/queue')
+  @Roles('plant', 'transporter', 'producer', 'admin')
+  @ApiOperation({ summary: 'Cola de fletes de un chofer' })
+  getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string) {
+    return this.service.getDriverQueue(driverId);
+  }
+
+  @Post('drivers/:driverId/reorder')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Reordenar cola de un chofer (solo planta gerente)' })
+  reorderDriverQueue(
+    @Param('driverId', ParseUUIDPipe) driverId: string,
+    @Body() body: { orderedFreightIds: string[] },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reorderDriverQueue(driverId, body.orderedFreightIds, user);
+  }
+
   @Get(':id/tracking')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Obtener puntos de tracking' })
