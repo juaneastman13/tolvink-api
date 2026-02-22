@@ -703,6 +703,7 @@ export class FreightsService {
             status: FreightStatus.loaded,
             loadedAt: new Date(),
             transporterLoadedConfirmedAt: new Date(),
+            ...(isOwnFleet ? { producerLoadedConfirmedAt: new Date() } : {}),
           },
         });
 
@@ -1713,6 +1714,7 @@ export class FreightsService {
 
       const result = await this.prisma.$transaction(async (tx) => {
         const updateData: any = { transporterLoadedConfirmedAt: new Date() };
+        if (isOwnFleet) updateData.producerLoadedConfirmedAt = new Date();
         if (assignment.tripStatus === 'in_progress') {
           updateData.tripStatus = 'loaded';
           updateData.loadedAt = new Date();
