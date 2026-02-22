@@ -23,6 +23,13 @@ function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return fn().then(data => { cache.set(key, { data, ts: Date.now() }); return data; });
 }
 
+/** Invalidate all transport-related cache entries (called after access changes) */
+export function clearTransportCache() {
+  for (const key of cache.keys()) {
+    if (key.startsWith('transport:')) cache.delete(key);
+  }
+}
+
 @ApiTags('Catalog')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)

@@ -11,6 +11,7 @@ import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
+import { clearTransportCache } from '../catalog.controller';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -203,7 +204,7 @@ export class PlantAccessService {
       const mergedPlants = [...new Set([...existingPlants, ...newPlantIds])];
       const mergedBranches = [...new Set([...existingBranches, ...newBranchIds])];
 
-      return this.prisma.plantProducerAccess.update({
+      const updated = await this.prisma.plantProducerAccess.update({
         where: { id: existing.id },
         data: {
           active: true,
@@ -211,9 +212,11 @@ export class PlantAccessService {
           allowedBranchIds: mergedBranches,
         },
       });
+      clearTransportCache();
+      return updated;
     }
 
-    return this.prisma.plantProducerAccess.create({
+    const created = await this.prisma.plantProducerAccess.create({
       data: {
         plantCompanyId: plantCoId,
         producerCompanyId: dto.producerCompanyId,
@@ -223,6 +226,8 @@ export class PlantAccessService {
         allowedBranchIds: newBranchIds,
       },
     });
+    clearTransportCache();
+    return created;
   }
 
   async revokeAccess(accessId: string, user: any) {
@@ -239,10 +244,12 @@ export class PlantAccessService {
       }
     }
 
-    return this.prisma.plantProducerAccess.update({
+    const revoked = await this.prisma.plantProducerAccess.update({
       where: { id: access.id },
       data: { active: false },
     });
+    clearTransportCache();
+    return revoked;
   }
 
   async listForPlant(user: any, plantCompanyId?: string, producerCompanyId?: string) {
