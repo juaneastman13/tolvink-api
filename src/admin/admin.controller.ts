@@ -93,7 +93,7 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
   userTypes?: string[];
 
-  @ApiProperty({ required: false, enum: ['operator', 'admin', 'platform_admin'] })
+  @ApiProperty({ required: false, enum: ['operator', 'admin', 'platform_admin', 'chofer'] })
   @IsOptional()
   role?: string;
 
@@ -352,7 +352,7 @@ export class AdminService {
       select: {
         id: true, name: true, email: true, phone: true, role: true,
         userTypes: true, isSuperAdmin: true, active: true, companyId: true,
-        createdAt: true,
+        companyByType: true, roleByType: true, createdAt: true,
         company: { select: { id: true, name: true, type: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -378,7 +378,7 @@ export class AdminService {
 
     const hash = await bcrypt.hash(dto.password, 10);
 
-    const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+    const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
 
     const user = await this.prisma.user.create({
       data: {
@@ -412,7 +412,7 @@ export class AdminService {
       for (const [type, coId] of Object.entries(dto.companyByType)) {
         if (coId && coId !== dto.companyId) {
           const rbt = (dto.roleByType as any) || {};
-          const role = rbt[type] === 'admin' ? 'gerente' : 'operario';
+          const role = rbt[type] === 'admin' ? 'gerente' : rbt[type] === 'chofer' ? 'chofer' : 'operario';
           await (this.prisma as any).userCompany.create({
             data: { userId: user.id, companyId: coId, role },
           }).catch(() => {});
@@ -461,7 +461,7 @@ export class AdminService {
 
     // Sync memberships if companyId changed
     if (dto.companyId !== undefined && dto.companyId) {
-      const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+      const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
       await (this.prisma as any).userCompany.upsert({
         where: { userId_companyId: { userId, companyId: dto.companyId } },
         create: { userId, companyId: dto.companyId, role: membershipRole },
@@ -474,7 +474,7 @@ export class AdminService {
       for (const [type, coId] of Object.entries(dto.companyByType)) {
         if (coId && typeof coId === 'string') {
           const rbt = (dto.roleByType as any) || {};
-          const role = rbt[type] === 'admin' ? 'gerente' : 'operario';
+          const role = rbt[type] === 'admin' ? 'gerente' : rbt[type] === 'chofer' ? 'chofer' : 'operario';
           await (this.prisma as any).userCompany.upsert({
             where: { userId_companyId: { userId, companyId: coId } },
             create: { userId, companyId: coId, role },
