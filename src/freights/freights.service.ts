@@ -307,12 +307,12 @@ export class FreightsService {
 
     const transport = await this.prisma.company.findFirst({
       where: { id: dto.transportCompanyId, active: true },
-      select: { id: true, type: true, types: true },
+      select: { id: true, type: true, types: true, hasInternalFleet: true },
     });
     if (!transport) throw new BadRequestException('Empresa transportista no encontrada');
     const tTypes = Array.isArray(transport.types) && (transport.types as string[]).length > 0
       ? (transport.types as string[]) : [transport.type];
-    if (!tTypes.includes('transporter')) throw new BadRequestException('La empresa no es transportista');
+    if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.freightAssignment.updateMany({
