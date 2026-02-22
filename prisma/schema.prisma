@@ -408,6 +408,7 @@ model FreightAssignment {
   tripStatus                      TripStatus  @default(pending) @map("trip_status")
   tripNumber                      Int         @default(1)       @map("trip_number")
   tons                            Decimal?    @db.Decimal(10, 2)
+  loadedTons                      Decimal?    @map("loaded_tons") @db.Decimal(10, 2)
   startedAt                       DateTime?   @map("trip_started_at")
   loadedAt                        DateTime?   @map("trip_loaded_at")
   finishedAt                      DateTime?   @map("trip_finished_at")

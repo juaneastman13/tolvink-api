@@ -91,8 +91,8 @@ export class FreightsController {
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer')
   @ApiOperation({ summary: 'Confirmar carga' })
-  confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.confirmLoaded(id, user);
+  confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @Body() body: any, @CurrentUser() user: any) {
+    return this.service.confirmLoaded(id, user, body?.loadedTons);
   }
 
   @Post(':id/confirm-finished')
@@ -214,9 +214,10 @@ export class FreightsController {
   confirmTripLoaded(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('aId', ParseUUIDPipe) aId: string,
+    @Body() body: any,
     @CurrentUser() user: any,
   ) {
-    return this.service.confirmTripLoaded(id, aId, user);
+    return this.service.confirmTripLoaded(id, aId, user, body?.loadedTons);
   }
 
   @Post(':id/assignments/:aId/confirm-finished')

@@ -666,7 +666,7 @@ export class FreightsService {
 
   // ======================== CONFIRM LOADED ============================
 
-  async confirmLoaded(freightId: string, user: any) {
+  async confirmLoaded(freightId: string, user: any, loadedTons?: number) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
     const freight = await this.prisma.freight.findUnique({
@@ -706,6 +706,13 @@ export class FreightsService {
           },
         });
 
+        if (loadedTons != null) {
+          await tx.freightAssignment.updateMany({
+            where: { freightId, status: { in: ['active', 'accepted'] } },
+            data: { loadedTons },
+          });
+        }
+
         await tx.auditLog.create({
           data: {
             entityType: 'freight',
@@ -714,7 +721,7 @@ export class FreightsService {
             fromValue: 'in_progress',
             toValue: 'loaded',
             userId: user.sub,
-            metadata: { confirmedBy: 'transporter' },
+            metadata: { confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
           },
         });
 
@@ -1679,7 +1686,7 @@ export class FreightsService {
     return result;
   }
 
-  async confirmTripLoaded(freightId: string, assignmentId: string, user: any) {
+  async confirmTripLoaded(freightId: string, assignmentId: string, user: any, loadedTons?: number) {
     const freight = await this.prisma.freight.findUnique({
       where: { id: freightId },
       include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
@@ -1710,6 +1717,7 @@ export class FreightsService {
           updateData.tripStatus = 'loaded';
           updateData.loadedAt = new Date();
         }
+        if (loadedTons != null) updateData.loadedTons = loadedTons;
         await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: updateData });
 
         const newStatus = await this.deriveFreightStatus(tx, freightId);
@@ -1725,7 +1733,7 @@ export class FreightsService {
             fromValue: assignment.tripStatus,
             toValue: 'loaded',
             userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter' },
+            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
           },
         });
 
