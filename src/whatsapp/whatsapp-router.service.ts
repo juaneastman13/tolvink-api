@@ -70,10 +70,16 @@ export class WhatsAppRouterService {
       });
 
       if (session?.flowType) {
-        // Handle cancel command inside any flow
-        if (type === 'text' && /^(cancelar|salir|exit|cancel)$/i.test(payload.body?.trim())) {
+        // Handle cancel/menu command inside any flow
+        const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
+        if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.wa.sendText(phone, 'Operacion cancelada.');
+          await this.showMainMenu(phone, user);
+          return;
+        }
+        if (/^(menu|inicio|hola)$/.test(cmd)) {
+          await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.showMainMenu(phone, user);
           return;
         }

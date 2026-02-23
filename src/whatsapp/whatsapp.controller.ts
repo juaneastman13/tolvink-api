@@ -58,29 +58,44 @@ export class WhatsAppController {
     res.status(200).send('EVENT_RECEIVED');
 
     // Verify HMAC-SHA256 signature
-    if (this.appSecret && !this.verifyMetaSignature(req)) {
-      this.logger.warn('Meta webhook signature verification failed');
-      return;
+    if (this.appSecret) {
+      const sigOk = this.verifyMetaSignature(req);
+      console.log(`[WA-WEBHOOK] Signature verification: ${sigOk ? 'PASS' : 'FAIL'}`);
+      if (!sigOk) {
+        return;
+      }
+    } else {
+      console.log('[WA-WEBHOOK] No APP_SECRET configured, skipping signature check');
     }
 
     try {
       const body = req.body;
-      if (!body?.entry?.[0]?.changes?.[0]?.value) return;
+      console.log('[WA-WEBHOOK] Body received:', JSON.stringify(body).slice(0, 500));
+
+      if (!body?.entry?.[0]?.changes?.[0]?.value) {
+        console.log('[WA-WEBHOOK] No entry/changes/value found, ignoring');
+        return;
+      }
 
       const value = body.entry[0].changes[0].value;
 
       // Status updates (sent, delivered, read, failed)
       if (value.statuses?.[0]) {
+        console.log('[WA-WEBHOOK] Status update:', value.statuses[0].status);
         this.handleStatusUpdate(value.statuses[0]);
         return;
       }
 
       // Incoming messages
       const message = value.messages?.[0];
-      if (!message) return;
+      if (!message) {
+        console.log('[WA-WEBHOOK] No message in payload, ignoring');
+        return;
+      }
 
       const phone = message.from; // E.164 without + (e.g., "59898247552")
       const waMessageId = message.id;
+      console.log(`[WA-WEBHOOK] Message from ${phone}, type: ${message.type}`);
 
       // Parse message type and payload
       const { type, payload } = this.parseMessage(message);
@@ -98,8 +113,11 @@ export class WhatsAppController {
       }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));
 
       // Route the message
+      console.log(`[WA-WEBHOOK] Routing message type=${type} to handler`);
       await this.router.handleMessage(phone, type, payload, waMessageId);
+      console.log(`[WA-WEBHOOK] Handler completed successfully`);
     } catch (e) {
+      console.error(`[WA-WEBHOOK] ERROR: ${e.message}`, e.stack);
       this.logger.error(`Webhook processing error: ${e.message}`, e.stack);
     }
   }

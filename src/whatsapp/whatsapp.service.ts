@@ -186,6 +186,7 @@ export class WhatsAppService {
 
       if (!res.ok) {
         const errorBody = await res.text();
+        console.error(`[WA-SEND] Meta API error ${res.status}: ${errorBody.slice(0, 300)}`);
         throw new Error(`Meta API ${res.status}: ${errorBody}`);
       }
 
