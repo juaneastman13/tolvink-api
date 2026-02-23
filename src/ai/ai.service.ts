@@ -1539,10 +1539,13 @@ MODIFICAR (solo admin/gerente):
   /** Post-process AI response: strip UUIDs, enforce length, quality check */
   private validateResponse(text: string): string {
     // 1. Strip UUID patterns that may have leaked through
-    let clean = text.replace(
-      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-      '[ID interno]',
-    );
+    //    BUT preserve UUIDs inside URLs (e.g. pick-location?token=UUID)
+    const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+    let clean = text.replace(UUID_RE, (match, offset) => {
+      const before = text.slice(Math.max(0, offset - 80), offset);
+      if (/https?:\/\/\S*$/i.test(before)) return match; // UUID is part of a URL
+      return '[ID interno]';
+    });
 
     // 2. Enforce max length for WhatsApp-friendly responses
     //    Exception: freight lists (contain FLT-) are allowed to be longer
