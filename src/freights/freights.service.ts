@@ -106,8 +106,8 @@ export class FreightsService {
     if (destCompanyId) participants.push({ companyId: destCompanyId });
 
     const originName = lot ? lot.name : (dto.customOriginName || 'Origen personalizado');
-    const originLat = dto.overrideOriginLat || lot?.lat || null;
-    const originLng = dto.overrideOriginLng || lot?.lng || null;
+    const originLat = dto.overrideOriginLat || lot?.lat || lot?.field?.lat || null;
+    const originLng = dto.overrideOriginLng || lot?.lng || lot?.field?.lng || null;
 
     const freight = await this.prisma.$transaction(async (tx) => {
       // Generate code inside transaction (fixes race condition)

@@ -7,6 +7,9 @@ import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { FreightsService } from '../freights/freights.service';
+import { FieldsService } from '../fields/fields.service';
+import { TrucksService } from '../trucks/trucks.controller';
+import { AdminService } from '../admin/admin.controller';
 import Anthropic from '@anthropic-ai/sdk';
 
 const MAX_HISTORY = 40;
@@ -23,6 +26,9 @@ export class AiService {
     private config: ConfigService,
     private prisma: PrismaService,
     @Inject(forwardRef(() => FreightsService)) private freights: FreightsService,
+    private fieldsService: FieldsService,
+    private trucksService: TrucksService,
+    private adminService: AdminService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -159,11 +165,29 @@ REGLAS:
 GRANOS: Soja, Maiz, Trigo, Girasol, Sorgo, Cebada, Otros
 
 INSTRUCCIONES CRITICAS PARA CREAR FLETES:
-1. Primero usa search_plants y list_lots para resolver IDs si es posible.
+1. Primero usa search_plants y list_lots (o list_fields) para resolver IDs si es posible.
 2. Llama prepare_freight con los datos. Esto NO crea el flete, solo lo prepara.
 3. Mostra el resumen al usuario y pregunta "¿Confirmás?"
 4. Cuando el usuario diga "si", "dale", "confirmar", "ok" o similar, DEBES llamar la herramienta confirm_create_freight. NUNCA digas que el flete fue creado sin llamar a confirm_create_freight. El flete NO existe hasta que llames esa herramienta.
 5. Si falta info, pregunta solo lo que falta. NO inventes datos.
+
+FLOTA PROPIA:
+- Si el productor quiere usar su propia flota, usa list_trucks para mostrar camiones disponibles.
+- Incluí truckId en prepare_freight para asignar flota propia al flete.
+
+UBICACIONES DE WHATSAPP:
+- Si el usuario comparte una ubicacion de WhatsApp, se guarda automaticamente en la sesion.
+- Podes usarla para asignar coordenadas a campos, lotes, u origenes/destinos de flete.
+- La ubicacion se usa automaticamente si no se proporcionan lat/lng en create_field, create_lot, o prepare_freight.
+
+CAMPOS, LOTES Y CAMIONES:
+- Usa list_fields para ver campos y lotes existentes con sus IDs.
+- Podes crear campos con create_field y lotes con create_lot.
+- Podes registrar camiones con create_truck.
+
+USUARIOS:
+- Solo admin/gerente puede crear usuarios con create_user.
+- Si el usuario no es admin, explica que necesita permisos.
 
 OTRAS INSTRUCCIONES:
 - Nunca expongas UUIDs. Usa codigos FLT-XXXX.
@@ -223,7 +247,7 @@ OTRAS INSTRUCCIONES:
     },
     {
       name: 'prepare_freight',
-      description: 'Prepara un flete para creacion (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, destPlantId o destName, loadDate (YYYY-MM-DD), loadTime (HH:mm). Opcional: originLotId, customOriginName, truckCount, notes.',
+      description: 'Prepara un flete para creacion (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, destPlantId o destName, loadDate (YYYY-MM-DD), loadTime (HH:mm). Opcional: originLotId, customOriginName, customOriginLat/Lng, truckId (flota propia), truckCount, notes.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -232,8 +256,13 @@ OTRAS INSTRUCCIONES:
           truckCount: { type: 'number', description: 'Default 1' },
           destPlantId: { type: 'string', description: 'ID de planta (de search_plants)' },
           destName: { type: 'string', description: 'Nombre destino si no hay planta' },
-          originLotId: { type: 'string', description: 'ID de lote (de list_lots)' },
+          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de ubicacion WhatsApp)' },
+          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de ubicacion WhatsApp)' },
+          originLotId: { type: 'string', description: 'ID de lote (de list_lots o list_fields)' },
           customOriginName: { type: 'string', description: 'Nombre origen si no hay lote' },
+          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de ubicacion WhatsApp)' },
+          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de ubicacion WhatsApp)' },
+          truckId: { type: 'string', description: 'ID de camion propio (de list_trucks) para asignar flota propia' },
           loadDate: { type: 'string', description: 'YYYY-MM-DD' },
           loadTime: { type: 'string', description: 'HH:mm' },
           notes: { type: 'string' },
@@ -319,6 +348,83 @@ OTRAS INSTRUCCIONES:
         required: ['code', 'reason'],
       },
     },
+    // ---- Field & Lot management ----
+    {
+      name: 'list_fields',
+      description: 'Lista todos los campos y lotes del productor con sus coordenadas.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'create_field',
+      description: 'Crea un campo (establecimiento). Si el usuario compartio una ubicacion de WhatsApp, se usa automaticamente como lat/lng.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Nombre del campo' },
+          address: { type: 'string', description: 'Direccion (opcional)' },
+          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicacion compartida si no se indica)' },
+          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicacion compartida si no se indica)' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'create_lot',
+      description: 'Crea un lote dentro de un campo existente. Usa list_fields para obtener el fieldId.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          fieldId: { type: 'string', description: 'ID del campo (de list_fields)' },
+          name: { type: 'string', description: 'Nombre del lote' },
+          hectares: { type: 'number', description: 'Hectareas (opcional)' },
+          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicacion compartida si no se indica)' },
+          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicacion compartida si no se indica)' },
+        },
+        required: ['fieldId', 'name'],
+      },
+    },
+    // ---- Truck management ----
+    {
+      name: 'list_trucks',
+      description: 'Lista los camiones/flota de la empresa del usuario.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'create_truck',
+      description: 'Registra un nuevo camion en la flota de la empresa.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          plate: { type: 'string', description: 'Patente/matricula del camion (ej: ABC1234)' },
+          model: { type: 'string', description: 'Modelo del camion (opcional)' },
+        },
+        required: ['plate'],
+      },
+    },
+    // ---- User management ----
+    {
+      name: 'create_user',
+      description: 'Crea un nuevo usuario en la empresa del usuario actual. Solo admin/gerente puede hacerlo.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Nombre completo' },
+          email: { type: 'string', description: 'Email del usuario' },
+          password: { type: 'string', description: 'Contrasena inicial' },
+          phone: { type: 'string', description: 'Telefono (opcional)' },
+          role: { type: 'string', enum: ['admin', 'operario', 'chofer'], description: 'Rol: admin, operario, o chofer (default: operario)' },
+        },
+        required: ['name', 'email', 'password'],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -344,6 +450,12 @@ OTRAS INSTRUCCIONES:
         case 'confirm_loaded': return await this.toolConfirmLoaded(input, synUser);
         case 'confirm_finished': return await this.toolConfirmFinished(input, synUser);
         case 'cancel_freight': return await this.toolCancelFreight(input, synUser);
+        case 'list_fields': return await this.toolListFields(user);
+        case 'create_field': return await this.toolCreateField(input, user, session);
+        case 'create_lot': return await this.toolCreateLot(input, user, session);
+        case 'list_trucks': return await this.toolListTrucks(user);
+        case 'create_truck': return await this.toolCreateTruck(input, user);
+        case 'create_user': return await this.toolCreateUser(input, user);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -508,8 +620,18 @@ OTRAS INSTRUCCIONES:
       if (lot) originDisplayName = lot.field?.name ? `${lot.field.name} - ${lot.name}` : lot.name;
     }
 
+    // Resolve truck name if own fleet
+    let truckDisplay: string | null = null;
+    if (input.truckId) {
+      const truck = await this.prisma.truck.findUnique({
+        where: { id: input.truckId },
+        select: { plate: true, model: true },
+      });
+      if (truck) truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
+    }
+
     const dateFormatted = input.loadDate.split('-').reverse().join('/');
-    const summary = {
+    const summary: any = {
       grain: input.grain,
       tons: input.tons,
       truckCount: input.truckCount || 1,
@@ -519,6 +641,7 @@ OTRAS INSTRUCCIONES:
       time: input.loadTime,
       notes: input.notes || null,
     };
+    if (truckDisplay) summary.truck = truckDisplay;
 
     // Store pending freight in session
     const state = (session.flowState as any) || {};
@@ -568,11 +691,41 @@ OTRAS INSTRUCCIONES:
     if (pending.destPlantId) dto.destPlantId = pending.destPlantId;
     else if (pending.destName) dto.customDestName = pending.destName;
 
-    if (pending.originLotId) dto.originLotId = pending.originLotId;
-    else {
+    if (pending.originLotId) {
+      dto.originLotId = pending.originLotId;
+      // Lookup lot coordinates (fallback to field) so origin location is populated
+      const lot = await this.prisma.lot.findUnique({
+        where: { id: pending.originLotId },
+        select: { lat: true, lng: true, field: { select: { lat: true, lng: true } } },
+      });
+      if (lot) {
+        const lat = lot.lat || lot.field?.lat;
+        const lng = lot.lng || lot.field?.lng;
+        if (lat && lng) {
+          dto.overrideOriginLat = Number(lat);
+          dto.overrideOriginLng = Number(lng);
+        }
+      }
+    } else {
       dto.customOriginName = pending.customOriginName || 'Origen WhatsApp';
-      dto.overrideOriginLat = -34.0;
-      dto.overrideOriginLng = -56.0;
+      if (pending.customOriginLat && pending.customOriginLng) {
+        dto.overrideOriginLat = pending.customOriginLat;
+        dto.overrideOriginLng = pending.customOriginLng;
+      } else {
+        dto.overrideOriginLat = -34.0;
+        dto.overrideOriginLng = -56.0;
+      }
+    }
+
+    // Destination coordinates from WhatsApp location
+    if (pending.customDestLat && pending.customDestLng) {
+      dto.overrideDestLat = pending.customDestLat;
+      dto.overrideDestLng = pending.customDestLng;
+    }
+
+    // Own fleet truck assignment
+    if (pending.truckId) {
+      dto.truckId = pending.truckId;
     }
 
     console.log(`[AI] Creating freight with DTO:`, JSON.stringify(dto).slice(0, 300));
@@ -640,6 +793,174 @@ OTRAS INSTRUCCIONES:
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
     await this.freights.cancel(freight.id, { reason: input.reason } as any, synUser);
     return JSON.stringify({ status: 'canceled', code: freight.code });
+  }
+
+  // ======================== FIELD & LOT TOOLS ===========================
+
+  // ---- list_fields ----
+  private async toolListFields(user: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    const fields = await this.prisma.field.findMany({
+      where: { companyId: producerCompanyId, active: true },
+      include: { lots: { where: { active: true } } },
+      orderBy: { name: 'asc' },
+    });
+
+    if (fields.length === 0) {
+      return JSON.stringify({ total: 0, fields: [], message: 'No hay campos registrados. Podes crear uno con create_field.' });
+    }
+
+    const result = fields.map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      address: f.address,
+      lat: f.lat ? Number(f.lat) : null,
+      lng: f.lng ? Number(f.lng) : null,
+      lots: f.lots.map((l: any) => ({
+        id: l.id,
+        name: l.name,
+        hectares: l.hectares ? Number(l.hectares) : null,
+        lat: l.lat ? Number(l.lat) : null,
+        lng: l.lng ? Number(l.lng) : null,
+      })),
+    }));
+
+    return JSON.stringify({ total: fields.length, fields: result });
+  }
+
+  // ---- create_field ----
+  private async toolCreateField(input: any, user: any, session: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
+
+    // Use lastLocation from WhatsApp if no lat/lng provided
+    if (!input.lat || !input.lng) {
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const state = (freshSession?.flowState as any) || {};
+      if (state.lastLocation) {
+        input.lat = input.lat || state.lastLocation.lat;
+        input.lng = input.lng || state.lastLocation.lng;
+      }
+    }
+
+    const field = await this.fieldsService.createField(producerSynUser, {
+      name: input.name,
+      address: input.address || null,
+      lat: input.lat || null,
+      lng: input.lng || null,
+    });
+
+    return JSON.stringify({
+      status: 'created',
+      field: { id: field.id, name: field.name, lat: field.lat ? Number(field.lat) : null, lng: field.lng ? Number(field.lng) : null },
+      message: `Campo "${field.name}" creado. Podes agregar lotes con create_lot usando fieldId: ${field.id}`,
+    });
+  }
+
+  // ---- create_lot ----
+  private async toolCreateLot(input: any, user: any, session: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
+
+    // Use lastLocation from WhatsApp if no lat/lng provided
+    if (!input.lat || !input.lng) {
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const state = (freshSession?.flowState as any) || {};
+      if (state.lastLocation) {
+        input.lat = input.lat || state.lastLocation.lat;
+        input.lng = input.lng || state.lastLocation.lng;
+      }
+    }
+
+    const lot = await this.fieldsService.createLot(producerSynUser, input.fieldId, {
+      name: input.name,
+      hectares: input.hectares || null,
+      lat: input.lat || null,
+      lng: input.lng || null,
+    });
+
+    return JSON.stringify({
+      status: 'created',
+      lot: { id: lot.id, name: lot.name, fieldId: input.fieldId, hectares: lot.hectares ? Number(lot.hectares) : null },
+      message: `Lote "${lot.name}" creado en el campo.`,
+    });
+  }
+
+  // ======================== TRUCK TOOLS ==================================
+
+  // ---- list_trucks ----
+  private async toolListTrucks(user: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    const trucks = await this.trucksService.list(synUser);
+
+    if ((trucks as any[]).length === 0) {
+      return JSON.stringify({ total: 0, trucks: [], message: 'No hay camiones registrados. Podes crear uno con create_truck.' });
+    }
+
+    const result = (trucks as any[]).map((t: any) => ({
+      id: t.id,
+      plate: t.plate,
+      model: t.model,
+      driver: t.assignedUser ? t.assignedUser.name : null,
+    }));
+
+    return JSON.stringify({ total: result.length, trucks: result });
+  }
+
+  // ---- create_truck ----
+  private async toolCreateTruck(input: any, user: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    const truck = await this.trucksService.create(
+      { plate: input.plate, model: input.model || null } as any,
+      synUser,
+    );
+
+    return JSON.stringify({
+      status: 'created',
+      truck: { id: (truck as any).id, plate: (truck as any).plate, model: (truck as any).model },
+      message: `Camion ${(truck as any).plate} registrado.`,
+    });
+  }
+
+  // ======================== USER TOOLS ===================================
+
+  // ---- create_user ----
+  private async toolCreateUser(input: any, user: any): Promise<string> {
+    // Check that requesting user is admin/gerente
+    const userRole = user.role || '';
+    const memberRoles = user.memberships?.map((m: any) => m.role) || [];
+    const allRoles = [userRole, ...memberRoles];
+    const isAdmin = allRoles.some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r)) || user.isSuperAdmin;
+
+    if (!isAdmin) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden crear usuarios.' });
+    }
+
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    const companyType = this.resolveCompanyType(user);
+    const primaryType = companyType.split(',')[0]?.trim() || 'producer';
+
+    const role = input.role || 'operario';
+    const dto: any = {
+      name: input.name,
+      email: input.email,
+      password: input.password,
+      phone: input.phone || null,
+      role,
+      companyId: producerCompanyId,
+      userTypes: [primaryType],
+      companyByType: { [primaryType]: producerCompanyId },
+      roleByType: { [primaryType]: role },
+    };
+
+    const newUser = await this.adminService.createUser(dto);
+    return JSON.stringify({
+      status: 'created',
+      user: { id: (newUser as any).id, name: (newUser as any).name, email: (newUser as any).email, role },
+      message: `Usuario "${input.name}" creado con rol ${role}.`,
+    });
   }
 
   // ======================== HELPERS =====================================

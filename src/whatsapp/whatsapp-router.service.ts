@@ -97,8 +97,10 @@ export class WhatsAppRouterService {
         await this.handleListReply(phone, user, payload.id, payload.title);
       } else if (type === 'text') {
         await this.handleText(phone, user, payload.body || '');
+      } else if (type === 'location') {
+        await this.handleLocation(phone, user, payload);
       } else {
-        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto. Escribi *menu* para ver las opciones.');
+        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto y ubicaciones. Escribi *menu* para ver las opciones.');
       }
     } catch (e) {
       this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
@@ -195,6 +197,47 @@ export class WhatsAppRouterService {
       );
       await this.showMainMenu(phone, user);
     }
+  }
+
+  // ======================== LOCATION HANDLER ==============================
+
+  private async handleLocation(phone: string, user: any, payload: any) {
+    const { latitude, longitude, name, address } = payload;
+
+    // Save location in AI session for later use (create_field, create_lot, prepare_freight)
+    let session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (!session) {
+      session = await this.prisma.whatsAppSession.create({
+        data: {
+          userId: user.id,
+          phone: this.wa.normalizePhone(phone),
+          flowType: null,
+          flowStep: '0',
+          flowState: {},
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      });
+    }
+
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          lastLocation: { lat: latitude, lng: longitude, name: name || '', address: address || '' },
+        },
+      },
+    });
+
+    // Forward as text to AI so Claude knows the user shared a location
+    const locationDesc = name || address || `${latitude}, ${longitude}`;
+    const textForAi = `[Ubicacion compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
+    await this.handleAiChat(phone, user, textForAi);
   }
 
   // ======================== BUTTON REPLY HANDLER ========================
