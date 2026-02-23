@@ -427,48 +427,191 @@ export class WhatsAppRouterService {
 
   async showMainMenu(phone: string, user: any) {
     const name = user.name?.split(' ')[0] || 'usuario';
+    const role = this.getUserRole(user);
+    const companyName = user.company?.name || '';
+    const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
+    const tag = companyName ? `${companyName}${roleLabel ? ` · ${roleLabel}` : ''}` : '';
+
+    const greeting = `Hola *${name}*! Soy el asistente de *Tolvink* 🌾` +
+      (tag ? `\n_${tag}_` : '') +
+      `\n\n`;
+
+    const features = this.getRoleFeatureSummary(role);
 
     await this.wa.sendButtons(phone,
-      `Hola ${name}! Soy el asistente de *Tolvink*.\n\n` +
-      `Que necesitas hacer?\n\n📱 ${APP_URL}`,
-      [
-        { id: 'active_freights', title: 'MIS FLETES' },
-        { id: 'create_freight', title: 'CREAR FLETE' },
-        { id: 'show_help', title: 'AYUDA' },
-      ],
+      greeting + features + `\nEscribi lo que necesitas o usa los botones:`,
+      this.getRoleMenuButtons(role),
     );
   }
 
   // ======================== SHOW HELP ==================================
 
   private async showHelp(phone: string, user: any) {
-    const name = user.name?.split(' ')[0] || 'usuario';
+    const role = this.getUserRole(user);
 
-    await this.wa.sendText(phone,
-      `*Ayuda de Tolvink* 📋\n` +
-      `━━━━━━━━━━━━━━━\n\n` +
-      `*Comandos disponibles:*\n` +
-      `• Escribi *menu* → ver opciones principales\n` +
-      `• Escribi *crear* → crear un nuevo flete\n` +
-      `• Escribi *fletes* → ver tus fletes activos\n` +
-      `• Escribi un codigo (ej: *FLT-0001*) → ver detalle de un flete\n` +
-      `• Escribi *cancelar* → salir de cualquier operacion en curso\n\n` +
-      `*Que puedo hacer:*\n` +
-      `📦 Crear fletes con grano, toneladas, planta y fecha\n` +
-      `📋 Ver el estado de tus fletes activos\n` +
-      `✅ Aceptar o rechazar asignaciones\n` +
-      `🚛 Iniciar viajes y confirmar cargas/entregas\n` +
-      `❌ Cancelar fletes\n\n` +
-      `Si necesitas mas ayuda, contactanos en la app:\n${APP_URL}`,
-    );
+    const header = `*Guia de Tolvink por WhatsApp* 📋\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    const commands =
+      `*Atajos rapidos:*\n` +
+      `• *menu* → volver al inicio\n` +
+      `• *crear* → crear flete nuevo\n` +
+      `• *fletes* → ver tus fletes activos\n` +
+      `• *FLT-0001* → ver detalle de un flete\n` +
+      `• *cancelar* → salir de una operacion\n\n`;
+
+    const roleSection = this.getRoleHelpSection(role);
+
+    const tips =
+      `\n*Tips:*\n` +
+      `💬 Podes escribir en lenguaje natural\n` +
+      `🎤 Tambien acepto mensajes de voz\n` +
+      `📍 Comparti ubicacion para origen/destino\n` +
+      `📄 Pedi un _informe PDF_ de cualquier flete\n` +
+      `🗺️ Pedi un _link de seguimiento_ en vivo\n\n` +
+      `📱 App completa: ${APP_URL}`;
+
+    await this.wa.sendText(phone, header + commands + roleSection + tips);
 
     await this.wa.sendButtons(phone,
       'Que queres hacer?',
-      [
-        { id: 'active_freights', title: 'MIS FLETES' },
+      this.getRoleMenuButtons(role),
+    );
+  }
+
+  // ======================== ROLE HELPERS ================================
+
+  private getUserRole(user: any): string {
+    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
+    if (userTypes.length > 0) return userTypes[0];
+    if (user.company?.type) return user.company.type;
+    if (user.memberships?.length > 0) {
+      const co = user.memberships[0].company;
+      const types = Array.isArray(co?.types) && co.types.length > 0 ? co.types : [co?.type];
+      return types[0] || 'unknown';
+    }
+    return 'unknown';
+  }
+
+  private getRoleFeatureSummary(role: string): string {
+    if (role === 'producer') {
+      return (
+        `*Lo que podes hacer:*\n` +
+        `📦 Crear fletes (grano, toneladas, planta, fecha)\n` +
+        `🚛 Gestionar tu flota propia\n` +
+        `📋 Ver estado de tus fletes en tiempo real\n` +
+        `✅ Confirmar cargas de flota propia\n` +
+        `🗺️ Seguimiento en vivo de camiones\n` +
+        `📄 Descargar informes PDF\n` +
+        `🌾 Administrar campos y lotes\n` +
+        `👥 Gestionar equipo (admin)\n\n`
+      );
+    }
+    if (role === 'plant') {
+      return (
+        `*Lo que podes hacer:*\n` +
+        `📋 Ver fletes pendientes de asignacion\n` +
+        `🚛 Asignar transportistas a fletes\n` +
+        `✅ Confirmar recepciones y entregas\n` +
+        `🗺️ Seguimiento en vivo de camiones\n` +
+        `📄 Descargar informes PDF\n` +
+        `👥 Gestionar equipo (admin)\n\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `*Lo que podes hacer:*\n` +
+        `📋 Ver fletes asignados\n` +
+        `✅ Aceptar o rechazar asignaciones\n` +
+        `🚛 Iniciar viajes\n` +
+        `📦 Confirmar carga (con toneladas reales)\n` +
+        `🏁 Confirmar entrega en destino\n` +
+        `🗺️ Seguimiento en vivo\n` +
+        `📄 Descargar informes PDF\n` +
+        `👥 Gestionar choferes y camiones\n\n`
+      );
+    }
+    // Generic fallback
+    return (
+      `*Lo que podes hacer:*\n` +
+      `📦 Crear y gestionar fletes\n` +
+      `📋 Ver estado de fletes en tiempo real\n` +
+      `✅ Confirmar cargas y entregas\n` +
+      `🗺️ Seguimiento en vivo\n` +
+      `📄 Descargar informes PDF\n\n`
+    );
+  }
+
+  private getRoleMenuButtons(role: string): Array<{ id: string; title: string }> {
+    if (role === 'producer') {
+      return [
         { id: 'create_freight', title: 'CREAR FLETE' },
-        { id: 'menu', title: 'VOLVER AL MENU' },
-      ],
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'show_help', title: 'GUIA COMPLETA' },
+      ];
+    }
+    if (role === 'plant') {
+      return [
+        { id: 'active_freights', title: 'FLETES PENDIENTES' },
+        { id: 'show_help', title: 'GUIA COMPLETA' },
+      ];
+    }
+    if (role === 'transporter') {
+      return [
+        { id: 'active_freights', title: 'MIS ASIGNACIONES' },
+        { id: 'show_help', title: 'GUIA COMPLETA' },
+      ];
+    }
+    return [
+      { id: 'active_freights', title: 'MIS FLETES' },
+      { id: 'create_freight', title: 'CREAR FLETE' },
+      { id: 'show_help', title: 'GUIA COMPLETA' },
+    ];
+  }
+
+  private getRoleHelpSection(role: string): string {
+    if (role === 'producer') {
+      return (
+        `*Funciones de Productor:*\n` +
+        `📦 *Crear flete* → decime el grano, toneladas, planta y fecha\n` +
+        `   _Ej: "quiero mandar 60 tn de soja a Cargill mañana 8am"_\n` +
+        `🌾 *Campos y lotes* → "mostrame mis campos" / "crear campo"\n` +
+        `🚛 *Flota propia* → asigna tus camiones al crear\n` +
+        `✅ *Confirmar carga* → cuando tu flota carga en origen\n` +
+        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
+        `🗺️ *Tracking* → "donde esta el FLT-XXXX?"\n` +
+        `👥 *Equipo* → "mostrame los usuarios" / "crear chofer"\n\n`
+      );
+    }
+    if (role === 'plant') {
+      return (
+        `*Funciones de Planta:*\n` +
+        `📋 *Ver fletes* → "fletes pendientes" / "mis fletes"\n` +
+        `🚛 *Asignar transportista* → "asignar transportista al FLT-XXXX"\n` +
+        `✅ *Confirmar recepcion* → cuando el camion llega a planta\n` +
+        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
+        `🗺️ *Tracking* → "donde esta el FLT-XXXX?"\n` +
+        `👥 *Equipo* → "mostrame los usuarios"\n\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `*Funciones de Transportista:*\n` +
+        `📋 *Ver asignaciones* → "mis fletes" / "fletes asignados"\n` +
+        `✅ *Aceptar/rechazar* → cuando te asignan un flete\n` +
+        `🚛 *Iniciar viaje* → "iniciar viaje del FLT-XXXX"\n` +
+        `📦 *Confirmar carga* → con toneladas reales cargadas\n` +
+        `🏁 *Confirmar entrega* → al llegar a destino\n` +
+        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
+        `👥 *Equipo* → "mis choferes" / "mis camiones"\n\n`
+      );
+    }
+    return (
+      `*Funciones disponibles:*\n` +
+      `📦 Crear y gestionar fletes\n` +
+      `📋 Ver estado de fletes\n` +
+      `✅ Confirmar cargas y entregas\n` +
+      `📊 Descargar informes PDF\n` +
+      `🗺️ Seguimiento en vivo\n\n`
     );
   }
 
