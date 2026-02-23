@@ -4,10 +4,11 @@ import { WhatsAppController } from './whatsapp.controller';
 import { WhatsAppRouterService } from './whatsapp-router.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsModule } from '../freights/freights.module';
+import { AiModule } from '../ai/ai.module';
 import { PrismaService } from '../database/prisma.service';
 
 @Module({
-  imports: [FreightsModule],
+  imports: [FreightsModule, AiModule],
   controllers: [WhatsAppController],
   providers: [
     PrismaService,

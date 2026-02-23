@@ -8,6 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
+import { AiService } from '../ai/ai.service';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -42,6 +43,7 @@ export class WhatsAppRouterService {
     private wa: WhatsAppService,
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
+    private ai: AiService,
   ) {}
 
   // ======================== MAIN ENTRY POINT ============================
@@ -109,13 +111,25 @@ export class WhatsAppRouterService {
   private async handleText(phone: string, user: any, text: string) {
     const t = text.trim();
 
-    // Freight code lookup
+    // Fast path: freight code lookup (no AI needed)
     if (/^FLT-\d{4,}$/i.test(t)) {
       await this.showFreightByCode(phone, user, t.toUpperCase());
       return;
     }
 
-    // Intent matching
+    // Fast path: explicit menu/hola commands
+    if (/^(menu|inicio|hola|hi)$/i.test(t)) {
+      await this.showMainMenu(phone, user);
+      return;
+    }
+
+    // AI-powered handler for all other text
+    if (this.ai.isEnabled()) {
+      await this.handleAiChat(phone, user, t);
+      return;
+    }
+
+    // Fallback: regex intent matching (when AI disabled)
     if (/^(estado|status|mis fletes|fletes)$/i.test(t)) {
       await this.showActiveFreights(phone, user);
       return;
@@ -126,13 +140,60 @@ export class WhatsAppRouterService {
       return;
     }
 
-    if (/^(ayuda|help|menu|hola|hi|inicio)$/i.test(t)) {
-      await this.showMainMenu(phone, user);
+    if (/^(ayuda|help)$/i.test(t)) {
+      await this.showHelp(phone, user);
       return;
     }
 
     // Default: show menu
     await this.showMainMenu(phone, user);
+  }
+
+  // ======================== AI CHAT HANDLER ==============================
+
+  private async handleAiChat(phone: string, user: any, text: string) {
+    try {
+      // Find or create an AI session (flowType = null)
+      let session = await this.prisma.whatsAppSession.findFirst({
+        where: {
+          userId: user.id,
+          flowType: null,
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (!session) {
+        session = await this.prisma.whatsAppSession.create({
+          data: {
+            userId: user.id,
+            phone: this.wa.normalizePhone(phone),
+            flowType: null,
+            flowStep: '0',
+            flowState: {},
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 min
+          },
+        });
+      }
+
+      const reply = await this.ai.chat(phone, text, user, session);
+
+      // Split long messages (WhatsApp max ~4096 chars per message)
+      if (reply.length > 4000) {
+        const chunks = reply.match(/[\s\S]{1,4000}/g) || [reply];
+        for (const chunk of chunks) {
+          await this.wa.sendText(phone, chunk);
+        }
+      } else {
+        await this.wa.sendText(phone, reply);
+      }
+    } catch (e) {
+      this.logger.error(`AI chat error: ${e.message}`);
+      await this.wa.sendText(phone,
+        'Estoy teniendo problemas tecnicos. Usa los botones del menu.',
+      );
+      await this.showMainMenu(phone, user);
+    }
   }
 
   // ======================== BUTTON REPLY HANDLER ========================
