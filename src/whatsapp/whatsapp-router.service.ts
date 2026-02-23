@@ -108,7 +108,12 @@ export class WhatsAppRouterService {
       } else if (type === 'list_reply') {
         await this.handleListReply(phone, user, payload.id, payload.title);
       } else if (type === 'text') {
-        await this.handleText(phone, user, payload.body || '');
+        // Detect forwarded messages and tag them for AI context
+        let textBody = payload.body || '';
+        if (payload.forwarded) {
+          textBody = `[Mensaje reenviado] ${textBody}`;
+        }
+        await this.handleText(phone, user, textBody);
       } else if (type === 'location') {
         await this.handleLocation(phone, user, payload);
       } else if (type === 'audio') {
@@ -126,6 +131,23 @@ export class WhatsAppRouterService {
 
   private async handleText(phone: string, user: any, text: string) {
     const t = text.trim();
+
+    // Edge case: empty or whitespace-only message
+    if (!t) return;
+
+    // Edge case: emoji-only message (1-4 emojis, no text)
+    const emojiOnly = /^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\s]{1,16}$/u.test(t) && !/[a-zA-Z0-9]/.test(t);
+    if (emojiOnly && this.ai.isEnabled()) {
+      // Forward to AI with context so it can interpret naturally
+      await this.handleAiChat(phone, user, `[El usuario envio solo emojis: ${t}]`);
+      return;
+    }
+
+    // Edge case: very short message (1-2 chars, not a command)
+    if (t.length <= 2 && !/^(si|no|ok)$/i.test(t) && this.ai.isEnabled()) {
+      await this.handleAiChat(phone, user, t);
+      return;
+    }
 
     // Fast path: freight code lookup (no AI needed)
     if (/^FLT-\d{4,}$/i.test(t)) {
@@ -257,10 +279,7 @@ export class WhatsAppRouterService {
   // ======================== AUDIO HANDLER =================================
 
   private async handleAudio(phone: string, user: any, payload: any) {
-    console.log(`[WA-AUDIO] handleAudio called. openai=${!!this.openai} mediaId=${payload?.mediaId} mimeType=${payload?.mimeType}`);
-
     if (!this.openai) {
-      console.log(`[WA-AUDIO] OpenAI client is NULL — OPENAI_API_KEY present: ${!!process.env.OPENAI_API_KEY}`);
       await this.wa.sendText(phone, 'El procesamiento de audio no esta disponible. Envia tu mensaje como texto.');
       return;
     }
@@ -270,6 +289,17 @@ export class WhatsAppRouterService {
 
       // Download audio from Meta
       const { buffer, mimeType } = await this.wa.downloadMedia(payload.mediaId);
+
+      // Size check: Whisper API limit is 25MB, WhatsApp max ~16MB
+      const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB safety margin
+      if (buffer.length > MAX_AUDIO_BYTES) {
+        this.logger.warn(`Audio too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB from ${phone}`);
+        await this.wa.sendText(phone, 'El audio es demasiado largo. Envia un mensaje mas corto (menos de 2 minutos) o escribi como texto.');
+        return;
+      }
+      if (buffer.length > 10 * 1024 * 1024) {
+        this.logger.warn(`Large audio (${(buffer.length / 1024 / 1024).toFixed(1)}MB) from ${phone}`);
+      }
 
       // Map MIME type to file extension for Whisper
       const ext = mimeType.includes('ogg') ? 'ogg'
@@ -294,8 +324,11 @@ export class WhatsAppRouterService {
 
       this.logger.log(`Audio transcribed (${buffer.length} bytes): "${text.slice(0, 100)}"`);
 
-      // Pass transcription to AI chat (same pipeline as text messages)
-      await this.handleAiChat(phone, user, text);
+      // Tag as audio-sourced so AI knows to handle filler words/noise
+      const taggedText = `[Audio transcripto] ${text}`;
+
+      // Pass transcription to AI chat (preprocessing in ai.service strips fillers)
+      await this.handleAiChat(phone, user, taggedText);
     } catch (e) {
       this.logger.error(`Audio processing error: ${e.message}`, e.stack?.slice(0, 300));
       await this.wa.sendText(phone, 'No pude procesar el audio. Intenta de nuevo o envia un mensaje de texto.');

@@ -12,10 +12,23 @@ import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
 import Anthropic from '@anthropic-ai/sdk';
 
-const MAX_HISTORY = 40;
+const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
 const APP_URL = 'https://tolvink.vercel.app';
+
+// Model configuration — Claude Haiku 4.5
+// NOTE: Anthropic API supports temperature, top_p, top_k.
+// It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
+// temperature 0.3  → precise, factual responses; not 0 to preserve natural language.
+// max_tokens 800   → enforces WhatsApp-friendly length (~600 chars español).
+const MODEL_TEMPERATURE = 0.3;
+const MODEL_MAX_TOKENS = 800;
+const MAX_RESPONSE_CHARS = 1500;   // Hard cap before truncation
+const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
+
+// Audio filler words common in River Plate Spanish voice transcriptions
+const AUDIO_FILLERS = /\b(eh+|ehmm*|emm*|mmm*|a+h+|este+|o sea|digamos|nada|viste|tipo|bue+no|dale|claro)\b[,.]?\s*/gi;
 
 @Injectable()
 export class AiService {
@@ -59,15 +72,28 @@ export class AiService {
     const companyType = this.resolveCompanyType(user);
     const systemPrompt = this.buildSystemPrompt(user, companyType);
 
+    // Preprocess: clean audio fillers, normalize whitespace
+    const cleanedMessage = this.preprocessMessage(userMessage);
+
     // Load conversation history from session
     const state = (session?.flowState as any) || {};
     const aiMessages: any[] = state.aiMessages || [];
 
-    // Add user message
-    aiMessages.push({ role: 'user', content: userMessage });
+    // Stale session detection: inject context note if conversation paused
+    let messageToSend = cleanedMessage;
+    const lastMsgTime = state.lastMessageAt ? new Date(state.lastMessageAt).getTime() : 0;
+    if (lastMsgTime && aiMessages.length > 0) {
+      const minutesGap = (Date.now() - lastMsgTime) / 60000;
+      if (minutesGap > STALE_SESSION_MIN) {
+        messageToSend = `[Sistema: pasaron ${Math.round(minutesGap)} min desde el ultimo mensaje. El usuario puede estar retomando o cambiando de tema.]\n\n${cleanedMessage}`;
+      }
+    }
 
-    // Trim to last N messages
-    const trimmed = aiMessages.slice(-MAX_HISTORY);
+    // Add user message
+    aiMessages.push({ role: 'user', content: messageToSend });
+
+    // Smart trim: keep recent messages + preserve tool results from older ones
+    const trimmed = this.smartTrimHistory(aiMessages);
 
     let response: any;
     let loopCount = 0;
@@ -80,7 +106,8 @@ export class AiService {
         console.log(`[AI] Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         response = await this.client.messages.create({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1024,
+          max_tokens: MODEL_MAX_TOKENS,
+          temperature: MODEL_TEMPERATURE,
           system: systemPrompt,
           tools: this.tools as any,
           messages: currentMessages,
@@ -113,7 +140,10 @@ export class AiService {
 
       // Extract text response
       const textBlocks = response.content.filter((b: any) => b.type === 'text');
-      const finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No pude procesar tu mensaje.';
+      let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No pude procesar tu mensaje.';
+
+      // Post-process: validate quality, strip UUIDs, enforce length
+      finalText = this.validateResponse(finalText);
 
       // Save updated history — reload session first to preserve tool-written state (e.g. pendingFreight)
       currentMessages.push({ role: 'assistant', content: response.content });
@@ -127,6 +157,7 @@ export class AiService {
           flowState: {
             ...latestState,
             aiMessages: currentMessages.slice(-MAX_HISTORY),
+            lastMessageAt: new Date().toISOString(),
           },
           expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
         },
@@ -146,55 +177,118 @@ export class AiService {
     const name = user.name?.split(' ')[0] || 'usuario';
     const today = new Date().toISOString().split('T')[0];
 
-    return `Sos Tolvink, asistente virtual de gestion de fletes de granos por WhatsApp.
-Hablas español rioplatense (vos, sos, tenes). Se conciso — esto es WhatsApp.
-Usa emojis con moderacion. No uses markdown de enlaces.
+    return `Sos Tolvink, asistente de gestion de fletes de granos por WhatsApp.
 
-USUARIO: ${name} | Empresa: ${companyType} | Hoy: ${today}
+USUARIO: ${name} | Tipo: ${companyType} | Fecha: ${today}
 
-ESTADOS DE UN FLETE:
-pending_assignment → assigned → accepted → in_progress → loaded → finished (o canceled)
+═══ REGLAS DE COMUNICACION (OBLIGATORIAS) ═══
 
-REGLAS:
-- Solo productores pueden crear fletes
-- Solo transportistas/choferes: aceptar, rechazar, iniciar viaje, confirmar carga/entrega
-- Rechazar o cancelar requiere motivo
-- No se puede cancelar si esta in_progress o loaded
-- Confirmar carga requiere toneladas reales
+FORMATO WHATSAPP:
+- Respuestas CORTAS: 2-4 lineas para consultas simples.
+- Listas: maximo 5 items, una linea por item.
+- Negritas *asi* solo para datos clave (codigo, estado, fecha, toneladas).
+- Maximo 2 emojis por mensaje.
+- NUNCA uses markdown de enlaces [text](url). Pega URLs limpias.
+- NUNCA envies parrafos largos. Si hay mucha info, usa bullets cortos.
 
+TONO:
+- Español rioplatense: vos, sos, tenes, podes, escribi, deci.
+- Profesional pero directo. Sin rodeos. Sin formalidades excesivas.
+- NO uses disclaimers ("cabe mencionar", "es importante notar", "vale aclarar").
+- NO saludes si ya saludaste en esta conversacion.
+- NO repitas informacion que ya diste en mensajes anteriores.
+
+═══ REGLAS ANTI-ALUCINACION (CRITICAS) ═══
+
+1. SOLO afirma datos que vengan de resultados de herramientas. NUNCA inventes.
+2. Si una herramienta devuelve error o vacio, DECILO. No improvises datos.
+3. NUNCA inventes codigos FLT-XXXX, nombres de plantas, toneladas, fechas, patentes.
+4. NUNCA confirmes que una accion se ejecuto si la herramienta no lo hizo.
+5. Si no tenes la informacion, deci "no tengo esa informacion" en UNA linea.
+6. Si no estas seguro de lo que pide el usuario, pregunta antes de actuar.
+7. NUNCA expongas UUIDs internos. Solo codigos FLT-XXXX.
+8. Si la entrada es de audio transcripto, puede tener errores o muletillas. Interpreta la INTENCION, ignora el ruido verbal.
+
+═══ MANEJO DE INCERTIDUMBRE ═══
+
+- Falta 1 dato → pregunta ESE dato puntualmente.
+- Faltan 2+ datos → pregunta todos juntos en una lista con bullets.
+- Pregunta ambigua → hace UNA pregunta de clarificacion directa.
+- Cambio de tema → segui el nuevo tema sin mezclar con el anterior.
+- Si el usuario dice algo irrelevante o confuso → pedi que aclare en una linea.
+
+═══ PRIORIDAD DE CONTEXTO ═══
+
+1. Ultimo mensaje del usuario (maxima prioridad).
+2. Datos de operacion en curso (flete pendiente, ubicacion guardada).
+3. Resultados de herramientas ejecutadas (datos facticos).
+4. Historial de conversacion (solo como referencia, no repetir).
+
+═══ DOMINIO: FLETES DE GRANOS ═══
+
+ESTADOS: pending_assignment → assigned → accepted → in_progress → loaded → finished (o canceled)
 GRANOS: Soja, Maiz, Trigo, Girasol, Sorgo, Cebada, Otros
 
-INSTRUCCIONES CRITICAS PARA CREAR FLETES:
-1. Primero usa search_plants y list_lots (o list_fields) para resolver IDs si es posible.
+PERMISOS:
+- Productores: crear fletes, ver sus fletes, gestionar campos/lotes/camiones.
+- Plantas: asignar transportistas, asignar camiones, confirmar recepcion (loaded → finished).
+- Transportistas/Choferes: aceptar, rechazar, iniciar viaje, confirmar carga/entrega.
+- Rechazar/cancelar SIEMPRE requiere motivo.
+- NO se puede cancelar en estado in_progress o loaded.
+- Confirmar carga requiere toneladas reales cargadas.
+
+═══ CREAR FLETES (INSTRUCCIONES CRITICAS) ═══
+
+1. Resolvi IDs primero: usa search_plants y list_lots (o list_fields).
 2. Llama prepare_freight con los datos. Esto NO crea el flete, solo lo prepara.
-3. Mostra el resumen al usuario y pregunta "¿Confirmás?"
-4. Cuando el usuario diga "si", "dale", "confirmar", "ok" o similar, DEBES llamar la herramienta confirm_create_freight. NUNCA digas que el flete fue creado sin llamar a confirm_create_freight. El flete NO existe hasta que llames esa herramienta.
-5. Si falta info, pregunta solo lo que falta. NO inventes datos.
+3. Mostra el resumen y pregunta "Confirmas?"
+4. Cuando confirme (si/dale/ok/confirmar) → OBLIGATORIO llamar confirm_create_freight.
+   SIN esta llamada el flete NO existe. NUNCA digas que se creo sin llamarla.
+5. Si falta info, pregunta SOLO lo que falta. NO asumas valores.
 
 FLOTA PROPIA:
-- Si el productor quiere usar su propia flota, usa list_trucks para mostrar camiones disponibles.
-- Incluí truckId en prepare_freight para asignar flota propia al flete.
+- list_trucks para ver camiones. Incluir truckId en prepare_freight.
 
 UBICACIONES:
-- Si el usuario comparte una ubicacion de WhatsApp, se guarda automaticamente en la sesion.
-- Para ubicaciones precisas, usa generate_location_link para enviar un link al mapa de Google Maps.
-- El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan en la sesion.
-- Despues de que confirme, la ubicacion se usa automaticamente en create_field, create_lot, o prepare_freight.
-- Cuando el usuario pida un origen o destino personalizado, o crear un campo/lote con ubicacion, ofrece el link del mapa.
+- Ubicacion de WhatsApp compartida → se guarda automaticamente en sesion.
+- Para ubicacion precisa → generate_location_link (link al mapa).
+- Despues de confirmar en el mapa, se usa automaticamente.
 
-CAMPOS, LOTES Y CAMIONES:
-- Usa list_fields para ver campos y lotes existentes con sus IDs.
-- Podes crear campos con create_field y lotes con create_lot.
-- Podes registrar camiones con create_truck.
+CAMPOS Y LOTES:
+- list_fields para existentes. create_field / create_lot para nuevos.
 
 USUARIOS:
-- Solo admin/gerente puede crear usuarios con create_user.
-- Si el usuario no es admin, explica que necesita permisos.
+- Solo admin/gerente puede crear con create_user.
 
-OTRAS INSTRUCCIONES:
-- Nunca expongas UUIDs. Usa codigos FLT-XXXX.
-- Si hay error, traducilo a lenguaje amigable.
-- Link de la app: ${APP_URL}`;
+═══ ASIGNAR TRANSPORTISTA (SOLO PLANTAS) ═══
+
+1. El usuario de planta pide asignar transportista a un flete.
+2. Usa list_transporters para mostrar opciones disponibles.
+3. Cuando elija, mostra resumen: flete + transportista elegido.
+4. Pregunta "Confirmas la asignacion?"
+5. Solo cuando confirme → llama assign_transporter.
+6. Opcionalmente: list_trucks y list_drivers para asignar camion/chofer especifico.
+7. assign_truck_to_trip para cambiar camion de un viaje existente.
+8. Para fletes multi-camion, indicar que usen la app.
+
+═══ GESTIONAR EQUIPO ═══
+
+CONSULTAR (cualquier usuario):
+- list_company_users → miembros de la empresa con rol y estado.
+- list_drivers → choferes con camion asignado.
+
+MODIFICAR (solo admin/gerente):
+- update_user_role → cambiar rol (gerente/operario/chofer).
+  SIEMPRE confirmar: "Seguro que queres cambiar el rol de [nombre] a [rol]?"
+- deactivate_user → desactivar usuario de la empresa.
+  SIEMPRE confirmar: "Seguro que queres desactivar a [nombre]?"
+- NUNCA ejecutes acciones de modificacion sin confirmacion explicita.
+- NUNCA modifiques accesos si el usuario no es admin/gerente.
+
+═══ ERRORES ═══
+
+- Traduci errores tecnicos a lenguaje simple y amigable.
+- App: ${APP_URL}`;
   }
 
   // ======================== TOOL DEFINITIONS =============================
@@ -439,6 +533,85 @@ OTRAS INSTRUCCIONES:
         required: ['purpose'],
       },
     },
+    // ---- Transporter assignment (plant only) ----
+    {
+      name: 'list_transporters',
+      description: 'Lista las empresas transportistas disponibles. Solo para plantas.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'assign_transporter',
+      description: 'Asigna un transportista a un flete pendiente de asignacion. SOLO para plantas. IMPORTANTE: siempre mostra resumen y pregunta "Confirmas?" antes de ejecutar.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          transporterCompanyId: { type: 'string', description: 'ID de empresa transportista (de list_transporters)' },
+          truckId: { type: 'string', description: 'ID del camion (opcional, de list_trucks)' },
+          driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
+        },
+        required: ['code', 'transporterCompanyId'],
+      },
+    },
+    {
+      name: 'assign_truck_to_trip',
+      description: 'Asigna o cambia el camion de un viaje existente (asignacion activa/aceptada). Solo para plantas.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          truckId: { type: 'string', description: 'ID del camion (de list_trucks)' },
+          driverId: { type: 'string', description: 'ID del chofer (opcional)' },
+        },
+        required: ['code', 'truckId'],
+      },
+    },
+    // ---- Company team management ----
+    {
+      name: 'list_company_users',
+      description: 'Lista todos los usuarios de la empresa del usuario actual con roles y estado.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'list_drivers',
+      description: 'Lista los choferes de la empresa con camion asignado.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'update_user_role',
+      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. CRITICO: pregunta "Seguro que queres cambiar el rol de [nombre] a [rol]?" ANTES de ejecutar.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          userIdentifier: { type: 'string', description: 'Nombre o email del usuario' },
+          newRole: { type: 'string', enum: ['gerente', 'operario', 'chofer'], description: 'Nuevo rol' },
+        },
+        required: ['userIdentifier', 'newRole'],
+      },
+    },
+    {
+      name: 'deactivate_user',
+      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. CRITICO: pregunta "Seguro que queres desactivar a [nombre]?" ANTES de ejecutar.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          userIdentifier: { type: 'string', description: 'Nombre o email del usuario a desactivar' },
+        },
+        required: ['userIdentifier'],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -471,6 +644,13 @@ OTRAS INSTRUCCIONES:
         case 'create_truck': return await this.toolCreateTruck(input, user);
         case 'create_user': return await this.toolCreateUser(input, user);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
+        case 'list_transporters': return await this.toolListTransporters(user);
+        case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser);
+        case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser);
+        case 'list_company_users': return await this.toolListCompanyUsers(user);
+        case 'list_drivers': return await this.toolListDrivers(user);
+        case 'update_user_role': return await this.toolUpdateUserRole(input, user);
+        case 'deactivate_user': return await this.toolDeactivateUser(input, user);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -955,13 +1135,7 @@ OTRAS INSTRUCCIONES:
 
   // ---- create_user ----
   private async toolCreateUser(input: any, user: any): Promise<string> {
-    // Check that requesting user is admin/gerente
-    const userRole = user.role || '';
-    const memberRoles = user.memberships?.map((m: any) => m.role) || [];
-    const allRoles = [userRole, ...memberRoles];
-    const isAdmin = allRoles.some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r)) || user.isSuperAdmin;
-
-    if (!isAdmin) {
+    if (!this.isCallerAdmin(user)) {
       return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden crear usuarios.' });
     }
 
@@ -1029,6 +1203,367 @@ OTRAS INSTRUCCIONES:
     });
   }
 
+  // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================
+
+  // ---- list_transporters ----
+  private async toolListTransporters(user: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden listar transportistas.' });
+    }
+
+    const companies = await this.prisma.company.findMany({
+      where: { active: true },
+      select: { id: true, name: true, phone: true, type: true, types: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const transporters = companies.filter(c =>
+      c.type === 'transporter' ||
+      (Array.isArray(c.types) && (c.types as string[]).includes('transporter')),
+    ).slice(0, 15);
+
+    if (transporters.length === 0) {
+      return JSON.stringify({ total: 0, transporters: [], message: 'No hay transportistas disponibles.' });
+    }
+
+    return JSON.stringify({
+      total: transporters.length,
+      transporters: transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone })),
+    });
+  }
+
+  // ---- assign_transporter ----
+  private async toolAssignTransporter(input: any, user: any, synUser: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden asignar transportistas.' });
+    }
+
+    const freight = await this.resolveFreight(input.code);
+    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    const plantSynUser = {
+      ...synUser,
+      companyId: plantCompanyId,
+      companyType: 'plant',
+      userType: 'plant',
+    };
+
+    const dto: any = { transportCompanyId: input.transporterCompanyId };
+    if (input.truckId) dto.truckId = input.truckId;
+    if (input.driverId) dto.driverId = input.driverId;
+
+    await this.freights.assign(freight.id, dto, plantSynUser);
+
+    const transporter = await this.prisma.company.findUnique({
+      where: { id: input.transporterCompanyId },
+      select: { name: true },
+    });
+
+    return JSON.stringify({
+      status: 'done',
+      code: freight.code,
+      transporter: transporter?.name || 'Transportista',
+      message: `Transportista "${transporter?.name}" asignado a ${freight.code}.`,
+    });
+  }
+
+  // ---- assign_truck_to_trip ----
+  private async toolAssignTruckToTrip(input: any, user: any, synUser: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
+    }
+
+    const freight = await this.resolveFreight(input.code);
+    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+
+    const assignment = await this.prisma.freightAssignment.findFirst({
+      where: { freightId: freight.id, status: { in: ['active', 'accepted'] } },
+      select: { id: true },
+    });
+    if (!assignment) {
+      return JSON.stringify({ error: `${input.code} no tiene asignacion activa.` });
+    }
+
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    const plantSynUser = {
+      ...synUser,
+      companyId: plantCompanyId,
+      companyType: 'plant',
+      userType: 'plant',
+    };
+
+    const dto: any = { truckId: input.truckId };
+    if (input.driverId) dto.driverId = input.driverId;
+
+    await this.freights.updateAssignment(freight.id, assignment.id, dto, plantSynUser);
+
+    const truck = await this.prisma.truck.findUnique({
+      where: { id: input.truckId },
+      select: { plate: true, model: true },
+    });
+
+    return JSON.stringify({
+      status: 'done',
+      code: freight.code,
+      truck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : 'Asignado',
+      message: `Camion ${truck?.plate || ''} asignado a ${freight.code}.`,
+    });
+  }
+
+  // ======================== TEAM MANAGEMENT TOOLS =========================
+
+  // ---- list_company_users ----
+  private async toolListCompanyUsers(user: any): Promise<string> {
+    const companyIds: string[] = [];
+    if (user.activeCompanyId) companyIds.push(user.activeCompanyId);
+    else if (user.companyId) companyIds.push(user.companyId);
+
+    if (user.memberships?.length > 0) {
+      for (const m of user.memberships) {
+        if (m.companyId && !companyIds.includes(m.companyId)) {
+          companyIds.push(m.companyId);
+        }
+      }
+    }
+
+    if (companyIds.length === 0) {
+      return JSON.stringify({ error: 'No se encontro tu empresa.', users: [] });
+    }
+
+    const memberships = await this.prisma.userCompany.findMany({
+      where: { companyId: { in: companyIds }, active: true },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, active: true } },
+        company: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    });
+
+    const users = memberships
+      .filter(m => m.user.active)
+      .map(m => ({
+        name: m.user.name,
+        email: m.user.email,
+        phone: m.user.phone,
+        role: m.role,
+        company: m.company.name,
+      }));
+
+    return JSON.stringify({ total: users.length, users });
+  }
+
+  // ---- list_drivers ----
+  private async toolListDrivers(user: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    const drivers = await this.trucksService.listDrivers(synUser);
+
+    if ((drivers as any[]).length === 0) {
+      return JSON.stringify({ total: 0, drivers: [], message: 'No hay choferes registrados.' });
+    }
+
+    const result = await Promise.all((drivers as any[]).map(async (d: any) => {
+      const truck = await this.prisma.truck.findFirst({
+        where: { assignedUserId: d.id, active: true },
+        select: { plate: true, model: true },
+      });
+      return {
+        id: d.id,
+        name: d.name,
+        phone: d.phone,
+        assignedTruck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : null,
+      };
+    }));
+
+    return JSON.stringify({ total: result.length, drivers: result });
+  }
+
+  // ======================== ACCESS MANAGEMENT TOOLS ========================
+
+  // ---- update_user_role ----
+  private async toolUpdateUserRole(input: any, user: any): Promise<string> {
+    if (!this.isCallerAdmin(user)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden cambiar roles.' });
+    }
+
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) {
+      return JSON.stringify({ error: 'No se pudo determinar tu empresa.' });
+    }
+
+    const searchTerm = input.userIdentifier.trim();
+    const membership = await this.prisma.userCompany.findFirst({
+      where: {
+        companyId,
+        active: true,
+        user: {
+          active: true,
+          OR: [
+            { name: { contains: searchTerm, mode: 'insensitive' } },
+            { email: { equals: searchTerm, mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+
+    if (!membership) {
+      return JSON.stringify({ error: `No se encontro un usuario "${searchTerm}" en tu empresa.` });
+    }
+
+    if (membership.user.id === user.id) {
+      return JSON.stringify({ error: 'No podes cambiar tu propio rol.' });
+    }
+
+    await this.prisma.userCompany.update({
+      where: { id: membership.id },
+      data: { role: input.newRole },
+    });
+
+    const roleMapping: Record<string, string> = { gerente: 'admin', operario: 'operator', chofer: 'operator' };
+    await this.prisma.user.update({
+      where: { id: membership.user.id },
+      data: { role: (roleMapping[input.newRole] || 'operator') as any },
+    });
+
+    return JSON.stringify({
+      status: 'done',
+      user: membership.user.name,
+      newRole: input.newRole,
+      message: `Rol de "${membership.user.name}" cambiado a ${input.newRole}.`,
+    });
+  }
+
+  // ---- deactivate_user ----
+  private async toolDeactivateUser(input: any, user: any): Promise<string> {
+    if (!this.isCallerAdmin(user)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden desactivar usuarios.' });
+    }
+
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) {
+      return JSON.stringify({ error: 'No se pudo determinar tu empresa.' });
+    }
+
+    const searchTerm = input.userIdentifier.trim();
+    const membership = await this.prisma.userCompany.findFirst({
+      where: {
+        companyId,
+        active: true,
+        user: {
+          active: true,
+          OR: [
+            { name: { contains: searchTerm, mode: 'insensitive' } },
+            { email: { equals: searchTerm, mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+
+    if (!membership) {
+      return JSON.stringify({ error: `No se encontro un usuario activo "${searchTerm}" en tu empresa.` });
+    }
+
+    if (membership.user.id === user.id) {
+      return JSON.stringify({ error: 'No podes desactivarte a vos mismo.' });
+    }
+
+    await this.prisma.userCompany.update({
+      where: { id: membership.id },
+      data: { active: false },
+    });
+
+    const otherActive = await this.prisma.userCompany.count({
+      where: { userId: membership.user.id, active: true },
+    });
+    if (otherActive === 0) {
+      await this.prisma.user.update({
+        where: { id: membership.user.id },
+        data: { active: false },
+      });
+    }
+
+    return JSON.stringify({
+      status: 'done',
+      user: membership.user.name,
+      message: `Usuario "${membership.user.name}" desactivado de tu empresa.`,
+    });
+  }
+
+  // ======================== MESSAGE PREPROCESSING ========================
+
+  /** Clean audio transcription: strip filler words, normalize whitespace */
+  private preprocessMessage(text: string): string {
+    let clean = text
+      .replace(AUDIO_FILLERS, ' ')       // Strip filler words from voice
+      .replace(/\s{2,}/g, ' ')           // Collapse multiple spaces
+      .replace(/^[\s,.:;]+/, '')         // Trim leading punctuation artifacts
+      .trim();
+    return clean || text.trim();         // If cleaning removed everything, keep original
+  }
+
+  // ======================== RESPONSE VALIDATION ===========================
+
+  /** Post-process AI response: strip UUIDs, enforce length, quality check */
+  private validateResponse(text: string): string {
+    // 1. Strip UUID patterns that may have leaked through
+    let clean = text.replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+      '[ID interno]',
+    );
+
+    // 2. Enforce max length for WhatsApp-friendly responses
+    //    Exception: freight lists (contain FLT-) are allowed to be longer
+    if (clean.length > MAX_RESPONSE_CHARS && !clean.includes('FLT-')) {
+      // Find a natural break point (newline or sentence end)
+      const lineBreak = clean.lastIndexOf('\n', MAX_RESPONSE_CHARS);
+      if (lineBreak > MAX_RESPONSE_CHARS * 0.5) {
+        clean = clean.slice(0, lineBreak);
+      } else {
+        const sentenceBreak = clean.lastIndexOf('. ', MAX_RESPONSE_CHARS);
+        if (sentenceBreak > MAX_RESPONSE_CHARS * 0.5) {
+          clean = clean.slice(0, sentenceBreak + 1);
+        } else {
+          clean = clean.slice(0, MAX_RESPONSE_CHARS);
+        }
+      }
+    }
+
+    // 3. Strip excessive trailing whitespace/newlines
+    return clean.replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // ======================== SMART HISTORY MANAGEMENT =====================
+
+  /** Trim message history intelligently: keep recent + preserve tool results */
+  private smartTrimHistory(messages: any[]): any[] {
+    if (messages.length <= MAX_HISTORY) return messages;
+
+    // Always keep the last 20 messages (most recent context)
+    const recent = messages.slice(-20);
+    const older = messages.slice(0, -20);
+
+    // From older messages, keep tool_use + tool_result pairs (factual data)
+    const importantOlder = older.filter((m: any) => {
+      if (m.role === 'assistant' && Array.isArray(m.content)) {
+        return m.content.some((b: any) => b.type === 'tool_use');
+      }
+      if (m.role === 'user' && Array.isArray(m.content)) {
+        return m.content.some((b: any) => b.type === 'tool_result');
+      }
+      return false;
+    });
+
+    // Keep up to 10 important older messages to stay within budget
+    const keptOlder = importantOlder.slice(-10);
+    return [...keptOlder, ...recent];
+  }
+
   // ======================== HELPERS =====================================
 
   private async resolveFreight(code: string): Promise<any | null> {
@@ -1066,6 +1601,30 @@ OTRAS INSTRUCCIONES:
     }
     if (user.company?.type === 'producer') return user.companyId;
     return user.activeCompanyId || user.companyId || null;
+  }
+
+  private resolvePlantCompanyId(user: any): string | null {
+    if (user.memberships?.length > 0) {
+      const pm = user.memberships.find((m: any) =>
+        m.company?.type === 'plant' ||
+        (Array.isArray(m.company?.types) && m.company.types.includes('plant')),
+      );
+      if (pm) return pm.companyId;
+    }
+    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
+    const companyByType = (user.companyByType as any) || {};
+    if (userTypes.includes('plant') && companyByType.plant) {
+      return companyByType.plant;
+    }
+    if (user.company?.type === 'plant') return user.companyId;
+    return user.activeCompanyId || user.companyId || null;
+  }
+
+  private isCallerAdmin(user: any): boolean {
+    const userRole = user.role || '';
+    const memberRoles = user.memberships?.map((m: any) => m.role) || [];
+    const allRoles = [userRole, ...memberRoles];
+    return allRoles.some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r)) || user.isSuperAdmin;
   }
 
   private buildSyntheticUser(dbUser: any): any {

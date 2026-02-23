@@ -127,7 +127,13 @@ export class WhatsAppController {
   private parseMessage(message: any): { type: string; payload: any } {
     switch (message.type) {
       case 'text':
-        return { type: 'text', payload: { body: message.text?.body || '' } };
+        return {
+          type: 'text',
+          payload: {
+            body: message.text?.body || '',
+            forwarded: !!(message.context?.forwarded || message.context?.frequently_forwarded),
+          },
+        };
 
       case 'interactive':
         if (message.interactive?.type === 'button_reply') {
