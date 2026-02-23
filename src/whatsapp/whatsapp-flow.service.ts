@@ -216,7 +216,7 @@ export class WhatsAppFlowService {
 
   // ======================== CREATE FREIGHT FLOW ==========================
   // Multi-step guided freight creation
-  // Steps: grain → tons → truckCount → (ownFleet?) → (selectTruck?) → plant → lot → date → time → confirm
+  // Steps: grain → tons → truckCount → (ownFleet?) → (selectTruck?) → plant → lot → date(buttons) → time(list) → confirm
 
   private async createFreightStart(phone: string, session: any, user: any) {
     // Check if user is a producer
@@ -502,8 +502,7 @@ export class WhatsAppFlowService {
         return;
       }
       const customOriginName = payload.body.trim();
-      await this.updateState(session.id, 'awaiting_date', { ...state, customOriginName });
-      await this.wa.sendText(phone, 'Fecha de carga? (dd/mm/aaaa o "hoy" o "manana")');
+      await this.sendDateSelection(phone, session, { ...state, customOriginName });
       return;
     }
 
@@ -519,99 +518,116 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_date', { ...state, originLotId: lotId });
-      await this.wa.sendText(phone, 'Fecha de carga? (dd/mm/aaaa o "hoy" o "manana")');
+      await this.sendDateSelection(phone, session, { ...state, originLotId: lotId });
       return;
     }
 
-    // ---- Step: Date ----
+    // ---- Step: Date (buttons) ----
     if (step === 'awaiting_date') {
-      if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la fecha (dd/mm/aaaa, "hoy" o "manana"):');
-        return;
-      }
+      let loadDate: string | null = null;
 
-      const text = payload.body?.trim().toLowerCase();
-      let loadDate: string;
-
-      if (text === 'hoy') {
-        loadDate = new Date().toISOString().split('T')[0];
-      } else if (text === 'manana' || text === 'mañana') {
-        const d = new Date();
-        d.setDate(d.getDate() + 1);
-        loadDate = d.toISOString().split('T')[0];
-      } else {
-        // Parse dd/mm/yyyy
-        const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-        if (!match) {
-          await this.wa.sendText(phone, 'Formato invalido. Escribi dd/mm/aaaa, "hoy" o "manana":');
+      if (type === 'button_reply') {
+        if (payload.id === 'date:other') {
+          await this.updateState(session.id, 'awaiting_date_input', state);
+          await this.wa.sendText(phone, 'Escribi la fecha (dd/mm/aaaa):');
           return;
         }
-        loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+        if (payload.id === 'date:today') {
+          loadDate = new Date().toISOString().split('T')[0];
+        } else if (payload.id === 'date:tomorrow') {
+          const d = new Date(); d.setDate(d.getDate() + 1);
+          loadDate = d.toISOString().split('T')[0];
+        } else if (payload.id === 'date:day_after') {
+          const d = new Date(); d.setDate(d.getDate() + 2);
+          loadDate = d.toISOString().split('T')[0];
+        }
+      } else if (type === 'text') {
+        // Allow text shortcuts
+        const text = payload.body?.trim().toLowerCase();
+        if (text === 'hoy') {
+          loadDate = new Date().toISOString().split('T')[0];
+        } else if (text === 'manana' || text === 'mañana') {
+          const d = new Date(); d.setDate(d.getDate() + 1);
+          loadDate = d.toISOString().split('T')[0];
+        } else {
+          const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+          if (match) {
+            loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+          }
+        }
       }
 
-      await this.updateState(session.id, 'awaiting_time', { ...state, loadDate });
-      await this.wa.sendText(phone, 'Hora de carga? (HH:mm, ej: 08:00)');
-      return;
-    }
-
-    // ---- Step: Time ----
-    if (step === 'awaiting_time') {
-      if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la hora (HH:mm, ej: 08:00):');
+      if (!loadDate) {
+        await this.wa.sendText(phone, 'Selecciona una fecha o escribi dd/mm/aaaa:');
         return;
       }
 
+      await this.sendTimeSelection(phone, session, { ...state, loadDate });
+      return;
+    }
+
+    // ---- Step: Date Custom Input ----
+    if (step === 'awaiting_date_input') {
+      if (type !== 'text') {
+        await this.wa.sendText(phone, 'Escribi la fecha (dd/mm/aaaa):');
+        return;
+      }
+      const text = payload.body?.trim();
+      const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (!match) {
+        await this.wa.sendText(phone, 'Formato invalido. Escribi dd/mm/aaaa (ej: 25/02/2026):');
+        return;
+      }
+      const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+      await this.sendTimeSelection(phone, session, { ...state, loadDate });
+      return;
+    }
+
+    // ---- Step: Time (list) ----
+    if (step === 'awaiting_time') {
+      let loadTime: string | null = null;
+
+      if (type === 'list_reply') {
+        if (payload.id === 'time:other') {
+          await this.updateState(session.id, 'awaiting_time_input', state);
+          await this.wa.sendText(phone, 'Escribi la hora (HH:mm, ej: 14:30):');
+          return;
+        }
+        if (payload.id?.startsWith('time:')) {
+          loadTime = payload.id.split(':').slice(1).join(':'); // "time:08:00" → "08:00"
+        }
+      } else if (type === 'text') {
+        const text = payload.body?.trim();
+        const match = text.match(/^(\d{1,2}):(\d{2})$/);
+        if (match) {
+          loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
+        }
+      }
+
+      if (!loadTime) {
+        await this.wa.sendText(phone, 'Selecciona un horario de la lista o escribi HH:mm:');
+        return;
+      }
+
+      await this.showConfirmation(phone, session, { ...state, loadTime });
+      return;
+    }
+
+    // ---- Step: Time Custom Input ----
+    if (step === 'awaiting_time_input') {
+      if (type !== 'text') {
+        await this.wa.sendText(phone, 'Escribi la hora (HH:mm, ej: 14:30):');
+        return;
+      }
       const text = payload.body?.trim();
       const match = text.match(/^(\d{1,2}):(\d{2})$/);
       if (!match) {
-        await this.wa.sendText(phone, 'Formato invalido. Escribi HH:mm (ej: 08:00):');
+        await this.wa.sendText(phone, 'Formato invalido. Escribi HH:mm (ej: 14:30):');
         return;
       }
-
       const loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
       const finalState = { ...state, loadTime };
-
-      // Show summary for confirmation
-      let destName = finalState.customDestName || 'Destino';
-      if (finalState.destPlantId) {
-        // destPlantId may be a Plant ID or a Company ID — try company first (most common)
-        const company = await this.prisma.company.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-        if (company) {
-          destName = company.name;
-        } else {
-          const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-          destName = plant?.name || destName;
-        }
-      }
-      let originName = finalState.customOriginName || 'Origen';
-      if (finalState.originLotId) {
-        const lot = await this.prisma.lot.findUnique({ where: { id: finalState.originLotId }, select: { name: true } });
-        originName = lot?.name || originName;
-      }
-
-      const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
-
-      await this.updateState(session.id, 'awaiting_confirm', finalState);
-
-      const truckCount = finalState.truckCount || 1;
-      const truckLine = finalState.truckPlate
-        ? `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''} · Flota propia (${finalState.truckPlate})`
-        : `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
-
-      await this.wa.sendButtons(phone,
-        `*Resumen del flete:*\n` +
-        `━━━━━━━━━━━━━━━\n` +
-        `📦 ${finalState.grain} · ${finalState.tons} tn\n` +
-        `${truckLine}\n` +
-        `📍 ${originName} → ${destName}\n` +
-        `📅 ${dateFormatted} ${loadTime}\n\n` +
-        `Confirmas la creacion?`,
-        [
-          { id: 'flow_confirm:yes', title: 'Confirmar' },
-          { id: 'flow_confirm:no', title: 'Cancelar' },
-        ],
-      );
+      await this.showConfirmation(phone, session, finalState);
       return;
     }
 
@@ -740,6 +756,91 @@ export class WhatsAppFlowService {
           title: c.name.slice(0, 24),
         })),
       }],
+    );
+  }
+
+  /** Show date selection buttons (Hoy, Mañana, Pasado mañana, Otra fecha) */
+  private async sendDateSelection(phone: string, session: any, state: any) {
+    const today = new Date();
+    const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
+    const dayAfter = new Date(); dayAfter.setDate(today.getDate() + 2);
+
+    const fmt = (d: Date) => `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+
+    await this.updateState(session.id, 'awaiting_date', state);
+    await this.wa.sendButtons(phone,
+      'Cuando se carga?',
+      [
+        { id: 'date:today', title: `Hoy ${fmt(today)}` },
+        { id: 'date:tomorrow', title: `Manana ${fmt(tomorrow)}` },
+        { id: 'date:other', title: 'Otra fecha' },
+      ],
+    );
+  }
+
+  /** Show time selection list with common loading hours */
+  private async sendTimeSelection(phone: string, session: any, state: any) {
+    const dateFormatted = state.loadDate.split('-').reverse().join('/');
+
+    await this.updateState(session.id, 'awaiting_time', state);
+    await this.wa.sendList(phone,
+      `Fecha: *${dateFormatted}*\n\nA que hora se carga?`,
+      'Seleccionar hora',
+      [{
+        title: 'Horarios',
+        rows: [
+          { id: 'time:05:00', title: '05:00' },
+          { id: 'time:06:00', title: '06:00' },
+          { id: 'time:07:00', title: '07:00' },
+          { id: 'time:08:00', title: '08:00' },
+          { id: 'time:09:00', title: '09:00' },
+          { id: 'time:10:00', title: '10:00' },
+          { id: 'time:12:00', title: '12:00' },
+          { id: 'time:14:00', title: '14:00' },
+          { id: 'time:16:00', title: '16:00' },
+          { id: 'time:other', title: 'Otro horario', description: 'Escribir hora manualmente' },
+        ],
+      }],
+    );
+  }
+
+  /** Show confirmation summary with all freight details */
+  private async showConfirmation(phone: string, session: any, finalState: any) {
+    let destName = finalState.customDestName || 'Destino';
+    if (finalState.destPlantId) {
+      const company = await this.prisma.company.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
+      if (company) {
+        destName = company.name;
+      } else {
+        const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
+        destName = plant?.name || destName;
+      }
+    }
+    let originName = finalState.customOriginName || 'Origen';
+    if (finalState.originLotId) {
+      const lot = await this.prisma.lot.findUnique({ where: { id: finalState.originLotId }, select: { name: true } });
+      originName = lot?.name || originName;
+    }
+
+    const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
+    const truckCount = finalState.truckCount || 1;
+    const truckLine = finalState.truckPlate
+      ? `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''} · Flota propia (${finalState.truckPlate})`
+      : `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
+
+    await this.updateState(session.id, 'awaiting_confirm', finalState);
+    await this.wa.sendButtons(phone,
+      `*Resumen del flete:*\n` +
+      `━━━━━━━━━━━━━━━\n` +
+      `📦 ${finalState.grain} · ${finalState.tons} tn\n` +
+      `${truckLine}\n` +
+      `📍 ${originName} → ${destName}\n` +
+      `📅 ${dateFormatted} ${finalState.loadTime}\n\n` +
+      `Confirmas la creacion?`,
+      [
+        { id: 'flow_confirm:yes', title: 'Confirmar' },
+        { id: 'flow_confirm:no', title: 'Cancelar' },
+      ],
     );
   }
 
