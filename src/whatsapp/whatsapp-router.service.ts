@@ -135,33 +135,40 @@ export class WhatsAppRouterService {
     // Edge case: empty or whitespace-only message
     if (!t) return;
 
-    // Edge case: emoji-only message (1-4 emojis, no text)
-    const emojiOnly = /^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\s]{1,16}$/u.test(t) && !/[a-zA-Z0-9]/.test(t);
-    if (emojiOnly && this.ai.isEnabled()) {
-      // Forward to AI with context so it can interpret naturally
-      await this.handleAiChat(phone, user, `[El usuario envio solo emojis: ${t}]`);
-      return;
-    }
-
-    // Edge case: very short message (1-2 chars, not a command)
-    if (t.length <= 2 && !/^(si|no|ok)$/i.test(t) && this.ai.isEnabled()) {
-      await this.handleAiChat(phone, user, t);
-      return;
-    }
-
     // Fast path: freight code lookup (no AI needed)
     if (/^FLT-\d{4,}$/i.test(t)) {
       await this.showFreightByCode(phone, user, t.toUpperCase());
       return;
     }
 
-    // Fast path: explicit menu/hola commands
-    if (/^(menu|inicio|hola|hi)$/i.test(t)) {
+    // Greeting / generic message detection — show main menu directly
+    // Covers: hola, buenas, buen dia, buenos dias, buenas tardes/noches, que tal, como estas, hey, etc.
+    const GREETING_RE = /^(hola|hi|hey|buenas?|buen\s*d[ií]a|buenos?\s*d[ií]as?|buenas?\s*tardes?|buenas?\s*noches?|qu[eé]\s*tal|c[oó]mo\s*(est[aá]s?|and[aá]s?|va)|saludos?|menu|inicio)[\s?!.,]*$/i;
+    if (GREETING_RE.test(t)) {
       await this.showMainMenu(phone, user);
       return;
     }
 
-    // AI-powered handler for all other text
+    // Emoji-only or very short messages without active AI session → show menu
+    const emojiOnly = /^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\s]{1,16}$/u.test(t) && !/[a-zA-Z0-9]/.test(t);
+    const tooShort = t.length <= 2 && !/^(si|no|ok)$/i.test(t);
+    if (emojiOnly || tooShort) {
+      // Check for active AI session — if exists, forward to AI for context continuity
+      const activeSession = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+        select: { id: true, flowState: true },
+      });
+      const hasHistory = activeSession && ((activeSession.flowState as any)?.aiMessages?.length > 0);
+      if (hasHistory && this.ai.isEnabled()) {
+        const msg = emojiOnly ? `[El usuario envio solo emojis: ${t}]` : t;
+        await this.handleAiChat(phone, user, msg);
+      } else {
+        await this.showMainMenu(phone, user);
+      }
+      return;
+    }
+
+    // AI-powered handler for all other text (actual requests/queries)
     if (this.ai.isEnabled()) {
       await this.handleAiChat(phone, user, t);
       return;
