@@ -164,6 +164,7 @@ export class WhatsAppFlowService {
   private async confirmLoadedContinue(
     phone: string, session: any, type: string, payload: any, user: any, state: any,
   ) {
+    // Step: awaiting_tons — user types the number
     if (session.flowStep === 'awaiting_tons' && type === 'text') {
       const text = payload.body?.trim().replace(',', '.');
       const tons = parseFloat(text);
@@ -174,14 +175,38 @@ export class WhatsAppFlowService {
       }
 
       if (tons > 100) {
-        await this.wa.sendText(phone, `Se indicaron ${tons} tn. Para confirmar, escriba el numero nuevamente. Para cancelar, escriba "cancelar".`);
-        // Allow it through if they repeat
+        // High tonnage → ask for button confirmation
+        await this.updateState(session.id, 'awaiting_tons_confirm', { ...state, pendingTons: tons });
+        await this.wa.sendButtons(phone,
+          `Se indicaron ${tons} tn.\n¿Confirma esta cantidad?`,
+          [
+            { id: 'tons_confirm:yes', title: `CONFIRMAR ${tons} TN` },
+            { id: 'tons_confirm:no', title: 'CANCELAR' },
+          ],
+        );
+        return;
       }
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.confirmLoaded(state.freightId, synUser, tons);
       await this.wa.sendText(phone, `─────────────────────\n  Carga confirmada: ${tons} tn\n─────────────────────`);
       await this.endFlow(session.id);
+      return;
+    }
+
+    // Step: awaiting_tons_confirm — button confirmation for tons > 100
+    if (session.flowStep === 'awaiting_tons_confirm' && type === 'button_reply') {
+      const btnId = payload.id || '';
+      if (btnId === 'tons_confirm:yes') {
+        const tons = state.pendingTons;
+        const synUser = this.buildSyntheticUser(user);
+        await this.freights.confirmLoaded(state.freightId, synUser, tons);
+        await this.wa.sendText(phone, `─────────────────────\n  Carga confirmada: ${tons} tn\n─────────────────────`);
+        await this.endFlow(session.id);
+      } else {
+        await this.wa.sendText(phone, '─────────────────────\n  Operacion cancelada\n─────────────────────');
+        await this.endFlow(session.id);
+      }
       return;
     }
 

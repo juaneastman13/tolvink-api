@@ -221,14 +221,23 @@ export class WhatsAppRouterService {
         });
       }
 
-      const reply = await this.ai.chat(phone, text, user, session);
+      const result = await this.ai.chat(phone, text, user, session);
+      const reply = result.text;
+      const buttons = result.buttons;
 
       // Split long messages (WhatsApp max ~4096 chars per message)
       if (reply.length > 4000) {
         const chunks = reply.match(/[\s\S]{1,4000}/g) || [reply];
-        for (const chunk of chunks) {
-          await this.wa.sendText(phone, chunk);
+        for (let i = 0; i < chunks.length; i++) {
+          // Attach buttons only to the last chunk
+          if (i === chunks.length - 1 && buttons?.length) {
+            await this.wa.sendButtons(phone, chunks[i], buttons);
+          } else {
+            await this.wa.sendText(phone, chunks[i]);
+          }
         }
+      } else if (buttons?.length) {
+        await this.wa.sendButtons(phone, reply, buttons);
       } else {
         await this.wa.sendText(phone, reply);
       }
@@ -402,6 +411,21 @@ export class WhatsAppRouterService {
         }
         case 'show_help': {
           await this.showHelp(phone, user);
+          break;
+        }
+        case 'location_done': {
+          // User pressed "UBICACION LISTA" → forward to AI so it picks up the saved location
+          await this.handleAiChat(phone, user, 'Ubicacion confirmada.');
+          break;
+        }
+        case 'ai_confirm_freight': {
+          // User pressed "CONFIRMAR" on freight summary → forward to AI as confirmation
+          await this.handleAiChat(phone, user, 'Confirmar.');
+          break;
+        }
+        case 'ai_cancel_freight': {
+          // User pressed "CANCELAR" on freight summary → forward to AI
+          await this.handleAiChat(phone, user, 'No, cancelar.');
           break;
         }
         default: {

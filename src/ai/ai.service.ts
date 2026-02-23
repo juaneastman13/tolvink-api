@@ -63,9 +63,9 @@ export class AiService {
     userMessage: string,
     user: any,
     session: any,
-  ): Promise<string> {
+  ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
     if (!this.client) {
-      return 'El asistente IA no esta disponible en este momento.';
+      return { text: 'El asistente IA no esta disponible en este momento.' };
     }
 
     const synUser = this.buildSyntheticUser(user);
@@ -163,11 +163,25 @@ export class AiService {
         },
       });
 
-      return finalText;
+      // Check if any tool set pending buttons in session state
+      const updatedSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const updatedState = (updatedSession?.flowState as any) || {};
+      const pendingButtons = updatedState._pendingButtons || undefined;
+
+      // Clear pending buttons from session
+      if (pendingButtons) {
+        const { _pendingButtons, ...cleanState } = updatedState;
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { flowState: { ...cleanState, aiMessages: updatedState.aiMessages, lastMessageAt: updatedState.lastMessageAt } },
+        });
+      }
+
+      return { text: finalText, buttons: pendingButtons };
     } catch (e) {
       console.error(`[AI] Chat error:`, e.message, e.stack?.slice(0, 300));
       this.logger.error(`AI chat error: ${e.message}`);
-      return 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente o utilice las opciones del menu.';
+      return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente o utilice las opciones del menu.' };
     }
   }
 
@@ -916,19 +930,26 @@ MODIFICAR (solo admin/gerente):
     };
     if (truckDisplay) summary.truck = truckDisplay;
 
-    // Store pending freight in session
+    // Store pending freight + pending confirm buttons in session
     const state = (session.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
-        flowState: { ...state, pendingFreight: { ...input, truckCount } },
+        flowState: {
+          ...state,
+          pendingFreight: { ...input, truckCount },
+          _pendingButtons: [
+            { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
+            { id: 'ai_cancel_freight', title: 'CANCELAR' },
+          ],
+        },
       },
     });
 
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma. Cuando confirme, DEBES llamar la herramienta confirm_create_freight para crearlo.',
+      IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automaticamente.',
     });
   }
 
@@ -1282,9 +1303,24 @@ MODIFICAR (solo admin/gerente):
     };
     const label = purposeLabels[input.purpose] || 'ubicacion';
 
+    // Store pending buttons in session for the router to send after AI text
+    const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const sessState = (freshSess?.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...sessState,
+          _pendingButtons: [
+            { id: 'location_done', title: 'UBICACION LISTA' },
+          ],
+        },
+      },
+    });
+
     return JSON.stringify({
       url,
-      message: `Abri este link para elegir el ${label} en el mapa. Cuando confirmes la ubicacion, volvé aca y decime "listo".`,
+      message: `Abra el siguiente link para seleccionar el ${label} en el mapa. Una vez confirmada la ubicacion, presione el boton.`,
     });
   }
 
