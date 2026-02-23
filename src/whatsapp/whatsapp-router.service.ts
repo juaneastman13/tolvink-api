@@ -226,9 +226,9 @@ export class WhatsAppRouterService {
       `Hola ${name}! Soy el asistente de *Tolvink*.\n\n` +
       `Que necesitas hacer?\n\n📱 ${APP_URL}`,
       [
-        { id: 'active_freights', title: 'Mis fletes' },
-        { id: 'create_freight', title: 'Crear flete' },
-        { id: 'show_help', title: 'Ayuda' },
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'create_freight', title: 'CREAR FLETE' },
+        { id: 'show_help', title: 'AYUDA' },
       ],
     );
   }
@@ -259,9 +259,9 @@ export class WhatsAppRouterService {
     await this.wa.sendButtons(phone,
       'Que queres hacer?',
       [
-        { id: 'active_freights', title: 'Mis fletes' },
-        { id: 'create_freight', title: 'Crear flete' },
-        { id: 'menu', title: 'Volver al menu' },
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'create_freight', title: 'CREAR FLETE' },
+        { id: 'menu', title: 'VOLVER AL MENU' },
       ],
     );
   }
@@ -336,8 +336,8 @@ export class WhatsAppRouterService {
 
     await this.wa.sendList(phone,
       `Tenes *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:\n\n📱 ${APP_URL}`,
-      'Ver fletes',
-      [{ title: 'Fletes activos', rows }],
+      'VER FLETES',
+      [{ title: 'FLETES ACTIVOS', rows }],
     );
   }
 
@@ -446,32 +446,32 @@ export class WhatsAppRouterService {
     switch (freight.status) {
       case 'assigned':
         if (isTransporterRole) {
-          buttons.push({ id: `accept:${freight.id}`, title: 'Aceptar' });
-          buttons.push({ id: `reject:${freight.id}`, title: 'Rechazar' });
+          buttons.push({ id: `accept:${freight.id}`, title: 'ACEPTAR' });
+          buttons.push({ id: `reject:${freight.id}`, title: 'RECHAZAR' });
         }
         break;
 
       case 'accepted':
         if (isTransporterRole) {
-          buttons.push({ id: `start:${freight.id}`, title: 'Iniciar viaje' });
+          buttons.push({ id: `start:${freight.id}`, title: 'INICIAR VIAJE' });
         }
         break;
 
       case 'in_progress':
         if (isTransporterRole) {
-          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'Confirmar carga' });
+          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'CONFIRMAR CARGA' });
         }
         break;
 
       case 'loaded':
         if (isTransporterRole && !freight.transporterFinishedConfirmedAt) {
-          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'Confirmar entrega' });
+          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'CONFIRMAR ENTREGA' });
         }
         if (isDest && !freight.plantFinishedConfirmedAt) {
-          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'Confirmar recepcion' });
+          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'CONFIRMAR RECEPCION' });
         }
         if (isOrigin && !isOwnFleet && !freight.producerLoadedConfirmedAt) {
-          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'Confirmar carga' });
+          buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'CONFIRMAR CARGA' });
         }
         break;
     }

@@ -10,8 +10,8 @@ import { FreightsService } from '../freights/freights.service';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
-// Footer hint shown on every flow step so non-tech users always know their options
-const FLOW_HINT = '\n\n_Escribi *cancelar* para salir · *menu* para opciones_';
+// Header hint shown at the top of every flow message
+const FLOW_HINT = '_Para salir escribí *cancelar*\nPara ver opciones escribí *menu*_\n━━━━━━━━━━━━━━━\n\n';
 
 const APP_URL = 'https://tolvink.vercel.app';
 
@@ -235,18 +235,18 @@ export class WhatsAppFlowService {
     // Store producer company ID in flow state for later steps
     await this.updateState(session.id, 'awaiting_grain', { producerCompanyId });
     await this.wa.sendList(phone,
-      'Vamos a crear un nuevo flete.\nSi necesitas corregir algo, vas a poder editarlo al final.' + FLOW_HINT + '\n\nQue grano vas a enviar?',
-      'Seleccionar grano',
+      FLOW_HINT + 'Vamos a crear un nuevo flete.\nSi necesitas corregir algo, vas a poder editarlo al final.\n\nQue grano vas a enviar?',
+      'SELECCIONAR GRANO',
       [{
-        title: 'Tipo de grano',
+        title: 'TIPO DE GRANO',
         rows: [
-          { id: 'grain:Soja', title: 'Soja' },
-          { id: 'grain:Maiz', title: 'Maiz' },
-          { id: 'grain:Trigo', title: 'Trigo' },
-          { id: 'grain:Girasol', title: 'Girasol' },
-          { id: 'grain:Sorgo', title: 'Sorgo' },
-          { id: 'grain:Cebada', title: 'Cebada' },
-          { id: 'grain:Otros', title: 'Otros' },
+          { id: 'grain:Soja', title: 'SOJA' },
+          { id: 'grain:Maiz', title: 'MAIZ' },
+          { id: 'grain:Trigo', title: 'TRIGO' },
+          { id: 'grain:Girasol', title: 'GIRASOL' },
+          { id: 'grain:Sorgo', title: 'SORGO' },
+          { id: 'grain:Cebada', title: 'CEBADA' },
+          { id: 'grain:Otros', title: 'OTROS' },
         ],
       }],
     );
@@ -271,7 +271,7 @@ export class WhatsAppFlowService {
       }
 
       if (!grain) {
-        await this.wa.sendText(phone, 'Selecciona un grano de la lista o escribi el nombre (Soja, Maiz, Trigo, etc.).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona un grano de la lista o escribi el nombre (Soja, Maiz, Trigo, etc.).');
         return;
       }
 
@@ -282,20 +282,20 @@ export class WhatsAppFlowService {
         return;
       }
       await this.updateState(session.id, 'awaiting_tons', newState);
-      await this.wa.sendText(phone, `Grano: *${grain}*\n\nCuantas toneladas? (ej: 30)` + FLOW_HINT);
+      await this.wa.sendText(phone, FLOW_HINT + `Grano: *${grain}*\n\nEscribir cuantas toneladas se van a cargar (ej: 30)`);
       return;
     }
 
     // ---- Step: Tons ----
     if (step === 'awaiting_tons') {
       if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la cantidad de toneladas (ej: 30).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi la cantidad de toneladas (ej: 30).');
         return;
       }
 
       const tons = parseFloat(payload.body?.trim().replace(',', '.'));
       if (isNaN(tons) || tons <= 0) {
-        await this.wa.sendText(phone, 'Ingresa un numero valido (ej: 30).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingresa un numero valido (ej: 30).');
         return;
       }
 
@@ -312,12 +312,13 @@ export class WhatsAppFlowService {
 
       const truckWord = suggested === 1 ? 'camion' : 'camiones';
       await this.wa.sendButtons(phone,
+        FLOW_HINT +
         `Grano: *${state.grain}* | Toneladas: *${tons}*\n\n` +
         `Para ${tons} tn se necesita${suggested > 1 ? 'n' : ''} aprox. *${suggested} ${truckWord}*.\n` +
-        `Cuantos camiones necesitas?` + FLOW_HINT,
+        `Cuantos camiones necesitas?`,
         [
-          { id: `trucks:${suggested}`, title: `${suggested} ${truckWord}` },
-          { id: 'trucks:other', title: 'Otra cantidad' },
+          { id: `trucks:${suggested}`, title: `${suggested} ${truckWord.toUpperCase()}` },
+          { id: 'trucks:other', title: 'OTRA CANTIDAD' },
         ],
       );
       return;
@@ -330,7 +331,7 @@ export class WhatsAppFlowService {
       if (type === 'button_reply') {
         if (payload.id === 'trucks:other') {
           await this.updateState(session.id, 'awaiting_truck_count_input', state);
-          await this.wa.sendText(phone, 'Cuantos camiones necesitas? (escribi el numero)' + FLOW_HINT);
+          await this.wa.sendText(phone, FLOW_HINT + 'Cuantos camiones necesitas? (escribi el numero)');
           return;
         }
         if (payload.id?.startsWith('trucks:')) {
@@ -341,7 +342,7 @@ export class WhatsAppFlowService {
       }
 
       if (!truckCount || truckCount < 1 || truckCount > 50) {
-        await this.wa.sendText(phone, 'Ingresa un numero entre 1 y 50.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingresa un numero entre 1 y 50.');
         return;
       }
 
@@ -352,12 +353,12 @@ export class WhatsAppFlowService {
     // ---- Step: Truck Count Custom Input ----
     if (step === 'awaiting_truck_count_input') {
       if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la cantidad de camiones (ej: 3).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi la cantidad de camiones (ej: 3).');
         return;
       }
       const truckCount = parseInt(payload.body?.trim(), 10);
       if (!truckCount || truckCount < 1 || truckCount > 50) {
-        await this.wa.sendText(phone, 'Ingresa un numero valido entre 1 y 50.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingresa un numero valido entre 1 y 50.');
         return;
       }
       await this.afterTruckCount(phone, session, { ...state, truckCount });
@@ -394,16 +395,16 @@ export class WhatsAppFlowService {
 
       await this.updateState(session.id, 'awaiting_truck_select', state);
       await this.wa.sendList(phone,
-        'Selecciona un camion de tu flota:' + FLOW_HINT,
-        'Ver camiones',
+        FLOW_HINT + 'Selecciona un camion de tu flota:',
+        'VER CAMIONES',
         [{
-          title: 'Tus camiones',
+          title: 'TUS CAMIONES',
           rows: trucks.map((t: any) => {
             const driver = t.assignedUser?.name ? ` · ${t.assignedUser.name}` : '';
             const info = [t.brand, t.model].filter(Boolean).join(' ');
             return {
               id: `truck:${t.id}`,
-              title: t.plate.slice(0, 24),
+              title: t.plate.toUpperCase().slice(0, 24),
               description: `${info}${driver}`.slice(0, 72) || undefined,
             };
           }),
@@ -420,7 +421,7 @@ export class WhatsAppFlowService {
       }
 
       if (!truckId) {
-        await this.wa.sendText(phone, 'Selecciona un camion de la lista.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona un camion de la lista.');
         return;
       }
 
@@ -445,7 +446,7 @@ export class WhatsAppFlowService {
       }
 
       if (!companyId) {
-        await this.wa.sendText(phone, 'Selecciona una planta de la lista.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona una planta de la lista.');
         return;
       }
 
@@ -467,13 +468,13 @@ export class WhatsAppFlowService {
           ...state, destCompanyId: companyId, editing: state.editing || false,
         });
         await this.wa.sendList(phone,
-          'Selecciona la sucursal:' + FLOW_HINT,
-          'Ver sucursales',
+          FLOW_HINT + 'Selecciona la sucursal:',
+          'VER SUCURSALES',
           [{
-            title: 'Sucursales',
+            title: 'SUCURSALES',
             rows: branches.map(b => ({
               id: `branch:${b.id}`,
-              title: b.name.slice(0, 24),
+              title: b.name.toUpperCase().slice(0, 24),
               description: b.address?.slice(0, 72) || '',
             })),
           }],
@@ -493,7 +494,7 @@ export class WhatsAppFlowService {
       }
 
       if (!branchId) {
-        await this.wa.sendText(phone, 'Selecciona una sucursal de la lista.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona una sucursal de la lista.');
         return;
       }
 
@@ -504,7 +505,7 @@ export class WhatsAppFlowService {
     // ---- Step: Custom Dest Name (no plants available) ----
     if (step === 'awaiting_dest_name') {
       if (type !== 'text' || !payload.body?.trim()) {
-        await this.wa.sendText(phone, 'Escribi el nombre del destino.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi el nombre del destino.');
         return;
       }
       const customDestName = payload.body.trim();
@@ -517,20 +518,20 @@ export class WhatsAppFlowService {
 
       if (lots.length === 0) {
         await this.updateState(session.id, 'awaiting_origin_name', { ...state, customDestName });
-        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi el nombre del campo/lugar de origen.');
         return;
       }
 
       await this.updateState(session.id, 'awaiting_lot', { ...state, customDestName });
-      await this.wa.sendList(phone, 'Desde que lote se carga?' + FLOW_HINT, 'Seleccionar lote', [{
-        title: 'Tus lotes',
+      await this.wa.sendList(phone, FLOW_HINT + 'Indicar desde qué lote / campo se carga.', 'SELECCIONAR LOTE', [{
+        title: 'TUS LOTES',
         rows: [
           ...lots.map((l: any) => ({
             id: `lot:${l.id}`,
-            title: l.name.slice(0, 24),
+            title: l.name.toUpperCase().slice(0, 24),
             description: l.field?.name?.slice(0, 72) || '',
           })),
-          { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+          { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
         ],
       }]);
       return;
@@ -539,7 +540,7 @@ export class WhatsAppFlowService {
     // ---- Step: Custom Origin Name ----
     if (step === 'awaiting_origin_name') {
       if (type !== 'text' || !payload.body?.trim()) {
-        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi el nombre del campo/lugar de origen.');
         return;
       }
       const customOriginName = payload.body.trim();
@@ -561,8 +562,8 @@ export class WhatsAppFlowService {
         // Continue without location
       } else {
         await this.wa.sendButtons(phone,
-          'Envia tu ubicacion o selecciona Omitir.' + FLOW_HINT,
-          [{ id: 'location:skip', title: 'Omitir ubicacion' }],
+          FLOW_HINT + 'Envia tu ubicacion o selecciona Omitir.',
+          [{ id: 'location:skip', title: 'OMITIR UBICACION' }],
         );
         return;
       }
@@ -587,7 +588,7 @@ export class WhatsAppFlowService {
       if (type === 'list_reply' && payload.id === 'lot:custom') {
         // User wants to enter a custom origin
         await this.updateState(session.id, 'awaiting_origin_name', state);
-        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi el nombre del campo/lugar de origen.');
         return;
       }
 
@@ -597,7 +598,7 @@ export class WhatsAppFlowService {
       }
 
       if (!lotId) {
-        await this.wa.sendText(phone, 'Selecciona un lote de la lista.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona un lote de la lista.');
         return;
       }
 
@@ -618,7 +619,7 @@ export class WhatsAppFlowService {
       if (type === 'button_reply') {
         if (payload.id === 'date:other') {
           await this.updateState(session.id, 'awaiting_date_input', state);
-          await this.wa.sendText(phone, 'Escribi la fecha (dd/mm/aaaa).' + FLOW_HINT);
+          await this.wa.sendText(phone, FLOW_HINT + 'Escribi la fecha (dd/mm/aaaa).');
           return;
         }
         if (payload.id === 'date:today') {
@@ -647,7 +648,7 @@ export class WhatsAppFlowService {
       }
 
       if (!loadDate) {
-        await this.wa.sendText(phone, 'Selecciona una fecha o escribi dd/mm/aaaa.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona una fecha o escribi dd/mm/aaaa.');
         return;
       }
 
@@ -664,13 +665,13 @@ export class WhatsAppFlowService {
     // ---- Step: Date Custom Input ----
     if (step === 'awaiting_date_input') {
       if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la fecha (dd/mm/aaaa).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi la fecha (dd/mm/aaaa).');
         return;
       }
       const text = payload.body?.trim();
       const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
       if (!match) {
-        await this.wa.sendText(phone, 'Formato invalido. Escribi dd/mm/aaaa (ej: 25/02/2026).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Formato invalido. Escribi dd/mm/aaaa (ej: 25/02/2026).');
         return;
       }
       const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
@@ -691,7 +692,7 @@ export class WhatsAppFlowService {
       if (type === 'list_reply') {
         if (payload.id === 'time:other') {
           await this.updateState(session.id, 'awaiting_time_input', state);
-          await this.wa.sendText(phone, 'Escribi la hora (HH:mm, ej: 14:30).' + FLOW_HINT);
+          await this.wa.sendText(phone, FLOW_HINT + 'Escribi la hora (HH:mm, ej: 14:30).');
           return;
         }
         if (payload.id?.startsWith('time:')) {
@@ -706,7 +707,7 @@ export class WhatsAppFlowService {
       }
 
       if (!loadTime) {
-        await this.wa.sendText(phone, 'Selecciona un horario de la lista o escribi HH:mm.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona un horario de la lista o escribi HH:mm.');
         return;
       }
 
@@ -719,13 +720,13 @@ export class WhatsAppFlowService {
     // ---- Step: Time Custom Input ----
     if (step === 'awaiting_time_input') {
       if (type !== 'text') {
-        await this.wa.sendText(phone, 'Escribi la hora (HH:mm, ej: 14:30).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Escribi la hora (HH:mm, ej: 14:30).');
         return;
       }
       const text = payload.body?.trim();
       const match = text.match(/^(\d{1,2}):(\d{2})$/);
       if (!match) {
-        await this.wa.sendText(phone, 'Formato invalido. Escribi HH:mm (ej: 14:30).' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Formato invalido. Escribi HH:mm (ej: 14:30).');
         return;
       }
       const loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
@@ -743,7 +744,7 @@ export class WhatsAppFlowService {
       }
 
       if (!field) {
-        await this.wa.sendText(phone, 'Selecciona un campo de la lista para editar.' + FLOW_HINT);
+        await this.wa.sendText(phone, FLOW_HINT + 'Selecciona un campo de la lista para editar.');
         return;
       }
 
@@ -752,32 +753,32 @@ export class WhatsAppFlowService {
       switch (field) {
         case 'grain':
           await this.updateState(session.id, 'awaiting_grain', editState);
-          await this.wa.sendList(phone, 'Selecciona el nuevo grano:', 'Seleccionar grano', [{
-            title: 'Tipo de grano',
+          await this.wa.sendList(phone, FLOW_HINT + 'Selecciona el nuevo grano:', 'SELECCIONAR GRANO', [{
+            title: 'TIPO DE GRANO',
             rows: [
-              { id: 'grain:Soja', title: 'Soja' },
-              { id: 'grain:Maiz', title: 'Maiz' },
-              { id: 'grain:Trigo', title: 'Trigo' },
-              { id: 'grain:Girasol', title: 'Girasol' },
-              { id: 'grain:Sorgo', title: 'Sorgo' },
-              { id: 'grain:Cebada', title: 'Cebada' },
-              { id: 'grain:Otros', title: 'Otros' },
+              { id: 'grain:Soja', title: 'SOJA' },
+              { id: 'grain:Maiz', title: 'MAIZ' },
+              { id: 'grain:Trigo', title: 'TRIGO' },
+              { id: 'grain:Girasol', title: 'GIRASOL' },
+              { id: 'grain:Sorgo', title: 'SORGO' },
+              { id: 'grain:Cebada', title: 'CEBADA' },
+              { id: 'grain:Otros', title: 'OTROS' },
             ],
           }]);
           break;
         case 'tons':
           await this.updateState(session.id, 'awaiting_tons', editState);
-          await this.wa.sendText(phone, `Toneladas actuales: *${state.tons}*\n\nEscribi las nuevas toneladas.` + FLOW_HINT);
+          await this.wa.sendText(phone, FLOW_HINT + `Toneladas actuales: *${state.tons}*\n\nEscribi las nuevas toneladas.`);
           break;
         case 'trucks':
           await this.updateState(session.id, 'awaiting_truck_count', editState);
           const suggested = Math.max(1, Math.ceil((state.tons || 30) / 30));
           const truckWord = suggested === 1 ? 'camion' : 'camiones';
           await this.wa.sendButtons(phone,
-            `Camiones actuales: *${state.truckCount || 1}*\n\nCuantos camiones?` + FLOW_HINT,
+            FLOW_HINT + `Camiones actuales: *${state.truckCount || 1}*\n\nCuantos camiones?`,
             [
-              { id: `trucks:${suggested}`, title: `${suggested} ${truckWord}` },
-              { id: 'trucks:other', title: 'Otra cantidad' },
+              { id: `trucks:${suggested}`, title: `${suggested} ${truckWord.toUpperCase()}` },
+              { id: 'trucks:other', title: 'OTRA CANTIDAD' },
             ],
           );
           break;
@@ -792,18 +793,18 @@ export class WhatsAppFlowService {
           });
           if (lots.length === 0) {
             await this.updateState(session.id, 'awaiting_origin_name', editState);
-            await this.wa.sendText(phone, 'Escribi el nuevo nombre del campo/lugar de origen.' + FLOW_HINT);
+            await this.wa.sendText(phone, FLOW_HINT + 'Escribi el nuevo nombre del campo/lugar de origen.');
           } else {
             await this.updateState(session.id, 'awaiting_lot', editState);
-            await this.wa.sendList(phone, 'Selecciona el nuevo lote:', 'Seleccionar lote', [{
-              title: 'Tus lotes',
+            await this.wa.sendList(phone, FLOW_HINT + 'Selecciona el nuevo lote:', 'SELECCIONAR LOTE', [{
+              title: 'TUS LOTES',
               rows: [
                 ...lots.map((l: any) => ({
                   id: `lot:${l.id}`,
-                  title: l.name.slice(0, 24),
+                  title: l.name.toUpperCase().slice(0, 24),
                   description: l.field?.name?.slice(0, 72) || '',
                 })),
-                { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+                { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
               ],
             }]);
           }
@@ -888,7 +889,7 @@ export class WhatsAppFlowService {
     }
 
     // Fallback
-    await this.wa.sendText(phone, 'No entendi tu respuesta.' + FLOW_HINT);
+    await this.wa.sendText(phone, FLOW_HINT + 'No entendi tu respuesta.');
   }
 
   // ======================== CREATE FREIGHT HELPERS ========================
@@ -912,10 +913,10 @@ export class WhatsAppFlowService {
     if (company?.hasInternalFleet) {
       await this.updateState(session.id, 'awaiting_own_fleet', state);
       await this.wa.sendButtons(phone,
-        `Camiones: *${state.truckCount}*\n\nQueres usar tu flota propia?` + FLOW_HINT,
+        FLOW_HINT + `Camiones: *${state.truckCount}*\n\nQueres usar tu flota propia?`,
         [
-          { id: 'own_fleet:yes', title: 'Si, flota propia' },
-          { id: 'own_fleet:no', title: 'No' },
+          { id: 'own_fleet:yes', title: 'SI, FLOTA PROPIA' },
+          { id: 'own_fleet:no', title: 'NO' },
         ],
       );
       return;
@@ -945,24 +946,24 @@ export class WhatsAppFlowService {
       // No lots → ask for custom origin name
       await this.updateState(session.id, 'awaiting_origin_name', { ...state, destPlantId: plantId });
       await this.wa.sendText(phone,
-        'No tenes lotes registrados.\n' +
-        'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+        FLOW_HINT + 'No tenes lotes registrados.\n' +
+        'Escribi el nombre del campo/lugar de origen.');
       return;
     }
 
     await this.updateState(session.id, 'awaiting_lot', { ...state, destPlantId: plantId });
     await this.wa.sendList(phone,
-      'Desde que lote se carga?' + FLOW_HINT,
-      'Seleccionar lote',
+      FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
+      'SELECCIONAR LOTE',
       [{
-        title: 'Tus lotes',
+        title: 'TUS LOTES',
         rows: [
           ...lots.map((l: any) => ({
             id: `lot:${l.id}`,
-            title: l.name.slice(0, 24),
+            title: l.name.toUpperCase().slice(0, 24),
             description: l.field?.name?.slice(0, 72) || '',
           })),
-          { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+          { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
         ],
       }],
     );
@@ -988,26 +989,26 @@ export class WhatsAppFlowService {
     if (plantCompanies.length === 0) {
       await this.updateState(session.id, 'awaiting_dest_name', state);
       await this.wa.sendText(phone,
-        'No tenes plantas habilitadas.\n' +
-        'Escribi el nombre del destino o pedi acceso a una planta desde la app.' + FLOW_HINT);
+        FLOW_HINT + 'No tenes plantas habilitadas.\n' +
+        'Escribi el nombre del destino o pedi acceso a una planta desde la app.');
       return;
     }
 
     await this.updateState(session.id, 'awaiting_plant', state);
     await this.wa.sendList(phone,
-      `*${state.grain}* · ${state.tons} tn · ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nA que planta?` + FLOW_HINT,
-      'Seleccionar planta',
+      FLOW_HINT + `*${state.grain}* · ${state.tons} tn · ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndicar qué empresa recibe el pedido.`,
+      'SELECCIONAR PLANTA',
       [{
-        title: 'Plantas disponibles',
+        title: 'PLANTAS DISPONIBLES',
         rows: plantCompanies.map((c: any) => ({
           id: `plant:${c.id}`,
-          title: c.name.slice(0, 24),
+          title: c.name.toUpperCase().slice(0, 24),
         })),
       }],
     );
   }
 
-  /** Show date selection buttons (Hoy, Mañana, Pasado mañana, Otra fecha) */
+  /** Show date selection buttons */
   private async sendDateSelection(phone: string, session: any, state: any) {
     const today = new Date();
     const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
@@ -1017,11 +1018,11 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_date', state);
     await this.wa.sendButtons(phone,
-      'Cuando se carga?' + FLOW_HINT,
+      FLOW_HINT + 'Indicar qué día es la carga.',
       [
-        { id: 'date:today', title: `Hoy ${fmt(today)}` },
-        { id: 'date:tomorrow', title: `Manana ${fmt(tomorrow)}` },
-        { id: 'date:other', title: 'Otra fecha' },
+        { id: 'date:today', title: `HOY ${fmt(today)}` },
+        { id: 'date:tomorrow', title: `MAÑANA ${fmt(tomorrow)}` },
+        { id: 'date:other', title: 'OTRA FECHA' },
       ],
     );
   }
@@ -1032,10 +1033,10 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_time', state);
     await this.wa.sendList(phone,
-      `Fecha: *${dateFormatted}*\n\nA que hora se carga?` + FLOW_HINT,
-      'Seleccionar hora',
+      FLOW_HINT + `Fecha: *${dateFormatted}*\n\nA que hora se carga?`,
+      'SELECCIONAR HORA',
       [{
-        title: 'Horarios',
+        title: 'HORARIOS',
         rows: [
           { id: 'time:05:00', title: '05:00' },
           { id: 'time:06:00', title: '06:00' },
@@ -1046,7 +1047,7 @@ export class WhatsAppFlowService {
           { id: 'time:12:00', title: '12:00' },
           { id: 'time:14:00', title: '14:00' },
           { id: 'time:16:00', title: '16:00' },
-          { id: 'time:other', title: 'Otro horario', description: 'Escribir hora manualmente' },
+          { id: 'time:other', title: 'OTRO HORARIO', description: 'Escribir hora manualmente' },
         ],
       }],
     );
@@ -1056,11 +1057,12 @@ export class WhatsAppFlowService {
   private async sendOriginLocationPrompt(phone: string, session: any, state: any) {
     await this.updateState(session.id, 'awaiting_origin_location', state);
     await this.wa.sendButtons(phone,
+      FLOW_HINT +
       `Origen: *${state.customOriginName}*\n\n` +
       'Comparti la ubicacion del origen.\n' +
       'Toca 📎 > *Ubicacion* para enviar.\n\n' +
-      'O selecciona *Omitir* para continuar sin ubicacion.' + FLOW_HINT,
-      [{ id: 'location:skip', title: 'Omitir ubicacion' }],
+      'O selecciona *Omitir* para continuar sin ubicacion.',
+      [{ id: 'location:skip', title: 'OMITIR UBICACION' }],
     );
   }
 
@@ -1104,11 +1106,11 @@ export class WhatsAppFlowService {
       `${truckLine}\n` +
       `📍 ${originName} → ${destName}\n` +
       `📅 ${dateFormatted} ${finalState.loadTime}\n\n` +
-      `Confirmas la creacion?`,
+      `¿Confirmás la creación de la solicitud?`,
       [
-        { id: 'flow_confirm:yes', title: 'Confirmar' },
-        { id: 'flow_confirm:edit', title: 'Editar' },
-        { id: 'flow_confirm:no', title: 'Cancelar' },
+        { id: 'flow_confirm:yes', title: 'CONFIRMAR' },
+        { id: 'flow_confirm:edit', title: 'EDITAR' },
+        { id: 'flow_confirm:no', title: 'CANCELAR' },
       ],
     );
   }
@@ -1129,18 +1131,18 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_edit_field', state);
     await this.wa.sendList(phone,
-      'Que campo queres modificar?' + FLOW_HINT,
-      'Ver campos',
+      FLOW_HINT + 'Que campo queres modificar?',
+      'VER CAMPOS',
       [{
-        title: 'Campos editables',
+        title: 'CAMPOS EDITABLES',
         rows: [
-          { id: 'edit:grain',  title: 'Grano',     description: state.grain || '' },
-          { id: 'edit:tons',   title: 'Toneladas', description: `${state.tons} tn` },
-          { id: 'edit:trucks', title: 'Camiones',  description: `${state.truckCount || 1}` },
-          { id: 'edit:plant',  title: 'Planta',    description: destDesc.slice(0, 72) },
-          { id: 'edit:origin', title: 'Origen',    description: originDesc.slice(0, 72) },
-          { id: 'edit:date',   title: 'Fecha',     description: dateDesc },
-          { id: 'edit:time',   title: 'Hora',      description: state.loadTime || '' },
+          { id: 'edit:grain',  title: 'GRANO',     description: state.grain || '' },
+          { id: 'edit:tons',   title: 'TONELADAS', description: `${state.tons} tn` },
+          { id: 'edit:trucks', title: 'CAMIONES',  description: `${state.truckCount || 1}` },
+          { id: 'edit:plant',  title: 'PLANTA',    description: destDesc.slice(0, 72) },
+          { id: 'edit:origin', title: 'ORIGEN',    description: originDesc.slice(0, 72) },
+          { id: 'edit:date',   title: 'FECHA',     description: dateDesc },
+          { id: 'edit:time',   title: 'HORA',      description: state.loadTime || '' },
         ],
       }],
     );
