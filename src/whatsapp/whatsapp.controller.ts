@@ -3,7 +3,7 @@
 // Handles Meta webhook: GET verification + POST incoming messages
 // =====================================================================
 
-import { Controller, Get, Post, Req, Res, Logger, HttpCode, Query } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -226,5 +226,93 @@ export class WhatsAppController {
     } catch {
       return false;
     }
+  }
+
+  // ======================== LOCATION PICKER (public, token-based) =========
+
+  /**
+   * Generate a location-picker token for a WhatsApp session.
+   * Called internally by AI service — no JWT auth needed.
+   */
+  @Post('location-token')
+  @HttpCode(200)
+  async createLocationToken(@Body() body: { sessionId: string; purpose?: string }) {
+    if (!body.sessionId) throw new BadRequestException('sessionId required');
+
+    const session = await this.prisma.whatsAppSession.findUnique({ where: { id: body.sessionId } });
+    if (!session) throw new NotFoundException('Session not found');
+
+    const token = crypto.randomUUID();
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: body.sessionId },
+      data: {
+        flowState: {
+          ...state,
+          locationToken: {
+            token,
+            purpose: body.purpose || 'general',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    return {
+      token,
+      url: `${frontendUrl}/pick-location?token=${token}`,
+    };
+  }
+
+  /**
+   * Save a picked location from the frontend map picker.
+   * Public endpoint — validated only by the one-time token.
+   */
+  @Post('save-location')
+  @HttpCode(200)
+  async saveLocation(@Body() body: { token: string; lat: number; lng: number; name?: string; address?: string }) {
+    if (!body.token || body.lat == null || body.lng == null) {
+      throw new BadRequestException('token, lat, lng required');
+    }
+
+    // Find session with this token (search all active sessions)
+    const sessions = await this.prisma.whatsAppSession.findMany({
+      where: { expiresAt: { gt: new Date() } },
+    });
+
+    const session = sessions.find((s: any) => {
+      const state = (s.flowState as any) || {};
+      return state.locationToken?.token === body.token;
+    });
+
+    if (!session) throw new NotFoundException('Token invalido o expirado');
+
+    // Check token age (max 15 minutes)
+    const state = (session.flowState as any) || {};
+    const tokenCreated = new Date(state.locationToken.createdAt).getTime();
+    if (Date.now() - tokenCreated > 15 * 60 * 1000) {
+      throw new BadRequestException('Token expirado (max 15 min)');
+    }
+
+    // Save location and clear token
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          lastLocation: {
+            lat: body.lat,
+            lng: body.lng,
+            name: body.name || '',
+            address: body.address || '',
+          },
+          locationToken: null, // one-time use
+        },
+      },
+    });
+
+    this.logger.log(`Location saved for session ${session.id}: ${body.lat},${body.lng}`);
+    return { success: true };
   }
 }

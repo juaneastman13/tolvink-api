@@ -175,10 +175,12 @@ FLOTA PROPIA:
 - Si el productor quiere usar su propia flota, usa list_trucks para mostrar camiones disponibles.
 - Incluí truckId en prepare_freight para asignar flota propia al flete.
 
-UBICACIONES DE WHATSAPP:
+UBICACIONES:
 - Si el usuario comparte una ubicacion de WhatsApp, se guarda automaticamente en la sesion.
-- Podes usarla para asignar coordenadas a campos, lotes, u origenes/destinos de flete.
-- La ubicacion se usa automaticamente si no se proporcionan lat/lng en create_field, create_lot, o prepare_freight.
+- Para ubicaciones precisas, usa generate_location_link para enviar un link al mapa de Google Maps.
+- El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan en la sesion.
+- Despues de que confirme, la ubicacion se usa automaticamente en create_field, create_lot, o prepare_freight.
+- Cuando el usuario pida un origen o destino personalizado, o crear un campo/lote con ubicacion, ofrece el link del mapa.
 
 CAMPOS, LOTES Y CAMIONES:
 - Usa list_fields para ver campos y lotes existentes con sus IDs.
@@ -425,6 +427,18 @@ OTRAS INSTRUCCIONES:
         required: ['name', 'email', 'password'],
       },
     },
+    // ---- Location picker ----
+    {
+      name: 'generate_location_link',
+      description: 'Genera un link para que el usuario elija una ubicacion en un mapa de Google Maps. Usalo cuando el usuario necesite marcar una ubicacion personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan automaticamente en la sesion.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          purpose: { type: 'string', enum: ['origin', 'destination', 'field', 'lot'], description: 'Para que es la ubicacion' },
+        },
+        required: ['purpose'],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -456,6 +470,7 @@ OTRAS INSTRUCCIONES:
         case 'list_trucks': return await this.toolListTrucks(user);
         case 'create_truck': return await this.toolCreateTruck(input, user);
         case 'create_user': return await this.toolCreateUser(input, user);
+        case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -972,6 +987,45 @@ OTRAS INSTRUCCIONES:
       status: 'created',
       user: { id: (newUser as any).id, name: (newUser as any).name, email: (newUser as any).email, role },
       message: `Usuario "${input.name}" creado con rol ${role}.`,
+    });
+  }
+
+  // ======================== LOCATION PICKER TOOL ==========================
+
+  // ---- generate_location_link ----
+  private async toolGenerateLocationLink(input: any, session: any): Promise<string> {
+    const token = require('crypto').randomUUID();
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const state = (freshSession?.flowState as any) || {};
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          locationToken: {
+            token,
+            purpose: input.purpose || 'general',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const url = `${frontendUrl}/pick-location?token=${token}`;
+
+    const purposeLabels: Record<string, string> = {
+      origin: 'origen del flete',
+      destination: 'destino del flete',
+      field: 'ubicacion del campo',
+      lot: 'ubicacion del lote',
+    };
+    const label = purposeLabels[input.purpose] || 'ubicacion';
+
+    return JSON.stringify({
+      url,
+      message: `Abri este link para elegir el ${label} en el mapa. Cuando confirmes la ubicacion, volvé aca y decime "listo".`,
     });
   }
 
