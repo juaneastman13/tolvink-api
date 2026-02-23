@@ -359,7 +359,7 @@ MODIFICAR (solo admin/gerente):
         properties: {
           grain: { type: 'string', enum: ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] },
           tons: { type: 'number' },
-          truckCount: { type: 'number', description: 'Default 1' },
+          truckCount: { type: 'number', description: 'Se auto-calcula a partir de tons/30 si no se pasa' },
           destPlantId: { type: 'string', description: 'ID de planta (de search_plants)' },
           destName: { type: 'string', description: 'Nombre destino si no hay planta' },
           customDestLat: { type: 'number', description: 'Latitud destino personalizado (de ubicacion WhatsApp)' },
@@ -878,11 +878,16 @@ MODIFICAR (solo admin/gerente):
       if (truck) truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
     }
 
+    // Auto-calculate truck count: ~30 tn per truck (standard grain transport)
+    const tons = Number(input.tons);
+    const autoTruckCount = Math.max(1, Math.ceil(tons / 30));
+    const truckCount = input.truckCount || autoTruckCount;
+
     const dateFormatted = input.loadDate.split('-').reverse().join('/');
     const summary: any = {
       grain: input.grain,
       tons: input.tons,
-      truckCount: input.truckCount || 1,
+      truckCount,
       origin: originDisplayName,
       dest: destDisplayName,
       date: dateFormatted,
@@ -896,7 +901,7 @@ MODIFICAR (solo admin/gerente):
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
-        flowState: { ...state, pendingFreight: input },
+        flowState: { ...state, pendingFreight: { ...input, truckCount } },
       },
     });
 
