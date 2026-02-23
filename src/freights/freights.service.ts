@@ -106,8 +106,13 @@ export class FreightsService {
     if (destCompanyId) participants.push({ companyId: destCompanyId });
 
     const originName = lot ? lot.name : (dto.customOriginName || 'Origen personalizado');
-    const originLat = dto.overrideOriginLat || lot?.lat || lot?.field?.lat || null;
-    const originLng = dto.overrideOriginLng || lot?.lng || lot?.field?.lng || null;
+    // Use nullish coalescing — Prisma Decimal(0) is falsy with ||, so use ?? and skip 0
+    const lotLat = lot?.lat != null && Number(lot.lat) !== 0 ? lot.lat : null;
+    const lotLng = lot?.lng != null && Number(lot.lng) !== 0 ? lot.lng : null;
+    const fieldLat = lot?.field?.lat != null && Number(lot.field.lat) !== 0 ? lot.field.lat : null;
+    const fieldLng = lot?.field?.lng != null && Number(lot.field.lng) !== 0 ? lot.field.lng : null;
+    const originLat = dto.overrideOriginLat ?? lotLat ?? fieldLat ?? null;
+    const originLng = dto.overrideOriginLng ?? lotLng ?? fieldLng ?? null;
 
     const freight = await this.prisma.$transaction(async (tx) => {
       // Generate code inside transaction (fixes race condition)

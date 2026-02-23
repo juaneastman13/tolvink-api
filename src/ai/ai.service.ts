@@ -699,19 +699,31 @@ OTRAS INSTRUCCIONES:
         select: { lat: true, lng: true, field: { select: { lat: true, lng: true } } },
       });
       if (lot) {
-        const lat = lot.lat || lot.field?.lat;
-        const lng = lot.lng || lot.field?.lng;
-        if (lat && lng) {
-          dto.overrideOriginLat = Number(lat);
-          dto.overrideOriginLng = Number(lng);
+        // Use != null checks (Decimal 0 is falsy in JS but may be a valid-ish value)
+        // Also skip 0,0 which means "no real coordinates"
+        const lotLat = lot.lat != null && Number(lot.lat) !== 0 ? Number(lot.lat) : null;
+        const lotLng = lot.lng != null && Number(lot.lng) !== 0 ? Number(lot.lng) : null;
+        const fieldLat = lot.field?.lat != null && Number(lot.field.lat) !== 0 ? Number(lot.field.lat) : null;
+        const fieldLng = lot.field?.lng != null && Number(lot.field.lng) !== 0 ? Number(lot.field.lng) : null;
+        const lat = lotLat ?? fieldLat;
+        const lng = lotLng ?? fieldLng;
+        console.log(`[AI] Lot coords: lot(${lot.lat},${lot.lng}) field(${lot.field?.lat},${lot.field?.lng}) → resolved(${lat},${lng})`);
+        if (lat != null && lng != null) {
+          dto.overrideOriginLat = lat;
+          dto.overrideOriginLng = lng;
         }
       }
-    } else {
-      dto.customOriginName = pending.customOriginName || 'Origen WhatsApp';
+    }
+    // If no lot or lot had no coords, use custom origin
+    if (!pending.originLotId || !dto.overrideOriginLat) {
+      if (!pending.originLotId) {
+        dto.customOriginName = pending.customOriginName || 'Origen WhatsApp';
+      }
       if (pending.customOriginLat && pending.customOriginLng) {
         dto.overrideOriginLat = pending.customOriginLat;
         dto.overrideOriginLng = pending.customOriginLng;
-      } else {
+      } else if (!dto.overrideOriginLat) {
+        // Default fallback coords (Montevideo) so freight creation doesn't fail
         dto.overrideOriginLat = -34.0;
         dto.overrideOriginLng = -56.0;
       }
