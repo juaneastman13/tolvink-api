@@ -51,6 +51,8 @@ export class WhatsAppRouterService {
     if (openaiKey) {
       this.openai = new OpenAI({ apiKey: openaiKey });
       this.logger.log('OpenAI Whisper enabled for audio transcription');
+    } else {
+      this.logger.warn('OPENAI_API_KEY not set — audio transcription disabled');
     }
   }
 
@@ -58,6 +60,8 @@ export class WhatsAppRouterService {
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
+      console.log(`[WA-ROUTER] handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
+
       // Mark as read
       this.wa.markRead(waMessageId).catch(() => {});
 
@@ -253,7 +257,10 @@ export class WhatsAppRouterService {
   // ======================== AUDIO HANDLER =================================
 
   private async handleAudio(phone: string, user: any, payload: any) {
+    console.log(`[WA-AUDIO] handleAudio called. openai=${!!this.openai} mediaId=${payload?.mediaId} mimeType=${payload?.mimeType}`);
+
     if (!this.openai) {
+      console.log(`[WA-AUDIO] OpenAI client is NULL — OPENAI_API_KEY present: ${!!process.env.OPENAI_API_KEY}`);
       await this.wa.sendText(phone, 'El procesamiento de audio no esta disponible. Envia tu mensaje como texto.');
       return;
     }
