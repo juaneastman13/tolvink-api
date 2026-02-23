@@ -1551,24 +1551,35 @@ MODIFICAR (solo admin/gerente):
   private smartTrimHistory(messages: any[]): any[] {
     if (messages.length <= MAX_HISTORY) return messages;
 
-    // Always keep the last 20 messages (most recent context)
-    const recent = messages.slice(-20);
-    const older = messages.slice(0, -20);
+    // Simple trim: keep last MAX_HISTORY messages
+    let trimmed = messages.slice(-MAX_HISTORY);
 
-    // From older messages, keep tool_use + tool_result pairs (factual data)
-    const importantOlder = older.filter((m: any) => {
-      if (m.role === 'assistant' && Array.isArray(m.content)) {
-        return m.content.some((b: any) => b.type === 'tool_use');
+    // Ensure we don't start with an orphaned tool_result
+    // (each tool_result needs a preceding tool_use from the assistant)
+    while (trimmed.length > 0) {
+      const first = trimmed[0];
+      const hasToolResult = first.role === 'user' && Array.isArray(first.content) &&
+        first.content.some((b: any) => b.type === 'tool_result');
+      if (hasToolResult) {
+        trimmed = trimmed.slice(1); // drop the orphan
+      } else {
+        break;
       }
-      if (m.role === 'user' && Array.isArray(m.content)) {
-        return m.content.some((b: any) => b.type === 'tool_result');
-      }
-      return false;
-    });
+    }
 
-    // Keep up to 10 important older messages to stay within budget
-    const keptOlder = importantOlder.slice(-10);
-    return [...keptOlder, ...recent];
+    // Also ensure we don't end with a tool_use without its tool_result
+    while (trimmed.length > 0) {
+      const last = trimmed[trimmed.length - 1];
+      const hasToolUse = last.role === 'assistant' && Array.isArray(last.content) &&
+        last.content.some((b: any) => b.type === 'tool_use');
+      if (hasToolUse) {
+        trimmed = trimmed.slice(0, -1); // drop trailing tool_use without result
+      } else {
+        break;
+      }
+    }
+
+    return trimmed;
   }
 
   // ======================== HELPERS =====================================
