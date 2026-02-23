@@ -216,7 +216,7 @@ export class WhatsAppFlowService {
 
   // ======================== CREATE FREIGHT FLOW ==========================
   // Multi-step guided freight creation
-  // Steps: grain → tons → plant → field → date → time → confirm
+  // Steps: grain → tons → truckCount → (ownFleet?) → (selectTruck?) → plant → lot → date → time → confirm
 
   private async createFreightStart(phone: string, session: any, user: any) {
     // Check if user is a producer
@@ -288,42 +288,132 @@ export class WhatsAppFlowService {
         return;
       }
 
-      // Fetch plant companies the producer has access to via PlantProducerAccess
-      const accessRecords = await this.prisma.plantProducerAccess.findMany({
-        where: { producerCompanyId: state.producerCompanyId, active: true },
-        select: { plantCompanyId: true },
-      });
+      // Calculate suggested truck count (30 tn standard capacity)
+      const suggested = Math.max(1, Math.ceil(tons / 30));
+      await this.updateState(session.id, 'awaiting_truck_count', { ...state, tons });
 
-      let plantCompanies: any[] = [];
-      if (accessRecords.length > 0) {
-        const plantCompanyIds = [...new Set(accessRecords.map(ar => ar.plantCompanyId))];
-        plantCompanies = await this.prisma.company.findMany({
-          where: { id: { in: plantCompanyIds }, active: true },
-          select: { id: true, name: true },
-          take: 10,
-        });
+      const truckWord = suggested === 1 ? 'camion' : 'camiones';
+      await this.wa.sendButtons(phone,
+        `Grano: *${state.grain}* | Toneladas: *${tons}*\n\n` +
+        `Para ${tons} tn se necesita${suggested > 1 ? 'n' : ''} aprox. *${suggested} ${truckWord}*.\n` +
+        `Cuantos camiones necesitas?`,
+        [
+          { id: `trucks:${suggested}`, title: `${suggested} ${truckWord}` },
+          { id: 'trucks:other', title: 'Otra cantidad' },
+        ],
+      );
+      return;
+    }
+
+    // ---- Step: Truck Count ----
+    if (step === 'awaiting_truck_count') {
+      let truckCount: number | null = null;
+
+      if (type === 'button_reply') {
+        if (payload.id === 'trucks:other') {
+          await this.updateState(session.id, 'awaiting_truck_count_input', state);
+          await this.wa.sendText(phone, 'Cuantos camiones necesitas? (escribi el numero):');
+          return;
+        }
+        if (payload.id?.startsWith('trucks:')) {
+          truckCount = parseInt(payload.id.split(':')[1], 10);
+        }
+      } else if (type === 'text') {
+        truckCount = parseInt(payload.body?.trim(), 10);
       }
 
-      if (plantCompanies.length === 0) {
-        await this.updateState(session.id, 'awaiting_dest_name', { ...state, tons });
-        await this.wa.sendText(phone,
-          'No tenes plantas habilitadas.\n' +
-          'Escribi el nombre del destino o pedi acceso a una planta desde la app.');
+      if (!truckCount || truckCount < 1 || truckCount > 50) {
+        await this.wa.sendText(phone, 'Ingresa un numero entre 1 y 50:');
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_plant', { ...state, tons });
+      await this.afterTruckCount(phone, session, { ...state, truckCount });
+      return;
+    }
+
+    // ---- Step: Truck Count Custom Input ----
+    if (step === 'awaiting_truck_count_input') {
+      if (type !== 'text') {
+        await this.wa.sendText(phone, 'Escribi la cantidad de camiones (ej: 3):');
+        return;
+      }
+      const truckCount = parseInt(payload.body?.trim(), 10);
+      if (!truckCount || truckCount < 1 || truckCount > 50) {
+        await this.wa.sendText(phone, 'Ingresa un numero valido entre 1 y 50:');
+        return;
+      }
+      await this.afterTruckCount(phone, session, { ...state, truckCount });
+      return;
+    }
+
+    // ---- Step: Own Fleet Decision ----
+    if (step === 'awaiting_own_fleet') {
+      let useOwnFleet = false;
+      if (type === 'button_reply') {
+        useOwnFleet = payload.id === 'own_fleet:yes';
+      } else if (type === 'text') {
+        useOwnFleet = /^(si|sí|yes)$/i.test(payload.body?.trim());
+      }
+
+      if (!useOwnFleet) {
+        // Skip to plant selection
+        await this.sendPlantSelection(phone, session, state);
+        return;
+      }
+
+      // Show available trucks
+      const trucks = await this.prisma.truck.findMany({
+        where: { companyId: state.producerCompanyId, active: true },
+        include: { assignedUser: { select: { id: true, name: true } } },
+        take: 10,
+      });
+
+      if (trucks.length === 0) {
+        await this.wa.sendText(phone, 'No tenes camiones registrados. Continuamos sin flota propia.');
+        await this.sendPlantSelection(phone, session, state);
+        return;
+      }
+
+      await this.updateState(session.id, 'awaiting_truck_select', state);
       await this.wa.sendList(phone,
-        `Grano: *${state.grain}* | Toneladas: *${tons}*\n\nA que planta?`,
-        'Seleccionar planta',
+        'Selecciona un camion de tu flota:',
+        'Ver camiones',
         [{
-          title: 'Plantas disponibles',
-          rows: plantCompanies.map((c: any) => ({
-            id: `plant:${c.id}`,
-            title: c.name.slice(0, 24),
-          })),
+          title: 'Tus camiones',
+          rows: trucks.map((t: any) => {
+            const driver = t.assignedUser?.name ? ` · ${t.assignedUser.name}` : '';
+            const info = [t.brand, t.model].filter(Boolean).join(' ');
+            return {
+              id: `truck:${t.id}`,
+              title: t.plate.slice(0, 24),
+              description: `${info}${driver}`.slice(0, 72) || undefined,
+            };
+          }),
         }],
       );
+      return;
+    }
+
+    // ---- Step: Truck Selection ----
+    if (step === 'awaiting_truck_select') {
+      let truckId: string | null = null;
+      if ((type === 'list_reply' || type === 'button_reply') && payload.id?.startsWith('truck:')) {
+        truckId = payload.id.split(':')[1];
+      }
+
+      if (!truckId) {
+        await this.wa.sendText(phone, 'Selecciona un camion de la lista.');
+        return;
+      }
+
+      // Get truck plate for summary
+      const truck = await this.prisma.truck.findUnique({
+        where: { id: truckId },
+        select: { plate: true },
+      });
+
+      const newState = { ...state, truckId, truckPlate: truck?.plate || '' };
+      await this.sendPlantSelection(phone, session, newState);
       return;
     }
 
@@ -503,10 +593,17 @@ export class WhatsAppFlowService {
       const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
 
       await this.updateState(session.id, 'awaiting_confirm', finalState);
+
+      const truckCount = finalState.truckCount || 1;
+      const truckLine = finalState.truckPlate
+        ? `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''} · Flota propia (${finalState.truckPlate})`
+        : `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
+
       await this.wa.sendButtons(phone,
         `*Resumen del flete:*\n` +
         `━━━━━━━━━━━━━━━\n` +
         `📦 ${finalState.grain} · ${finalState.tons} tn\n` +
+        `${truckLine}\n` +
         `📍 ${originName} → ${destName}\n` +
         `📅 ${dateFormatted} ${loadTime}\n\n` +
         `Confirmas la creacion?`,
@@ -544,7 +641,13 @@ export class WhatsAppFlowService {
         items: [{ grain: state.grain, tons: parseFloat(state.tons) }],
         loadDate: state.loadDate,
         loadTime: state.loadTime,
+        truckCount: state.truckCount || 1,
       };
+
+      // Own fleet truck assignment
+      if (state.truckId) {
+        dto.truckId = state.truckId;
+      }
 
       // Destination: plant ID or custom name
       if (state.destPlantId) {
@@ -563,16 +666,81 @@ export class WhatsAppFlowService {
       }
 
       const freight = await this.freights.create(dto as any, synUser);
-      await this.wa.sendText(phone,
-        `✅ Flete creado: *${(freight as any).code}*\n\n` +
-        `El flete esta pendiente de asignacion de transportista.`,
-      );
+      const successMsg = state.truckId
+        ? `✅ Flete creado: *${(freight as any).code}*\n\nAsignado a tu flota propia (${state.truckPlate || 'camion seleccionado'}).`
+        : `✅ Flete creado: *${(freight as any).code}*\n\nEl flete esta pendiente de asignacion de transportista.`;
+      await this.wa.sendText(phone, successMsg);
       await this.endFlow(session.id);
       return;
     }
 
     // Fallback
     await this.wa.sendText(phone, 'No entendi tu respuesta. Escribi "cancelar" para volver al menu.');
+  }
+
+  // ======================== CREATE FREIGHT HELPERS ========================
+
+  /** After truck count is confirmed, check own fleet or go to plant selection */
+  private async afterTruckCount(phone: string, session: any, state: any) {
+    // Check if producer has own fleet
+    const company = await this.prisma.company.findUnique({
+      where: { id: state.producerCompanyId },
+      select: { hasInternalFleet: true },
+    });
+
+    if (company?.hasInternalFleet) {
+      await this.updateState(session.id, 'awaiting_own_fleet', state);
+      await this.wa.sendButtons(phone,
+        `Camiones: *${state.truckCount}*\n\nQueres usar tu flota propia?`,
+        [
+          { id: 'own_fleet:yes', title: 'Si, flota propia' },
+          { id: 'own_fleet:no', title: 'No' },
+        ],
+      );
+      return;
+    }
+
+    // No own fleet → go to plant selection
+    await this.sendPlantSelection(phone, session, state);
+  }
+
+  /** Show plant selection (reused from multiple steps) */
+  private async sendPlantSelection(phone: string, session: any, state: any) {
+    const accessRecords = await this.prisma.plantProducerAccess.findMany({
+      where: { producerCompanyId: state.producerCompanyId, active: true },
+      select: { plantCompanyId: true },
+    });
+
+    let plantCompanies: any[] = [];
+    if (accessRecords.length > 0) {
+      const plantCompanyIds = [...new Set(accessRecords.map(ar => ar.plantCompanyId))];
+      plantCompanies = await this.prisma.company.findMany({
+        where: { id: { in: plantCompanyIds }, active: true },
+        select: { id: true, name: true },
+        take: 10,
+      });
+    }
+
+    if (plantCompanies.length === 0) {
+      await this.updateState(session.id, 'awaiting_dest_name', state);
+      await this.wa.sendText(phone,
+        'No tenes plantas habilitadas.\n' +
+        'Escribi el nombre del destino o pedi acceso a una planta desde la app.');
+      return;
+    }
+
+    await this.updateState(session.id, 'awaiting_plant', state);
+    await this.wa.sendList(phone,
+      `*${state.grain}* · ${state.tons} tn · ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nA que planta?`,
+      'Seleccionar planta',
+      [{
+        title: 'Plantas disponibles',
+        rows: plantCompanies.map((c: any) => ({
+          id: `plant:${c.id}`,
+          title: c.name.slice(0, 24),
+        })),
+      }],
+    );
   }
 
   // ======================== HELPERS =====================================
