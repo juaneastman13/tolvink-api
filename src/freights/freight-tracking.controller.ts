@@ -73,4 +73,125 @@ export class FreightTrackingController {
       select: { lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
   }
+
+  /** Get full freight data for PDF report generation (no auth) */
+  @Get(':token/report-data')
+  async getReportDataByToken(@Param('token') token: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { shareToken: token },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        originCompanyId: true,
+        originName: true,
+        originLat: true,
+        originLng: true,
+        destName: true,
+        destLat: true,
+        destLng: true,
+        loadDate: true,
+        loadTime: true,
+        startedAt: true,
+        loadedAt: true,
+        finishedAt: true,
+        notes: true,
+        originCompany: { select: { name: true, hasInternalFleet: true } },
+        field: { select: { name: true } },
+        requestedBy: { select: { name: true } },
+        items: {
+          select: { grain: true, tons: true },
+          take: 1,
+        },
+        assignments: {
+          where: { status: { not: 'rejected' as any } },
+          orderBy: { createdAt: 'desc' as const },
+          take: 1,
+          select: {
+            transportCompanyId: true,
+            transportCompany: { select: { name: true } },
+            driver: { select: { name: true, phone: true } },
+            driverName: true,
+            truck: { select: { plate: true, model: true } },
+            plate: true,
+          },
+        },
+        documents: {
+          orderBy: { createdAt: 'desc' as const },
+          take: 20,
+          select: { name: true, type: true, step: true, createdAt: true },
+        },
+      },
+    });
+
+    if (!freight) {
+      throw new NotFoundException('Link de informe no valido');
+    }
+
+    // Fetch audit log
+    const auditLog = await this.prisma.auditLog.findMany({
+      where: { entityType: 'freight', entityId: freight.id },
+      orderBy: { createdAt: 'asc' },
+      take: 200,
+      select: {
+        action: true,
+        reason: true,
+        createdAt: true,
+        user: {
+          select: {
+            name: true,
+            company: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    const item = freight.items[0];
+    const a = freight.assignments[0];
+    const isOwnFleet = !!(a && freight.originCompany?.hasInternalFleet && a.transportCompanyId === freight.originCompanyId);
+
+    return {
+      code: freight.code,
+      status: freight.status,
+      grain: item?.grain || null,
+      tons: item?.tons ? Number(item.tons) : null,
+      unit: 'toneladas',
+      originCompanyName: freight.originCompany?.name || null,
+      fieldName: freight.field?.name || null,
+      originName: freight.originName,
+      destName: freight.destName,
+      loadDate: freight.loadDate ? freight.loadDate.toISOString().split('T')[0] : null,
+      loadTime: freight.loadTime,
+      requestedByName: freight.requestedBy?.name || null,
+      transporterName: a?.transportCompany?.name || null,
+      truckPlate: a?.truck?.plate || a?.plate || null,
+      truckModel: a?.truck?.model || null,
+      driverName: a?.driver?.name || a?.driverName || null,
+      driverPhone: a?.driver?.phone || null,
+      isOwnFleet,
+      notes: freight.notes,
+      originLat: freight.originLat ? Number(freight.originLat) : null,
+      originLng: freight.originLng ? Number(freight.originLng) : null,
+      destLat: freight.destLat ? Number(freight.destLat) : null,
+      destLng: freight.destLng ? Number(freight.destLng) : null,
+      startedAt: freight.startedAt,
+      loadedAt: freight.loadedAt,
+      finishedAt: freight.finishedAt,
+      documents: freight.documents.map(d => ({
+        name: d.name,
+        type: d.type,
+        step: d.step,
+        createdAt: d.createdAt,
+      })),
+      auditLog: auditLog.map(log => ({
+        action: log.action,
+        reason: log.reason,
+        createdAt: log.createdAt,
+        user: {
+          name: log.user?.name || null,
+          company: { name: log.user?.company?.name || null },
+        },
+      })),
+    };
+  }
 }
