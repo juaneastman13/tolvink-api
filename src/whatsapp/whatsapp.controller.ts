@@ -18,6 +18,9 @@ export class WhatsAppController {
   private readonly logger = new Logger(WhatsAppController.name);
   private readonly appSecret: string | undefined;
   private readonly verifyToken: string | undefined;
+  // Deduplication: track recently processed message IDs (Meta can send duplicates)
+  private readonly processedMessages = new Map<string, number>();
+  private readonly DEDUP_TTL_MS = 60_000; // 1 minute
 
   constructor(
     private config: ConfigService,
@@ -96,6 +99,22 @@ export class WhatsAppController {
       const phone = message.from; // E.164 without + (e.g., "59898247552")
       const waMessageId = message.id;
       console.log(`[WA-WEBHOOK] Message from ${phone}, type: ${message.type}`);
+
+      // Deduplication — Meta can send the same webhook multiple times
+      if (waMessageId && this.processedMessages.has(waMessageId)) {
+        console.log(`[WA-WEBHOOK] Duplicate message ${waMessageId}, skipping`);
+        return;
+      }
+      if (waMessageId) {
+        this.processedMessages.set(waMessageId, Date.now());
+        // Cleanup old entries every 100 messages
+        if (this.processedMessages.size > 100) {
+          const now = Date.now();
+          for (const [id, ts] of this.processedMessages) {
+            if (now - ts > this.DEDUP_TTL_MS) this.processedMessages.delete(id);
+          }
+        }
+      }
 
       // Parse message type and payload
       const { type, payload } = this.parseMessage(message);

@@ -76,6 +76,7 @@ export class TrucksService {
     // Plant/admin can query trucks of a specific company (for own-fleet assignment)
     const targetCompanyId = companyId && (user.role === 'platform_admin' || user.companyType === 'plant' || (Array.isArray(user.companyTypes) && user.companyTypes.includes('plant')))
       ? companyId : user.companyId;
+    if (!targetCompanyId) return [];
     return this.prisma.truck.findMany({
       where: { companyId: targetCompanyId, active: true },
       include: { assignedUser: { select: { id: true, name: true } } },
