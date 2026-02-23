@@ -342,6 +342,9 @@ model Freight {
   assignedTruckCount  Int       @default(0)     @map("assigned_truck_count")
   isMultiTruck        Boolean   @default(false) @map("is_multi_truck")
 
+  // Public tracking share token (generated on first share request)
+  shareToken          String?   @unique @map("share_token") @db.VarChar(36)
+
   // Cross-confirmations
   transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
   producerLoadedConfirmedAt      DateTime? @map("producer_loaded_confirmed_at")

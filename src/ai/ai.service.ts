@@ -260,6 +260,11 @@ CAMPOS Y LOTES:
 USUARIOS:
 - Solo admin/gerente puede crear con create_user.
 
+SEGUIMIENTO EN VIVO:
+- generate_tracking_link para enviar un link de seguimiento (ruta + posicion en tiempo real).
+- Solo funciona para fletes activos (no finalizados ni cancelados).
+- El link no expira y se puede compartir con cualquiera.
+
 ═══ ASIGNAR TRANSPORTISTA (SOLO PLANTAS) ═══
 
 1. El usuario de planta pide asignar transportista a un flete.
@@ -533,6 +538,18 @@ MODIFICAR (solo admin/gerente):
         required: ['purpose'],
       },
     },
+    // ---- Tracking link ----
+    {
+      name: 'generate_tracking_link',
+      description: 'Genera un link publico para rastrear un flete en vivo en Google Maps. Muestra ruta completa (origen → destino) y posicion del camion en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo del flete (FLT-XXXX)' },
+        },
+        required: ['code'],
+      },
+    },
     // ---- Transporter assignment (plant only) ----
     {
       name: 'list_transporters',
@@ -644,6 +661,7 @@ MODIFICAR (solo admin/gerente):
         case 'create_truck': return await this.toolCreateTruck(input, user);
         case 'create_user': return await this.toolCreateUser(input, user);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
+        case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input);
         case 'list_transporters': return await this.toolListTransporters(user);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser);
@@ -1207,6 +1225,41 @@ MODIFICAR (solo admin/gerente):
     return JSON.stringify({
       url,
       message: `Abri este link para elegir el ${label} en el mapa. Cuando confirmes la ubicacion, volvé aca y decime "listo".`,
+    });
+  }
+
+  // ---- generate_tracking_link ----
+  private async toolGenerateTrackingLink(input: any): Promise<string> {
+    const code = input.code?.toUpperCase();
+    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: { id: true, status: true, shareToken: true, code: true },
+    });
+
+    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    if (['finished', 'canceled'].includes(freight.status)) {
+      return JSON.stringify({ error: `El flete ${code} ya esta ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
+    }
+
+    // Reuse existing token or generate new one
+    let token = freight.shareToken;
+    if (!token) {
+      token = require('crypto').randomUUID();
+      await this.prisma.freight.update({
+        where: { id: freight.id },
+        data: { shareToken: token },
+      });
+    }
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const url = `${frontendUrl}/track?token=${token}`;
+
+    return JSON.stringify({
+      url,
+      message: `Aca tenes el link de seguimiento en vivo del flete ${code}. Abrilo para ver la ruta y posicion del camion en tiempo real.`,
     });
   }
 
