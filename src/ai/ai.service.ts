@@ -516,7 +516,7 @@ MODIFICAR (solo admin/gerente):
           email: { type: 'string', description: 'Email del usuario' },
           password: { type: 'string', description: 'Contrasena inicial' },
           phone: { type: 'string', description: 'Telefono (opcional)' },
-          role: { type: 'string', enum: ['admin', 'operario', 'chofer'], description: 'Rol: admin, operario, o chofer (default: operario)' },
+          role: { type: 'string', enum: ['admin', 'gerente', 'operario', 'chofer'], description: 'Rol: admin/gerente, operario, o chofer (default: operario)' },
         },
         required: ['name', 'email', 'password'],
       },
@@ -1143,24 +1143,31 @@ MODIFICAR (solo admin/gerente):
     const companyType = this.resolveCompanyType(user);
     const primaryType = companyType.split(',')[0]?.trim() || 'producer';
 
-    const role = input.role || 'operario';
+    // Map Spanish role names to Prisma UserRole enum (admin | operator | platform_admin)
+    const inputRole = input.role || 'operario';
+    const roleToEnum: Record<string, string> = {
+      admin: 'admin', gerente: 'admin',
+      operario: 'operator', chofer: 'operator',
+    };
+    const prismaRole = roleToEnum[inputRole] || 'operator';
+
     const dto: any = {
       name: input.name,
       email: input.email,
       password: input.password,
       phone: input.phone || null,
-      role,
+      role: prismaRole,
       companyId: producerCompanyId,
       userTypes: [primaryType],
       companyByType: { [primaryType]: producerCompanyId },
-      roleByType: { [primaryType]: role },
+      roleByType: { [primaryType]: inputRole },
     };
 
     const newUser = await this.adminService.createUser(dto);
     return JSON.stringify({
       status: 'created',
-      user: { id: (newUser as any).id, name: (newUser as any).name, email: (newUser as any).email, role },
-      message: `Usuario "${input.name}" creado con rol ${role}.`,
+      user: { id: (newUser as any).id, name: (newUser as any).name, email: (newUser as any).email, role: inputRole },
+      message: `Usuario "${input.name}" creado con rol ${inputRole}.`,
     });
   }
 
