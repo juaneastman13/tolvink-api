@@ -188,6 +188,7 @@ export class WhatsAppRouterService {
         await this.wa.sendText(phone, reply);
       }
     } catch (e) {
+      console.error(`[WA-AI] handleAiChat error:`, e.message, e.stack?.slice(0, 300));
       this.logger.error(`AI chat error: ${e.message}`);
       await this.wa.sendText(phone,
         'Estoy teniendo problemas tecnicos. Usa los botones del menu.',

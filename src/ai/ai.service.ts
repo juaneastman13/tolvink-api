@@ -71,6 +71,7 @@ export class AiService {
       while (loopCount < MAX_TOOL_LOOPS) {
         loopCount++;
 
+        console.log(`[AI] Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         response = await this.client.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 1024,
@@ -78,6 +79,7 @@ export class AiService {
           tools: this.tools as any,
           messages: currentMessages,
         });
+        console.log(`[AI] Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
 
         if (response.stop_reason === 'tool_use') {
           // Add assistant response to messages
@@ -123,6 +125,7 @@ export class AiService {
 
       return finalText;
     } catch (e) {
+      console.error(`[AI] Chat error:`, e.message, e.stack?.slice(0, 300));
       this.logger.error(`AI chat error: ${e.message}`);
       return 'Estoy teniendo problemas tecnicos. Intenta de nuevo o usa los botones del menu.';
     }
