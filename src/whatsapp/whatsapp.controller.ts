@@ -282,17 +282,30 @@ export class WhatsAppController {
       throw new BadRequestException('token, lat, lng required');
     }
 
-    // Find session with this token (search all active sessions)
+    // Find session with this token — search ALL sessions (including recently expired)
     const sessions = await this.prisma.whatsAppSession.findMany({
-      where: { expiresAt: { gt: new Date() } },
+      where: {
+        expiresAt: { gt: new Date(Date.now() - 60 * 60 * 1000) }, // include up to 1h expired
+      },
     });
+
+    this.logger.log(`save-location: searching ${sessions.length} sessions for token ${body.token.slice(0, 8)}...`);
 
     const session = sessions.find((s: any) => {
       const state = (s.flowState as any) || {};
       return state.locationToken?.token === body.token;
     });
 
-    if (!session) throw new NotFoundException('Token invalido o expirado');
+    if (!session) {
+      // Debug: log which sessions have locationTokens
+      const withTokens = sessions.filter((s: any) => (s.flowState as any)?.locationToken);
+      this.logger.warn(`save-location: token not found. Sessions with tokens: ${withTokens.length}/${sessions.length}`);
+      withTokens.forEach((s: any) => {
+        const t = (s.flowState as any).locationToken;
+        this.logger.warn(`  session ${s.id}: token=${t?.token?.slice(0, 8)}... expired=${s.expiresAt < new Date()}`);
+      });
+      throw new NotFoundException('Token invalido o expirado');
+    }
 
     // Check token age (max 15 minutes)
     const state = (session.flowState as any) || {};
