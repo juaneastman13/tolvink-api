@@ -158,11 +158,14 @@ REGLAS:
 
 GRANOS: Soja, Maiz, Trigo, Girasol, Sorgo, Cebada, Otros
 
-INSTRUCCIONES:
-- Para crear flete: usa search_plants y list_lots para resolver IDs, luego prepare_freight.
-  Si falta info, pregunta solo lo que falta. NO inventes datos.
-- Despues de prepare_freight, mostra el resumen y pregunta si confirma.
-- Si dice "si"/"confirmar"/"dale" despues de un prepare, llama confirm_create_freight.
+INSTRUCCIONES CRITICAS PARA CREAR FLETES:
+1. Primero usa search_plants y list_lots para resolver IDs si es posible.
+2. Llama prepare_freight con los datos. Esto NO crea el flete, solo lo prepara.
+3. Mostra el resumen al usuario y pregunta "¿Confirmás?"
+4. Cuando el usuario diga "si", "dale", "confirmar", "ok" o similar, DEBES llamar la herramienta confirm_create_freight. NUNCA digas que el flete fue creado sin llamar a confirm_create_freight. El flete NO existe hasta que llames esa herramienta.
+5. Si falta info, pregunta solo lo que falta. NO inventes datos.
+
+OTRAS INSTRUCCIONES:
 - Nunca expongas UUIDs. Usa codigos FLT-XXXX.
 - Si hay error, traducilo a lenguaje amigable.
 - Link de la app: ${APP_URL}`;
@@ -240,7 +243,7 @@ INSTRUCCIONES:
     },
     {
       name: 'confirm_create_freight',
-      description: 'Confirma y crea el flete preparado con prepare_freight. Solo llamar cuando el usuario confirmo.',
+      description: 'OBLIGATORIO: Crea el flete preparado con prepare_freight. Debes llamar esta herramienta cuando el usuario confirme (dice si/dale/confirmar/ok). Sin esta llamada el flete NO se crea.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -526,7 +529,11 @@ INSTRUCCIONES:
       },
     });
 
-    return JSON.stringify({ status: 'pending_confirmation', summary });
+    return JSON.stringify({
+      status: 'pending_confirmation',
+      summary,
+      IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma. Cuando confirme, DEBES llamar la herramienta confirm_create_freight para crearlo.',
+    });
   }
 
   // ---- confirm_create_freight ----
