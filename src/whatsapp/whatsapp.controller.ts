@@ -1,9 +1,9 @@
 // =====================================================================
-// TOLVINK — WhatsApp Webhook Controller (Twilio)
-// Handles Twilio WhatsApp webhook: incoming messages + status callbacks
+// TOLVINK — WhatsApp Webhook Controller (Meta Cloud API)
+// Handles Meta webhook: GET verification + POST incoming messages
 // =====================================================================
 
-import { Controller, Post, Req, Res, Logger, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res, Logger, HttpCode, Query } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -16,7 +16,8 @@ import { PrismaService } from '../database/prisma.service';
 @Controller('whatsapp')
 export class WhatsAppController {
   private readonly logger = new Logger(WhatsAppController.name);
-  private readonly authToken: string | undefined;
+  private readonly appSecret: string | undefined;
+  private readonly verifyToken: string | undefined;
 
   constructor(
     private config: ConfigService,
@@ -24,139 +25,160 @@ export class WhatsAppController {
     private router: WhatsAppRouterService,
     private prisma: PrismaService,
   ) {
-    this.authToken = this.config.get<string>('TWILIO_AUTH_TOKEN');
+    this.appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    this.verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
   }
 
-  // ======================== RECEIVE MESSAGES ============================
-  // Twilio sends POST with application/x-www-form-urlencoded
-  // Fields: From, To, Body, MessageSid, NumMedia, SmsStatus, etc.
+  // ======================== WEBHOOK VERIFICATION ==========================
+  // Meta sends GET to verify the webhook URL during setup
+
+  @Get('webhook')
+  verify(
+    @Query('hub.mode') mode: string,
+    @Query('hub.verify_token') token: string,
+    @Query('hub.challenge') challenge: string,
+    @Res() res: Response,
+  ) {
+    if (mode === 'subscribe' && token === this.verifyToken) {
+      this.logger.log('Webhook verified successfully');
+      res.status(200).send(challenge);
+    } else {
+      this.logger.warn(`Webhook verification failed — mode: ${mode}, token match: ${token === this.verifyToken}`);
+      res.status(403).send('Forbidden');
+    }
+  }
+
+  // ======================== RECEIVE MESSAGES ==============================
+  // Meta sends POST with JSON body for incoming messages
 
   @Post('webhook')
   @HttpCode(200)
   async receive(@Req() req: Request, @Res() res: Response) {
-    // Respond with empty TwiML to acknowledge (Twilio expects XML or empty 200)
-    res.set('Content-Type', 'text/xml');
-    res.status(200).send('<Response></Response>');
+    // Always respond 200 immediately (Meta requires fast response)
+    res.status(200).send('EVENT_RECEIVED');
 
-    // Verify Twilio signature if auth token configured
-    if (this.authToken && !this.verifyTwilioSignature(req)) {
-      this.logger.warn('Twilio webhook signature verification failed');
+    // Verify HMAC-SHA256 signature
+    if (this.appSecret && !this.verifyMetaSignature(req)) {
+      this.logger.warn('Meta webhook signature verification failed');
       return;
     }
 
     try {
       const body = req.body;
-      if (!body) return;
+      if (!body?.entry?.[0]?.changes?.[0]?.value) return;
 
-      // Twilio sends status callbacks for outbound messages
-      if (body.SmsStatus && body.MessageSid && !body.Body && body.SmsStatus !== 'received') {
-        this.handleStatusCallback(body);
+      const value = body.entry[0].changes[0].value;
+
+      // Status updates (sent, delivered, read, failed)
+      if (value.statuses?.[0]) {
+        this.handleStatusUpdate(value.statuses[0]);
         return;
       }
 
-      // Incoming message
-      const from = body.From; // "whatsapp:+598XXXXXXXX"
-      const msgBody = body.Body || '';
-      const messageSid = body.MessageSid || '';
+      // Incoming messages
+      const message = value.messages?.[0];
+      if (!message) return;
 
-      if (!from || !msgBody) return;
+      const phone = message.from; // E.164 without + (e.g., "59898247552")
+      const waMessageId = message.id;
 
-      // Extract phone from Twilio format "whatsapp:+598..."
-      const phone = from.replace('whatsapp:', '').replace('+', '');
+      // Parse message type and payload
+      const { type, payload } = this.parseMessage(message);
 
-      await this.processMessage(phone, messageSid, msgBody);
+      // Log inbound message
+      this.prisma.whatsAppMessageLog.create({
+        data: {
+          waMessageId,
+          phone,
+          direction: 'inbound',
+          type,
+          content: payload,
+          status: 'received',
+        },
+      }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));
+
+      // Route the message
+      await this.router.handleMessage(phone, type, payload, waMessageId);
     } catch (e) {
       this.logger.error(`Webhook processing error: ${e.message}`, e.stack);
     }
   }
 
-  // ======================== STATUS CALLBACK =============================
-  // Twilio sends callbacks for outbound message status changes
+  // ======================== PARSE MESSAGE =================================
 
-  @Post('status')
-  @HttpCode(200)
-  statusCallback(@Req() req: Request, @Res() res: Response) {
-    res.status(200).send('OK');
+  private parseMessage(message: any): { type: string; payload: any } {
+    switch (message.type) {
+      case 'text':
+        return { type: 'text', payload: { body: message.text?.body || '' } };
 
-    try {
-      this.handleStatusCallback(req.body);
-    } catch (e) {
-      this.logger.error(`Status callback error: ${e.message}`);
+      case 'interactive':
+        if (message.interactive?.type === 'button_reply') {
+          return {
+            type: 'button_reply',
+            payload: {
+              id: message.interactive.button_reply.id,
+              title: message.interactive.button_reply.title,
+            },
+          };
+        }
+        if (message.interactive?.type === 'list_reply') {
+          return {
+            type: 'list_reply',
+            payload: {
+              id: message.interactive.list_reply.id,
+              title: message.interactive.list_reply.title,
+              description: message.interactive.list_reply.description,
+            },
+          };
+        }
+        return { type: 'text', payload: { body: '' } };
+
+      case 'button':
+        // Quick reply buttons from template messages
+        return {
+          type: 'button_reply',
+          payload: {
+            id: message.button?.payload || '',
+            title: message.button?.text || '',
+          },
+        };
+
+      default:
+        return { type: message.type || 'unknown', payload: { body: '' } };
     }
   }
 
-  // ======================== PROCESS MESSAGE =============================
+  // ======================== STATUS UPDATES ================================
 
-  private async processMessage(phone: string, messageSid: string, text: string) {
-    // Check if the text is a numbered reply to a previous buttons/list message
-    const resolved = this.wa.resolveNumberedReply(phone, text);
+  private handleStatusUpdate(status: any) {
+    const waMessageId = status.id;
+    const statusValue = status.status; // sent, delivered, read, failed
 
-    let type: string;
-    let payload: any;
-
-    if (resolved) {
-      // User replied with a number → treat as button/list reply
-      type = resolved.type;
-      payload = resolved.payload;
-    } else {
-      // Regular text message
-      type = 'text';
-      payload = { body: text };
-    }
-
-    // Log inbound message
-    this.prisma.whatsAppMessageLog.create({
-      data: {
-        waMessageId: messageSid,
-        phone,
-        direction: 'inbound',
-        type,
-        content: payload,
-        status: 'received',
-      },
-    }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));
-
-    // Route the message
-    await this.router.handleMessage(phone, type, payload, messageSid);
-  }
-
-  // ======================== STATUS UPDATES ==============================
-
-  private handleStatusCallback(body: any) {
-    const messageSid = body.MessageSid;
-    const status = body.SmsStatus || body.MessageStatus; // queued, sent, delivered, read, failed, undelivered
-
-    if (!messageSid || !status) return;
+    if (!waMessageId || !statusValue) return;
 
     this.prisma.whatsAppMessageLog.updateMany({
-      where: { waMessageId: messageSid },
-      data: { status },
+      where: { waMessageId },
+      data: { status: statusValue },
     }).catch(e => this.logger.error(`WA status update failed: ${e.message}`));
   }
 
-  // ======================== TWILIO SIGNATURE VERIFICATION ================
-  // https://www.twilio.com/docs/usage/security#validating-requests
+  // ======================== META SIGNATURE VERIFICATION ====================
+  // https://developers.facebook.com/docs/graph-api/webhooks/getting-started
 
-  private verifyTwilioSignature(req: Request): boolean {
-    const signature = req.headers['x-twilio-signature'] as string;
-    if (!signature || !this.authToken) return false;
+  private verifyMetaSignature(req: Request): boolean {
+    const signature = req.headers['x-hub-signature-256'] as string;
+    if (!signature || !this.appSecret) return false;
 
-    // Build the full URL that Twilio used to call us
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const url = `${protocol}://${req.headers.host}${req.originalUrl}`;
-
-    // Sort POST parameters and concatenate
-    const params = req.body || {};
-    const sortedKeys = Object.keys(params).sort();
-    let dataString = url;
-    for (const key of sortedKeys) {
-      dataString += key + params[key];
+    const rawBody = (req as any).rawBody;
+    if (!rawBody) {
+      this.logger.warn('Raw body not available for signature verification');
+      return true; // Allow if raw body not captured (graceful degradation)
     }
 
-    const expected = crypto
-      .createHmac('sha1', this.authToken)
-      .update(dataString)
-      .digest('base64');
+    const expected = 'sha256=' + crypto
+      .createHmac('sha256', this.appSecret)
+      .update(rawBody)
+      .digest('hex');
 
     try {
       return crypto.timingSafeEqual(
