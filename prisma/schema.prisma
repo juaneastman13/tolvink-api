@@ -273,6 +273,7 @@ model Truck {
 
   @@index([companyId])
   @@index([plate])
+  @@index([assignedUserId])
   @@map("trucks")
 }
 
@@ -371,6 +372,8 @@ model Freight {
   @@index([code])
   @@index([fieldId])
   @@index([requestedById])
+  @@index([originCompanyId])
+  @@index([destCompanyId])
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
   @@map("freights")

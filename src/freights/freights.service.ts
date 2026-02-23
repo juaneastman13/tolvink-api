@@ -214,11 +214,11 @@ export class FreightsService {
         'Nuevo flete solicitado',
         `${grain} desde ${lot?.name || originName}`,
         freight.id, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE: notify all involved parties
-    this.sse.broadcastFreightUpdate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return freight;
   }
@@ -435,7 +435,7 @@ export class FreightsService {
       'Te asignaron un flete',
       `${freight.code} → ${freight.destName || 'destino'}`,
       freightId, user.sub,
-    ).catch(() => {});
+    ).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     // Notify driver personally if assigned
     if (dto.driverId) {
@@ -444,11 +444,11 @@ export class FreightsService {
         'Te asignaron un flete',
         `${freight.code} → ${freight.destName || 'destino'}`,
         freightId,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return result;
   }
@@ -517,11 +517,11 @@ export class FreightsService {
           'Flete rechazado',
           `${freight.code}: ${dto.reason}`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'pending_assignment' }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'pending_assignment' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
       return result;
     }
@@ -531,6 +531,7 @@ export class FreightsService {
     const assignmentUpdate: any = { status: AssignmentStatus.accepted };
 
     if (dto.truckId) {
+      if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
       const truck = await this.prisma.truck.findFirst({
         where: { id: dto.truckId, companyId: user.companyId, active: true },
       });
@@ -544,6 +545,7 @@ export class FreightsService {
     }
 
     if (dto.driverId) {
+      if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
       const driverMembership = await this.prisma.userCompany.findFirst({
         where: { userId: dto.driverId, companyId: user.companyId, role: 'chofer', active: true },
         include: { user: { select: { id: true, name: true } } },
@@ -593,7 +595,7 @@ export class FreightsService {
         'Flete aceptado',
         `${freight.code} fue aceptado por el transportista`,
         freightId, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // Notify driver personally if assigned
@@ -603,11 +605,11 @@ export class FreightsService {
         'Te asignaron un flete',
         `${freight.code} → ${freight.destName || 'destino'}`,
         freightId,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return acceptResult;
   }
@@ -660,11 +662,11 @@ export class FreightsService {
         'Flete en camino',
         `${freight.code} inició el viaje`,
         freightId, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return startResult;
   }
@@ -741,11 +743,11 @@ export class FreightsService {
           'Carga confirmada',
           `${freight.code}: el transportista confirmó la carga`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
       return loadedResult;
     }
@@ -788,11 +790,11 @@ export class FreightsService {
           'Carga confirmada',
           `${freight.code}: el productor confirmó la carga`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
       return prodLoadResult;
     }
@@ -857,11 +859,11 @@ export class FreightsService {
           plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
           `${freight.code}: el transportista confirmó la entrega`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
       return tFinishResult;
     }
@@ -912,11 +914,11 @@ export class FreightsService {
           transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
           `${freight.code}: la planta confirmó la recepción`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
       return pFinishResult;
     }
@@ -967,11 +969,11 @@ export class FreightsService {
         'Flete finalizado',
         `${freight.code} fue marcado como finalizado`,
         freightId, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return finishResult;
   }
@@ -1038,11 +1040,11 @@ export class FreightsService {
         'Flete cancelado',
         `${freight.code}: ${dto.reason}`,
         freightId, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'canceled' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'canceled' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
     return cancelResult;
   }
@@ -1377,10 +1379,10 @@ export class FreightsService {
           'Te asignaron camiones',
           `${freight.code} → ${(freight as any).destName || 'destino'}`,
           freightId, user.sub,
-        ).catch(() => {});
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
     }
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -1429,7 +1431,7 @@ export class FreightsService {
       return updated;
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -1516,7 +1518,7 @@ export class FreightsService {
       },
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return updated;
   }
 
@@ -1573,7 +1575,7 @@ export class FreightsService {
         return updated;
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
@@ -1630,7 +1632,7 @@ export class FreightsService {
       return updated;
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -1686,9 +1688,9 @@ export class FreightsService {
         'Camión en camino',
         `${freight.code} — Camión #${assignment.tripNumber} inició viaje`,
         freightId, user.sub,
-      ).catch(() => {});
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -1747,7 +1749,7 @@ export class FreightsService {
         return updated;
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
@@ -1778,7 +1780,7 @@ export class FreightsService {
         return freight;
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
@@ -1838,7 +1840,7 @@ export class FreightsService {
         return updated;
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
@@ -1874,7 +1876,7 @@ export class FreightsService {
         return updated;
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(() => {});
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 

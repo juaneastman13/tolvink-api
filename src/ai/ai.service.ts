@@ -824,6 +824,23 @@ MODIFICAR (solo admin/gerente):
 
   // ---- prepare_freight ----
   private async toolPrepareFreight(input: any, user: any, session: any): Promise<string> {
+    // Input validation
+    if (!input.grain || typeof input.grain !== 'string') {
+      return JSON.stringify({ error: 'Falta el tipo de grano (grain).' });
+    }
+    if (!input.tons || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
+      return JSON.stringify({ error: 'Falta la cantidad de toneladas (tons) o es invalida.' });
+    }
+    if (!input.loadDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.loadDate)) {
+      return JSON.stringify({ error: 'Falta la fecha de carga (loadDate) o formato invalido. Usa YYYY-MM-DD.' });
+    }
+    if (!input.loadTime || !/^\d{2}:\d{2}$/.test(input.loadTime)) {
+      return JSON.stringify({ error: 'Falta la hora de carga (loadTime) o formato invalido. Usa HH:MM.' });
+    }
+    if (input.truckCount !== undefined && (isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1)) {
+      return JSON.stringify({ error: 'truckCount debe ser un numero >= 1.' });
+    }
+
     // Resolve display names
     let destDisplayName = input.destName || 'Sin destino';
     if (input.destPlantId) {
@@ -1475,18 +1492,22 @@ MODIFICAR (solo admin/gerente):
       return JSON.stringify({ total: 0, drivers: [], message: 'No hay choferes registrados.' });
     }
 
-    const result = await Promise.all((drivers as any[]).map(async (d: any) => {
-      const truck = await this.prisma.truck.findFirst({
-        where: { assignedUserId: d.id, active: true },
-        select: { plate: true, model: true },
-      });
+    const driverIds = (drivers as any[]).map(d => d.id);
+    const trucks = await this.prisma.truck.findMany({
+      where: { assignedUserId: { in: driverIds }, active: true },
+      select: { assignedUserId: true, plate: true, model: true },
+    });
+    const truckByDriver = new Map(trucks.map(t => [t.assignedUserId, t]));
+
+    const result = (drivers as any[]).map((d: any) => {
+      const truck = truckByDriver.get(d.id);
       return {
         id: d.id,
         name: d.name,
         phone: d.phone,
         assignedTruck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : null,
       };
-    }));
+    });
 
     return JSON.stringify({ total: result.length, drivers: result });
   }

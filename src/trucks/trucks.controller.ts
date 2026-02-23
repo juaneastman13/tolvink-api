@@ -41,6 +41,7 @@ export class TrucksService {
   constructor(private prisma: PrismaService) {}
 
   async create(dto: CreateTruckDto, user: any) {
+    if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
     // Allow transporters, producers, and plants (own fleet)
     const ct = user.companyType;
     const cts = Array.isArray(user.companyTypes) ? user.companyTypes : [];
@@ -133,6 +134,7 @@ export class TrucksService {
   }
 
   async listDrivers(user: any) {
+    if (!user.companyId) return [];
     const memberships = await this.prisma.userCompany.findMany({
       where: { companyId: user.companyId, role: 'chofer', active: true },
       include: { user: { select: { id: true, name: true, phone: true, email: true, active: true } } },
