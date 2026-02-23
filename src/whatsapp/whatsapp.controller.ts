@@ -133,6 +133,17 @@ export class WhatsAppController {
         }
         return { type: 'text', payload: { body: '' } };
 
+      case 'location':
+        return {
+          type: 'location',
+          payload: {
+            latitude: message.location?.latitude,
+            longitude: message.location?.longitude,
+            name: message.location?.name || '',
+            address: message.location?.address || '',
+          },
+        };
+
       case 'button':
         // Quick reply buttons from template messages
         return {

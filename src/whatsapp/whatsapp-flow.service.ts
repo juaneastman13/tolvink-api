@@ -13,6 +13,8 @@ const FLOW_TIMEOUT_MINUTES = 10;
 // Footer hint shown on every flow step so non-tech users always know their options
 const FLOW_HINT = '\n\n_Escribi *cancelar* para salir · *menu* para opciones_';
 
+const APP_URL = 'https://tolvink.vercel.app';
+
 @Injectable()
 export class WhatsAppFlowService {
   private readonly logger = new Logger(WhatsAppFlowService.name);
@@ -435,54 +437,67 @@ export class WhatsAppFlowService {
 
     // ---- Step: Plant Selection ----
     if (step === 'awaiting_plant') {
-      let plantId: string | null = null;
+      let companyId: string | null = null;
       if (type === 'list_reply' && payload.id?.startsWith('plant:')) {
-        plantId = payload.id.split(':')[1];
+        companyId = payload.id.split(':')[1];
       } else if (type === 'button_reply' && payload.id?.startsWith('plant:')) {
-        plantId = payload.id.split(':')[1];
+        companyId = payload.id.split(':')[1];
       }
 
-      if (!plantId) {
+      if (!companyId) {
         await this.wa.sendText(phone, 'Selecciona una planta de la lista.' + FLOW_HINT);
         return;
       }
 
-      if (state.editing) {
-        const newState = { ...state, destPlantId: plantId };
-        delete newState.editing;
-        await this.showConfirmation(phone, session, newState);
-        return;
-      }
-
-      // Fetch available lots for this producer's company
-      const lots = await this.prisma.lot.findMany({
-        where: { companyId: state.producerCompanyId, active: true },
-        include: { field: { select: { id: true, name: true } } },
+      // Check for physical branches (Plant records) of this company
+      const branches = await this.prisma.plant.findMany({
+        where: { companyId, active: true },
+        select: { id: true, name: true, address: true },
         take: 10,
       });
 
-      if (lots.length === 0) {
-        // No lots → ask for custom origin name
-        await this.updateState(session.id, 'awaiting_origin_name', { ...state, destPlantId: plantId });
-        await this.wa.sendText(phone,
-          'No tenes lotes registrados.\n' +
-          'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+      let plantId = companyId; // Default: company ID (fallback path in freights.service)
+
+      if (branches.length === 1) {
+        // Single branch → auto-select
+        plantId = branches[0].id;
+      } else if (branches.length > 1) {
+        // Multiple branches → show selection
+        await this.updateState(session.id, 'awaiting_plant_branch', {
+          ...state, destCompanyId: companyId, editing: state.editing || false,
+        });
+        await this.wa.sendList(phone,
+          'Selecciona la sucursal:' + FLOW_HINT,
+          'Ver sucursales',
+          [{
+            title: 'Sucursales',
+            rows: branches.map(b => ({
+              id: `branch:${b.id}`,
+              title: b.name.slice(0, 24),
+              description: b.address?.slice(0, 72) || '',
+            })),
+          }],
+        );
+        return;
+      }
+      // 0 or 1 branch → continue with plantId
+      await this.afterPlantSelected(phone, session, state, plantId);
+      return;
+    }
+
+    // ---- Step: Plant Branch Selection ----
+    if (step === 'awaiting_plant_branch') {
+      let branchId: string | null = null;
+      if (type === 'list_reply' && payload.id?.startsWith('branch:')) {
+        branchId = payload.id.split(':')[1];
+      }
+
+      if (!branchId) {
+        await this.wa.sendText(phone, 'Selecciona una sucursal de la lista.' + FLOW_HINT);
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_lot', { ...state, destPlantId: plantId });
-      await this.wa.sendList(phone,
-        'Desde que lote se carga?' + FLOW_HINT,
-        'Seleccionar lote',
-        [{
-          title: 'Tus lotes',
-          rows: lots.map((l: any) => ({
-            id: `lot:${l.id}`,
-            title: l.name.slice(0, 24),
-            description: l.field?.name?.slice(0, 72) || '',
-          })),
-        }],
-      );
+      await this.afterPlantSelected(phone, session, state, branchId);
       return;
     }
 
@@ -497,7 +512,7 @@ export class WhatsAppFlowService {
       const lots = await this.prisma.lot.findMany({
         where: { companyId: state.producerCompanyId, active: true },
         include: { field: { select: { id: true, name: true } } },
-        take: 10,
+        take: 9,
       });
 
       if (lots.length === 0) {
@@ -509,16 +524,19 @@ export class WhatsAppFlowService {
       await this.updateState(session.id, 'awaiting_lot', { ...state, customDestName });
       await this.wa.sendList(phone, 'Desde que lote se carga?' + FLOW_HINT, 'Seleccionar lote', [{
         title: 'Tus lotes',
-        rows: lots.map((l: any) => ({
-          id: `lot:${l.id}`,
-          title: l.name.slice(0, 24),
-          description: l.field?.name?.slice(0, 72) || '',
-        })),
+        rows: [
+          ...lots.map((l: any) => ({
+            id: `lot:${l.id}`,
+            title: l.name.slice(0, 24),
+            description: l.field?.name?.slice(0, 72) || '',
+          })),
+          { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+        ],
       }]);
       return;
     }
 
-    // ---- Step: Custom Origin Name (no lots available) ----
+    // ---- Step: Custom Origin Name ----
     if (step === 'awaiting_origin_name') {
       if (type !== 'text' || !payload.body?.trim()) {
         await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
@@ -526,17 +544,53 @@ export class WhatsAppFlowService {
       }
       const customOriginName = payload.body.trim();
       const originState = { ...state, customOriginName };
-      if (state.editing) {
-        delete originState.editing;
-        await this.showConfirmation(phone, session, originState);
+      // Ask for location before continuing
+      await this.sendOriginLocationPrompt(phone, session, originState);
+      return;
+    }
+
+    // ---- Step: Origin Location ----
+    if (step === 'awaiting_origin_location') {
+      let lat: number | null = null;
+      let lng: number | null = null;
+
+      if (type === 'location') {
+        lat = payload.latitude;
+        lng = payload.longitude;
+      } else if (type === 'button_reply' && payload.id === 'location:skip') {
+        // Continue without location
+      } else {
+        await this.wa.sendButtons(phone,
+          'Envia tu ubicacion o selecciona Omitir.' + FLOW_HINT,
+          [{ id: 'location:skip', title: 'Omitir ubicacion' }],
+        );
         return;
       }
-      await this.sendDateSelection(phone, session, originState);
+
+      const locState = { ...state };
+      if (lat !== null && lng !== null) {
+        locState.originLat = lat;
+        locState.originLng = lng;
+      }
+
+      if (state.editing) {
+        delete locState.editing;
+        await this.showConfirmation(phone, session, locState);
+        return;
+      }
+      await this.sendDateSelection(phone, session, locState);
       return;
     }
 
     // ---- Step: Lot Selection ----
     if (step === 'awaiting_lot') {
+      if (type === 'list_reply' && payload.id === 'lot:custom') {
+        // User wants to enter a custom origin
+        await this.updateState(session.id, 'awaiting_origin_name', state);
+        await this.wa.sendText(phone, 'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+        return;
+      }
+
       let lotId: string | null = null;
       if (type === 'list_reply' && payload.id?.startsWith('lot:')) {
         lotId = payload.id.split(':')[1];
@@ -734,7 +788,7 @@ export class WhatsAppFlowService {
           const lots = await this.prisma.lot.findMany({
             where: { companyId: state.producerCompanyId, active: true },
             include: { field: { select: { id: true, name: true } } },
-            take: 10,
+            take: 9,
           });
           if (lots.length === 0) {
             await this.updateState(session.id, 'awaiting_origin_name', editState);
@@ -743,11 +797,14 @@ export class WhatsAppFlowService {
             await this.updateState(session.id, 'awaiting_lot', editState);
             await this.wa.sendList(phone, 'Selecciona el nuevo lote:', 'Seleccionar lote', [{
               title: 'Tus lotes',
-              rows: lots.map((l: any) => ({
-                id: `lot:${l.id}`,
-                title: l.name.slice(0, 24),
-                description: l.field?.name?.slice(0, 72) || '',
-              })),
+              rows: [
+                ...lots.map((l: any) => ({
+                  id: `lot:${l.id}`,
+                  title: l.name.slice(0, 24),
+                  description: l.field?.name?.slice(0, 72) || '',
+                })),
+                { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+              ],
             }]);
           }
           break;
@@ -811,19 +868,20 @@ export class WhatsAppFlowService {
         dto.customDestName = state.customDestName;
       }
 
-      // Origin: lot ID or custom origin name (with dummy coords for validation)
+      // Origin: lot ID or custom origin name (with coords from location or dummy)
       if (state.originLotId) {
         dto.originLotId = state.originLotId;
       } else {
         dto.customOriginName = state.customOriginName || 'Origen WhatsApp';
-        dto.overrideOriginLat = -34.0;
-        dto.overrideOriginLng = -56.0;
+        dto.overrideOriginLat = state.originLat || -34.0;
+        dto.overrideOriginLng = state.originLng || -56.0;
       }
 
       const freight = await this.freights.create(dto as any, synUser);
+      const freightLink = `\n\n📱 ${APP_URL}/freights/${(freight as any).id}`;
       const successMsg = state.truckId
-        ? `✅ Flete creado: *${(freight as any).code}*\n\nAsignado a tu flota propia (${state.truckPlate || 'camion seleccionado'}).`
-        : `✅ Flete creado: *${(freight as any).code}*\n\nEl flete esta pendiente de asignacion de transportista.`;
+        ? `✅ Flete creado: *${(freight as any).code}*\n\nAsignado a tu flota propia (${state.truckPlate || 'camion seleccionado'}).` + freightLink
+        : `✅ Flete creado: *${(freight as any).code}*\n\nPendiente de asignacion de transportista.` + freightLink;
       await this.wa.sendText(phone, successMsg);
       await this.endFlow(session.id);
       return;
@@ -865,6 +923,49 @@ export class WhatsAppFlowService {
 
     // No own fleet → go to plant selection
     await this.sendPlantSelection(phone, session, state);
+  }
+
+  /** After a plant (or branch) is selected, continue to lot selection or confirmation */
+  private async afterPlantSelected(phone: string, session: any, state: any, plantId: string) {
+    if (state.editing) {
+      const newState = { ...state, destPlantId: plantId };
+      delete newState.editing;
+      await this.showConfirmation(phone, session, newState);
+      return;
+    }
+
+    // Fetch available lots for this producer's company
+    const lots = await this.prisma.lot.findMany({
+      where: { companyId: state.producerCompanyId, active: true },
+      include: { field: { select: { id: true, name: true } } },
+      take: 9,
+    });
+
+    if (lots.length === 0) {
+      // No lots → ask for custom origin name
+      await this.updateState(session.id, 'awaiting_origin_name', { ...state, destPlantId: plantId });
+      await this.wa.sendText(phone,
+        'No tenes lotes registrados.\n' +
+        'Escribi el nombre del campo/lugar de origen.' + FLOW_HINT);
+      return;
+    }
+
+    await this.updateState(session.id, 'awaiting_lot', { ...state, destPlantId: plantId });
+    await this.wa.sendList(phone,
+      'Desde que lote se carga?' + FLOW_HINT,
+      'Seleccionar lote',
+      [{
+        title: 'Tus lotes',
+        rows: [
+          ...lots.map((l: any) => ({
+            id: `lot:${l.id}`,
+            title: l.name.slice(0, 24),
+            description: l.field?.name?.slice(0, 72) || '',
+          })),
+          { id: 'lot:custom', title: 'Otro origen', description: 'Ingresar manualmente' },
+        ],
+      }],
+    );
   }
 
   /** Show plant selection (reused from multiple steps) */
@@ -951,17 +1052,37 @@ export class WhatsAppFlowService {
     );
   }
 
+  /** Prompt the user to share their origin location or skip */
+  private async sendOriginLocationPrompt(phone: string, session: any, state: any) {
+    await this.updateState(session.id, 'awaiting_origin_location', state);
+    await this.wa.sendButtons(phone,
+      `Origen: *${state.customOriginName}*\n\n` +
+      'Comparti la ubicacion del origen.\n' +
+      'Toca 📎 > *Ubicacion* para enviar.\n\n' +
+      'O selecciona *Omitir* para continuar sin ubicacion.' + FLOW_HINT,
+      [{ id: 'location:skip', title: 'Omitir ubicacion' }],
+    );
+  }
+
+  /** Resolve destination name from Plant or Company */
+  private async resolveDestName(destPlantId: string): Promise<string> {
+    const plant = await this.prisma.plant.findUnique({
+      where: { id: destPlantId },
+      select: { name: true, company: { select: { name: true } } },
+    });
+    if (plant) return `${plant.company.name} - ${plant.name}`;
+    const company = await this.prisma.company.findUnique({
+      where: { id: destPlantId },
+      select: { name: true },
+    });
+    return company?.name || 'Sin planta';
+  }
+
   /** Show confirmation summary with all freight details */
   private async showConfirmation(phone: string, session: any, finalState: any) {
     let destName = finalState.customDestName || 'Destino';
     if (finalState.destPlantId) {
-      const company = await this.prisma.company.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-      if (company) {
-        destName = company.name;
-      } else {
-        const plant = await this.prisma.plant.findUnique({ where: { id: finalState.destPlantId }, select: { name: true } });
-        destName = plant?.name || destName;
-      }
+      destName = await this.resolveDestName(finalState.destPlantId);
     }
     let originName = finalState.customOriginName || 'Origen';
     if (finalState.originLotId) {
@@ -997,8 +1118,7 @@ export class WhatsAppFlowService {
     // Resolve names for descriptions
     let destDesc = state.customDestName || 'Sin planta';
     if (state.destPlantId) {
-      const company = await this.prisma.company.findUnique({ where: { id: state.destPlantId }, select: { name: true } });
-      destDesc = company?.name || destDesc;
+      destDesc = await this.resolveDestName(state.destPlantId);
     }
     let originDesc = state.customOriginName || 'Sin origen';
     if (state.originLotId) {

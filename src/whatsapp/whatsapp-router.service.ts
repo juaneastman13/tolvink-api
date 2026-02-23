@@ -31,6 +31,8 @@ const STATUS_EMOJI: Record<string, string> = {
   canceled: '❌',
 };
 
+const APP_URL = 'https://tolvink.vercel.app';
+
 @Injectable()
 export class WhatsAppRouterService {
   private readonly logger = new Logger(WhatsAppRouterService.name);
@@ -56,7 +58,7 @@ export class WhatsAppRouterService {
       if (!user) {
         await this.wa.sendText(phone,
           'Este numero no esta registrado en Tolvink.\n\n' +
-          'Registrate en la app primero: https://tolvink.vercel.app',
+          `Registrate en la app primero: ${APP_URL}`,
         );
         return;
       }
@@ -222,7 +224,7 @@ export class WhatsAppRouterService {
 
     await this.wa.sendButtons(phone,
       `Hola ${name}! Soy el asistente de *Tolvink*.\n\n` +
-      'Que necesitas hacer?',
+      `Que necesitas hacer?\n\n📱 ${APP_URL}`,
       [
         { id: 'active_freights', title: 'Mis fletes' },
         { id: 'create_freight', title: 'Crear flete' },
@@ -251,7 +253,7 @@ export class WhatsAppRouterService {
       `✅ Aceptar o rechazar asignaciones\n` +
       `🚛 Iniciar viajes y confirmar cargas/entregas\n` +
       `❌ Cancelar fletes\n\n` +
-      `Si necesitas mas ayuda, contactanos en la app:\nhttps://tolvink.vercel.app`,
+      `Si necesitas mas ayuda, contactanos en la app:\n${APP_URL}`,
     );
 
     await this.wa.sendButtons(phone,
@@ -333,7 +335,7 @@ export class WhatsAppRouterService {
     });
 
     await this.wa.sendList(phone,
-      `Tenes *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:`,
+      `Tenes *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:\n\n📱 ${APP_URL}`,
       'Ver fletes',
       [{ title: 'Fletes activos', rows }],
     );
@@ -415,6 +417,7 @@ export class WhatsAppRouterService {
     text += `${transportLine}\n`;
     if (loadDate) text += `📅 ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `📝 ${freight.notes}\n`;
+    text += `\n📱 Ver en la app: ${APP_URL}/freights/${freight.id}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);
