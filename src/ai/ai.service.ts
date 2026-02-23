@@ -9,7 +9,7 @@ import { PrismaService } from '../database/prisma.service';
 import { FreightsService } from '../freights/freights.service';
 import Anthropic from '@anthropic-ai/sdk';
 
-const MAX_HISTORY = 20;
+const MAX_HISTORY = 40;
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
 const APP_URL = 'https://tolvink.vercel.app';
@@ -109,14 +109,17 @@ export class AiService {
       const textBlocks = response.content.filter((b: any) => b.type === 'text');
       const finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No pude procesar tu mensaje.';
 
-      // Save updated history
+      // Save updated history — reload session first to preserve tool-written state (e.g. pendingFreight)
       currentMessages.push({ role: 'assistant', content: response.content });
+
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const latestState = (freshSession?.flowState as any) || {};
 
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: {
           flowState: {
-            ...state,
+            ...latestState,
             aiMessages: currentMessages.slice(-MAX_HISTORY),
           },
           expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
@@ -528,10 +531,15 @@ INSTRUCCIONES:
 
   // ---- confirm_create_freight ----
   private async toolConfirmCreateFreight(user: any, synUser: any, session: any): Promise<string> {
-    const state = (session.flowState as any) || {};
+    // Reload session from DB to get pendingFreight saved by prepare_freight
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const state = (freshSession?.flowState as any) || {};
     const pending = state.pendingFreight;
+
+    console.log(`[AI] confirm_create_freight — pendingFreight: ${pending ? JSON.stringify(pending).slice(0, 200) : 'NULL'}`);
+
     if (!pending) {
-      return JSON.stringify({ error: 'No hay un flete pendiente de confirmacion.' });
+      return JSON.stringify({ error: 'No hay un flete pendiente de confirmacion. Primero usa prepare_freight.' });
     }
 
     const producerCompanyId = this.resolveProducerCompanyId(user);
@@ -560,7 +568,9 @@ INSTRUCCIONES:
       dto.overrideOriginLng = -56.0;
     }
 
+    console.log(`[AI] Creating freight with DTO:`, JSON.stringify(dto).slice(0, 300));
     const freight = await this.freights.create(dto, producerSynUser);
+    console.log(`[AI] Freight created: ${(freight as any).code}`);
 
     // Clear pending freight
     await this.prisma.whatsAppSession.update({
