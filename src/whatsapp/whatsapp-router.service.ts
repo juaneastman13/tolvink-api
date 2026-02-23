@@ -186,7 +186,7 @@ export class WhatsAppRouterService {
           break;
         }
         case 'show_help': {
-          await this.showMainMenu(phone, user);
+          await this.showHelp(phone, user);
           break;
         }
         default: {
@@ -227,6 +227,39 @@ export class WhatsAppRouterService {
         { id: 'active_freights', title: 'Mis fletes' },
         { id: 'create_freight', title: 'Crear flete' },
         { id: 'show_help', title: 'Ayuda' },
+      ],
+    );
+  }
+
+  // ======================== SHOW HELP ==================================
+
+  private async showHelp(phone: string, user: any) {
+    const name = user.name?.split(' ')[0] || 'usuario';
+
+    await this.wa.sendText(phone,
+      `*Ayuda de Tolvink* 📋\n` +
+      `━━━━━━━━━━━━━━━\n\n` +
+      `*Comandos disponibles:*\n` +
+      `• Escribi *menu* → ver opciones principales\n` +
+      `• Escribi *crear* → crear un nuevo flete\n` +
+      `• Escribi *fletes* → ver tus fletes activos\n` +
+      `• Escribi un codigo (ej: *FLT-0001*) → ver detalle de un flete\n` +
+      `• Escribi *cancelar* → salir de cualquier operacion en curso\n\n` +
+      `*Que puedo hacer:*\n` +
+      `📦 Crear fletes con grano, toneladas, planta y fecha\n` +
+      `📋 Ver el estado de tus fletes activos\n` +
+      `✅ Aceptar o rechazar asignaciones\n` +
+      `🚛 Iniciar viajes y confirmar cargas/entregas\n` +
+      `❌ Cancelar fletes\n\n` +
+      `Si necesitas mas ayuda, contactanos en la app:\nhttps://tolvink.vercel.app`,
+    );
+
+    await this.wa.sendButtons(phone,
+      'Que queres hacer?',
+      [
+        { id: 'active_freights', title: 'Mis fletes' },
+        { id: 'create_freight', title: 'Crear flete' },
+        { id: 'menu', title: 'Volver al menu' },
       ],
     );
   }
