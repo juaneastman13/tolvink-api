@@ -230,7 +230,7 @@ export class WhatsAppFlowService {
     // Store producer company ID in flow state for later steps
     await this.updateState(session.id, 'awaiting_grain', { producerCompanyId });
     await this.wa.sendList(phone,
-      'Vamos a crear un nuevo flete.\n\nQue grano vas a enviar?',
+      'Vamos a crear un nuevo flete.\nSi necesitas corregir algo, vas a poder editarlo al final.\n\nQue grano vas a enviar?',
       'Seleccionar grano',
       [{
         title: 'Tipo de grano',
@@ -270,7 +270,13 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_tons', { ...state, grain });
+      const newState = { ...state, grain };
+      if (state.editing) {
+        delete newState.editing;
+        await this.showConfirmation(phone, session, newState);
+        return;
+      }
+      await this.updateState(session.id, 'awaiting_tons', newState);
       await this.wa.sendText(phone, `Grano: *${grain}*\n\nCuantas toneladas? (ej: 30)`);
       return;
     }
@@ -285,6 +291,13 @@ export class WhatsAppFlowService {
       const tons = parseFloat(payload.body?.trim().replace(',', '.'));
       if (isNaN(tons) || tons <= 0) {
         await this.wa.sendText(phone, 'Ingresa un numero valido (ej: 30):');
+        return;
+      }
+
+      if (state.editing) {
+        const newState = { ...state, tons };
+        delete newState.editing;
+        await this.showConfirmation(phone, session, newState);
         return;
       }
 
@@ -431,6 +444,13 @@ export class WhatsAppFlowService {
         return;
       }
 
+      if (state.editing) {
+        const newState = { ...state, destPlantId: plantId };
+        delete newState.editing;
+        await this.showConfirmation(phone, session, newState);
+        return;
+      }
+
       // Fetch available lots for this producer's company
       const lots = await this.prisma.lot.findMany({
         where: { companyId: state.producerCompanyId, active: true },
@@ -502,7 +522,13 @@ export class WhatsAppFlowService {
         return;
       }
       const customOriginName = payload.body.trim();
-      await this.sendDateSelection(phone, session, { ...state, customOriginName });
+      const originState = { ...state, customOriginName };
+      if (state.editing) {
+        delete originState.editing;
+        await this.showConfirmation(phone, session, originState);
+        return;
+      }
+      await this.sendDateSelection(phone, session, originState);
       return;
     }
 
@@ -518,7 +544,13 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.sendDateSelection(phone, session, { ...state, originLotId: lotId });
+      const lotState = { ...state, originLotId: lotId };
+      if (state.editing) {
+        delete lotState.editing;
+        await this.showConfirmation(phone, session, lotState);
+        return;
+      }
+      await this.sendDateSelection(phone, session, lotState);
       return;
     }
 
@@ -562,7 +594,13 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.sendTimeSelection(phone, session, { ...state, loadDate });
+      const dateState = { ...state, loadDate };
+      if (state.editing) {
+        delete dateState.editing;
+        await this.showConfirmation(phone, session, dateState);
+        return;
+      }
+      await this.sendTimeSelection(phone, session, dateState);
       return;
     }
 
@@ -579,7 +617,13 @@ export class WhatsAppFlowService {
         return;
       }
       const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
-      await this.sendTimeSelection(phone, session, { ...state, loadDate });
+      const dateInputState = { ...state, loadDate };
+      if (state.editing) {
+        delete dateInputState.editing;
+        await this.showConfirmation(phone, session, dateInputState);
+        return;
+      }
+      await this.sendTimeSelection(phone, session, dateInputState);
       return;
     }
 
@@ -609,7 +653,9 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.showConfirmation(phone, session, { ...state, loadTime });
+      const timeState = { ...state, loadTime };
+      delete timeState.editing;
+      await this.showConfirmation(phone, session, timeState);
       return;
     }
 
@@ -627,12 +673,102 @@ export class WhatsAppFlowService {
       }
       const loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
       const finalState = { ...state, loadTime };
+      delete finalState.editing;
       await this.showConfirmation(phone, session, finalState);
+      return;
+    }
+
+    // ---- Step: Edit Field Selection ----
+    if (step === 'awaiting_edit_field') {
+      let field: string | null = null;
+      if (type === 'list_reply' && payload.id?.startsWith('edit:')) {
+        field = payload.id.split(':')[1];
+      }
+
+      if (!field) {
+        await this.wa.sendText(phone, 'Selecciona un campo de la lista para editar.');
+        return;
+      }
+
+      const editState = { ...state, editing: true };
+
+      switch (field) {
+        case 'grain':
+          await this.updateState(session.id, 'awaiting_grain', editState);
+          await this.wa.sendList(phone, 'Selecciona el nuevo grano:', 'Seleccionar grano', [{
+            title: 'Tipo de grano',
+            rows: [
+              { id: 'grain:Soja', title: 'Soja' },
+              { id: 'grain:Maiz', title: 'Maiz' },
+              { id: 'grain:Trigo', title: 'Trigo' },
+              { id: 'grain:Girasol', title: 'Girasol' },
+              { id: 'grain:Sorgo', title: 'Sorgo' },
+              { id: 'grain:Cebada', title: 'Cebada' },
+              { id: 'grain:Otros', title: 'Otros' },
+            ],
+          }]);
+          break;
+        case 'tons':
+          await this.updateState(session.id, 'awaiting_tons', editState);
+          await this.wa.sendText(phone, `Toneladas actuales: *${state.tons}*\n\nEscribi las nuevas toneladas:`);
+          break;
+        case 'trucks':
+          await this.updateState(session.id, 'awaiting_truck_count', editState);
+          const suggested = Math.max(1, Math.ceil((state.tons || 30) / 30));
+          const truckWord = suggested === 1 ? 'camion' : 'camiones';
+          await this.wa.sendButtons(phone,
+            `Camiones actuales: *${state.truckCount || 1}*\n\nCuantos camiones?`,
+            [
+              { id: `trucks:${suggested}`, title: `${suggested} ${truckWord}` },
+              { id: 'trucks:other', title: 'Otra cantidad' },
+            ],
+          );
+          break;
+        case 'plant':
+          await this.sendPlantSelection(phone, session, editState);
+          break;
+        case 'origin':
+          const lots = await this.prisma.lot.findMany({
+            where: { companyId: state.producerCompanyId, active: true },
+            include: { field: { select: { id: true, name: true } } },
+            take: 10,
+          });
+          if (lots.length === 0) {
+            await this.updateState(session.id, 'awaiting_origin_name', editState);
+            await this.wa.sendText(phone, 'Escribi el nuevo nombre del campo/lugar de origen:');
+          } else {
+            await this.updateState(session.id, 'awaiting_lot', editState);
+            await this.wa.sendList(phone, 'Selecciona el nuevo lote:', 'Seleccionar lote', [{
+              title: 'Tus lotes',
+              rows: lots.map((l: any) => ({
+                id: `lot:${l.id}`,
+                title: l.name.slice(0, 24),
+                description: l.field?.name?.slice(0, 72) || '',
+              })),
+            }]);
+          }
+          break;
+        case 'date':
+          await this.sendDateSelection(phone, session, editState);
+          break;
+        case 'time':
+          await this.sendTimeSelection(phone, session, editState);
+          break;
+        default:
+          await this.wa.sendText(phone, 'Campo no reconocido.');
+          await this.showConfirmation(phone, session, state);
+      }
       return;
     }
 
     // ---- Step: Confirmation ----
     if (step === 'awaiting_confirm') {
+      // Handle edit button
+      if (type === 'button_reply' && payload.id === 'flow_confirm:edit') {
+        await this.showEditMenu(phone, session, state);
+        return;
+      }
+
       let confirmed = false;
       if (type === 'button_reply') {
         confirmed = payload.id === 'flow_confirm:yes';
@@ -698,6 +834,14 @@ export class WhatsAppFlowService {
 
   /** After truck count is confirmed, check own fleet or go to plant selection */
   private async afterTruckCount(phone: string, session: any, state: any) {
+    // If editing, go straight back to confirmation
+    if (state.editing) {
+      const newState = { ...state };
+      delete newState.editing;
+      await this.showConfirmation(phone, session, newState);
+      return;
+    }
+
     // Check if producer has own fleet
     const company = await this.prisma.company.findUnique({
       where: { id: state.producerCompanyId },
@@ -839,8 +983,43 @@ export class WhatsAppFlowService {
       `Confirmas la creacion?`,
       [
         { id: 'flow_confirm:yes', title: 'Confirmar' },
+        { id: 'flow_confirm:edit', title: 'Editar' },
         { id: 'flow_confirm:no', title: 'Cancelar' },
       ],
+    );
+  }
+
+  /** Show edit menu with current values for each field */
+  private async showEditMenu(phone: string, session: any, state: any) {
+    // Resolve names for descriptions
+    let destDesc = state.customDestName || 'Sin planta';
+    if (state.destPlantId) {
+      const company = await this.prisma.company.findUnique({ where: { id: state.destPlantId }, select: { name: true } });
+      destDesc = company?.name || destDesc;
+    }
+    let originDesc = state.customOriginName || 'Sin origen';
+    if (state.originLotId) {
+      const lot = await this.prisma.lot.findUnique({ where: { id: state.originLotId }, select: { name: true } });
+      originDesc = lot?.name || originDesc;
+    }
+    const dateDesc = state.loadDate?.split('-').reverse().join('/') || '';
+
+    await this.updateState(session.id, 'awaiting_edit_field', state);
+    await this.wa.sendList(phone,
+      'Que campo queres modificar?',
+      'Ver campos',
+      [{
+        title: 'Campos editables',
+        rows: [
+          { id: 'edit:grain',  title: 'Grano',     description: state.grain || '' },
+          { id: 'edit:tons',   title: 'Toneladas', description: `${state.tons} tn` },
+          { id: 'edit:trucks', title: 'Camiones',  description: `${state.truckCount || 1}` },
+          { id: 'edit:plant',  title: 'Planta',    description: destDesc.slice(0, 72) },
+          { id: 'edit:origin', title: 'Origen',    description: originDesc.slice(0, 72) },
+          { id: 'edit:date',   title: 'Fecha',     description: dateDesc },
+          { id: 'edit:time',   title: 'Hora',      description: state.loadTime || '' },
+        ],
+      }],
     );
   }
 
