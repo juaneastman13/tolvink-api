@@ -172,6 +172,15 @@ export class WhatsAppController {
           },
         };
 
+      case 'audio':
+        return {
+          type: 'audio',
+          payload: {
+            mediaId: message.audio?.id,
+            mimeType: message.audio?.mime_type || 'audio/ogg',
+          },
+        };
+
       default:
         return { type: message.type || 'unknown', payload: { body: '' } };
     }

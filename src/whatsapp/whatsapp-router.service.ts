@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AiService } from '../ai/ai.service';
+import OpenAI from 'openai';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -37,6 +38,7 @@ const APP_URL = 'https://tolvink.vercel.app';
 @Injectable()
 export class WhatsAppRouterService {
   private readonly logger = new Logger(WhatsAppRouterService.name);
+  private openai: OpenAI | null = null;
 
   constructor(
     private prisma: PrismaService,
@@ -44,7 +46,13 @@ export class WhatsAppRouterService {
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
     private ai: AiService,
-  ) {}
+  ) {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (openaiKey) {
+      this.openai = new OpenAI({ apiKey: openaiKey });
+      this.logger.log('OpenAI Whisper enabled for audio transcription');
+    }
+  }
 
   // ======================== MAIN ENTRY POINT ============================
 
@@ -99,8 +107,10 @@ export class WhatsAppRouterService {
         await this.handleText(phone, user, payload.body || '');
       } else if (type === 'location') {
         await this.handleLocation(phone, user, payload);
+      } else if (type === 'audio') {
+        await this.handleAudio(phone, user, payload);
       } else {
-        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto y ubicaciones. Escribi *menu* para ver las opciones.');
+        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto, audio y ubicaciones. Escribi *menu* para ver las opciones.');
       }
     } catch (e) {
       this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
@@ -238,6 +248,51 @@ export class WhatsAppRouterService {
     const locationDesc = name || address || `${latitude}, ${longitude}`;
     const textForAi = `[Ubicacion compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
     await this.handleAiChat(phone, user, textForAi);
+  }
+
+  // ======================== AUDIO HANDLER =================================
+
+  private async handleAudio(phone: string, user: any, payload: any) {
+    if (!this.openai) {
+      await this.wa.sendText(phone, 'El procesamiento de audio no esta disponible. Envia tu mensaje como texto.');
+      return;
+    }
+
+    try {
+      await this.wa.sendText(phone, '🎙️ Procesando tu audio...');
+
+      // Download audio from Meta
+      const { buffer, mimeType } = await this.wa.downloadMedia(payload.mediaId);
+
+      // Map MIME type to file extension for Whisper
+      const ext = mimeType.includes('ogg') ? 'ogg'
+        : mimeType.includes('mp4') ? 'mp4'
+        : mimeType.includes('mpeg') ? 'mp3'
+        : 'ogg';
+
+      // Transcribe with OpenAI Whisper (convert Buffer to Uint8Array for TS compat)
+      const uint8 = new Uint8Array(buffer);
+      const file = new File([uint8], `audio.${ext}`, { type: mimeType });
+      const transcription = await this.openai.audio.transcriptions.create({
+        model: 'whisper-1',
+        file,
+        language: 'es',
+      });
+
+      const text = transcription.text?.trim();
+      if (!text) {
+        await this.wa.sendText(phone, 'No pude entender el audio. Intenta de nuevo o envia un mensaje de texto.');
+        return;
+      }
+
+      this.logger.log(`Audio transcribed (${buffer.length} bytes): "${text.slice(0, 100)}"`);
+
+      // Pass transcription to AI chat (same pipeline as text messages)
+      await this.handleAiChat(phone, user, text);
+    } catch (e) {
+      this.logger.error(`Audio processing error: ${e.message}`, e.stack?.slice(0, 300));
+      await this.wa.sendText(phone, 'No pude procesar el audio. Intenta de nuevo o envia un mensaje de texto.');
+    }
   }
 
   // ======================== BUTTON REPLY HANDLER ========================

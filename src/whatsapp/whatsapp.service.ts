@@ -163,6 +163,35 @@ export class WhatsAppService {
     }
   }
 
+  // ======================== DOWNLOAD MEDIA =================================
+
+  async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    if (!this.enabled) throw new Error('WhatsApp not configured');
+
+    // Step 1: Get media URL from Meta
+    const metaRes = await fetch(`${META_API}/${mediaId}`, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+    if (!metaRes.ok) {
+      const errBody = await metaRes.text();
+      throw new Error(`Media metadata fetch failed (${metaRes.status}): ${errBody.slice(0, 200)}`);
+    }
+    const metaData = await metaRes.json() as any;
+    const url = metaData.url;
+    const mimeType = metaData.mime_type || 'audio/ogg';
+
+    // Step 2: Download the actual file
+    const fileRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+    if (!fileRes.ok) {
+      throw new Error(`Media download failed (${fileRes.status})`);
+    }
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+    return { buffer, mimeType };
+  }
+
   // ======================== INTERNAL: SEND VIA META API ===================
 
   private async send(phone: string, payload: any): Promise<string | null> {
