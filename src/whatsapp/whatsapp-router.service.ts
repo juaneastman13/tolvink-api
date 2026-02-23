@@ -71,8 +71,8 @@ export class WhatsAppRouterService {
 
       if (!user) {
         await this.wa.sendText(phone,
-          'Este numero no esta registrado en Tolvink.\n\n' +
-          `Registrate en la app primero: ${APP_URL}`,
+          'Este numero no se encuentra registrado en Tolvink.\n\n' +
+          `Registrese en la plataforma: ${APP_URL}`,
         );
         return;
       }
@@ -88,7 +88,7 @@ export class WhatsAppRouterService {
         const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
-          await this.wa.sendText(phone, 'Operacion cancelada.');
+          await this.wa.sendText(phone, 'Operacion cancelada correctamente.');
           await this.showMainMenu(phone, user);
           return;
         }
@@ -119,11 +119,11 @@ export class WhatsAppRouterService {
       } else if (type === 'audio') {
         await this.handleAudio(phone, user, payload);
       } else {
-        await this.wa.sendText(phone, 'Por ahora solo puedo procesar mensajes de texto, audio y ubicaciones. Escribi *menu* para ver las opciones.');
+        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio y ubicaciones. Escriba *menu* para ver las opciones disponibles.');
       }
     } catch (e) {
       this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
-      await this.wa.sendText(phone, 'Ocurrio un error procesando tu mensaje. Intenta de nuevo.');
+      await this.wa.sendText(phone, 'Se produjo un error al procesar su mensaje. Por favor, intente nuevamente.');
     }
   }
 
@@ -229,7 +229,7 @@ export class WhatsAppRouterService {
       console.error(`[WA-AI] handleAiChat error:`, e.message, e.stack?.slice(0, 300));
       this.logger.error(`AI chat error: ${e.message}`);
       await this.wa.sendText(phone,
-        'Estoy teniendo problemas tecnicos. Usa los botones del menu.',
+        'Se produjo un inconveniente tecnico. Por favor, utilice las opciones del menu.',
       );
       await this.showMainMenu(phone, user);
     }
@@ -280,12 +280,12 @@ export class WhatsAppRouterService {
 
   private async handleAudio(phone: string, user: any, payload: any) {
     if (!this.openai) {
-      await this.wa.sendText(phone, 'El procesamiento de audio no esta disponible. Envia tu mensaje como texto.');
+      await this.wa.sendText(phone, 'El procesamiento de audio no se encuentra disponible. Por favor, envie su mensaje como texto.');
       return;
     }
 
     try {
-      await this.wa.sendText(phone, '🎙️ Procesando tu audio...');
+      await this.wa.sendText(phone, 'Procesando audio. Aguarde un momento.');
 
       // Download audio from Meta
       const { buffer, mimeType } = await this.wa.downloadMedia(payload.mediaId);
@@ -294,7 +294,7 @@ export class WhatsAppRouterService {
       const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB safety margin
       if (buffer.length > MAX_AUDIO_BYTES) {
         this.logger.warn(`Audio too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB from ${phone}`);
-        await this.wa.sendText(phone, 'El audio es demasiado largo. Envia un mensaje mas corto (menos de 2 minutos) o escribi como texto.');
+        await this.wa.sendText(phone, 'El audio excede el limite permitido. Por favor, envie un mensaje mas breve (menos de 2 minutos) o escriba como texto.');
         return;
       }
       if (buffer.length > 10 * 1024 * 1024) {
@@ -318,7 +318,7 @@ export class WhatsAppRouterService {
 
       const text = transcription.text?.trim();
       if (!text) {
-        await this.wa.sendText(phone, 'No pude entender el audio. Intenta de nuevo o envia un mensaje de texto.');
+        await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envie un mensaje de texto.');
         return;
       }
 
@@ -331,7 +331,7 @@ export class WhatsAppRouterService {
       await this.handleAiChat(phone, user, taggedText);
     } catch (e) {
       this.logger.error(`Audio processing error: ${e.message}`, e.stack?.slice(0, 300));
-      await this.wa.sendText(phone, 'No pude procesar el audio. Intenta de nuevo o envia un mensaje de texto.');
+      await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envie un mensaje de texto.');
     }
   }
 
@@ -349,7 +349,7 @@ export class WhatsAppRouterService {
       switch (action) {
         case 'accept': {
           await this.freights.respond(entityId, { action: 'accepted' } as any, synUser);
-          await this.wa.sendText(phone, '✅ Flete aceptado correctamente.');
+          await this.wa.sendText(phone, 'Flete aceptado correctamente.');
           break;
         }
         case 'reject': {
@@ -359,7 +359,7 @@ export class WhatsAppRouterService {
         }
         case 'start': {
           await this.freights.start(entityId, synUser);
-          await this.wa.sendText(phone, '🚛 Viaje iniciado. Buen camino!');
+          await this.wa.sendText(phone, '🚛 Viaje iniciado correctamente.');
           break;
         }
         case 'confirm_loaded': {
@@ -369,7 +369,7 @@ export class WhatsAppRouterService {
         }
         case 'confirm_finished': {
           await this.freights.confirmFinished(entityId, synUser);
-          await this.wa.sendText(phone, '🏁 Entrega confirmada.');
+          await this.wa.sendText(phone, 'Entrega confirmada correctamente.');
           break;
         }
         case 'cancel': {
@@ -398,7 +398,7 @@ export class WhatsAppRouterService {
           break;
         }
         default: {
-          await this.wa.sendText(phone, 'Accion no reconocida. Escribi *menu* para ver opciones.');
+          await this.wa.sendText(phone, 'Accion no reconocida. Escriba *menu* para ver las opciones disponibles.');
         }
       }
     } catch (e) {
@@ -426,20 +426,22 @@ export class WhatsAppRouterService {
   // ======================== SHOW MAIN MENU ==============================
 
   async showMainMenu(phone: string, user: any) {
-    const name = user.name?.split(' ')[0] || 'usuario';
+    const name = user.name?.split(' ')[0] || 'Usuario';
     const role = this.getUserRole(user);
     const companyName = user.company?.name || '';
     const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
-    const tag = companyName ? `${companyName}${roleLabel ? ` · ${roleLabel}` : ''}` : '';
+    const tag = companyName ? `${companyName}${roleLabel ? ` | ${roleLabel}` : ''}` : '';
 
-    const greeting = `Hola *${name}*! Soy el asistente de *Tolvink* 🌾` +
-      (tag ? `\n_${tag}_` : '') +
+    const greeting = `*TOLVINK* — Gestion de Fletes\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `👤 ${name}` +
+      (tag ? ` | _${tag}_` : '') +
       `\n\n`;
 
     const features = this.getRoleFeatureSummary(role);
 
     await this.wa.sendButtons(phone,
-      greeting + features + `\nEscribi lo que necesitas o usa los botones:`,
+      greeting + features + `\nSeleccione una opcion o escriba su consulta:`,
       this.getRoleMenuButtons(role),
     );
   }
@@ -449,31 +451,32 @@ export class WhatsAppRouterService {
   private async showHelp(phone: string, user: any) {
     const role = this.getUserRole(user);
 
-    const header = `*Guia de Tolvink por WhatsApp* 📋\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    const header = `*GUIA DE USO — TOLVINK*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     const commands =
-      `*Atajos rapidos:*\n` +
-      `• *menu* → volver al inicio\n` +
-      `• *crear* → crear flete nuevo\n` +
-      `• *fletes* → ver tus fletes activos\n` +
-      `• *FLT-0001* → ver detalle de un flete\n` +
-      `• *cancelar* → salir de una operacion\n\n`;
+      `*COMANDOS DISPONIBLES*\n` +
+      `• *menu* — Volver al inicio\n` +
+      `• *crear* — Solicitar nuevo flete\n` +
+      `• *fletes* — Consultar fletes activos\n` +
+      `• *FLT-0001* — Consultar detalle de un flete\n` +
+      `• *cancelar* — Interrumpir operacion en curso\n\n`;
 
     const roleSection = this.getRoleHelpSection(role);
 
     const tips =
-      `\n*Tips:*\n` +
-      `💬 Podes escribir en lenguaje natural\n` +
-      `🎤 Tambien acepto mensajes de voz\n` +
-      `📍 Comparti ubicacion para origen/destino\n` +
-      `📄 Pedi un _informe PDF_ de cualquier flete\n` +
-      `🗺️ Pedi un _link de seguimiento_ en vivo\n\n` +
-      `📱 App completa: ${APP_URL}`;
+      `\n*CANALES DE ENTRADA*\n` +
+      `📋 Texto en lenguaje natural\n` +
+      `📋 Mensajes de voz\n` +
+      `📍 Ubicacion compartida para origen/destino\n\n` +
+      `*DOCUMENTACION*\n` +
+      `📄 Solicite informe PDF de cualquier flete\n` +
+      `📍 Solicite link de seguimiento en vivo\n\n` +
+      `Plataforma web: ${APP_URL}`;
 
     await this.wa.sendText(phone, header + commands + roleSection + tips);
 
     await this.wa.sendButtons(phone,
-      'Que queres hacer?',
+      'Seleccione una opcion:',
       this.getRoleMenuButtons(role),
     );
   }
@@ -495,48 +498,47 @@ export class WhatsAppRouterService {
   private getRoleFeatureSummary(role: string): string {
     if (role === 'producer') {
       return (
-        `*Lo que podes hacer:*\n` +
+        `*OPERACIONES DISPONIBLES*\n` +
         `📦 Crear fletes (grano, toneladas, planta, fecha)\n` +
-        `🚛 Gestionar tu flota propia\n` +
-        `📋 Ver estado de tus fletes en tiempo real\n` +
-        `✅ Confirmar cargas de flota propia\n` +
-        `🗺️ Seguimiento en vivo de camiones\n` +
+        `🚛 Gestionar flota propia\n` +
+        `📋 Consultar estado de fletes en tiempo real\n` +
+        `📦 Confirmar cargas de flota propia\n` +
+        `📍 Seguimiento en vivo de unidades\n` +
         `📄 Descargar informes PDF\n` +
-        `🌾 Administrar campos y lotes\n` +
-        `👥 Gestionar equipo (admin)\n\n`
+        `📋 Administrar campos y lotes\n` +
+        `👤 Gestionar equipo\n\n`
       );
     }
     if (role === 'plant') {
       return (
-        `*Lo que podes hacer:*\n` +
-        `📋 Ver fletes pendientes de asignacion\n` +
+        `*OPERACIONES DISPONIBLES*\n` +
+        `📋 Consultar fletes pendientes de asignacion\n` +
         `🚛 Asignar transportistas a fletes\n` +
-        `✅ Confirmar recepciones y entregas\n` +
-        `🗺️ Seguimiento en vivo de camiones\n` +
+        `📦 Confirmar recepciones y entregas\n` +
+        `📍 Seguimiento en vivo de unidades\n` +
         `📄 Descargar informes PDF\n` +
-        `👥 Gestionar equipo (admin)\n\n`
+        `👤 Gestionar equipo\n\n`
       );
     }
     if (role === 'transporter') {
       return (
-        `*Lo que podes hacer:*\n` +
-        `📋 Ver fletes asignados\n` +
-        `✅ Aceptar o rechazar asignaciones\n` +
+        `*OPERACIONES DISPONIBLES*\n` +
+        `📋 Consultar fletes asignados\n` +
+        `📋 Aceptar o rechazar asignaciones\n` +
         `🚛 Iniciar viajes\n` +
-        `📦 Confirmar carga (con toneladas reales)\n` +
-        `🏁 Confirmar entrega en destino\n` +
-        `🗺️ Seguimiento en vivo\n` +
+        `📦 Confirmar carga (toneladas reales)\n` +
+        `📦 Confirmar entrega en destino\n` +
+        `📍 Seguimiento en vivo\n` +
         `📄 Descargar informes PDF\n` +
-        `👥 Gestionar choferes y camiones\n\n`
+        `👤 Gestionar choferes y camiones\n\n`
       );
     }
-    // Generic fallback
     return (
-      `*Lo que podes hacer:*\n` +
+      `*OPERACIONES DISPONIBLES*\n` +
       `📦 Crear y gestionar fletes\n` +
-      `📋 Ver estado de fletes en tiempo real\n` +
-      `✅ Confirmar cargas y entregas\n` +
-      `🗺️ Seguimiento en vivo\n` +
+      `📋 Consultar estado de fletes\n` +
+      `📦 Confirmar cargas y entregas\n` +
+      `📍 Seguimiento en vivo\n` +
       `📄 Descargar informes PDF\n\n`
     );
   }
@@ -546,72 +548,72 @@ export class WhatsAppRouterService {
       return [
         { id: 'create_freight', title: 'CREAR FLETE' },
         { id: 'active_freights', title: 'MIS FLETES' },
-        { id: 'show_help', title: 'GUIA COMPLETA' },
+        { id: 'show_help', title: 'GUIA DE USO' },
       ];
     }
     if (role === 'plant') {
       return [
         { id: 'active_freights', title: 'FLETES PENDIENTES' },
-        { id: 'show_help', title: 'GUIA COMPLETA' },
+        { id: 'show_help', title: 'GUIA DE USO' },
       ];
     }
     if (role === 'transporter') {
       return [
         { id: 'active_freights', title: 'MIS ASIGNACIONES' },
-        { id: 'show_help', title: 'GUIA COMPLETA' },
+        { id: 'show_help', title: 'GUIA DE USO' },
       ];
     }
     return [
       { id: 'active_freights', title: 'MIS FLETES' },
       { id: 'create_freight', title: 'CREAR FLETE' },
-      { id: 'show_help', title: 'GUIA COMPLETA' },
+      { id: 'show_help', title: 'GUIA DE USO' },
     ];
   }
 
   private getRoleHelpSection(role: string): string {
     if (role === 'producer') {
       return (
-        `*Funciones de Productor:*\n` +
-        `📦 *Crear flete* → decime el grano, toneladas, planta y fecha\n` +
-        `   _Ej: "quiero mandar 60 tn de soja a Cargill mañana 8am"_\n` +
-        `🌾 *Campos y lotes* → "mostrame mis campos" / "crear campo"\n` +
-        `🚛 *Flota propia* → asigna tus camiones al crear\n` +
-        `✅ *Confirmar carga* → cuando tu flota carga en origen\n` +
-        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
-        `🗺️ *Tracking* → "donde esta el FLT-XXXX?"\n` +
-        `👥 *Equipo* → "mostrame los usuarios" / "crear chofer"\n\n`
+        `*FUNCIONES — PRODUCTOR*\n` +
+        `📦 *Crear flete* — Indique grano, toneladas, planta y fecha\n` +
+        `   _Ej: "60 tn de soja a Cargill, manana 08:00"_\n` +
+        `📋 *Campos y lotes* — "consultar campos" / "crear campo"\n` +
+        `🚛 *Flota propia* — Asigne sus camiones al crear el flete\n` +
+        `📦 *Confirmar carga* — Cuando su flota carga en origen\n` +
+        `📄 *Informes* — "informe del FLT-XXXX"\n` +
+        `📍 *Seguimiento* — "ubicacion del FLT-XXXX"\n` +
+        `👤 *Equipo* — "listar usuarios" / "crear chofer"\n\n`
       );
     }
     if (role === 'plant') {
       return (
-        `*Funciones de Planta:*\n` +
-        `📋 *Ver fletes* → "fletes pendientes" / "mis fletes"\n` +
-        `🚛 *Asignar transportista* → "asignar transportista al FLT-XXXX"\n` +
-        `✅ *Confirmar recepcion* → cuando el camion llega a planta\n` +
-        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
-        `🗺️ *Tracking* → "donde esta el FLT-XXXX?"\n` +
-        `👥 *Equipo* → "mostrame los usuarios"\n\n`
+        `*FUNCIONES — PLANTA*\n` +
+        `📋 *Consultar fletes* — "fletes pendientes" / "mis fletes"\n` +
+        `🚛 *Asignar transportista* — "asignar transportista al FLT-XXXX"\n` +
+        `📦 *Confirmar recepcion* — Cuando la unidad arriba a planta\n` +
+        `📄 *Informes* — "informe del FLT-XXXX"\n` +
+        `📍 *Seguimiento* — "ubicacion del FLT-XXXX"\n` +
+        `👤 *Equipo* — "listar usuarios"\n\n`
       );
     }
     if (role === 'transporter') {
       return (
-        `*Funciones de Transportista:*\n` +
-        `📋 *Ver asignaciones* → "mis fletes" / "fletes asignados"\n` +
-        `✅ *Aceptar/rechazar* → cuando te asignan un flete\n` +
-        `🚛 *Iniciar viaje* → "iniciar viaje del FLT-XXXX"\n` +
-        `📦 *Confirmar carga* → con toneladas reales cargadas\n` +
-        `🏁 *Confirmar entrega* → al llegar a destino\n` +
-        `📊 *Informes* → "mandame el informe del FLT-XXXX"\n` +
-        `👥 *Equipo* → "mis choferes" / "mis camiones"\n\n`
+        `*FUNCIONES — TRANSPORTISTA*\n` +
+        `📋 *Consultar asignaciones* — "mis fletes" / "fletes asignados"\n` +
+        `📋 *Aceptar/rechazar* — Al recibir asignacion de flete\n` +
+        `🚛 *Iniciar viaje* — "iniciar viaje del FLT-XXXX"\n` +
+        `📦 *Confirmar carga* — Con toneladas reales cargadas\n` +
+        `📦 *Confirmar entrega* — Al arribar a destino\n` +
+        `📄 *Informes* — "informe del FLT-XXXX"\n` +
+        `👤 *Equipo* — "mis choferes" / "mis camiones"\n\n`
       );
     }
     return (
-      `*Funciones disponibles:*\n` +
+      `*FUNCIONES DISPONIBLES*\n` +
       `📦 Crear y gestionar fletes\n` +
-      `📋 Ver estado de fletes\n` +
-      `✅ Confirmar cargas y entregas\n` +
-      `📊 Descargar informes PDF\n` +
-      `🗺️ Seguimiento en vivo\n\n`
+      `📋 Consultar estado de fletes\n` +
+      `📦 Confirmar cargas y entregas\n` +
+      `📄 Descargar informes PDF\n` +
+      `📍 Seguimiento en vivo\n\n`
     );
   }
 
@@ -622,7 +624,7 @@ export class WhatsAppRouterService {
     const activeCompanyId = user.activeCompanyId || user.companyId;
 
     if (!activeCompanyId) {
-      await this.wa.sendText(phone, 'No tenes una empresa activa configurada.');
+      await this.wa.sendText(phone, 'No se encontro una empresa activa asociada a su cuenta.');
       return;
     }
 
@@ -665,7 +667,7 @@ export class WhatsAppRouterService {
     });
 
     if (activeFreights.length === 0) {
-      await this.wa.sendText(phone, 'No tenes fletes activos en este momento.');
+      await this.wa.sendText(phone, 'No se registran fletes activos en este momento.');
       return;
     }
 
@@ -684,7 +686,7 @@ export class WhatsAppRouterService {
     });
 
     await this.wa.sendList(phone,
-      `Tenes *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:\n\n📱 ${APP_URL}`,
+      `Se registran *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:\n\nPlataforma: ${APP_URL}`,
       'VER FLETES',
       [{ title: 'FLETES ACTIVOS', rows }],
     );
@@ -699,7 +701,7 @@ export class WhatsAppRouterService {
     });
 
     if (!freight) {
-      await this.wa.sendText(phone, `No se encontro el flete ${code}.`);
+      await this.wa.sendText(phone, `No se encontro el flete *${code}*.`);
       return;
     }
 
@@ -741,7 +743,7 @@ export class WhatsAppRouterService {
       isDriver;
 
     if (!hasAccess) {
-      await this.wa.sendText(phone, 'No tenes acceso a este flete con tu empresa activa.');
+      await this.wa.sendText(phone, 'No dispone de acceso a este flete con su empresa activa.');
       return;
     }
 
@@ -752,8 +754,8 @@ export class WhatsAppRouterService {
     const items = freight.items.map((i: any) => `${i.grain} ${i.tons}tn`).join(', ');
     const assignment = freight.assignments[0];
     const transportLine = assignment
-      ? `🚚 ${assignment.transportCompany?.name || 'Transportista'}${assignment.truck ? ` (${assignment.truck.plate})` : ''}${assignment.driver ? ` - ${assignment.driver.name}` : ''}`
-      : '🚚 Sin transportista asignado';
+      ? `🚛 ${assignment.transportCompany?.name || 'Transportista'}${assignment.truck ? ` (${assignment.truck.plate})` : ''}${assignment.driver ? ` — ${assignment.driver.name}` : ''}`
+      : '🚛 Sin transportista asignado';
 
     const loadDate = freight.loadDate
       ? new Date(freight.loadDate).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -765,8 +767,8 @@ export class WhatsAppRouterService {
     text += `📍 ${freight.originName || freight.originCompany?.name || 'Origen'} → ${freight.destName || freight.destCompany?.name || 'Destino'}\n`;
     text += `${transportLine}\n`;
     if (loadDate) text += `📅 ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
-    if (freight.notes) text += `📝 ${freight.notes}\n`;
-    text += `\n📱 Ver en la app: ${APP_URL}/freights/${freight.id}`;
+    if (freight.notes) text += `📋 Observaciones: ${freight.notes}\n`;
+    text += `\nPlataforma: ${APP_URL}/freights/${freight.id}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);
