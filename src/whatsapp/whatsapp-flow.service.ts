@@ -11,7 +11,7 @@ import { FreightsService } from '../freights/freights.service';
 const FLOW_TIMEOUT_MINUTES = 10;
 
 // Header hint shown at the top of every flow message
-const FLOW_HINT = '_Para salir escribí *cancelar*\nPara ver opciones escribí *menu*_\n━━━━━━━━━━━━━━━\n\n';
+const FLOW_HINT = '_cancelar · menu_\n─────────────────────\n\n';
 
 const APP_URL = 'https://tolvink.vercel.app';
 
@@ -99,7 +99,7 @@ export class WhatsAppFlowService {
           await this.createFreightContinue(phone, session, type, payload, user, state);
           break;
         default:
-          await this.wa.sendText(phone, 'Flujo no reconocido. Escriba *menu* para volver al inicio.');
+          await this.wa.sendText(phone, 'Flujo no reconocido. Escriba "menu" para volver al inicio.');
           await this.endFlow(session.id);
       }
     } catch (e) {
@@ -132,7 +132,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.respond(state.freightId, { action: 'rejected', reason } as any, synUser);
-      await this.wa.sendText(phone, `Flete rechazado.\nMotivo: ${reason}`);
+      await this.wa.sendText(phone, `─────────────────────\n  Flete rechazado\n─────────────────────\nMotivo: ${reason}`);
       await this.endFlow(session.id);
       return;
     }
@@ -180,7 +180,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.confirmLoaded(state.freightId, synUser, tons);
-      await this.wa.sendText(phone, `📦 Carga confirmada: *${tons} tn*`);
+      await this.wa.sendText(phone, `─────────────────────\n  Carga confirmada: ${tons} tn\n─────────────────────`);
       await this.endFlow(session.id);
       return;
     }
@@ -211,7 +211,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.cancel(state.freightId, { reason } as any, synUser);
-      await this.wa.sendText(phone, `Flete cancelado.\nMotivo: ${reason}`);
+      await this.wa.sendText(phone, `─────────────────────\n  Flete cancelado\n─────────────────────\nMotivo: ${reason}`);
       await this.endFlow(session.id);
       return;
     }
@@ -282,7 +282,7 @@ export class WhatsAppFlowService {
         return;
       }
       await this.updateState(session.id, 'awaiting_tons', newState);
-      await this.wa.sendText(phone, FLOW_HINT + `Grano: *${grain}*\n\nIndique las toneladas a cargar (ej: 30)`);
+      await this.wa.sendText(phone, FLOW_HINT + `Grano: ${grain}\n\nIndique las toneladas a cargar (ej: 30)`);
       return;
     }
 
@@ -313,9 +313,9 @@ export class WhatsAppFlowService {
       const truckWord = suggested === 1 ? 'camion' : 'camiones';
       await this.wa.sendButtons(phone,
         FLOW_HINT +
-        `Grano: *${state.grain}* | Toneladas: *${tons}*\n\n` +
-        `Para ${tons} tn se necesita${suggested > 1 ? 'n' : ''} aprox. *${suggested} ${truckWord}*.\n` +
-        `Indique la cantidad de camiones requeridos:`,
+        `${state.grain}  ·  ${tons} tn\n\n` +
+        `Para ${tons} tn se necesita${suggested > 1 ? 'n' : ''} aprox. ${suggested} ${truckWord}.\n` +
+        `Indique la cantidad de camiones:`,
         [
           { id: `trucks:${suggested}`, title: `${suggested} ${truckWord.toUpperCase()}` },
           { id: 'trucks:other', title: 'OTRA CANTIDAD' },
@@ -768,14 +768,14 @@ export class WhatsAppFlowService {
           break;
         case 'tons':
           await this.updateState(session.id, 'awaiting_tons', editState);
-          await this.wa.sendText(phone, FLOW_HINT + `Toneladas actuales: *${state.tons}*\n\nIndique las nuevas toneladas.`);
+          await this.wa.sendText(phone, FLOW_HINT + `Toneladas actuales: ${state.tons}\n\nIndique las nuevas toneladas.`);
           break;
         case 'trucks':
           await this.updateState(session.id, 'awaiting_truck_count', editState);
           const suggested = Math.max(1, Math.ceil((state.tons || 30) / 30));
           const truckWord = suggested === 1 ? 'camion' : 'camiones';
           await this.wa.sendButtons(phone,
-            FLOW_HINT + `Camiones actuales: *${state.truckCount || 1}*\n\nCantidad de camiones:`,
+            FLOW_HINT + `Camiones actuales: ${state.truckCount || 1}\n\nIndique la cantidad de camiones:`,
             [
               { id: `trucks:${suggested}`, title: `${suggested} ${truckWord.toUpperCase()}` },
               { id: 'trucks:other', title: 'OTRA CANTIDAD' },
@@ -880,9 +880,10 @@ export class WhatsAppFlowService {
 
       const freight = await this.freights.create(dto as any, synUser);
       const freightLink = `\n\nPlataforma: ${APP_URL}/freights/${(freight as any).id}`;
+      const code = (freight as any).code;
       const successMsg = state.truckId
-        ? `Flete creado: *${(freight as any).code}*\n\nAsignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
-        : `Flete creado: *${(freight as any).code}*\n\nPendiente de asignacion de transportista.` + freightLink;
+        ? `─────────────────────\n  Flete creado: ${code}\n─────────────────────\nAsignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
+        : `─────────────────────\n  Flete creado: ${code}\n─────────────────────\nPendiente de asignacion de transportista.` + freightLink;
       await this.wa.sendText(phone, successMsg);
       await this.endFlow(session.id);
       return;
@@ -913,7 +914,7 @@ export class WhatsAppFlowService {
     if (company?.hasInternalFleet) {
       await this.updateState(session.id, 'awaiting_own_fleet', state);
       await this.wa.sendButtons(phone,
-        FLOW_HINT + `Camiones: *${state.truckCount}*\n\n¿Desea utilizar su flota propia?`,
+        FLOW_HINT + `Camiones: ${state.truckCount}\n\n¿Desea utilizar su flota propia?`,
         [
           { id: 'own_fleet:yes', title: 'SI, FLOTA PROPIA' },
           { id: 'own_fleet:no', title: 'NO' },
@@ -996,7 +997,7 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_plant', state);
     await this.wa.sendList(phone,
-      FLOW_HINT + `*${state.grain}* · ${state.tons} tn · ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndicar qué empresa recibe el pedido.`,
+      FLOW_HINT + `${state.grain}  ·  ${state.tons} tn  ·  ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
       'SELECCIONAR PLANTA',
       [{
         title: 'PLANTAS DISPONIBLES',
@@ -1033,7 +1034,7 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_time', state);
     await this.wa.sendList(phone,
-      FLOW_HINT + `Fecha: *${dateFormatted}*\n\nA que hora se carga?`,
+      FLOW_HINT + `Fecha: ${dateFormatted}\n\nIndique la hora de carga.`,
       'SELECCIONAR HORA',
       [{
         title: 'HORARIOS',
@@ -1058,10 +1059,9 @@ export class WhatsAppFlowService {
     await this.updateState(session.id, 'awaiting_origin_location', state);
     await this.wa.sendButtons(phone,
       FLOW_HINT +
-      `Origen: *${state.customOriginName}*\n\n` +
-      'Comparta la ubicacion del origen.\n' +
-      'Seleccione 📎 > *Ubicacion* para enviar.\n\n' +
-      'O seleccione *Omitir* para continuar sin ubicacion.',
+      `Origen: ${state.customOriginName}\n\n` +
+      'Comparta la ubicacion del origen (adjuntos > ubicacion).\n\n' +
+      'O seleccione Omitir para continuar sin ubicacion.',
       [{ id: 'location:skip', title: 'OMITIR UBICACION' }],
     );
   }
@@ -1095,17 +1095,19 @@ export class WhatsAppFlowService {
     const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
     const truckCount = finalState.truckCount || 1;
     const truckLine = finalState.truckPlate
-      ? `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''} · Flota propia (${finalState.truckPlate})`
-      : `🚛 ${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
+      ? `${truckCount} camion${truckCount > 1 ? 'es' : ''}  ·  Flota propia (${finalState.truckPlate})`
+      : `${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
 
     await this.updateState(session.id, 'awaiting_confirm', finalState);
     await this.wa.sendButtons(phone,
-      `*RESUMEN DEL FLETE*\n` +
-      `━━━━━━━━━━━━━━━\n` +
-      `📦 ${finalState.grain} · ${finalState.tons} tn\n` +
-      `${truckLine}\n` +
-      `📍 ${originName} → ${destName}\n` +
-      `📅 ${dateFormatted} ${finalState.loadTime}\n\n` +
+      `RESUMEN DEL FLETE\n` +
+      `─────────────────────\n` +
+      `Carga: ${finalState.grain}  ·  ${finalState.tons} tn\n` +
+      `Transporte: ${truckLine}\n` +
+      `Origen: ${originName}\n` +
+      `Destino: ${destName}\n` +
+      `Fecha: ${dateFormatted}  ${finalState.loadTime}\n` +
+      `─────────────────────\n\n` +
       `¿Confirma la creacion del flete?`,
       [
         { id: 'flow_confirm:yes', title: 'CONFIRMAR' },

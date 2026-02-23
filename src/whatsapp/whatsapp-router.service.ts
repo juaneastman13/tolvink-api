@@ -88,7 +88,7 @@ export class WhatsAppRouterService {
         const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
-          await this.wa.sendText(phone, 'Operacion cancelada correctamente.');
+          await this.wa.sendText(phone, '─────────────────────\n  Operacion cancelada\n─────────────────────');
           await this.showMainMenu(phone, user);
           return;
         }
@@ -119,7 +119,7 @@ export class WhatsAppRouterService {
       } else if (type === 'audio') {
         await this.handleAudio(phone, user, payload);
       } else {
-        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio y ubicaciones. Escriba *menu* para ver las opciones disponibles.');
+        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio y ubicaciones. Escriba "menu" para ver las opciones disponibles.');
       }
     } catch (e) {
       this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
@@ -356,7 +356,7 @@ export class WhatsAppRouterService {
       switch (action) {
         case 'accept': {
           await this.freights.respond(entityId, { action: 'accepted' } as any, synUser);
-          await this.wa.sendText(phone, 'Flete aceptado correctamente.');
+          await this.wa.sendText(phone, '─────────────────────\n  Flete aceptado\n─────────────────────');
           break;
         }
         case 'reject': {
@@ -366,7 +366,7 @@ export class WhatsAppRouterService {
         }
         case 'start': {
           await this.freights.start(entityId, synUser);
-          await this.wa.sendText(phone, '🚛 Viaje iniciado correctamente.');
+          await this.wa.sendText(phone, '─────────────────────\n  Viaje iniciado\n─────────────────────');
           break;
         }
         case 'confirm_loaded': {
@@ -376,7 +376,7 @@ export class WhatsAppRouterService {
         }
         case 'confirm_finished': {
           await this.freights.confirmFinished(entityId, synUser);
-          await this.wa.sendText(phone, 'Entrega confirmada correctamente.');
+          await this.wa.sendText(phone, '─────────────────────\n  Entrega confirmada\n─────────────────────');
           break;
         }
         case 'cancel': {
@@ -405,7 +405,7 @@ export class WhatsAppRouterService {
           break;
         }
         default: {
-          await this.wa.sendText(phone, 'Accion no reconocida. Escriba *menu* para ver las opciones disponibles.');
+          await this.wa.sendText(phone, 'Accion no reconocida. Escriba "menu" para ver las opciones disponibles.');
         }
       }
     } catch (e) {
@@ -438,12 +438,15 @@ export class WhatsAppRouterService {
     const companyName = user.company?.name || '';
     const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
 
-    const header = `*Tolvink*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `Usuario: ${name}` +
-      (companyName ? ` | ${companyName}` : '') +
-      (roleLabel ? ` | ${roleLabel}` : '') +
-      `\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    const userLine = `${name}` +
+      (companyName ? `  ·  ${companyName}` : '') +
+      (roleLabel ? `  ·  ${roleLabel}` : '');
+
+    const header =
+      `T O L V I N K\n` +
+      `─────────────────────\n` +
+      `${userLine}\n` +
+      `─────────────────────\n\n`;
 
     const features = this.getRoleFeatureSummary(role);
 
@@ -459,7 +462,9 @@ export class WhatsAppRouterService {
   private async showHelp(phone: string, user: any) {
     const role = this.getUserRole(user);
 
-    const header = `*Guia de uso — Tolvink*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    const header =
+      `GUIA DE USO\n` +
+      `─────────────────────\n\n`;
 
     const body =
       `Enviando un mensaje de texto o audio puede realizar las gestiones que tenga habilitadas. ` +
@@ -467,7 +472,9 @@ export class WhatsAppRouterService {
 
     const roleSection = this.getRoleHelpSection(role);
 
-    const footer = `Plataforma web: ${APP_URL}`;
+    const footer =
+      `─────────────────────\n` +
+      `Plataforma web:\n${APP_URL}`;
 
     await this.wa.sendText(phone, header + body + roleSection + footer);
 
@@ -494,48 +501,47 @@ export class WhatsAppRouterService {
   private getRoleFeatureSummary(role: string): string {
     if (role === 'producer') {
       return (
-        `*Funciones disponibles*\n` +
-        `📦 Crear fletes (grano, toneladas, planta, fecha)\n` +
-        `🚛 Gestionar flota propia\n` +
-        `📋 Consultar estado de fletes en tiempo real\n` +
-        `📦 Confirmar cargas de flota propia\n` +
-        `📍 Seguimiento en vivo de unidades\n` +
-        `📄 Descargar informes PDF\n` +
-        `📋 Administrar campos y lotes\n` +
-        `👤 Gestionar equipo\n`
+        `Funciones disponibles\n\n` +
+        `  ▸ Crear fletes\n` +
+        `  ▸ Gestionar flota propia\n` +
+        `  ▸ Consultar estado en tiempo real\n` +
+        `  ▸ Confirmar cargas\n` +
+        `  ▸ Seguimiento en vivo\n` +
+        `  ▸ Informes PDF\n` +
+        `  ▸ Campos y lotes\n` +
+        `  ▸ Equipo\n`
       );
     }
     if (role === 'plant') {
       return (
-        `*Funciones disponibles*\n` +
-        `📋 Consultar fletes pendientes de asignacion\n` +
-        `🚛 Asignar transportistas a fletes\n` +
-        `📦 Confirmar recepciones y entregas\n` +
-        `📍 Seguimiento en vivo de unidades\n` +
-        `📄 Descargar informes PDF\n` +
-        `👤 Gestionar equipo\n`
+        `Funciones disponibles\n\n` +
+        `  ▸ Fletes pendientes de asignacion\n` +
+        `  ▸ Asignar transportistas\n` +
+        `  ▸ Confirmar recepciones y entregas\n` +
+        `  ▸ Seguimiento en vivo\n` +
+        `  ▸ Informes PDF\n` +
+        `  ▸ Equipo\n`
       );
     }
     if (role === 'transporter') {
       return (
-        `*Funciones disponibles*\n` +
-        `📋 Consultar fletes asignados\n` +
-        `📋 Aceptar o rechazar asignaciones\n` +
-        `🚛 Iniciar viajes\n` +
-        `📦 Confirmar carga (toneladas reales)\n` +
-        `📦 Confirmar entrega en destino\n` +
-        `📍 Seguimiento en vivo\n` +
-        `📄 Descargar informes PDF\n` +
-        `👤 Gestionar choferes y camiones\n`
+        `Funciones disponibles\n\n` +
+        `  ▸ Fletes asignados\n` +
+        `  ▸ Aceptar o rechazar asignaciones\n` +
+        `  ▸ Iniciar viajes\n` +
+        `  ▸ Confirmar carga y entrega\n` +
+        `  ▸ Seguimiento en vivo\n` +
+        `  ▸ Informes PDF\n` +
+        `  ▸ Choferes y camiones\n`
       );
     }
     return (
-      `*Funciones disponibles*\n` +
-      `📦 Crear y gestionar fletes\n` +
-      `📋 Consultar estado de fletes\n` +
-      `📦 Confirmar cargas y entregas\n` +
-      `📍 Seguimiento en vivo\n` +
-      `📄 Descargar informes PDF\n`
+      `Funciones disponibles\n\n` +
+      `  ▸ Crear y gestionar fletes\n` +
+      `  ▸ Consultar estado\n` +
+      `  ▸ Confirmar cargas y entregas\n` +
+      `  ▸ Seguimiento en vivo\n` +
+      `  ▸ Informes PDF\n`
     );
   }
 
@@ -569,46 +575,46 @@ export class WhatsAppRouterService {
   private getRoleHelpSection(role: string): string {
     if (role === 'producer') {
       return (
-        `*Funciones habilitadas — Productor*\n` +
-        `📦 Crear fletes indicando grano, toneladas, planta y fecha\n` +
-        `📋 Administrar campos y lotes\n` +
-        `🚛 Gestionar flota propia y asignar camiones\n` +
-        `📦 Confirmar cargas de flota propia\n` +
-        `📄 Solicitar informes PDF de fletes\n` +
-        `📍 Solicitar seguimiento en vivo de unidades\n` +
-        `👤 Gestionar equipo y choferes\n\n`
+        `Productor\n\n` +
+        `  ▸ Crear fletes indicando grano, toneladas, planta y fecha\n` +
+        `  ▸ Administrar campos y lotes\n` +
+        `  ▸ Gestionar flota propia y asignar camiones\n` +
+        `  ▸ Confirmar cargas de flota propia\n` +
+        `  ▸ Solicitar informes PDF\n` +
+        `  ▸ Seguimiento en vivo de unidades\n` +
+        `  ▸ Gestionar equipo y choferes\n\n`
       );
     }
     if (role === 'plant') {
       return (
-        `*Funciones habilitadas — Planta*\n` +
-        `📋 Consultar fletes pendientes de asignacion\n` +
-        `🚛 Asignar transportistas a fletes\n` +
-        `📦 Confirmar recepcion y entrega de cargas\n` +
-        `📄 Solicitar informes PDF de fletes\n` +
-        `📍 Solicitar seguimiento en vivo de unidades\n` +
-        `👤 Gestionar equipo\n\n`
+        `Planta\n\n` +
+        `  ▸ Consultar fletes pendientes de asignacion\n` +
+        `  ▸ Asignar transportistas a fletes\n` +
+        `  ▸ Confirmar recepcion y entrega de cargas\n` +
+        `  ▸ Solicitar informes PDF\n` +
+        `  ▸ Seguimiento en vivo de unidades\n` +
+        `  ▸ Gestionar equipo\n\n`
       );
     }
     if (role === 'transporter') {
       return (
-        `*Funciones habilitadas — Transportista*\n` +
-        `📋 Consultar asignaciones y fletes\n` +
-        `📋 Aceptar o rechazar asignaciones\n` +
-        `🚛 Iniciar viajes\n` +
-        `📦 Confirmar carga con toneladas reales\n` +
-        `📦 Confirmar entrega en destino\n` +
-        `📄 Solicitar informes PDF de fletes\n` +
-        `👤 Gestionar choferes y camiones\n\n`
+        `Transportista\n\n` +
+        `  ▸ Consultar asignaciones y fletes\n` +
+        `  ▸ Aceptar o rechazar asignaciones\n` +
+        `  ▸ Iniciar viajes\n` +
+        `  ▸ Confirmar carga con toneladas reales\n` +
+        `  ▸ Confirmar entrega en destino\n` +
+        `  ▸ Solicitar informes PDF\n` +
+        `  ▸ Gestionar choferes y camiones\n\n`
       );
     }
     return (
-      `*Funciones habilitadas*\n` +
-      `📦 Crear y gestionar fletes\n` +
-      `📋 Consultar estado de fletes\n` +
-      `📦 Confirmar cargas y entregas\n` +
-      `📄 Descargar informes PDF\n` +
-      `📍 Seguimiento en vivo\n\n`
+      `Funciones habilitadas\n\n` +
+      `  ▸ Crear y gestionar fletes\n` +
+      `  ▸ Consultar estado de fletes\n` +
+      `  ▸ Confirmar cargas y entregas\n` +
+      `  ▸ Informes PDF\n` +
+      `  ▸ Seguimiento en vivo\n\n`
     );
   }
 
@@ -681,7 +687,7 @@ export class WhatsAppRouterService {
     });
 
     await this.wa.sendList(phone,
-      `Se registran *${activeFreights.length}* flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}:\n\nPlataforma: ${APP_URL}`,
+      `${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}\n─────────────────────\nSeleccione uno para ver el detalle.`,
       'VER FLETES',
       [{ title: 'FLETES ACTIVOS', rows }],
     );
@@ -696,7 +702,7 @@ export class WhatsAppRouterService {
     });
 
     if (!freight) {
-      await this.wa.sendText(phone, `No se encontro el flete *${code}*.`);
+      await this.wa.sendText(phone, `No se encontro el flete ${code}.`);
       return;
     }
 
@@ -742,28 +748,29 @@ export class WhatsAppRouterService {
       return;
     }
 
-    const emoji = STATUS_EMOJI[freight.status] || '';
     const statusLabel = STATUS_LABELS[freight.status] || freight.status;
 
     // Build detail text
-    const items = freight.items.map((i: any) => `${i.grain} ${i.tons}tn`).join(', ');
+    const items = freight.items.map((i: any) => `${i.grain}  ·  ${i.tons} tn`).join(', ');
     const assignment = freight.assignments[0];
     const transportLine = assignment
-      ? `🚛 ${assignment.transportCompany?.name || 'Transportista'}${assignment.truck ? ` (${assignment.truck.plate})` : ''}${assignment.driver ? ` — ${assignment.driver.name}` : ''}`
-      : '🚛 Sin transportista asignado';
+      ? `${assignment.transportCompany?.name || 'Transportista'}${assignment.truck ? ` (${assignment.truck.plate})` : ''}${assignment.driver ? `  ·  ${assignment.driver.name}` : ''}`
+      : 'Sin transportista asignado';
 
     const loadDate = freight.loadDate
       ? new Date(freight.loadDate).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit', year: 'numeric' })
       : '';
 
-    let text = `*${freight.code}* — ${emoji} ${statusLabel}\n`;
-    text += '━━━━━━━━━━━━━━━\n';
-    text += `📦 ${items}\n`;
-    text += `📍 ${freight.originName || freight.originCompany?.name || 'Origen'} → ${freight.destName || freight.destCompany?.name || 'Destino'}\n`;
-    text += `${transportLine}\n`;
-    if (loadDate) text += `📅 ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
-    if (freight.notes) text += `📋 Observaciones: ${freight.notes}\n`;
-    text += `\nPlataforma: ${APP_URL}/freights/${freight.id}`;
+    let text = `${freight.code}  ·  ${statusLabel}\n`;
+    text += `─────────────────────\n`;
+    text += `Carga: ${items}\n`;
+    text += `Origen: ${freight.originName || freight.originCompany?.name || '–'}\n`;
+    text += `Destino: ${freight.destName || freight.destCompany?.name || '–'}\n`;
+    text += `Transporte: ${transportLine}\n`;
+    if (loadDate) text += `Fecha: ${loadDate}${freight.loadTime ? `  ${freight.loadTime}` : ''}\n`;
+    if (freight.notes) text += `Obs: ${freight.notes}\n`;
+    text += `─────────────────────\n`;
+    text += `${APP_URL}/freights/${freight.id}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);

@@ -140,7 +140,7 @@ export class AiService {
 
       // Extract text response
       const textBlocks = response.content.filter((b: any) => b.type === 'text');
-      let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No pude procesar tu mensaje.';
+      let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No se pudo procesar el mensaje.';
 
       // Post-process: validate quality, strip UUIDs, enforce length
       finalText = this.validateResponse(finalText);
@@ -203,10 +203,12 @@ EMOJIS:
 
 FORMATO:
 - Respuestas breves: 2-4 lineas para consultas simples.
-- Listas: maximo 5 items, una linea por item.
-- Negritas *asi* solo para datos clave (codigo, estado, fecha, toneladas).
+- Listas: maximo 5 items, una linea por item con "▸" como viñeta.
+- PROHIBIDO usar asteriscos para negritas. NUNCA escriba *texto*. Texto plano siempre.
+- Use "·" como separador entre datos en una misma linea.
+- Use "─────────────────────" como linea divisoria cuando necesite separar bloques.
 - NUNCA use markdown de enlaces [text](url). Incluya URLs directas.
-- Estructura en bloques claros. Titulos breves cuando corresponda.
+- Estructura en bloques claros. Titulos breves en mayusculas cuando corresponda.
 - Separar informacion critica en lineas independientes.
 - Evitar parrafos extensos. Priorizar bullets concretos.
 
