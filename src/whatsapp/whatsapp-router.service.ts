@@ -729,6 +729,13 @@ export class WhatsAppRouterService {
       },
     });
 
+    // Ensure shareToken exists for public tracking link
+    if (freight && !freight.shareToken) {
+      const token = require('crypto').randomUUID();
+      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken: token } });
+      (freight as any).shareToken = token;
+    }
+
     if (!freight) {
       await this.wa.sendText(phone, 'Flete no encontrado.');
       return;
@@ -770,7 +777,7 @@ export class WhatsAppRouterService {
     if (loadDate) text += `Fecha: ${loadDate}${freight.loadTime ? `  ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `Obs: ${freight.notes}\n`;
     text += `─────────────────────\n`;
-    text += `${APP_URL}/freights/${freight.id}`;
+    text += `${APP_URL}/track?token=${freight.shareToken}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);

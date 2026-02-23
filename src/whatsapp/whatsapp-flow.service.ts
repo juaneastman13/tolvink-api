@@ -879,7 +879,12 @@ export class WhatsAppFlowService {
       }
 
       const freight = await this.freights.create(dto as any, synUser);
-      const freightLink = `\n\nPlataforma: ${APP_URL}/freights/${(freight as any).id}`;
+
+      // Generate shareToken for public tracking link
+      const shareToken = require('crypto').randomUUID();
+      await this.prisma.freight.update({ where: { id: (freight as any).id }, data: { shareToken } });
+
+      const freightLink = `\n\n${APP_URL}/track?token=${shareToken}`;
       const code = (freight as any).code;
       const successMsg = state.truckId
         ? `─────────────────────\n  Flete creado: ${code}\n─────────────────────\nAsignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
