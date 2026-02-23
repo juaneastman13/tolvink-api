@@ -151,17 +151,31 @@ export class AiService {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const latestState = (freshSession?.flowState as any) || {};
 
+      const hasLocToken = !!latestState.locationToken;
+      if (hasLocToken) {
+        console.log(`[AI] Saving session — locationToken present: ${latestState.locationToken.token?.slice(0, 8)}...`);
+      }
+
+      const finalFlowState = {
+        ...latestState,
+        aiMessages: currentMessages.slice(-MAX_HISTORY),
+        lastMessageAt: new Date().toISOString(),
+      };
+
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: {
-          flowState: {
-            ...latestState,
-            aiMessages: currentMessages.slice(-MAX_HISTORY),
-            lastMessageAt: new Date().toISOString(),
-          },
+          flowState: finalFlowState,
           expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
         },
       });
+
+      if (hasLocToken) {
+        // Final verify
+        const check = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+        const saved = (check?.flowState as any)?.locationToken?.token;
+        console.log(`[AI] Post-save locationToken verify: ${saved ? saved.slice(0, 8) + '...' : 'MISSING!'}`);
+      }
 
       return finalText;
     } catch (e) {
@@ -1179,19 +1193,25 @@ MODIFICAR (solo admin/gerente):
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
     const state = (freshSession?.flowState as any) || {};
 
+    const newFlowState = {
+      ...state,
+      locationToken: {
+        token,
+        purpose: input.purpose || 'general',
+        createdAt: new Date().toISOString(),
+      },
+    };
+
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
-      data: {
-        flowState: {
-          ...state,
-          locationToken: {
-            token,
-            purpose: input.purpose || 'general',
-            createdAt: new Date().toISOString(),
-          },
-        },
-      },
+      data: { flowState: newFlowState },
     });
+
+    // Verify token was saved
+    const verifySession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const verifyToken = (verifySession?.flowState as any)?.locationToken?.token;
+    console.log(`[LOCATION] Token ${token.slice(0, 8)}... saved to session ${session.id}. Verify: ${verifyToken === token ? 'OK' : 'MISMATCH! got=' + verifyToken}`);
+    console.log(`[LOCATION] Session expiresAt: ${verifySession?.expiresAt}`);
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
     const url = `${frontendUrl}/pick-location?token=${token}`;
