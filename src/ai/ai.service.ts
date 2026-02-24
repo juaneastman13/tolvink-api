@@ -151,31 +151,21 @@ export class AiService {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const latestState = (freshSession?.flowState as any) || {};
 
+      // Extract pending buttons (set by tools during execution) and exclude from saved state
+      const pendingButtons = latestState._pendingButtons || undefined;
+      const { _pendingButtons, ...cleanState } = latestState;
+
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: {
           flowState: {
-            ...latestState,
+            ...cleanState,
             aiMessages: currentMessages.slice(-MAX_HISTORY),
             lastMessageAt: new Date().toISOString(),
           },
           expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
         },
       });
-
-      // Check if any tool set pending buttons in session state
-      const updatedSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-      const updatedState = (updatedSession?.flowState as any) || {};
-      const pendingButtons = updatedState._pendingButtons || undefined;
-
-      // Clear pending buttons from session
-      if (pendingButtons) {
-        const { _pendingButtons, ...cleanState } = updatedState;
-        await this.prisma.whatsAppSession.update({
-          where: { id: session.id },
-          data: { flowState: { ...cleanState, aiMessages: updatedState.aiMessages, lastMessageAt: updatedState.lastMessageAt } },
-        });
-      }
 
       return { text: finalText, buttons: pendingButtons };
     } catch (e) {
