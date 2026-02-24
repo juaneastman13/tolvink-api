@@ -87,7 +87,7 @@ export class AiService {
       aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
     }
     // Cleanup stale entries periodically
-    if (aiRateMap.size > 500) {
+    if (aiRateMap.size > 100) {
       for (const [k, v] of aiRateMap) {
         if (now > v.resetAt) aiRateMap.delete(k);
       }

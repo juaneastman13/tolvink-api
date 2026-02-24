@@ -285,9 +285,9 @@ export class WhatsAppController {
   async createLocationToken(@Body() body: { sessionId: string; purpose?: string; internalKey?: string }) {
     if (!body.sessionId) throw new BadRequestException('sessionId required');
 
-    // Validate internal caller: must provide appSecret or be called from within the process
+    // Validate internal caller: must provide appSecret
     const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (appSecret && body.internalKey !== appSecret) {
+    if (!appSecret || body.internalKey !== appSecret) {
       throw new BadRequestException('Unauthorized');
     }
 
@@ -345,6 +345,9 @@ export class WhatsAppController {
 
     // Check token age (max 30 minutes)
     const state = session.flow_state || {};
+    if (!state.locationToken?.createdAt) {
+      throw new BadRequestException('Token invalido o expirado');
+    }
     const tokenCreated = new Date(state.locationToken.createdAt).getTime();
     const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
     if (tokenAgeMin > 30) {
