@@ -377,7 +377,13 @@ export class WhatsAppRouterService {
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
       };
-      const ext = extMap[mimeType] || (filename ? `.${filename.split('.').pop()}` : '.bin');
+      // Strict MIME allowlist
+      const ALLOWED_MIMES = new Set(Object.keys(extMap));
+      if (!ALLOWED_MIMES.has(mimeType)) {
+        await this.wa.sendText(phone, 'Tipo de archivo no admitido. Se aceptan imagenes (JPG, PNG, WebP), PDF y documentos Office.');
+        return;
+      }
+      const ext = extMap[mimeType];
       const storagePath = `whatsapp/${user.id}/${Date.now()}${ext}`;
 
       const publicUrl = await this.wa.uploadToStorage(buffer, storagePath, mimeType);
@@ -435,6 +441,26 @@ export class WhatsAppRouterService {
     const entityId = parts[1] || '';
 
     const synUser = this.buildSyntheticUser(user);
+
+    // Access check for freight actions
+    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel'];
+    if (freightActions.includes(action) && entityId) {
+      const freight = await this.prisma.freight.findUnique({
+        where: { id: entityId },
+        select: { originCompanyId: true, destCompanyId: true, assignments: { select: { transportCompanyId: true, driverId: true } } },
+      }).catch(() => null);
+      if (!freight) {
+        await this.wa.sendText(phone, 'Flete no encontrado.');
+        return;
+      }
+      const activeCoId = user.activeCompanyId || user.companyId;
+      const canAccess = activeCoId === freight.originCompanyId || activeCoId === freight.destCompanyId
+        || freight.assignments.some(a => a.transportCompanyId === activeCoId || a.driverId === user.id);
+      if (!canAccess) {
+        await this.wa.sendText(phone, 'No tiene acceso a este flete.');
+        return;
+      }
+    }
 
     try {
       switch (action) {

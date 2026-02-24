@@ -14,7 +14,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
   IsNotEmpty, IsOptional, IsString, IsEmail, IsUUID,
-  IsBoolean, IsArray, MaxLength, MinLength, IsNumber,
+  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
@@ -93,8 +93,9 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
   userTypes?: string[];
 
-  @ApiProperty({ required: false, enum: ['operator', 'admin', 'platform_admin', 'chofer'] })
+  @ApiProperty({ required: false, enum: ['operator', 'admin', 'chofer'] })
   @IsOptional()
+  @IsIn(['operator', 'admin', 'chofer'], { message: 'Rol debe ser operator, admin o chofer' })
   role?: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsUUID()

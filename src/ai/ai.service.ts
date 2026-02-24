@@ -1751,18 +1751,42 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
     }
 
-    const transporters = await this.prisma.company.findMany({
-      where: {
-        active: true,
-        OR: [
-          { type: 'transporter' },
-          { types: { array_contains: ['transporter'] } },
-        ],
-      },
-      select: { id: true, name: true, phone: true },
-      orderBy: { name: 'asc' },
-      take: 15,
+    // Scope to transporters with business relationship (PlantProducerAccess)
+    const accessRecords = await this.prisma.plantProducerAccess.findMany({
+      where: { OR: [{ producerCompanyId: ownCompanyId }, { plantCompanyId: ownCompanyId }], active: true },
+      select: { producerCompanyId: true, plantCompanyId: true },
     });
+    const relatedCompanyIds = [...new Set(accessRecords.map(a =>
+      a.producerCompanyId === ownCompanyId ? a.plantCompanyId : a.producerCompanyId,
+    ))];
+    // Also include companies from freight assignments
+    const freightRelated = await this.prisma.freightAssignment.findMany({
+      where: { transportCompanyId: { not: null } },
+      distinct: ['transportCompanyId'],
+      select: { transportCompanyId: true, freight: { select: { originCompanyId: true, destCompanyId: true } } },
+    });
+    for (const fr of freightRelated) {
+      if (fr.freight.originCompanyId === ownCompanyId || fr.freight.destCompanyId === ownCompanyId) {
+        if (fr.transportCompanyId) relatedCompanyIds.push(fr.transportCompanyId);
+      }
+    }
+    const uniqueIds = [...new Set(relatedCompanyIds)];
+
+    const transporters = uniqueIds.length > 0
+      ? await this.prisma.company.findMany({
+          where: {
+            id: { in: uniqueIds },
+            active: true,
+            OR: [
+              { type: 'transporter' },
+              { types: { array_contains: ['transporter'] } },
+            ],
+          },
+          select: { id: true, name: true, phone: true },
+          orderBy: { name: 'asc' },
+          take: 15,
+        })
+      : [];
 
     const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
 
