@@ -1193,7 +1193,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
           const dto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) dto.truckId = params.truckId;
           if (params.driverId) dto.driverId = params.driverId;
-          await this.freights.assign(params.freightId, dto, plantSyn);
+          // Multi-truck freights must use assignTruck() — assign() rejects them
+          const frCheck = await this.prisma.freight.findUnique({ where: { id: params.freightId }, select: { isMultiTruck: true } });
+          if (frCheck?.isMultiTruck) {
+            await this.freights.assignTruck(params.freightId, dto, plantSyn);
+          } else {
+            await this.freights.assign(params.freightId, dto, plantSyn);
+          }
           result = JSON.stringify({ status: 'done', code: params.code, transporter: params.transporterName });
           break;
         }
