@@ -261,6 +261,29 @@ PERMISOS:
 - NO se permite cancelar en estado in_progress o loaded.
 - Confirmacion de carga requiere toneladas reales.
 
+═══ CONFIRMACION DE ACCIONES (CRITICO) ═══
+
+TODAS las herramientas de accion siguen un patron de DOS ETAPAS:
+1. Al llamar una herramienta de accion, esta PREPARA la accion sin ejecutarla.
+2. Presente el resumen al usuario y consulte: "Confirma la operacion?"
+3. Cuando confirme → OBLIGATORIO llamar confirm_action.
+   SIN esta llamada la accion NO se ejecuta. NUNCA indique que se ejecuto sin llamarla.
+4. Si cancela → reconozca la cancelacion. La accion pendiente se descarta automaticamente.
+
+Herramientas que requieren confirmacion via confirm_action:
+- accept_freight, reject_freight, start_freight
+- confirm_loaded, confirm_finished, cancel_freight
+- assign_transporter, assign_truck_to_trip
+- update_user_role, deactivate_user
+- create_field, create_lot, create_truck, create_user
+
+Excepcion — patron propio (NO usan confirm_action):
+- prepare_freight → usa confirm_create_freight
+- generate_location_link → usa boton UBICACION LISTA
+
+IMPORTANTE: Los botones CONFIRMAR/CANCELAR se envian automaticamente.
+No es necesario mencionarlos en el texto. Solo presente el resumen y pregunte.
+
 ═══ CREAR FLETES (INSTRUCCIONES CRITICAS) ═══
 
 1. Resolver IDs primero: usar search_plants y list_lots (o list_fields).
@@ -298,12 +321,11 @@ INFORME PDF:
 
 1. El usuario de planta solicita asignar transportista a un flete.
 2. Utilizar list_transporters para presentar opciones disponibles.
-3. Al seleccionar, presentar resumen: flete + transportista seleccionado.
-4. Consultar: "Confirma la asignacion?"
-5. Solo tras confirmacion → ejecutar assign_transporter.
-6. Opcional: list_trucks y list_drivers para asignar camion/chofer especifico.
-7. assign_truck_to_trip para modificar camion de un viaje existente.
-8. Para fletes multi-camion, indicar que utilicen la aplicacion web.
+3. Al seleccionar → assign_transporter prepara la accion y presenta resumen.
+4. Cuando confirme → llamar confirm_action.
+5. Opcional: list_trucks y list_drivers para asignar camion/chofer especifico.
+6. assign_truck_to_trip para modificar camion de un viaje existente.
+7. Para fletes multi-camion, indicar que utilicen la aplicacion web.
 
 ═══ GESTIONAR EQUIPO ═══
 
@@ -312,11 +334,9 @@ CONSULTAR (cualquier usuario):
 - list_drivers → choferes con camion asignado.
 
 MODIFICAR (solo admin/gerente):
-- update_user_role → cambiar rol (gerente/operario/chofer).
-  SIEMPRE confirmar: "Confirma el cambio de rol de [nombre] a [rol]?"
-- deactivate_user → desactivar usuario de la empresa.
-  SIEMPRE confirmar: "Confirma la desactivacion de [nombre]?"
-- NUNCA ejecute acciones de modificacion sin confirmacion explicita.
+- update_user_role → prepara cambio de rol para confirmacion.
+- deactivate_user → prepara desactivacion para confirmacion.
+- Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
 
 ═══ ERRORES ═══
@@ -410,8 +430,17 @@ MODIFICAR (solo admin/gerente):
       },
     },
     {
+      name: 'confirm_action',
+      description: 'OBLIGATORIO: Ejecuta una accion previamente preparada cuando el usuario confirma (dice si/dale/confirmar/ok). Sin esta llamada la accion NO se ejecuta. NO usar para crear fletes (esos usan confirm_create_freight).',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
       name: 'accept_freight',
-      description: 'Acepta un flete asignado.',
+      description: 'Acepta un flete asignado. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -422,7 +451,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'reject_freight',
-      description: 'Rechaza un flete asignado. Requiere motivo.',
+      description: 'Rechaza un flete asignado. Requiere motivo. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -434,7 +463,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'start_freight',
-      description: 'Inicia el viaje de un flete aceptado.',
+      description: 'Inicia el viaje de un flete aceptado. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -445,7 +474,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'confirm_loaded',
-      description: 'Confirma carga de un flete. Requiere toneladas reales.',
+      description: 'Confirma carga de un flete. Requiere toneladas reales. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -457,7 +486,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'confirm_finished',
-      description: 'Confirma entrega/recepcion de un flete.',
+      description: 'Confirma entrega/recepcion de un flete. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -468,7 +497,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'cancel_freight',
-      description: 'Cancela un flete. No se puede si esta in_progress o loaded.',
+      description: 'Cancela un flete. No se puede si esta in_progress o loaded. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -490,7 +519,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'create_field',
-      description: 'Crea un campo (establecimiento). Si el usuario compartio una ubicacion de WhatsApp, se usa automaticamente como lat/lng.',
+      description: 'Crea un campo (establecimiento). Prepara la accion para confirmacion. Si el usuario compartio una ubicacion de WhatsApp, se usa automaticamente.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -504,7 +533,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'create_lot',
-      description: 'Crea un lote dentro de un campo existente. Usa list_fields para obtener el fieldId.',
+      description: 'Crea un lote dentro de un campo existente. Prepara la accion para confirmacion. Usa list_fields para obtener el fieldId.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -529,7 +558,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'create_truck',
-      description: 'Registra un nuevo camion en la flota de la empresa.',
+      description: 'Registra un nuevo camion en la flota de la empresa. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -542,7 +571,7 @@ MODIFICAR (solo admin/gerente):
     // ---- User management ----
     {
       name: 'create_user',
-      description: 'Crea un nuevo usuario en la empresa del usuario actual. Solo admin/gerente puede hacerlo.',
+      description: 'Crea un nuevo usuario en la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -603,7 +632,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'assign_transporter',
-      description: 'Asigna un transportista a un flete pendiente de asignacion. SOLO para plantas. IMPORTANTE: siempre mostra resumen y pregunta "Confirmas?" antes de ejecutar.',
+      description: 'Asigna un transportista a un flete pendiente de asignacion. Solo para plantas. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -617,7 +646,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'assign_truck_to_trip',
-      description: 'Asigna o cambia el camion de un viaje existente (asignacion activa/aceptada). Solo para plantas.',
+      description: 'Asigna o cambia el camion de un viaje existente. Solo para plantas. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -649,7 +678,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'update_user_role',
-      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. CRITICO: pregunta "Seguro que queres cambiar el rol de [nombre] a [rol]?" ANTES de ejecutar.',
+      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -661,7 +690,7 @@ MODIFICAR (solo admin/gerente):
     },
     {
       name: 'deactivate_user',
-      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. CRITICO: pregunta "Seguro que queres desactivar a [nombre]?" ANTES de ejecutar.',
+      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -689,28 +718,29 @@ MODIFICAR (solo admin/gerente):
         case 'list_lots': return await this.toolListLots(user);
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
         case 'confirm_create_freight': return await this.toolConfirmCreateFreight(user, synUser, session);
-        case 'accept_freight': return await this.toolAcceptFreight(input, synUser);
-        case 'reject_freight': return await this.toolRejectFreight(input, synUser);
-        case 'start_freight': return await this.toolStartFreight(input, synUser);
-        case 'confirm_loaded': return await this.toolConfirmLoaded(input, synUser);
-        case 'confirm_finished': return await this.toolConfirmFinished(input, synUser);
-        case 'cancel_freight': return await this.toolCancelFreight(input, synUser);
+        case 'confirm_action': return await this.toolConfirmAction(user, synUser, session);
+        case 'accept_freight': return await this.toolAcceptFreight(input, synUser, session);
+        case 'reject_freight': return await this.toolRejectFreight(input, synUser, session);
+        case 'start_freight': return await this.toolStartFreight(input, synUser, session);
+        case 'confirm_loaded': return await this.toolConfirmLoaded(input, synUser, session);
+        case 'confirm_finished': return await this.toolConfirmFinished(input, synUser, session);
+        case 'cancel_freight': return await this.toolCancelFreight(input, synUser, session);
         case 'list_fields': return await this.toolListFields(user);
         case 'create_field': return await this.toolCreateField(input, user, session);
         case 'create_lot': return await this.toolCreateLot(input, user, session);
         case 'list_trucks': return await this.toolListTrucks(user);
-        case 'create_truck': return await this.toolCreateTruck(input, user);
-        case 'create_user': return await this.toolCreateUser(input, user);
+        case 'create_truck': return await this.toolCreateTruck(input, user, session);
+        case 'create_user': return await this.toolCreateUser(input, user, session);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
         case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input);
         case 'generate_report_link': return await this.toolGenerateReportLink(input);
         case 'list_transporters': return await this.toolListTransporters(user);
-        case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser);
-        case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser);
+        case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
+        case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
         case 'list_company_users': return await this.toolListCompanyUsers(user);
         case 'list_drivers': return await this.toolListDrivers(user);
-        case 'update_user_role': return await this.toolUpdateUserRole(input, user);
-        case 'deactivate_user': return await this.toolDeactivateUser(input, user);
+        case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
+        case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -1043,52 +1073,193 @@ MODIFICAR (solo admin/gerente):
     });
   }
 
+  // ---- confirm_action (generic dispatcher) ----
+  private async toolConfirmAction(user: any, synUser: any, session: any): Promise<string> {
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const state = (freshSession?.flowState as any) || {};
+    const pending = state.pendingAction;
+
+    if (!pending) {
+      return JSON.stringify({ error: 'No hay una accion pendiente de confirmacion.' });
+    }
+
+    const { tool, params } = pending;
+    console.log(`[AI] confirm_action — dispatching: ${tool}`);
+
+    let result: string;
+
+    try {
+      switch (tool) {
+        case 'accept_freight':
+          await this.freights.respond(params.freightId, { action: 'accepted' } as any, synUser);
+          result = JSON.stringify({ status: 'accepted', code: params.code });
+          break;
+
+        case 'reject_freight':
+          await this.freights.respond(params.freightId, { action: 'rejected', reason: params.reason } as any, synUser);
+          result = JSON.stringify({ status: 'rejected', code: params.code });
+          break;
+
+        case 'start_freight':
+          await this.freights.start(params.freightId, synUser);
+          result = JSON.stringify({ status: 'started', code: params.code });
+          break;
+
+        case 'confirm_loaded':
+          await this.freights.confirmLoaded(params.freightId, synUser, params.tons);
+          result = JSON.stringify({ status: 'loaded', code: params.code, tons: params.tons });
+          break;
+
+        case 'confirm_finished':
+          await this.freights.confirmFinished(params.freightId, synUser);
+          result = JSON.stringify({ status: 'finished', code: params.code });
+          break;
+
+        case 'cancel_freight':
+          await this.freights.cancel(params.freightId, { reason: params.reason } as any, synUser);
+          result = JSON.stringify({ status: 'canceled', code: params.code });
+          break;
+
+        case 'assign_transporter': {
+          const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          const dto: any = { transportCompanyId: params.transporterCompanyId };
+          if (params.truckId) dto.truckId = params.truckId;
+          if (params.driverId) dto.driverId = params.driverId;
+          await this.freights.assign(params.freightId, dto, plantSyn);
+          result = JSON.stringify({ status: 'done', code: params.code, transporter: params.transporterName });
+          break;
+        }
+
+        case 'assign_truck_to_trip': {
+          const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          const dto: any = { truckId: params.truckId };
+          if (params.driverId) dto.driverId = params.driverId;
+          await this.freights.updateAssignment(params.freightId, params.assignmentId, dto, plantSyn);
+          result = JSON.stringify({ status: 'done', code: params.code, truck: params.truckDisplay });
+          break;
+        }
+
+        case 'update_user_role': {
+          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { role: params.newRole } });
+          const roleMapping: Record<string, string> = { gerente: 'admin', operario: 'operator', chofer: 'operator' };
+          await this.prisma.user.update({ where: { id: params.targetUserId }, data: { role: (roleMapping[params.newRole] || 'operator') as any } });
+          result = JSON.stringify({ status: 'done', user: params.userName, newRole: params.newRole });
+          break;
+        }
+
+        case 'deactivate_user': {
+          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
+          const otherActive = await this.prisma.userCompany.count({ where: { userId: params.targetUserId, active: true } });
+          if (otherActive === 0) {
+            await this.prisma.user.update({ where: { id: params.targetUserId }, data: { active: false } });
+          }
+          result = JSON.stringify({ status: 'done', user: params.userName });
+          break;
+        }
+
+        case 'create_field': {
+          const field = await this.fieldsService.createField(params.producerSynUser, params.dto);
+          result = JSON.stringify({ status: 'created', field: { id: field.id, name: field.name } });
+          break;
+        }
+
+        case 'create_lot': {
+          const lot = await this.fieldsService.createLot(params.producerSynUser, params.fieldId, params.dto);
+          result = JSON.stringify({ status: 'created', lot: { id: lot.id, name: lot.name } });
+          break;
+        }
+
+        case 'create_truck': {
+          const truck = await this.trucksService.create(params.dto as any, params.actionSynUser);
+          result = JSON.stringify({ status: 'created', truck: { id: (truck as any).id, plate: (truck as any).plate } });
+          break;
+        }
+
+        case 'create_user': {
+          const newUser = await this.adminService.createUser(params.dto);
+          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel } });
+          break;
+        }
+
+        default:
+          result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
+      }
+    } catch (e) {
+      this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`);
+      result = JSON.stringify({ error: e.message || 'Error al ejecutar la accion.' });
+    }
+
+    // Clear pendingAction from session
+    const { pendingAction, ...cleanState } = state;
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { flowState: cleanState },
+    });
+
+    return result;
+  }
+
   // ---- accept_freight ----
-  private async toolAcceptFreight(input: any, synUser: any): Promise<string> {
+  private async toolAcceptFreight(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.respond(freight.id, { action: 'accepted' } as any, synUser);
-    return JSON.stringify({ status: 'accepted', code: freight.code });
+
+    return this.stageAction(session, 'accept_freight', {
+      freightId: freight.id, code: freight.code,
+    }, `Aceptar flete ${freight.code}`);
   }
 
   // ---- reject_freight ----
-  private async toolRejectFreight(input: any, synUser: any): Promise<string> {
+  private async toolRejectFreight(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.respond(freight.id, { action: 'rejected', reason: input.reason } as any, synUser);
-    return JSON.stringify({ status: 'rejected', code: freight.code });
+
+    return this.stageAction(session, 'reject_freight', {
+      freightId: freight.id, code: freight.code, reason: input.reason,
+    }, `Rechazar flete ${freight.code} · Motivo: ${input.reason}`);
   }
 
   // ---- start_freight ----
-  private async toolStartFreight(input: any, synUser: any): Promise<string> {
+  private async toolStartFreight(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.start(freight.id, synUser);
-    return JSON.stringify({ status: 'started', code: freight.code });
+
+    return this.stageAction(session, 'start_freight', {
+      freightId: freight.id, code: freight.code,
+    }, `Iniciar viaje del flete ${freight.code}`);
   }
 
   // ---- confirm_loaded ----
-  private async toolConfirmLoaded(input: any, synUser: any): Promise<string> {
+  private async toolConfirmLoaded(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.confirmLoaded(freight.id, synUser, input.tons);
-    return JSON.stringify({ status: 'loaded', code: freight.code, tons: input.tons });
+
+    return this.stageAction(session, 'confirm_loaded', {
+      freightId: freight.id, code: freight.code, tons: input.tons,
+    }, `Confirmar carga del flete ${freight.code} · ${input.tons} tn`);
   }
 
   // ---- confirm_finished ----
-  private async toolConfirmFinished(input: any, synUser: any): Promise<string> {
+  private async toolConfirmFinished(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.confirmFinished(freight.id, synUser);
-    return JSON.stringify({ status: 'finished', code: freight.code });
+
+    return this.stageAction(session, 'confirm_finished', {
+      freightId: freight.id, code: freight.code,
+    }, `Confirmar entrega del flete ${freight.code}`);
   }
 
   // ---- cancel_freight ----
-  private async toolCancelFreight(input: any, synUser: any): Promise<string> {
+  private async toolCancelFreight(input: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
-    await this.freights.cancel(freight.id, { reason: input.reason } as any, synUser);
-    return JSON.stringify({ status: 'canceled', code: freight.code });
+    if (['in_progress', 'loaded'].includes(freight.status)) {
+      return JSON.stringify({ error: `No se puede cancelar ${input.code} en estado ${freight.status}` });
+    }
+
+    return this.stageAction(session, 'cancel_freight', {
+      freightId: freight.id, code: freight.code, reason: input.reason,
+    }, `Cancelar flete ${freight.code} · Motivo: ${input.reason}`);
   }
 
   // ======================== FIELD & LOT TOOLS ===========================
@@ -1131,27 +1302,20 @@ MODIFICAR (solo admin/gerente):
     const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
 
     // Use lastLocation from WhatsApp if no lat/lng provided
-    if (!input.lat || !input.lng) {
+    let lat = input.lat, lng = input.lng;
+    if (!lat || !lng) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-      const state = (freshSession?.flowState as any) || {};
-      if (state.lastLocation) {
-        input.lat = input.lat || state.lastLocation.lat;
-        input.lng = input.lng || state.lastLocation.lng;
+      const st = (freshSession?.flowState as any) || {};
+      if (st.lastLocation) {
+        lat = lat || st.lastLocation.lat;
+        lng = lng || st.lastLocation.lng;
       }
     }
 
-    const field = await this.fieldsService.createField(producerSynUser, {
-      name: input.name,
-      address: input.address || null,
-      lat: input.lat || null,
-      lng: input.lng || null,
-    });
+    const dto = { name: input.name, address: input.address || null, lat: lat || null, lng: lng || null };
+    const summary = `Crear campo "${input.name}"${input.address ? ` en ${input.address}` : ''}${lat ? ' (ubicacion incluida)' : ''}`;
 
-    return JSON.stringify({
-      status: 'created',
-      field: { id: field.id, name: field.name, lat: field.lat ? Number(field.lat) : null, lng: field.lng ? Number(field.lng) : null },
-      message: `Campo "${field.name}" creado. Podes agregar lotes con create_lot usando fieldId: ${field.id}`,
-    });
+    return this.stageAction(session, 'create_field', { producerSynUser, dto }, summary);
   }
 
   // ---- create_lot ----
@@ -1161,27 +1325,22 @@ MODIFICAR (solo admin/gerente):
     const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
 
     // Use lastLocation from WhatsApp if no lat/lng provided
-    if (!input.lat || !input.lng) {
+    let lat = input.lat, lng = input.lng;
+    if (!lat || !lng) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-      const state = (freshSession?.flowState as any) || {};
-      if (state.lastLocation) {
-        input.lat = input.lat || state.lastLocation.lat;
-        input.lng = input.lng || state.lastLocation.lng;
+      const st = (freshSession?.flowState as any) || {};
+      if (st.lastLocation) {
+        lat = lat || st.lastLocation.lat;
+        lng = lng || st.lastLocation.lng;
       }
     }
 
-    const lot = await this.fieldsService.createLot(producerSynUser, input.fieldId, {
-      name: input.name,
-      hectares: input.hectares || null,
-      lat: input.lat || null,
-      lng: input.lng || null,
-    });
+    // Resolve field name for summary
+    const field = await this.prisma.field.findUnique({ where: { id: input.fieldId }, select: { name: true } });
+    const dto = { name: input.name, hectares: input.hectares || null, lat: lat || null, lng: lng || null };
+    const summary = `Crear lote "${input.name}" en campo "${field?.name || 'desconocido'}"${input.hectares ? ` (${input.hectares} ha)` : ''}`;
 
-    return JSON.stringify({
-      status: 'created',
-      lot: { id: lot.id, name: lot.name, fieldId: input.fieldId, hectares: lot.hectares ? Number(lot.hectares) : null },
-      message: `Lote "${lot.name}" creado en el campo.`,
-    });
+    return this.stageAction(session, 'create_lot', { producerSynUser, fieldId: input.fieldId, dto }, summary);
   }
 
   // ======================== TRUCK TOOLS ==================================
@@ -1206,24 +1365,18 @@ MODIFICAR (solo admin/gerente):
   }
 
   // ---- create_truck ----
-  private async toolCreateTruck(input: any, user: any): Promise<string> {
+  private async toolCreateTruck(input: any, user: any, session: any): Promise<string> {
     const synUser = this.buildSyntheticUser(user);
-    const truck = await this.trucksService.create(
-      { plate: input.plate, model: input.model || null } as any,
-      synUser,
-    );
+    const dto = { plate: input.plate, model: input.model || null };
+    const summary = `Registrar camion ${input.plate}${input.model ? ` (${input.model})` : ''}`;
 
-    return JSON.stringify({
-      status: 'created',
-      truck: { id: (truck as any).id, plate: (truck as any).plate, model: (truck as any).model },
-      message: `Camion ${(truck as any).plate} registrado.`,
-    });
+    return this.stageAction(session, 'create_truck', { dto, actionSynUser: synUser }, summary);
   }
 
   // ======================== USER TOOLS ===================================
 
   // ---- create_user ----
-  private async toolCreateUser(input: any, user: any): Promise<string> {
+  private async toolCreateUser(input: any, user: any, session: any): Promise<string> {
     if (!this.isCallerAdmin(user)) {
       return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden crear usuarios.' });
     }
@@ -1252,12 +1405,8 @@ MODIFICAR (solo admin/gerente):
       roleByType: { [primaryType]: inputRole },
     };
 
-    const newUser = await this.adminService.createUser(dto);
-    return JSON.stringify({
-      status: 'created',
-      user: { id: (newUser as any).id, name: (newUser as any).name, email: (newUser as any).email, role: inputRole },
-      message: `Usuario "${input.name}" creado con rol ${inputRole}.`,
-    });
+    const summary = `Crear usuario "${input.name}" (${input.email}) con rol ${inputRole}`;
+    return this.stageAction(session, 'create_user', { dto, roleLabel: inputRole }, summary);
   }
 
   // ======================== LOCATION PICKER TOOL ==========================
@@ -1402,7 +1551,7 @@ MODIFICAR (solo admin/gerente):
   }
 
   // ---- assign_transporter ----
-  private async toolAssignTransporter(input: any, user: any, synUser: any): Promise<string> {
+  private async toolAssignTransporter(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
     if (!companyType.includes('plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden asignar transportistas.' });
@@ -1411,35 +1560,25 @@ MODIFICAR (solo admin/gerente):
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
 
-    const plantCompanyId = this.resolvePlantCompanyId(user);
-    const plantSynUser = {
-      ...synUser,
-      companyId: plantCompanyId,
-      companyType: 'plant',
-      userType: 'plant',
-    };
-
-    const dto: any = { transportCompanyId: input.transporterCompanyId };
-    if (input.truckId) dto.truckId = input.truckId;
-    if (input.driverId) dto.driverId = input.driverId;
-
-    await this.freights.assign(freight.id, dto, plantSynUser);
-
     const transporter = await this.prisma.company.findUnique({
       where: { id: input.transporterCompanyId },
       select: { name: true },
     });
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    const transporterName = transporter?.name || 'Transportista';
 
-    return JSON.stringify({
-      status: 'done',
-      code: freight.code,
-      transporter: transporter?.name || 'Transportista',
-      message: `Transportista "${transporter?.name}" asignado a ${freight.code}.`,
-    });
+    return this.stageAction(session, 'assign_transporter', {
+      freightId: freight.id, code: freight.code,
+      transporterCompanyId: input.transporterCompanyId,
+      transporterName,
+      truckId: input.truckId || null,
+      driverId: input.driverId || null,
+      plantCompanyId,
+    }, `Asignar transportista "${transporterName}" a flete ${freight.code}`);
   }
 
   // ---- assign_truck_to_trip ----
-  private async toolAssignTruckToTrip(input: any, user: any, synUser: any): Promise<string> {
+  private async toolAssignTruckToTrip(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
     if (!companyType.includes('plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
@@ -1456,30 +1595,21 @@ MODIFICAR (solo admin/gerente):
       return JSON.stringify({ error: `${input.code} no tiene asignacion activa.` });
     }
 
-    const plantCompanyId = this.resolvePlantCompanyId(user);
-    const plantSynUser = {
-      ...synUser,
-      companyId: plantCompanyId,
-      companyType: 'plant',
-      userType: 'plant',
-    };
-
-    const dto: any = { truckId: input.truckId };
-    if (input.driverId) dto.driverId = input.driverId;
-
-    await this.freights.updateAssignment(freight.id, assignment.id, dto, plantSynUser);
-
     const truck = await this.prisma.truck.findUnique({
       where: { id: input.truckId },
       select: { plate: true, model: true },
     });
+    const truckDisplay = truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : input.truckId;
+    const plantCompanyId = this.resolvePlantCompanyId(user);
 
-    return JSON.stringify({
-      status: 'done',
-      code: freight.code,
-      truck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : 'Asignado',
-      message: `Camion ${truck?.plate || ''} asignado a ${freight.code}.`,
-    });
+    return this.stageAction(session, 'assign_truck_to_trip', {
+      freightId: freight.id, code: freight.code,
+      assignmentId: assignment.id,
+      truckId: input.truckId,
+      driverId: input.driverId || null,
+      truckDisplay,
+      plantCompanyId,
+    }, `Asignar camion ${truckDisplay} a flete ${freight.code}`);
   }
 
   // ======================== TEAM MANAGEMENT TOOLS =========================
@@ -1557,14 +1687,14 @@ MODIFICAR (solo admin/gerente):
   // ======================== ACCESS MANAGEMENT TOOLS ========================
 
   // ---- update_user_role ----
-  private async toolUpdateUserRole(input: any, user: any): Promise<string> {
+  private async toolUpdateUserRole(input: any, user: any, session: any): Promise<string> {
     if (!this.isCallerAdmin(user)) {
       return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden cambiar roles.' });
     }
 
     const companyId = user.activeCompanyId || user.companyId;
     if (!companyId) {
-      return JSON.stringify({ error: 'No se pudo determinar tu empresa.' });
+      return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
     }
 
     const searchTerm = input.userIdentifier.trim();
@@ -1584,41 +1714,30 @@ MODIFICAR (solo admin/gerente):
     });
 
     if (!membership) {
-      return JSON.stringify({ error: `No se encontro un usuario "${searchTerm}" en tu empresa.` });
+      return JSON.stringify({ error: `No se encontro un usuario "${searchTerm}" en su empresa.` });
     }
 
     if (membership.user.id === user.id) {
-      return JSON.stringify({ error: 'No podes cambiar tu propio rol.' });
+      return JSON.stringify({ error: 'No puede cambiar su propio rol.' });
     }
 
-    await this.prisma.userCompany.update({
-      where: { id: membership.id },
-      data: { role: input.newRole },
-    });
-
-    const roleMapping: Record<string, string> = { gerente: 'admin', operario: 'operator', chofer: 'operator' };
-    await this.prisma.user.update({
-      where: { id: membership.user.id },
-      data: { role: (roleMapping[input.newRole] || 'operator') as any },
-    });
-
-    return JSON.stringify({
-      status: 'done',
-      user: membership.user.name,
+    return this.stageAction(session, 'update_user_role', {
+      membershipId: membership.id,
+      targetUserId: membership.user.id,
+      userName: membership.user.name,
       newRole: input.newRole,
-      message: `Rol de "${membership.user.name}" cambiado a ${input.newRole}.`,
-    });
+    }, `Cambiar rol de "${membership.user.name}" a ${input.newRole}`);
   }
 
   // ---- deactivate_user ----
-  private async toolDeactivateUser(input: any, user: any): Promise<string> {
+  private async toolDeactivateUser(input: any, user: any, session: any): Promise<string> {
     if (!this.isCallerAdmin(user)) {
       return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden desactivar usuarios.' });
     }
 
     const companyId = user.activeCompanyId || user.companyId;
     if (!companyId) {
-      return JSON.stringify({ error: 'No se pudo determinar tu empresa.' });
+      return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
     }
 
     const searchTerm = input.userIdentifier.trim();
@@ -1638,33 +1757,18 @@ MODIFICAR (solo admin/gerente):
     });
 
     if (!membership) {
-      return JSON.stringify({ error: `No se encontro un usuario activo "${searchTerm}" en tu empresa.` });
+      return JSON.stringify({ error: `No se encontro un usuario activo "${searchTerm}" en su empresa.` });
     }
 
     if (membership.user.id === user.id) {
-      return JSON.stringify({ error: 'No podes desactivarte a vos mismo.' });
+      return JSON.stringify({ error: 'No puede desactivarse a si mismo.' });
     }
 
-    await this.prisma.userCompany.update({
-      where: { id: membership.id },
-      data: { active: false },
-    });
-
-    const otherActive = await this.prisma.userCompany.count({
-      where: { userId: membership.user.id, active: true },
-    });
-    if (otherActive === 0) {
-      await this.prisma.user.update({
-        where: { id: membership.user.id },
-        data: { active: false },
-      });
-    }
-
-    return JSON.stringify({
-      status: 'done',
-      user: membership.user.name,
-      message: `Usuario "${membership.user.name}" desactivado de tu empresa.`,
-    });
+    return this.stageAction(session, 'deactivate_user', {
+      membershipId: membership.id,
+      targetUserId: membership.user.id,
+      userName: membership.user.name,
+    }, `Desactivar usuario "${membership.user.name}" de su empresa`);
   }
 
   // ======================== MESSAGE PREPROCESSING ========================
@@ -1748,6 +1852,39 @@ MODIFICAR (solo admin/gerente):
     }
 
     return trimmed;
+  }
+
+  // ======================== GENERIC CONFIRMATION ========================
+
+  /** Stage an action for user confirmation — stores pendingAction + buttons in session */
+  private async stageAction(
+    session: any,
+    tool: string,
+    params: Record<string, any>,
+    summary: string,
+  ): Promise<string> {
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const state = (freshSession?.flowState as any) || {};
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          pendingAction: { tool, params, summary },
+          _pendingButtons: [
+            { id: 'ai_confirm', title: 'CONFIRMAR' },
+            { id: 'ai_cancel', title: 'CANCELAR' },
+          ],
+        },
+      },
+    });
+
+    return JSON.stringify({
+      status: 'pending_confirmation',
+      summary,
+      IMPORTANT: 'La accion NO fue ejecutada todavia. Presente el resumen y consulte al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automaticamente.',
+    });
   }
 
   // ======================== HELPERS =====================================

@@ -428,6 +428,16 @@ export class WhatsAppRouterService {
           await this.handleAiChat(phone, user, 'No, cancelar.');
           break;
         }
+        case 'ai_confirm': {
+          // Generic confirmation for any staged AI action
+          await this.handleAiChat(phone, user, 'Confirmar.');
+          break;
+        }
+        case 'ai_cancel': {
+          // Generic cancellation for any staged AI action
+          await this.handleAiChat(phone, user, 'No, cancelar.');
+          break;
+        }
         default: {
           await this.wa.sendText(phone, 'Accion no reconocida. Escriba "menu" para ver las opciones disponibles.');
         }
