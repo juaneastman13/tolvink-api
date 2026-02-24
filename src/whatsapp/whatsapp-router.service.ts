@@ -968,10 +968,10 @@ export class WhatsAppRouterService {
         OR: variants.map(p => ({ phone: p })),
       },
       include: {
-        company: { select: { id: true, name: true, type: true, types: true } },
+        company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } },
         memberships: {
           where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, types: true } } },
+          include: { company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } } },
         },
       },
     });

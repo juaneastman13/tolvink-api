@@ -187,9 +187,16 @@ export class AiService {
     const name = user.name?.split(' ')[0] || 'usuario';
     const today = new Date().toISOString().split('T')[0];
 
+    // Detect own fleet capability
+    const hasOwnFleet = user.company?.hasInternalFleet ||
+      user.memberships?.some((m: any) => m.company?.hasInternalFleet);
+    const ownFleetNote = hasOwnFleet
+      ? `\nFLOTA INTERNA: Este usuario tiene flota propia. Para asignar transportista, usar assign_transporter con transporterCompanyId="own_fleet" (se resuelve automaticamente). NO es necesario llamar list_transporters.`
+      : '';
+
     return `Usted se comunica con Tolvink, plataforma de gestion de fletes de granos.
 
-USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}
+USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}
 
 ═══ PROTOCOLO DE COMUNICACION (OBLIGATORIO) ═══
 
@@ -667,12 +674,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'assign_transporter',
-      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Prepara la accion para confirmacion.',
+      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Usar transporterCompanyId="own_fleet" para flota interna del productor. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
           code: { type: 'string', description: 'Codigo FLT-XXXX' },
-          transporterCompanyId: { type: 'string', description: 'ID de empresa transportista (de list_transporters)' },
+          transporterCompanyId: { type: 'string', description: 'ID de empresa transportista, o "own_fleet" para flota interna del productor' },
           truckId: { type: 'string', description: 'ID del camion (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
         },
@@ -1650,11 +1657,18 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const freight = await this.resolveFreight(input.code);
     if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
 
+    // Resolve "own_fleet" shortcut to producer's own company
+    let transporterCompanyId = input.transporterCompanyId;
+    if (transporterCompanyId === 'own_fleet') {
+      transporterCompanyId = this.resolveProducerCompanyId(user);
+    }
+
     const transporter = await this.prisma.company.findUnique({
-      where: { id: input.transporterCompanyId },
+      where: { id: transporterCompanyId },
       select: { name: true, hasInternalFleet: true },
     });
-    const transporterName = transporter?.name || 'Transportista';
+    if (!transporter) return JSON.stringify({ error: 'Empresa transportista no encontrada.' });
+    const transporterName = transporter.name;
 
     // Resolve the acting company: plant for plant users, producer for own-fleet producers
     let actingCompanyId: string;
@@ -1669,12 +1683,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       actingCompanyId = fullFreight?.destCompanyId || this.resolveProducerCompanyId(user);
     }
 
-    const isOwnFleet = transporter?.hasInternalFleet && input.transporterCompanyId === this.resolveProducerCompanyId(user);
+    const isOwnFleet = transporter.hasInternalFleet && transporterCompanyId === this.resolveProducerCompanyId(user);
     const displayName = isOwnFleet ? `${transporterName} (Flota interna)` : transporterName;
 
     return this.stageAction(session, 'assign_transporter', {
       freightId: freight.id, code: freight.code,
-      transporterCompanyId: input.transporterCompanyId,
+      transporterCompanyId,
       transporterName: displayName,
       truckId: input.truckId || null,
       driverId: input.driverId || null,
