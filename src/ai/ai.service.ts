@@ -286,7 +286,7 @@ TODAS las herramientas de accion siguen un patron de DOS ETAPAS:
 Herramientas que requieren confirmacion via confirm_action:
 - accept_freight, reject_freight, start_freight
 - confirm_loaded, confirm_finished, cancel_freight
-- assign_transporter, assign_truck_to_trip
+- assign_transporter, assign_truck_to_trip, assign_truck_to_freight
 - update_user_role, deactivate_user
 - create_field, create_lot, create_truck, create_user
 - attach_document
@@ -346,7 +346,12 @@ SIN FLOTA INTERNA:
 OPCIONALES:
 - list_trucks y list_drivers para asignar camion/chofer especifico.
 - assign_truck_to_trip para modificar camion de un viaje existente.
-- Para fletes multi-camion, indicar que utilicen la aplicacion web.
+
+MULTI-CAMION:
+- Si un flete tiene truckCount > 1 y quedan viajes sin asignar, usar assign_truck_to_freight para cada viaje adicional.
+- Informar cuantos viajes quedan por asignar despues de cada asignacion.
+- Cada viaje se asigna y confirma por separado (un assign_truck_to_freight + confirm_action por viaje).
+- Para flota interna usar transporterCompanyId="own_fleet".
 
 ═══ GESTIONAR EQUIPO ═══
 
@@ -703,6 +708,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['code', 'truckId'],
       },
     },
+    {
+      name: 'assign_truck_to_freight',
+      description: 'Asigna un camion adicional a un flete multi-camion que tiene viajes sin asignar. Usar transporterCompanyId="own_fleet" para flota interna. Se llama una vez por cada viaje adicional. Prepara la accion para confirmacion.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          transporterCompanyId: { type: 'string', description: 'ID empresa o "own_fleet" para flota interna' },
+          truckId: { type: 'string', description: 'ID del camion (opcional, de list_trucks)' },
+          driverId: { type: 'string', description: 'ID del chofer (opcional)' },
+          tons: { type: 'number', description: 'Toneladas para este viaje (opcional)' },
+        },
+        required: ['code', 'transporterCompanyId'],
+      },
+    },
     // ---- Company team management ----
     {
       name: 'list_company_users',
@@ -784,6 +804,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'list_transporters': return await this.toolListTransporters(user);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
+        case 'assign_truck_to_freight': return await this.toolAssignTruckToFreight(input, user, synUser, session);
         case 'list_company_users': return await this.toolListCompanyUsers(user);
         case 'list_drivers': return await this.toolListDrivers(user);
         case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
@@ -1183,6 +1204,24 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
           if (params.driverId) dto.driverId = params.driverId;
           await this.freights.updateAssignment(params.freightId, params.assignmentId, dto, plantSyn);
           result = JSON.stringify({ status: 'done', code: params.code, truck: params.truckDisplay });
+          break;
+        }
+
+        case 'assign_truck_to_freight': {
+          const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          const truckDto: any = { transportCompanyId: params.transporterCompanyId };
+          if (params.truckId) truckDto.truckId = params.truckId;
+          if (params.driverId) truckDto.driverId = params.driverId;
+          if (params.tons) truckDto.tons = params.tons;
+          await this.freights.assignTruck(params.freightId, truckDto, plantSyn);
+          result = JSON.stringify({
+            status: 'assigned', code: params.code,
+            tripNumber: params.nextTripNumber,
+            remaining: params.remaining,
+            message: params.remaining > 0
+              ? `Viaje #${params.nextTripNumber} asignado. Quedan ${params.remaining} viaje(s) sin asignar.`
+              : `Viaje #${params.nextTripNumber} asignado. Todos los camiones del flete estan asignados.`,
+          });
           break;
         }
 
@@ -1754,6 +1793,61 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }, `Asignar camion ${truckDisplay} a flete ${freight.code}`);
   }
 
+  // ---- assign_truck_to_freight (multi-truck) ----
+  private async toolAssignTruckToFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const freight = await this.resolveFreight(input.code);
+    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+
+    const truckCount = freight.truckCount || 1;
+    const assigned = freight.assignedTruckCount || 0;
+
+    if (assigned >= truckCount) {
+      return JSON.stringify({ error: `${freight.code} ya tiene todos los viajes asignados (${assigned}/${truckCount}).` });
+    }
+
+    // Resolve "own_fleet" shortcut
+    let transporterCompanyId = input.transporterCompanyId;
+    if (transporterCompanyId === 'own_fleet') {
+      transporterCompanyId = user.activeCompanyId || user.companyId;
+    }
+
+    const transporter = await this.prisma.company.findUnique({
+      where: { id: transporterCompanyId },
+      select: { name: true, hasInternalFleet: true },
+    });
+    if (!transporter) return JSON.stringify({ error: 'Empresa transportista no encontrada.' });
+
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const isOwnFleet = transporter.hasInternalFleet && transporterCompanyId === userCompanyId;
+    const displayName = isOwnFleet ? `${transporter.name} (Flota interna)` : transporter.name;
+
+    // Resolve plantCompanyId for the assignment call
+    const companyType = this.resolveCompanyType(user);
+    let plantCompanyId: string;
+    if (companyType.includes('plant')) {
+      plantCompanyId = this.resolvePlantCompanyId(user);
+    } else {
+      plantCompanyId = freight.destCompanyId || userCompanyId;
+    }
+
+    const nextTrip = assigned + 1;
+    const remaining = truckCount - assigned - 1;
+
+    return this.stageAction(session, 'assign_truck_to_freight', {
+      freightId: freight.id, code: freight.code,
+      transporterCompanyId,
+      transporterName: displayName,
+      truckId: input.truckId || null,
+      driverId: input.driverId || null,
+      tons: input.tons || null,
+      plantCompanyId,
+      nextTripNumber: nextTrip,
+      remaining,
+      truckCount,
+      assignedTruckCount: assigned,
+    }, `Asignar ${displayName} a viaje #${nextTrip} de ${freight.code} (quedan ${remaining} por asignar)`);
+  }
+
   // ======================== TEAM MANAGEMENT TOOLS =========================
 
   // ---- list_company_users ----
@@ -2034,7 +2128,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private async resolveFreight(code: string): Promise<any | null> {
     return this.prisma.freight.findFirst({
       where: { code: code.toUpperCase() },
-      select: { id: true, code: true, status: true },
+      select: { id: true, code: true, status: true, truckCount: true, assignedTruckCount: true, isMultiTruck: true, destCompanyId: true },
     });
   }
 
