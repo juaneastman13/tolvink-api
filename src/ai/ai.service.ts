@@ -324,15 +324,18 @@ INFORME PDF:
 - Disponible para cualquier flete, incluso finalizados o cancelados.
 - El link no expira y puede compartirse.
 
-═══ ASIGNAR TRANSPORTISTA (SOLO PLANTAS) ═══
+═══ ASIGNAR TRANSPORTISTA (PLANTAS Y PRODUCTORES) ═══
 
-1. El usuario de planta solicita asignar transportista a un flete.
+1. El usuario de planta o productor solicita asignar transportista a un flete.
 2. Utilizar list_transporters para presentar opciones disponibles.
+   - Productores con flota interna veran su empresa como "Flota interna" en la lista.
 3. Al seleccionar → assign_transporter prepara la accion y presenta resumen.
 4. Cuando confirme → llamar confirm_action.
 5. Opcional: list_trucks y list_drivers para asignar camion/chofer especifico.
 6. assign_truck_to_trip para modificar camion de un viaje existente.
 7. Para fletes multi-camion, indicar que utilicen la aplicacion web.
+
+FLOTA INTERNA: Si el productor tiene flota propia (hasInternalFleet), puede autoasignarse como transportista seleccionando su propia empresa de la lista.
 
 ═══ GESTIONAR EQUIPO ═══
 
@@ -652,10 +655,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['code'],
       },
     },
-    // ---- Transporter assignment (plant only) ----
+    // ---- Transporter assignment (plant + producer with own fleet) ----
     {
       name: 'list_transporters',
-      description: 'Lista las empresas transportistas disponibles. Solo para plantas.',
+      description: 'Lista las empresas transportistas disponibles. Para plantas y productores con flota interna. Los productores con flota interna veran su propia empresa como opcion "Flota interna".',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -664,7 +667,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'assign_transporter',
-      description: 'Asigna un transportista a un flete pendiente de asignacion. Solo para plantas. Prepara la accion para confirmacion.',
+      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1600,13 +1603,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ---- list_transporters ----
   private async toolListTransporters(user: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
-      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden listar transportistas.' });
+    if (!companyType.includes('plant') && !companyType.includes('producer')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden listar transportistas.' });
     }
 
     const companies = await this.prisma.company.findMany({
       where: { active: true },
-      select: { id: true, name: true, phone: true, type: true, types: true },
+      select: { id: true, name: true, phone: true, type: true, types: true, hasInternalFleet: true },
       orderBy: { name: 'asc' },
     });
 
@@ -1615,21 +1618,33 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       (Array.isArray(c.types) && (c.types as string[]).includes('transporter')),
     ).slice(0, 15);
 
-    if (transporters.length === 0) {
+    const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
+
+    // For producers: add own company as "Flota interna" if hasInternalFleet
+    if (companyType.includes('producer')) {
+      const producerCompanyId = this.resolveProducerCompanyId(user);
+      const producerCompany = companies.find(c => c.id === producerCompanyId);
+      if (producerCompany?.hasInternalFleet) {
+        // Add at the top of the list
+        result.unshift({ id: producerCompany.id, name: `${producerCompany.name} (Flota interna)`, phone: producerCompany.phone, ownFleet: true });
+      }
+    }
+
+    if (result.length === 0) {
       return JSON.stringify({ total: 0, transporters: [], message: 'No hay transportistas disponibles.' });
     }
 
     return JSON.stringify({
-      total: transporters.length,
-      transporters: transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone })),
+      total: result.length,
+      transporters: result,
     });
   }
 
   // ---- assign_transporter ----
   private async toolAssignTransporter(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
-      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden asignar transportistas.' });
+    if (!companyType.includes('plant') && !companyType.includes('producer')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden asignar transportistas.' });
     }
 
     const freight = await this.resolveFreight(input.code);
@@ -1637,19 +1652,34 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const transporter = await this.prisma.company.findUnique({
       where: { id: input.transporterCompanyId },
-      select: { name: true },
+      select: { name: true, hasInternalFleet: true },
     });
-    const plantCompanyId = this.resolvePlantCompanyId(user);
     const transporterName = transporter?.name || 'Transportista';
+
+    // Resolve the acting company: plant for plant users, producer for own-fleet producers
+    let actingCompanyId: string;
+    if (companyType.includes('plant')) {
+      actingCompanyId = this.resolvePlantCompanyId(user);
+    } else {
+      // Producer assigning own fleet — use the freight's destCompanyId (the plant) as the acting company
+      const fullFreight = await this.prisma.freight.findUnique({
+        where: { id: freight.id },
+        select: { destCompanyId: true },
+      });
+      actingCompanyId = fullFreight?.destCompanyId || this.resolveProducerCompanyId(user);
+    }
+
+    const isOwnFleet = transporter?.hasInternalFleet && input.transporterCompanyId === this.resolveProducerCompanyId(user);
+    const displayName = isOwnFleet ? `${transporterName} (Flota interna)` : transporterName;
 
     return this.stageAction(session, 'assign_transporter', {
       freightId: freight.id, code: freight.code,
       transporterCompanyId: input.transporterCompanyId,
-      transporterName,
+      transporterName: displayName,
       truckId: input.truckId || null,
       driverId: input.driverId || null,
-      plantCompanyId,
-    }, `Asignar transportista "${transporterName}" a flete ${freight.code}`);
+      plantCompanyId: actingCompanyId,
+    }, `Asignar transportista "${displayName}" a flete ${freight.code}`);
   }
 
   // ---- assign_truck_to_trip ----
