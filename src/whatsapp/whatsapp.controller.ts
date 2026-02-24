@@ -60,6 +60,12 @@ export class WhatsAppController {
     // Always respond 200 immediately (Meta requires fast response)
     res.status(200).send('EVENT_RECEIVED');
 
+    // Diagnostic: log entry + rawBody availability
+    const hasRawBody = !!(req as any).rawBody;
+    const hasSig = !!req.headers['x-hub-signature-256'];
+    const hasSecret = !!this.appSecret;
+    this.logger.log(`WEBHOOK HIT — rawBody=${hasRawBody}, sig=${hasSig}, secret=${hasSecret}`);
+
     // Verify HMAC-SHA256 signature
     if (this.appSecret) {
       const sigOk = this.verifyMetaSignature(req);
