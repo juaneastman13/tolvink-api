@@ -44,8 +44,8 @@ export class FreightsController {
   @Roles('transporter', 'producer', 'plant', 'admin')
   @ApiOperation({ summary: 'Listar choferes disponibles de una empresa' })
   @ApiQuery({ name: 'companyId', required: true })
-  getDrivers(@Query('companyId', ParseUUIDPipe) companyId: string) {
-    return this.service.getAvailableDrivers(companyId);
+  getDrivers(@Query('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() user: any) {
+    return this.service.getAvailableDrivers(companyId, user);
   }
 
   @Get(':id')
@@ -251,8 +251,8 @@ export class FreightsController {
   @Get('drivers/:driverId/queue')
   @Roles('plant', 'transporter', 'producer', 'admin')
   @ApiOperation({ summary: 'Cola de fletes de un chofer' })
-  getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string) {
-    return this.service.getDriverQueue(driverId);
+  getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string, @CurrentUser() user: any) {
+    return this.service.getDriverQueue(driverId, user);
   }
 
   @Post('drivers/:driverId/reorder')

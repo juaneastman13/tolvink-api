@@ -1143,7 +1143,15 @@ export class FreightsService {
 
   // ======================== AVAILABLE DRIVERS ===========================
 
-  async getAvailableDrivers(companyId: string) {
+  async getAvailableDrivers(companyId: string, user?: any) {
+    // Validate caller has access to this company
+    if (user) {
+      const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
+      if (!callerCompanies.includes(companyId)) {
+        throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
+      }
+    }
+
     const memberships = await this.prisma.userCompany.findMany({
       where: { companyId, role: 'chofer', active: true },
       include: { user: { select: { id: true, name: true, phone: true, active: true } } },
@@ -1191,7 +1199,21 @@ export class FreightsService {
 
   // ======================== DRIVER QUEUE ================================
 
-  async getDriverQueue(driverId: string) {
+  async getDriverQueue(driverId: string, user?: any) {
+    // Validate caller has access to the driver's company
+    if (user) {
+      const driverMembership = await this.prisma.userCompany.findFirst({
+        where: { userId: driverId, active: true },
+        select: { companyId: true },
+      });
+      if (driverMembership) {
+        const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
+        if (!callerCompanies.includes(driverMembership.companyId)) {
+          throw new ForbiddenException('No tiene acceso a la cola de este chofer');
+        }
+      }
+    }
+
     // Cast to any: queuePosition field added to schema but Prisma client not regenerated locally
     const assignments: any[] = await (this.prisma.freightAssignment as any).findMany({
       where: {
