@@ -1694,92 +1694,76 @@ export class FreightsService {
   }
 
   async confirmTripLoaded(freightId: string, assignmentId: string, user: any, loadedTons?: number) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-loaded');
-
-    const assignment: any = freight.assignments[0];
-    if (!assignment) throw new NotFoundException('Asignación no encontrada');
-
-    if (user.role === 'chofer') {
-      if (assignment.driverId !== user.sub) throw new ForbiddenException('No sos el chofer asignado');
-    }
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
     let ct = await this.resolveCompanyType(user);
-    const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
-    if (ct === 'producer' && isOwnFleet) ct = 'transporter';
 
-    if (ct === 'transporter') {
-      if (assignment.tripStatus !== 'in_progress' && assignment.tripStatus !== 'loaded') {
-        throw new BadRequestException(`El camión debe estar en viaje para confirmar carga. Estado actual: ${assignment.tripStatus}`);
-      }
-      if (assignment.transporterLoadedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la carga de este camión');
-
+    if (ct === 'transporter' || ct === 'producer' || ct === 'plant') {
       const result = await this.prisma.$transaction(async (tx) => {
-        const updateData: any = { transporterLoadedConfirmedAt: new Date() };
-        if (isOwnFleet) updateData.producerLoadedConfirmedAt = new Date();
-        if (assignment.tripStatus === 'in_progress') {
-          updateData.tripStatus = 'loaded';
-          updateData.loadedAt = new Date();
+        // Read INSIDE transaction to prevent race condition
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
+        });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-loaded');
+
+        const assignment: any = freight.assignments[0];
+        if (!assignment) throw new NotFoundException('Asignación no encontrada');
+
+        const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
+        // Own fleet promotion: producer OR plant acting as transporter
+        if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
+
+        if (ct === 'transporter') {
+          if (assignment.tripStatus !== 'in_progress' && assignment.tripStatus !== 'loaded') {
+            throw new BadRequestException(`El camión debe estar en viaje para confirmar carga. Estado actual: ${assignment.tripStatus}`);
+          }
+          if (assignment.transporterLoadedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la carga de este camión');
+
+          const updateData: any = { transporterLoadedConfirmedAt: new Date() };
+          if (isOwnFleet) updateData.producerLoadedConfirmedAt = new Date();
+          if (assignment.tripStatus === 'in_progress') {
+            updateData.tripStatus = 'loaded';
+            updateData.loadedAt = new Date();
+          }
+          if (loadedTons != null) updateData.loadedTons = loadedTons;
+          await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: updateData });
+
+          const newStatus = await this.deriveFreightStatus(tx, freightId);
+          const freightData: any = { status: newStatus };
+          if (newStatus === FreightStatus.loaded && !freight.loadedAt) freightData.loadedAt = new Date();
+          const updated = await tx.freight.update({ where: { id: freightId }, data: freightData });
+
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight', entityId: freightId, action: 'trip_confirm_loaded',
+              fromValue: assignment.tripStatus, toValue: 'loaded', userId: user.sub,
+              metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
+            },
+          });
+          return updated;
         }
-        if (loadedTons != null) updateData.loadedTons = loadedTons;
-        await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: updateData });
 
-        const newStatus = await this.deriveFreightStatus(tx, freightId);
-        const freightData: any = { status: newStatus };
-        if (newStatus === FreightStatus.loaded && !freight.loadedAt) freightData.loadedAt = new Date();
-        const updated = await tx.freight.update({ where: { id: freightId }, data: freightData });
+        if (ct === 'producer') {
+          if (assignment.tripStatus !== 'loaded') throw new BadRequestException('El camión debe estar cargado para que el productor confirme');
+          if (assignment.producerLoadedConfirmedAt) throw new BadRequestException('El productor ya confirmó la carga');
 
-        await tx.auditLog.create({
-          data: {
-            entityType: 'freight',
-            entityId: freightId,
-            action: 'trip_confirm_loaded',
-            fromValue: assignment.tripStatus,
-            toValue: 'loaded',
-            userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
-          },
-        });
+          await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: { producerLoadedConfirmedAt: new Date() } });
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight', entityId: freightId, action: 'trip_confirm_loaded',
+              fromValue: 'loaded', toValue: 'loaded', userId: user.sub,
+              metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'producer' },
+            },
+          });
+          return freight;
+        }
 
-        return updated;
+        throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
-      return result;
-    }
-
-    if (ct === 'producer') {
-      if (assignment.tripStatus !== 'loaded') {
-        throw new BadRequestException('El camión debe estar cargado para que el productor confirme');
-      }
-      if (assignment.producerLoadedConfirmedAt) throw new BadRequestException('El productor ya confirmó la carga');
-
-      const result = await this.prisma.$transaction(async (tx) => {
-        await (tx.freightAssignment as any).update({
-          where: { id: assignmentId },
-          data: { producerLoadedConfirmedAt: new Date() },
-        });
-
-        await tx.auditLog.create({
-          data: {
-            entityType: 'freight',
-            entityId: freightId,
-            action: 'trip_confirm_loaded',
-            fromValue: 'loaded',
-            toValue: 'loaded',
-            userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'producer' },
-          },
-        });
-
-        return freight;
-      });
-
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
@@ -1787,33 +1771,38 @@ export class FreightsService {
   }
 
   async confirmTripFinished(freightId: string, assignmentId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-finished');
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
-    const assignment: any = freight.assignments[0];
-    if (!assignment) throw new NotFoundException('Asignación no encontrada');
+    let ct = await this.resolveCompanyType(user);
 
-    if (user.role === 'chofer') {
-      if (assignment.driverId !== user.sub) throw new ForbiddenException('No sos el chofer asignado');
-    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Read INSIDE transaction to prevent race condition
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-finished');
 
-    if (assignment.tripStatus !== 'loaded') {
-      throw new BadRequestException(`Solo se puede finalizar un camión cargado. Estado actual: ${assignment.tripStatus}`);
-    }
+      const assignment: any = freight.assignments[0];
+      if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
-    const ct = await this.resolveCompanyType(user);
+      if (assignment.tripStatus !== 'loaded') {
+        throw new BadRequestException(`Solo se puede finalizar un camión cargado. Estado actual: ${assignment.tripStatus}`);
+      }
 
-    if (ct === 'transporter') {
-      if (assignment.transporterFinishedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la entrega');
-      const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
+      // Own fleet promotion: producer OR plant acting as transporter
+      const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
+      if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
 
-      const result = await this.prisma.$transaction(async (tx) => {
+      if (ct === 'transporter') {
+        if (assignment.transporterFinishedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la entrega');
+        const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
+
         const updateData: any = { transporterFinishedConfirmedAt: new Date() };
-        if (plantAlsoConfirmed) {
+        if (isOwnFleet) updateData.plantFinishedConfirmedAt = new Date();
+        const bothConfirmed = plantAlsoConfirmed || isOwnFleet;
+        if (bothConfirmed) {
           updateData.tripStatus = 'finished';
           updateData.finishedAt = new Date();
         }
@@ -1826,28 +1815,19 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight',
-            entityId: freightId,
-            action: plantAlsoConfirmed ? 'trip_finished' : 'trip_confirm_finished',
-            fromValue: 'loaded',
-            toValue: plantAlsoConfirmed ? 'finished' : 'loaded',
-            userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed: plantAlsoConfirmed },
+            entityType: 'freight', entityId: freightId,
+            action: bothConfirmed ? 'trip_finished' : 'trip_confirm_finished',
+            fromValue: 'loaded', toValue: bothConfirmed ? 'finished' : 'loaded', userId: user.sub,
+            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed },
           },
         });
-
         return updated;
-      });
+      }
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
-      return result;
-    }
+      if (ct === 'plant') {
+        if (assignment.plantFinishedConfirmedAt) throw new BadRequestException('La planta ya confirmó la recepción');
+        const transporterAlsoConfirmed = !!assignment.transporterFinishedConfirmedAt;
 
-    if (ct === 'plant') {
-      if (assignment.plantFinishedConfirmedAt) throw new BadRequestException('La planta ya confirmó la recepción');
-      const transporterAlsoConfirmed = !!assignment.transporterFinishedConfirmedAt;
-
-      const result = await this.prisma.$transaction(async (tx) => {
         const updateData: any = { plantFinishedConfirmedAt: new Date() };
         if (transporterAlsoConfirmed) {
           updateData.tripStatus = 'finished';
@@ -1862,24 +1842,20 @@ export class FreightsService {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight',
-            entityId: freightId,
+            entityType: 'freight', entityId: freightId,
             action: transporterAlsoConfirmed ? 'trip_finished' : 'trip_confirm_finished',
-            fromValue: 'loaded',
-            toValue: transporterAlsoConfirmed ? 'finished' : 'loaded',
-            userId: user.sub,
+            fromValue: 'loaded', toValue: transporterAlsoConfirmed ? 'finished' : 'loaded', userId: user.sub,
             metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed },
           },
         });
-
         return updated;
-      });
+      }
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
-      return result;
-    }
+      throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
+    });
 
-    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    return result;
   }
 
   // ======================== AUDIT LOG ==================================

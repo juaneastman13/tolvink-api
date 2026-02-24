@@ -90,6 +90,9 @@ export class CreateUserDto {
   @ApiProperty() @IsNotEmpty() @MinLength(4)
   password: string;
 
+  @ApiProperty({ required: false }) @IsOptional() @IsString()
+  passwordHash?: string;
+
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
   userTypes?: string[];
 
@@ -319,6 +322,11 @@ export class AdminService {
     return this.prisma.branch.update({ where: { id }, data: { active: false } });
   }
 
+  async getBranchCompanyId(id: string): Promise<string | null> {
+    const b = await this.prisma.branch.findUnique({ where: { id }, select: { companyId: true } });
+    return b?.companyId || null;
+  }
+
   // --- Users ---
   async listUsers(search?: string, companyId?: string, callerUser?: any) {
     const where: any = {};
@@ -376,7 +384,8 @@ export class AdminService {
       if (!c) throw new BadRequestException('Empresa no encontrada');
     }
 
-    const hash = await bcrypt.hash(dto.password, 10);
+    // Support pre-hashed password (from WhatsApp AI flow to avoid plaintext in session)
+    const hash = dto.passwordHash || await bcrypt.hash(dto.password, 10);
 
     const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
 
@@ -702,22 +711,40 @@ export class AdminController {
 
   @Post('branches')
   @ApiOperation({ summary: 'Crear sucursal' })
-  createBranch(@Body() dto: CreateBranchDto, @CurrentUser() u: any) {
+  async createBranch(@Body() dto: CreateBranchDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    // Non-superadmin: verify they own the target company
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(dto.companyId)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     return this.svc.createBranch(dto);
   }
 
   @Patch('branches/:id')
   @ApiOperation({ summary: 'Editar sucursal' })
-  updateBranch(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateBranchDto>, @CurrentUser() u: any) {
+  async updateBranch(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateBranchDto>, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const branch = await this.svc.getBranchCompanyId(id);
+      if (!branch || !myIds.includes(branch)) throw new ForbiddenException('Sin acceso a esta sucursal');
+    }
     return this.svc.updateBranch(id, dto);
   }
 
   @Delete('branches/:id')
   @ApiOperation({ summary: 'Desactivar sucursal' })
-  deleteBranch(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
+  async deleteBranch(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const branch = await this.svc.getBranchCompanyId(id);
+      if (!branch || !myIds.includes(branch)) throw new ForbiddenException('Sin acceso a esta sucursal');
+    }
     return this.svc.deleteBranch(id);
   }
 

@@ -63,20 +63,20 @@ export class WhatsAppController {
     // Verify HMAC-SHA256 signature
     if (this.appSecret) {
       const sigOk = this.verifyMetaSignature(req);
-      console.log(`[WA-WEBHOOK] Signature verification: ${sigOk ? 'PASS' : 'FAIL'}`);
+      this.logger.log(`Signature verification: ${sigOk ? 'PASS' : 'FAIL'}`);
       if (!sigOk) {
         return;
       }
     } else {
-      console.log('[WA-WEBHOOK] No APP_SECRET configured, skipping signature check');
+      this.logger.log('No APP_SECRET configured, skipping signature check');
     }
 
     try {
       const body = req.body;
-      console.log('[WA-WEBHOOK] Body received:', JSON.stringify(body).slice(0, 500));
+      this.logger.log(`Body received: ${JSON.stringify(body).slice(0, 500)}`);
 
       if (!body?.entry?.[0]?.changes?.[0]?.value) {
-        console.log('[WA-WEBHOOK] No entry/changes/value found, ignoring');
+        this.logger.log('No entry/changes/value found, ignoring');
         return;
       }
 
@@ -84,7 +84,7 @@ export class WhatsAppController {
 
       // Status updates (sent, delivered, read, failed)
       if (value.statuses?.[0]) {
-        console.log('[WA-WEBHOOK] Status update:', value.statuses[0].status);
+        this.logger.log(`Status update: ${value.statuses[0].status}`);
         this.handleStatusUpdate(value.statuses[0]);
         return;
       }
@@ -92,17 +92,17 @@ export class WhatsAppController {
       // Incoming messages
       const message = value.messages?.[0];
       if (!message) {
-        console.log('[WA-WEBHOOK] No message in payload, ignoring');
+        this.logger.log('No message in payload, ignoring');
         return;
       }
 
       const phone = message.from; // E.164 without + (e.g., "59898247552")
       const waMessageId = message.id;
-      console.log(`[WA-WEBHOOK] Message from ${phone}, type: ${message.type}`);
+      this.logger.log(`Message from ${phone}, type: ${message.type}`);
 
       // Deduplication — Meta can send the same webhook multiple times
       if (waMessageId && this.processedMessages.has(waMessageId)) {
-        console.log(`[WA-WEBHOOK] Duplicate message ${waMessageId}, skipping`);
+        this.logger.log(`Duplicate message ${waMessageId}, skipping`);
         return;
       }
       if (waMessageId) {
@@ -132,11 +132,10 @@ export class WhatsAppController {
       }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));
 
       // Route the message
-      console.log(`[WA-WEBHOOK] Routing message type=${type} to handler`);
+      this.logger.log(`Routing message type=${type} to handler`);
       await this.router.handleMessage(phone, type, payload, waMessageId);
-      console.log(`[WA-WEBHOOK] Handler completed successfully`);
+      this.logger.log('Handler completed successfully');
     } catch (e) {
-      console.error(`[WA-WEBHOOK] ERROR: ${e.message}`, e.stack);
       this.logger.error(`Webhook processing error: ${e.message}`, e.stack);
     }
   }
@@ -278,12 +277,19 @@ export class WhatsAppController {
 
   /**
    * Generate a location-picker token for a WhatsApp session.
-   * Called internally by AI service — no JWT auth needed.
+   * Called internally by AI service — validated via internal secret.
    */
   @Post('location-token')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(200)
-  async createLocationToken(@Body() body: { sessionId: string; purpose?: string }) {
+  async createLocationToken(@Body() body: { sessionId: string; purpose?: string; internalKey?: string }) {
     if (!body.sessionId) throw new BadRequestException('sessionId required');
+
+    // Validate internal caller: must provide appSecret or be called from within the process
+    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (appSecret && body.internalKey !== appSecret) {
+      throw new BadRequestException('Unauthorized');
+    }
 
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: body.sessionId } });
     if (!session) throw new NotFoundException('Session not found');

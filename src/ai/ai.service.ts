@@ -133,7 +133,7 @@ export class AiService {
       while (loopCount < MAX_TOOL_LOOPS) {
         loopCount++;
 
-        console.log(`[AI] Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
+        this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         response = await this.client.messages.create({
           model: 'claude-haiku-4-5-20251001',
           max_tokens: MODEL_MAX_TOKENS,
@@ -142,7 +142,7 @@ export class AiService {
           tools: this.tools as any,
           messages: currentMessages,
         });
-        console.log(`[AI] Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
+        this.logger.log(`Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
 
         if (response.stop_reason === 'tool_use') {
           // Add assistant response to messages
@@ -199,8 +199,7 @@ export class AiService {
 
       return { text: finalText, buttons: pendingButtons };
     } catch (e) {
-      console.error(`[AI] Chat error:`, e.message, e.stack?.slice(0, 300));
-      this.logger.error(`AI chat error: ${e.message}`);
+      this.logger.error(`Chat error: ${e.message}`, e.stack?.slice(0, 300));
       return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente o utilice las opciones del menu.' };
     }
   }
@@ -1091,7 +1090,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const state = (freshSession?.flowState as any) || {};
     const pending = state.pendingFreight;
 
-    console.log(`[AI] confirm_create_freight — pendingFreight: ${pending ? JSON.stringify(pending).slice(0, 200) : 'NULL'}`);
+    this.logger.log(`confirm_create_freight — pendingFreight: ${pending ? JSON.stringify(pending).slice(0, 200) : 'NULL'}`);
 
     if (!pending) {
       return JSON.stringify({ error: 'No hay un flete pendiente de confirmacion. Primero usa prepare_freight.' });
@@ -1132,7 +1131,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         const fieldLng = lot.field?.lng != null && Number(lot.field.lng) !== 0 ? Number(lot.field.lng) : null;
         const lat = lotLat ?? fieldLat;
         const lng = lotLng ?? fieldLng;
-        console.log(`[AI] Lot coords: lot(${lot.lat},${lot.lng}) field(${lot.field?.lat},${lot.field?.lng}) → resolved(${lat},${lng})`);
+        this.logger.log(`Lot coords: lot(${lot.lat},${lot.lng}) field(${lot.field?.lat},${lot.field?.lng}) → resolved(${lat},${lng})`);
         if (lat != null && lng != null) {
           dto.overrideOriginLat = lat;
           dto.overrideOriginLng = lng;
@@ -1163,9 +1162,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       dto.truckId = pending.truckId;
     }
 
-    console.log(`[AI] Creating freight with DTO:`, JSON.stringify(dto).slice(0, 300));
+    this.logger.log(`Creating freight with DTO: ${JSON.stringify(dto).slice(0, 300)}`);
     const freight = await this.freights.create(dto, producerSynUser);
-    console.log(`[AI] Freight created: ${(freight as any).code}`);
+    this.logger.log(`Freight created: ${(freight as any).code}`);
 
     // Clear pending freight
     await this.prisma.whatsAppSession.update({
@@ -1193,7 +1192,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const { tool, params } = pending;
-    console.log(`[AI] confirm_action — dispatching: ${tool}`);
+    this.logger.log(`confirm_action — dispatching: ${tool}`);
 
     let result: string;
 
@@ -1315,15 +1314,15 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         }
 
         case 'attach_document': {
-          console.log(`[AI] attach_document params:`, JSON.stringify(params));
-          console.log(`[AI] attach_document synUser.sub:`, synUser.sub);
+          this.logger.log(`attach_document params: ${JSON.stringify(params)}`);
+          this.logger.log(`attach_document synUser.sub: ${synUser.sub}`);
           const doc = await this.freights.addDocument(params.freightId, {
             name: params.document.name,
             url: params.document.url,
             type: params.document.type,
             step: params.step || null,
           }, synUser);
-          console.log(`[AI] attach_document created doc:`, (doc as any).id);
+          this.logger.log(`attach_document created doc: ${(doc as any).id}`);
           result = JSON.stringify({ status: 'attached', code: params.code, document: params.document.name, docId: (doc as any).id });
           break;
         }
@@ -1332,8 +1331,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
           result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
     } catch (e) {
-      console.error(`[AI] confirm_action dispatch error (${tool}):`, e.message, e.stack?.slice(0, 300));
-      this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`);
+      this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`, e.stack?.slice(0, 300));
       result = JSON.stringify({ error: e.message || 'Error al ejecutar la accion.' });
     }
 
@@ -1542,10 +1540,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     };
     const prismaRole = roleToEnum[inputRole] || 'operator';
 
+    // Hash password NOW so plaintext never sits in session flowState
+    const bcrypt = require('bcryptjs');
+    const passwordHash = await bcrypt.hash(input.password, 10);
+
     const dto: any = {
       name: input.name,
       email: input.email,
-      password: input.password,
+      passwordHash, // pre-hashed — never store plaintext in session
       phone: input.phone || null,
       role: prismaRole,
       companyId: producerCompanyId,
@@ -1610,7 +1612,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       },
     });
 
-    console.log(`[AI] generate_location_link — token=${token}, sessionId=${session.id}`);
+    this.logger.log(`generate_location_link — token=${token}, sessionId=${session.id}`);
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
     const url = `${frontendUrl}/pick-location?token=${token}`;

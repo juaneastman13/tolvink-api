@@ -60,7 +60,7 @@ export class WhatsAppRouterService {
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
-      console.log(`[WA-ROUTER] handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
+      this.logger.log(`handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
 
       // Mark as read
       this.wa.markRead(waMessageId).catch(() => {});
@@ -244,8 +244,7 @@ export class WhatsAppRouterService {
         await this.wa.sendText(phone, reply);
       }
     } catch (e) {
-      console.error(`[WA-AI] handleAiChat error:`, e.message, e.stack?.slice(0, 300));
-      this.logger.error(`AI chat error: ${e.message}`);
+      this.logger.error(`AI chat error: ${e.message}`, e.stack?.slice(0, 300));
       await this.wa.sendText(phone,
         'Se produjo un inconveniente tecnico. Por favor, utilice las opciones del menu.',
       );

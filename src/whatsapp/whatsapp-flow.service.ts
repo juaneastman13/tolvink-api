@@ -910,8 +910,8 @@ export class WhatsAppFlowService {
         dto.originLotId = state.originLotId;
       } else {
         dto.customOriginName = state.customOriginName || 'Origen WhatsApp';
-        dto.overrideOriginLat = state.originLat || -34.0;
-        dto.overrideOriginLng = state.originLng || -56.0;
+        dto.overrideOriginLat = state.originLat || null;
+        dto.overrideOriginLng = state.originLng || null;
       }
 
       const freight = await this.freights.create(dto as any, synUser);
