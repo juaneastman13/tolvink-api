@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -238,6 +238,29 @@ export class UpdateAssignmentDto {
   @Min(0.1)
   @Type(() => Number)
   tons?: number;
+}
+
+export class AddDocumentDto {
+  @ApiProperty({ maxLength: 255 })
+  @IsNotEmpty()
+  @MaxLength(255)
+  name: string;
+
+  @ApiProperty({ maxLength: 500 })
+  @IsNotEmpty()
+  @IsUrl()
+  @MaxLength(500)
+  url: string;
+
+  @ApiProperty({ required: false, maxLength: 50 })
+  @IsOptional()
+  @MaxLength(50)
+  type?: string;
+
+  @ApiProperty({ required: false, maxLength: 50 })
+  @IsOptional()
+  @MaxLength(50)
+  step?: string;
 }
 
 export class RespondTripDto {

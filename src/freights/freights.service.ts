@@ -2002,6 +2002,11 @@ export class FreightsService {
     });
     if (!doc) throw new NotFoundException('Documento no encontrado');
 
+    // Only uploader or platform_admin can delete
+    if (doc.uploadedById !== user.sub && user.role !== 'platform_admin') {
+      throw new ForbiddenException('Solo quien subió el documento puede eliminarlo');
+    }
+
     await this.prisma.freightDocument.delete({ where: { id: docId } });
     return { ok: true };
   }

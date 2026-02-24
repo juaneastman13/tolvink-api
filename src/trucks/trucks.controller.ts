@@ -130,7 +130,7 @@ export class TrucksService {
   async createDriver(body: { name: string; phone?: string; email?: string }, user: any) {
     if (!body.name?.trim()) throw new BadRequestException('Nombre obligatorio');
 
-    const email = body.email?.trim().toLowerCase() || `chofer_${Date.now()}@tolvink.internal`;
+    const email = body.email?.trim().toLowerCase() || `chofer_${require('crypto').randomBytes(8).toString('hex')}@tolvink.internal`;
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) throw new BadRequestException('Ya existe un usuario con ese email');
 

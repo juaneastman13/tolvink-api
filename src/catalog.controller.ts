@@ -172,7 +172,8 @@ export class CatalogController {
         });
       }
 
-      // Admin or others: all branches (with limit)
+      // Only platform_admin gets full branch list; others get empty
+      if (user.role !== 'platform_admin') return [];
       return this.prisma.branch.findMany({
         where: { active: true },
         select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
@@ -277,7 +278,8 @@ export class CatalogController {
         });
       }
 
-      // Admin or others: all transporters (legacy type + types[])
+      // Only platform_admin gets full transporter list; others get empty
+      if (user.role !== 'platform_admin') return [];
       const all = await this.prisma.company.findMany({
         where: { active: true },
         select: { id: true, name: true, address: true, phone: true, type: true, types: true },

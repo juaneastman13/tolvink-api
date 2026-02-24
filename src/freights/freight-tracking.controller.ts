@@ -185,12 +185,8 @@ export class FreightTrackingController {
       })),
       auditLog: auditLog.map(log => ({
         action: log.action,
-        reason: log.reason,
         createdAt: log.createdAt,
-        user: {
-          name: log.user?.name || null,
-          company: { name: log.user?.company?.name || null },
-        },
+        actorCompany: log.user?.company?.name || null,
       })),
     };
   }

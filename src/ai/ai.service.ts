@@ -1273,6 +1273,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         }
 
         case 'update_user_role': {
+          // Re-validate membership still exists and belongs to the expected company
+          const membership = await this.prisma.userCompany.findFirst({
+            where: { id: params.membershipId, companyId: params.companyId, userId: params.targetUserId, active: true },
+          });
+          if (!membership) throw new Error('Membresía no encontrada o ya fue modificada');
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { role: params.newRole } });
           const roleMapping: Record<string, string> = { gerente: 'admin', operario: 'operator', chofer: 'operator' };
           await this.prisma.user.update({ where: { id: params.targetUserId }, data: { role: (roleMapping[params.newRole] || 'operator') as any } });
@@ -2040,6 +2045,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return this.stageAction(session, 'update_user_role', {
       membershipId: membership.id,
+      companyId: membership.companyId,
       targetUserId: membership.user.id,
       userName: membership.user.name,
       newRole: input.newRole,

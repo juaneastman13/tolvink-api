@@ -112,8 +112,11 @@ export class WhatsAppFlowService {
     } catch (e) {
       this.logger.error(`Flow "${flowType}" step "${flowStep}" error: ${e.message}`, e.stack);
       // Sanitize: never expose internal error details to user
-      const userMessage = e.status === 400 || e.response?.statusCode === 400
-        ? e.message
+      const raw400 = e.status === 400 || e.response?.statusCode === 400
+        ? String(e.message || '').slice(0, 200)
+        : '';
+      const userMessage = raw400
+        ? raw400.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim() || 'Datos inválidos.'
         : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
       await this.wa.sendText(phone, userMessage);
       await this.endFlow(session.id);
