@@ -1268,19 +1268,25 @@ MODIFICAR (solo admin/gerente):
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
     const state = (freshSession?.flowState as any) || {};
 
-    const newFlowState = {
-      ...state,
-      locationToken: {
-        token,
-        purpose: input.purpose || 'general',
-        createdAt: new Date().toISOString(),
-      },
-    };
-
+    // Single write: save locationToken + _pendingButtons together
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
-      data: { flowState: newFlowState },
+      data: {
+        flowState: {
+          ...state,
+          locationToken: {
+            token,
+            purpose: input.purpose || 'general',
+            createdAt: new Date().toISOString(),
+          },
+          _pendingButtons: [
+            { id: 'location_done', title: 'UBICACION LISTA' },
+          ],
+        },
+      },
     });
+
+    console.log(`[AI] generate_location_link — token=${token}, sessionId=${session.id}`);
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
     const url = `${frontendUrl}/pick-location?token=${token}`;
@@ -1292,21 +1298,6 @@ MODIFICAR (solo admin/gerente):
       lot: 'ubicacion del lote',
     };
     const label = purposeLabels[input.purpose] || 'ubicacion';
-
-    // Store pending buttons in session for the router to send after AI text
-    const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const sessState = (freshSess?.flowState as any) || {};
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: {
-          ...sessState,
-          _pendingButtons: [
-            { id: 'location_done', title: 'UBICACION LISTA' },
-          ],
-        },
-      },
-    });
 
     return JSON.stringify({
       url,

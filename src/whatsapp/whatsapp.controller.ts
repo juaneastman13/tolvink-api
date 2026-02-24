@@ -308,20 +308,32 @@ export class WhatsAppController {
       },
     });
 
+    console.log(`[WA-LOCATION] save-location token=${body.token}, sessions found=${sessions.length}`);
+    // Debug: log sessions that have any locationToken
+    for (const s of sessions) {
+      const st = (s.flowState as any) || {};
+      if (st.locationToken) {
+        console.log(`[WA-LOCATION] session ${s.id} has locationToken=${st.locationToken.token}, match=${st.locationToken.token === body.token}`);
+      }
+    }
+
     const session = sessions.find((s: any) => {
       const state = (s.flowState as any) || {};
       return state.locationToken?.token === body.token;
     });
 
     if (!session) {
+      console.log(`[WA-LOCATION] TOKEN NOT FOUND — searched ${sessions.length} sessions for token=${body.token}`);
       throw new NotFoundException('Token invalido o expirado');
     }
 
-    // Check token age (max 15 minutes)
+    // Check token age (max 30 minutes — extended for mobile users)
     const state = (session.flowState as any) || {};
     const tokenCreated = new Date(state.locationToken.createdAt).getTime();
-    if (Date.now() - tokenCreated > 15 * 60 * 1000) {
-      throw new BadRequestException('Token expirado (max 15 min)');
+    const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
+    console.log(`[WA-LOCATION] Token found in session ${session.id}, age=${tokenAgeMin.toFixed(1)} min`);
+    if (tokenAgeMin > 30) {
+      throw new BadRequestException('Token expirado (max 30 min)');
     }
 
     // Save location and clear token
