@@ -15,7 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
-const APP_URL = 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
 
 // Model configuration — Claude Haiku 4.5
 // NOTE: Anthropic API supports temperature, top_p, top_k.
@@ -1638,16 +1638,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
-      select: { id: true, status: true, shareToken: true, code: true, originCompanyId: true, destCompanyId: true },
+      select: {
+        id: true, status: true, shareToken: true, code: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
+      },
     });
 
     if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
 
-    // Access control
+    // Access control (origin, dest, and transporter companies)
     const userCompanyId = user.activeCompanyId || user.companyId;
     const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
     const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    if (!allUserCompanies.some(c => [freight.originCompanyId, freight.destCompanyId].includes(c))) {
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
       return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
     }
 
@@ -1681,16 +1686,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
-      select: { id: true, status: true, shareToken: true, code: true, originCompanyId: true, destCompanyId: true },
+      select: {
+        id: true, status: true, shareToken: true, code: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
+      },
     });
 
     if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
 
-    // Access control
+    // Access control (origin, dest, and transporter companies)
     const userCompanyId = user.activeCompanyId || user.companyId;
     const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
     const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    if (!allUserCompanies.some(c => [freight.originCompanyId, freight.destCompanyId].includes(c))) {
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
       return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
     }
 

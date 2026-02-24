@@ -13,7 +13,7 @@ const FLOW_TIMEOUT_MINUTES = 10;
 // Header hint shown at the top of every flow message
 const FLOW_HINT = '_cancelar · menu_\n─────────────────────\n\n';
 
-const APP_URL = 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
 
 @Injectable()
 export class WhatsAppFlowService {

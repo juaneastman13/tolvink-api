@@ -113,7 +113,7 @@ export class AuthService {
     const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
     if (phoneExists) throw new ConflictException('Telefono ya registrado');
 
-    const hash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
+    const hash = await bcrypt.hash(dto.password, 10);
 
     // Validate userTypes values
     const validTypes = ['producer', 'plant', 'transporter'];

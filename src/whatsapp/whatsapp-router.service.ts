@@ -33,7 +33,7 @@ const STATUS_EMOJI: Record<string, string> = {
   canceled: '❌',
 };
 
-const APP_URL = 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
 
 @Injectable()
 export class WhatsAppRouterService {
@@ -841,13 +841,6 @@ export class WhatsAppRouterService {
       },
     });
 
-    // Ensure shareToken exists for public tracking link
-    if (freight && !freight.shareToken) {
-      const token = require('crypto').randomUUID();
-      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken: token } });
-      (freight as any).shareToken = token;
-    }
-
     if (!freight) {
       await this.wa.sendText(phone, 'Flete no encontrado.');
       return;
@@ -865,6 +858,13 @@ export class WhatsAppRouterService {
     if (!hasAccess) {
       await this.wa.sendText(phone, 'No dispone de acceso a este flete con su empresa activa.');
       return;
+    }
+
+    // Ensure shareToken exists for public tracking link (after access check)
+    if (!freight.shareToken) {
+      const token = require('crypto').randomUUID();
+      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken: token } });
+      (freight as any).shareToken = token;
     }
 
     const statusLabel = STATUS_LABELS[freight.status] || freight.status;

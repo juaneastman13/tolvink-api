@@ -34,9 +34,10 @@ export class RegisterDto {
   @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 digitos)' })
   phone: string;
 
-  @IsOptional()
+  @IsNotEmpty({ message: 'Contraseña requerida' })
   @IsString()
-  password?: string;
+  @MinLength(4, { message: 'La contraseña debe tener al menos 4 caracteres' })
+  password: string;
 
   @IsArray({ message: 'userTypes debe ser un array' })
   @ArrayMinSize(1, { message: 'Selecciona al menos un tipo' })

@@ -436,10 +436,16 @@ export class AdminService {
     const target = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!target) throw new NotFoundException('Usuario no encontrado');
 
-    // Non-platform-admins can only edit users in their own company (or themselves)
+    // Non-platform-admins can only edit users in their own companies (or themselves)
     if (!this.isPlatformAdmin(callerUser)) {
-      if (callerUser.companyId !== target.companyId && callerUser.sub !== userId) {
-        throw new ForbiddenException('No podés editar este usuario');
+      if (callerUser.sub !== userId) {
+        const fullCaller = await this.resolveFullUser(callerUser);
+        const callerCompanies = await this.getUserCompanyIds(fullCaller);
+        const targetMemberships = await this.prisma.userCompany.findMany({ where: { userId }, select: { companyId: true } });
+        const targetCompanies = [target.companyId, ...targetMemberships.map(m => m.companyId)].filter(Boolean);
+        if (!targetCompanies.some(c => callerCompanies.includes(c))) {
+          throw new ForbiddenException('No podés editar este usuario');
+        }
       }
       // Company admins can't set platform_admin role
       if (dto.role === 'platform_admin') {
@@ -797,6 +803,11 @@ export class AdminController {
   @ApiOperation({ summary: 'Crear campo' })
   async createCompanyField(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     return this.svc.createField(companyId, dto);
   }
 
@@ -804,6 +815,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Editar campo' })
   async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const field = await this.svc.prisma.field.findUnique({ where: { id }, select: { companyId: true } });
+      if (!field || !myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
+    }
     return this.svc.updateField(id, dto);
   }
 
@@ -811,6 +828,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Desactivar campo' })
   async deleteAdminField(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const field = await this.svc.prisma.field.findUnique({ where: { id }, select: { companyId: true } });
+      if (!field || !myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
+    }
     return this.svc.deleteField(id);
   }
 
@@ -826,8 +849,13 @@ export class AdminController {
   @ApiOperation({ summary: 'Crear lote en campo' })
   async createFieldLot(@Param('fieldId', ParseUUIDPipe) fieldId: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
-    const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId } });
+    const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId }, select: { id: true, companyId: true } });
     if (!field) throw new NotFoundException('Campo no encontrado');
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
+    }
     return this.svc.createLot(fieldId, field.companyId, dto);
   }
 
@@ -835,6 +863,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Editar lote' })
   async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const lot = await this.svc.prisma.lot.findUnique({ where: { id }, select: { companyId: true } });
+      if (!lot || !myIds.includes(lot.companyId)) throw new ForbiddenException('Sin acceso a este lote');
+    }
     return this.svc.updateLot(id, dto);
   }
 
@@ -842,6 +876,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Desactivar lote' })
   async deleteAdminLot(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const lot = await this.svc.prisma.lot.findUnique({ where: { id }, select: { companyId: true } });
+      if (!lot || !myIds.includes(lot.companyId)) throw new ForbiddenException('Sin acceso a este lote');
+    }
     return this.svc.deleteLot(id);
   }
 
@@ -857,6 +897,11 @@ export class AdminController {
   @ApiOperation({ summary: 'Crear vehículo' })
   async createCompanyTruck(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     return this.svc.createTruck(companyId, dto);
   }
 
@@ -864,6 +909,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Editar vehículo' })
   async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const truck = await this.svc.prisma.truck.findUnique({ where: { id }, select: { companyId: true } });
+      if (!truck || !myIds.includes(truck.companyId)) throw new ForbiddenException('Sin acceso a este vehículo');
+    }
     return this.svc.updateTruck(id, dto);
   }
 
@@ -871,6 +922,12 @@ export class AdminController {
   @ApiOperation({ summary: 'Desactivar vehículo' })
   async deleteAdminTruck(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const truck = await this.svc.prisma.truck.findUnique({ where: { id }, select: { companyId: true } });
+      if (!truck || !myIds.includes(truck.companyId)) throw new ForbiddenException('Sin acceso a este vehículo');
+    }
     return this.svc.deleteTruck(id);
   }
 }

@@ -1101,7 +1101,11 @@ export class FreightsService {
       throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
     }
     if (freight.requestedById !== user.sub) {
-      throw new ForbiddenException('Solo el solicitante puede editar');
+      // Also allow users from the origin or dest company
+      const userCompanyId = user.companyId;
+      if (userCompanyId !== freight.originCompanyId && userCompanyId !== freight.destCompanyId) {
+        throw new ForbiddenException('Solo el solicitante o su empresa pueden editar');
+      }
     }
 
     const data: any = {};
@@ -1286,6 +1290,14 @@ export class FreightsService {
         const existingCount = await tx.freightAssignment.count({
           where: { freightId, status: { in: ['active', 'accepted'] } },
         });
+
+        // Validate truckCount limit
+        if (freight.isMultiTruck && freight.truckCount && existingCount + dto.trucks.length > freight.truckCount) {
+          throw new BadRequestException(
+            `El flete permite ${freight.truckCount} camiones, ya tiene ${existingCount} asignados. Solo puede agregar ${freight.truckCount - existingCount} mas.`,
+          );
+        }
+
         let tripNumber = existingCount;
 
         for (const truck of dto.trucks) {
