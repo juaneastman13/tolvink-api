@@ -1,20 +1,29 @@
 import {
-  Module, Controller, Get, Post, Body, Query, Req, Logger, UseGuards,
+  Module, Controller, Get, Post, Body, Query, Req, Logger, UseGuards, ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { SkipThrottle } from '@nestjs/throttler';
+import { IsNotEmpty, IsOptional, IsString, IsObject, MaxLength, ValidatorConstraint, ValidatorConstraintInterface, Validate } from 'class-validator';
+import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 // ======================== DTOs ========================================
 
+@ValidatorConstraint({ name: 'maxJsonSize', async: false })
+class MaxJsonSize implements ValidatorConstraintInterface {
+  validate(value: any) {
+    if (!value) return true;
+    try { return JSON.stringify(value).length <= 4096; } catch { return false; }
+  }
+  defaultMessage() { return 'data must be under 4KB'; }
+}
+
 class TrackDto {
   @IsNotEmpty() @IsString() @MaxLength(100)
   event: string;
 
-  @IsOptional()
+  @IsOptional() @IsObject() @Validate(MaxJsonSize)
   data?: Record<string, any>;
 
   @IsOptional() @IsString() @MaxLength(100)
@@ -31,7 +40,7 @@ class AnalyticsController {
   constructor(private prisma: PrismaService) {}
 
   @Post('track')
-  @SkipThrottle()
+  @Throttle({ default: { ttl: 60000, limit: 100 } })
   @ApiOperation({ summary: 'Track an analytics event (public, auth optional)' })
   async track(@Body() dto: TrackDto, @Req() req: any) {
     const userId = req.user?.sub || null;
@@ -64,7 +73,7 @@ class AnalyticsController {
     @Query('limit') limit?: string,
   ) {
     if (user.role !== 'platform_admin') {
-      return { error: 'Solo administradores de plataforma' };
+      throw new ForbiddenException('Solo administradores de plataforma');
     }
 
     const p = parseInt(page || '1', 10) || 1;
@@ -105,7 +114,7 @@ class AnalyticsController {
     @Query('to') to?: string,
   ) {
     if (user.role !== 'platform_admin') {
-      return { error: 'Solo administradores de plataforma' };
+      throw new ForbiddenException('Solo administradores de plataforma');
     }
 
     const where: any = {};

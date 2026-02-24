@@ -86,20 +86,40 @@ export class ConversationsService {
 
   async searchUsers(q: string, user: any) {
     if (!q || q.trim().length < 2) return [];
+
+    // Scope: users from caller's own companies + companies with freight relationships
+    const myCompanyIds = await this.resolveAllCompanyIds(user);
+    const relatedFreights = await this.prisma.freight.findMany({
+      where: {
+        OR: [
+          { originCompanyId: { in: myCompanyIds } },
+          { destCompanyId: { in: myCompanyIds } },
+          { assignments: { some: { transportCompanyId: { in: myCompanyIds } } } },
+        ],
+      },
+      select: { originCompanyId: true, destCompanyId: true },
+      distinct: ['originCompanyId', 'destCompanyId'],
+      take: 200,
+    });
+    const allowedCompanyIds = new Set(myCompanyIds);
+    for (const f of relatedFreights) {
+      if (f.originCompanyId) allowedCompanyIds.add(f.originCompanyId);
+      if (f.destCompanyId) allowedCompanyIds.add(f.destCompanyId);
+    }
+
     return this.prisma.user.findMany({
       where: {
         active: true,
         id: { not: user.sub },
+        companyId: { in: Array.from(allowedCompanyIds) },
         OR: [
           { name: { contains: q.trim(), mode: 'insensitive' } },
           { email: { contains: q.trim(), mode: 'insensitive' } },
-          { phone: { contains: q.trim() } },
         ],
       },
       select: {
         id: true,
         name: true,
-        phone: true,
         company: { select: { id: true, name: true, type: true } },
       },
       take: 15,

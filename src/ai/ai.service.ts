@@ -1309,7 +1309,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         }
 
         case 'create_user': {
-          const newUser = await this.adminService.createUser(params.dto);
+          const newUser = await this.adminService.createUser(params.dto, params.passwordHash);
           result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel } });
           break;
         }
@@ -1548,7 +1548,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const dto: any = {
       name: input.name,
       email: input.email,
-      passwordHash, // pre-hashed — never store plaintext in session
+      password: 'placeholder', // required by DTO — actual hash passed separately
       phone: input.phone || null,
       role: prismaRole,
       companyId: producerCompanyId,
@@ -1558,7 +1558,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     };
 
     const summary = `Crear usuario "${input.name}" (${input.email}) con rol ${inputRole}`;
-    return this.stageAction(session, 'create_user', { dto, roleLabel: inputRole }, summary);
+    return this.stageAction(session, 'create_user', { dto, passwordHash, roleLabel: inputRole }, summary);
   }
 
   // ======================== DOCUMENT ATTACHMENT TOOL =======================

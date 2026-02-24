@@ -1518,10 +1518,14 @@ export class FreightsService {
     }
 
     if (dto.driverId) {
-      const driver = await this.prisma.user.findUnique({ where: { id: dto.driverId }, select: { id: true, name: true } });
-      if (!driver) throw new NotFoundException('Chofer no encontrado');
-      updateData.driverId = driver.id;
-      updateData.driverName = driver.name;
+      const companyId = dto.transportCompanyId || assignment.transportCompanyId;
+      const dm = await (this.prisma as any).userCompany.findFirst({
+        where: { userId: dto.driverId, companyId, role: 'chofer', active: true },
+        include: { user: { select: { id: true, name: true } } },
+      });
+      if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa transportista');
+      updateData.driverId = dm.user.id;
+      updateData.driverName = dm.user.name;
     } else if (dto.driverId === null) {
       updateData.driverId = null;
       updateData.driverName = null;

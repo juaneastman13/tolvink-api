@@ -90,9 +90,6 @@ export class CreateUserDto {
   @ApiProperty() @IsNotEmpty() @MinLength(4)
   password: string;
 
-  @ApiProperty({ required: false }) @IsOptional() @IsString()
-  passwordHash?: string;
-
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
   userTypes?: string[];
 
@@ -105,6 +102,57 @@ export class CreateUserDto {
 
   @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
   @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
+}
+
+export class AdminCreateFieldDto {
+  @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(200)
+  name: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500)
+  address?: string;
+
+  @ApiProperty() @IsNumber()
+  lat: number;
+
+  @ApiProperty() @IsNumber()
+  lng: number;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber()
+  hectares?: number;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000)
+  comments?: string;
+}
+
+export class AdminCreateLotDto {
+  @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(200)
+  name: string;
+
+  @ApiProperty() @IsNumber()
+  lat: number;
+
+  @ApiProperty() @IsNumber()
+  lng: number;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber()
+  hectares?: number;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000)
+  comments?: string;
+}
+
+export class AdminCreateTruckDto {
+  @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(20)
+  plate: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100)
+  brand?: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100)
+  model?: string;
+
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber()
+  capacity?: number;
 }
 
 export class UpdateUserDto {
@@ -368,7 +416,7 @@ export class AdminService {
     });
   }
 
-  async createUser(dto: CreateUserDto) {
+  async createUser(dto: CreateUserDto, preHashedPassword?: string) {
     const bcrypt = require('bcryptjs');
 
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
@@ -384,8 +432,8 @@ export class AdminService {
       if (!c) throw new BadRequestException('Empresa no encontrada');
     }
 
-    // Support pre-hashed password (from WhatsApp AI flow to avoid plaintext in session)
-    const hash = dto.passwordHash || await bcrypt.hash(dto.password, 10);
+    // Use pre-hashed password (internal callers like AI) or hash from plaintext
+    const hash = preHashedPassword || await bcrypt.hash(dto.password, 10);
 
     const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
 
@@ -796,12 +844,17 @@ export class AdminController {
   @ApiOperation({ summary: 'Listar campos de empresa productora' })
   async companyFields(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     return this.svc.listFieldsByCompany(companyId);
   }
 
   @Post('companies/:companyId/fields')
   @ApiOperation({ summary: 'Crear campo' })
-  async createCompanyField(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
+  async createCompanyField(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: AdminCreateFieldDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -813,7 +866,7 @@ export class AdminController {
 
   @Patch('fields/:id')
   @ApiOperation({ summary: 'Editar campo' })
-  async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+  async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateFieldDto>, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -842,12 +895,18 @@ export class AdminController {
   @ApiOperation({ summary: 'Listar lotes de campo' })
   async fieldLots(@Param('fieldId', ParseUUIDPipe) fieldId: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId }, select: { companyId: true } });
+      if (!field || !myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
+    }
     return this.svc.listLotsByField(fieldId);
   }
 
   @Post('fields/:fieldId/lots')
   @ApiOperation({ summary: 'Crear lote en campo' })
-  async createFieldLot(@Param('fieldId', ParseUUIDPipe) fieldId: string, @Body() dto: any, @CurrentUser() u: any) {
+  async createFieldLot(@Param('fieldId', ParseUUIDPipe) fieldId: string, @Body() dto: AdminCreateLotDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId }, select: { id: true, companyId: true } });
     if (!field) throw new NotFoundException('Campo no encontrado');
@@ -861,7 +920,7 @@ export class AdminController {
 
   @Patch('lots/:id')
   @ApiOperation({ summary: 'Editar lote' })
-  async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+  async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateLotDto>, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -890,12 +949,17 @@ export class AdminController {
   @ApiOperation({ summary: 'Listar flota de empresa transportista' })
   async companyTrucks(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!this.svc.isPlatformAdmin(u)) {
+      const fullUser = await this.svc.resolveFullUser(u);
+      const myIds = await this.svc.getUserCompanyIds(fullUser);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('Sin acceso a esta empresa');
+    }
     return this.svc.listTrucksByCompany(companyId);
   }
 
   @Post('companies/:companyId/trucks')
   @ApiOperation({ summary: 'Crear vehículo' })
-  async createCompanyTruck(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: any, @CurrentUser() u: any) {
+  async createCompanyTruck(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: AdminCreateTruckDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -907,7 +971,7 @@ export class AdminController {
 
   @Patch('trucks/:id')
   @ApiOperation({ summary: 'Editar vehículo' })
-  async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: any, @CurrentUser() u: any) {
+  async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateTruckDto>, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
