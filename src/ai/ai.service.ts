@@ -1207,12 +1207,15 @@ MODIFICAR (solo admin/gerente):
         }
 
         case 'attach_document': {
+          console.log(`[AI] attach_document params:`, JSON.stringify(params));
+          console.log(`[AI] attach_document synUser.sub:`, synUser.sub);
           const doc = await this.freights.addDocument(params.freightId, {
             name: params.document.name,
             url: params.document.url,
             type: params.document.type,
             step: params.step || null,
           }, synUser);
+          console.log(`[AI] attach_document created doc:`, (doc as any).id);
           result = JSON.stringify({ status: 'attached', code: params.code, document: params.document.name, docId: (doc as any).id });
           break;
         }
@@ -1221,6 +1224,7 @@ MODIFICAR (solo admin/gerente):
           result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
     } catch (e) {
+      console.error(`[AI] confirm_action dispatch error (${tool}):`, e.message, e.stack?.slice(0, 300));
       this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`);
       result = JSON.stringify({ error: e.message || 'Error al ejecutar la accion.' });
     }
