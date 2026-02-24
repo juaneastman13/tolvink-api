@@ -16,6 +16,7 @@ const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
+const OWN_FLEET_SHORTCUT = 'own_fleet';
 
 // Model configuration — Claude Haiku 4.5
 // NOTE: Anthropic API supports temperature, top_p, top_k.
@@ -1314,8 +1315,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         }
 
         case 'attach_document': {
-          this.logger.log(`attach_document params: ${JSON.stringify(params)}`);
-          this.logger.log(`attach_document synUser.sub: ${synUser.sub}`);
+          this.logger.log(`attach_document freightId=${params.freightId} code=${params.code} doc=${params.document?.name}`);
           const doc = await this.freights.addDocument(params.freightId, {
             name: params.document.name,
             url: params.document.url,
@@ -1332,10 +1332,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
     } catch (e) {
       this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`, e.stack?.slice(0, 300));
-      result = JSON.stringify({ error: e.message || 'Error al ejecutar la accion.' });
+      // Don't clear pendingAction on error — user can retry
+      return JSON.stringify({ error: e.message || 'Error al ejecutar la accion. Intente nuevamente.' });
     }
 
-    // Clear pendingAction (and pendingDocument if attach_document) from session
+    // Clear pendingAction (and pendingDocument if attach_document) from session — only on success
     const { pendingAction: _pa, pendingDocument: _pd, ...cleanState } = state;
     const finalState = tool === 'attach_document' ? cleanState : { ...cleanState, ...(state.pendingDocument ? { pendingDocument: state.pendingDocument } : {}) };
     await this.prisma.whatsAppSession.update({
@@ -1800,7 +1801,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     // Resolve "own_fleet" shortcut to user's own company
     let transporterCompanyId = input.transporterCompanyId;
-    if (transporterCompanyId === 'own_fleet') {
+    if (transporterCompanyId === OWN_FLEET_SHORTCUT) {
       transporterCompanyId = user.activeCompanyId || user.companyId;
     }
 
@@ -1887,7 +1888,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     // Resolve "own_fleet" shortcut
     let transporterCompanyId = input.transporterCompanyId;
-    if (transporterCompanyId === 'own_fleet') {
+    if (transporterCompanyId === OWN_FLEET_SHORTCUT) {
       transporterCompanyId = user.activeCompanyId || user.companyId;
     }
 

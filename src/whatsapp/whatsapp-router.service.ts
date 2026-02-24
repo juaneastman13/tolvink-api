@@ -990,7 +990,7 @@ export class WhatsAppRouterService {
 
     // Determine primary company type from memberships
     let companyType = 'unknown';
-    let companyId = dbUser.activeCompanyId || dbUser.companyId || '';
+    let companyId = dbUser.activeCompanyId || dbUser.companyId || null;
 
     if (userTypes.length > 0) {
       companyType = userTypes[0];

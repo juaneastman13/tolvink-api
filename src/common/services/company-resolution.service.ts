@@ -73,7 +73,7 @@ export class CompanyResolutionService {
     const pm = memberships.find((m: any) =>
       m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer'),
     );
-    const result = pm?.companyId || (user.companyType === 'producer' && user.companyId ? user.companyId : user.companyId || '');
+    const result = pm?.companyId || (user.companyType === 'producer' && user.companyId ? user.companyId : user.companyId || null);
 
     cache?.set(key, result);
     return result;
@@ -89,7 +89,7 @@ export class CompanyResolutionService {
     const pm = memberships.find((m: any) =>
       m.company?.type === 'plant' || this.getCompanyTypes(m.company).includes('plant'),
     );
-    const result = pm?.companyId || user.companyId || '';
+    const result = pm?.companyId || user.companyId || null;
 
     cache?.set(key, result);
     return result;
