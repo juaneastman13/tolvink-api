@@ -424,7 +424,7 @@ export class FreightsService {
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
       this.logger.error(`assign() failed for freight ${freightId}: ${err.message}`, err.stack);
-      throw new BadRequestException(`Error al asignar transportista: ${err.message}`);
+      throw new BadRequestException('Error al asignar transportista. Intente nuevamente.');
     }
 
     // Notify transporter about assignment
@@ -1400,7 +1400,7 @@ export class FreightsService {
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
       this.logger.error(`assignMulti() failed for freight ${freightId}: ${err.message}`, err.stack);
-      throw new BadRequestException(`Error al asignar camiones: ${err.message}`);
+      throw new BadRequestException('Error al asignar camiones. Intente nuevamente.');
     }
 
     const notifiedCompanies = new Set<string>();

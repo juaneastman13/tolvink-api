@@ -160,7 +160,7 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() name?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() phone?: string;
-  @ApiProperty({ required: false }) @IsOptional() role?: string;
+  @ApiProperty({ required: false, enum: ['operator', 'admin', 'chofer'] }) @IsOptional() @IsIn(['operator', 'admin', 'chofer'], { message: 'Rol debe ser operator, admin o chofer' }) role?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
