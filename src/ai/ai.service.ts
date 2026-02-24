@@ -340,15 +340,17 @@ MODIFICAR (solo admin/gerente):
 - Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
 
-═══ ARCHIVOS Y DOCUMENTOS ═══
+═══ ARCHIVOS Y DOCUMENTOS (CRITICO) ═══
 
-- Cuando el usuario envia una imagen o documento por WhatsApp, se descarga y almacena automaticamente.
-- El sistema le informara: "[El usuario envio una imagen/documento: nombre.ext]"
-- SIEMPRE pregunte a que flete desea adjuntarlo. Ejemplo: "A que flete desea adjuntar este archivo?"
-- Cuando el usuario indique el codigo (ej: FLT-0042) → usar attach_document con el codigo.
-- attach_document prepara la accion para confirmacion → confirm_action para ejecutar.
-- Si el usuario envia archivo sin contexto de flete, pregunte antes de proceder.
-- Tipos soportados: imagenes (jpg, png) y documentos (pdf, etc).
+Cuando el mensaje contiene "[El usuario envio una imagen" o "[El usuario envio un documento":
+1. El archivo YA fue descargado y almacenado automaticamente.
+2. Pregunte: "A que flete desea adjuntar este archivo?"
+3. Cuando el usuario responda con un codigo de flete (ej: FLT-0042) → llamar attach_document con ese codigo.
+   IMPORTANTE: NO llamar list_freights ni ninguna otra herramienta. Usar DIRECTAMENTE attach_document.
+4. attach_document prepara la accion → se muestran botones CONFIRMAR/CANCELAR.
+5. Cuando confirme → llamar confirm_action.
+
+REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UNICA herramienta correcta es attach_document.
 
 ═══ ERRORES ═══
 
@@ -598,7 +600,7 @@ MODIFICAR (solo admin/gerente):
     // ---- Document attachment ----
     {
       name: 'attach_document',
-      description: 'Adjunta un archivo (foto/documento) enviado por WhatsApp a un flete. El archivo debe haberse enviado previamente en la conversacion. Siempre preguntar a que flete adjuntar. Prepara la accion para confirmacion.',
+      description: 'USAR CUANDO EL USUARIO INDICA UN CODIGO DE FLETE DESPUES DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el codigo. Prepara la accion para confirmacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
