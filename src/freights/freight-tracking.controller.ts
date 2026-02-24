@@ -4,10 +4,10 @@
 // =====================================================================
 
 import { Controller, Get, Param, NotFoundException } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 
-@SkipThrottle()
+@Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('track')
 export class FreightTrackingController {
   constructor(private prisma: PrismaService) {}

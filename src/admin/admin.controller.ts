@@ -489,6 +489,14 @@ export class AdminService {
 
   // Self-edit: any user can edit their own name/email/phone
   async updateSelf(userId: string, dto: { name?: string; email?: string; phone?: string }) {
+    if (dto.email) {
+      const dup = await this.prisma.user.findFirst({ where: { email: dto.email, id: { not: userId } } });
+      if (dup) throw new BadRequestException('Ya existe un usuario con ese email');
+    }
+    if (dto.phone) {
+      const dup = await this.prisma.user.findFirst({ where: { phone: dto.phone, id: { not: userId } } });
+      if (dup) throw new BadRequestException('Ya existe un usuario con ese teléfono');
+    }
     const data: any = {};
     if (dto.name) data.name = dto.name;
     if (dto.email) data.email = dto.email;

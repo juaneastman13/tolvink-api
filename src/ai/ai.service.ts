@@ -28,7 +28,12 @@ const MAX_RESPONSE_CHARS = 1500;   // Hard cap before truncation
 const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
 
 // Audio filler words common in River Plate Spanish voice transcriptions
-const AUDIO_FILLERS = /\b(eh+|ehmm*|emm*|mmm*|a+h+|este+|o sea|digamos|nada|viste|tipo|bue+no|dale|claro)\b[,.]?\s*/gi;
+const AUDIO_FILLERS = /\b(eh+|ehmm*|emm*|mmm*|a+h+|o sea|digamos|viste)\b[,.]?\s*/gi;
+
+// Per-user AI rate limiting: max 20 messages per 5 minutes
+const AI_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+const AI_RATE_LIMIT_MAX = 20;
+const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 
 @Injectable()
 export class AiService {
@@ -66,6 +71,25 @@ export class AiService {
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
     if (!this.client) {
       return { text: 'El asistente IA no esta disponible en este momento.' };
+    }
+
+    // Per-user rate limiting
+    const now = Date.now();
+    const userId = user.id || phone;
+    const rateEntry = aiRateMap.get(userId);
+    if (rateEntry && now < rateEntry.resetAt) {
+      if (rateEntry.count >= AI_RATE_LIMIT_MAX) {
+        return { text: 'Ha enviado muchos mensajes en poco tiempo. Por favor aguarde unos minutos.' };
+      }
+      rateEntry.count++;
+    } else {
+      aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
+    }
+    // Cleanup stale entries periodically
+    if (aiRateMap.size > 500) {
+      for (const [k, v] of aiRateMap) {
+        if (now > v.resetAt) aiRateMap.delete(k);
+      }
     }
 
     const synUser = this.buildSyntheticUser(user);
@@ -779,8 +803,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     try {
       switch (toolName) {
         case 'list_freights': return await this.toolListFreights(synUser, input);
-        case 'get_freight_detail': return await this.toolGetFreightDetail(input);
-        case 'search_plants': return await this.toolSearchPlants(user);
+        case 'get_freight_detail': return await this.toolGetFreightDetail(input, user);
+        case 'search_plants': return await this.toolSearchPlants(input, user);
         case 'list_lots': return await this.toolListLots(user);
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
         case 'confirm_create_freight': return await this.toolConfirmCreateFreight(user, synUser, session);
@@ -799,8 +823,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'create_user': return await this.toolCreateUser(input, user, session);
         case 'attach_document': return await this.toolAttachDocument(input, user, synUser, session);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
-        case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input);
-        case 'generate_report_link': return await this.toolGenerateReportLink(input);
+        case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input, user);
+        case 'generate_report_link': return await this.toolGenerateReportLink(input, user);
         case 'list_transporters': return await this.toolListTransporters(user);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
@@ -844,7 +868,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- get_freight_detail ----
-  private async toolGetFreightDetail(input: any): Promise<string> {
+  private async toolGetFreightDetail(input: any, user: any): Promise<string> {
     const freight = await this.prisma.freight.findFirst({
       where: { code: input.code.toUpperCase() },
       include: {
@@ -854,7 +878,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         assignments: {
           where: { status: { in: ['active', 'accepted'] } },
           include: {
-            transportCompany: { select: { name: true } },
+            transportCompany: { select: { id: true, name: true } },
             driver: { select: { name: true } },
             truck: { select: { plate: true } },
           },
@@ -864,6 +888,20 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     if (!freight) {
       return JSON.stringify({ error: `No se encontro el flete ${input.code}` });
+    }
+
+    // Access control: user must belong to one of the freight's companies
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [
+      freight.originCompanyId,
+      freight.destCompanyId,
+      ...freight.assignments.map(a => a.transportCompany?.id),
+    ].filter(Boolean);
+    const hasAccess = allUserCompanies.some(c => freightCompanies.includes(c));
+    if (!hasAccess) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${input.code}` });
     }
 
     const assignment = freight.assignments[0];
@@ -884,7 +922,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- search_plants ----
-  private async toolSearchPlants(user: any): Promise<string> {
+  private async toolSearchPlants(input: any, user: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No sos productor', plants: [] });
@@ -900,24 +938,29 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ plants: [], message: 'No tenes plantas habilitadas' });
     }
 
+    // Single query with include to avoid N+1
+    const nameFilter = input.query ? { contains: input.query, mode: 'insensitive' as const } : undefined;
     const companies = await this.prisma.company.findMany({
-      where: { id: { in: plantCompanyIds }, active: true },
-      select: { id: true, name: true },
+      where: {
+        id: { in: plantCompanyIds },
+        active: true,
+        ...(nameFilter ? { name: nameFilter } : {}),
+      },
+      select: {
+        id: true, name: true,
+        plants: {
+          where: { active: true },
+          select: { id: true, name: true },
+        },
+      },
       take: 10,
     });
 
-    const results: any[] = [];
-    for (const c of companies) {
-      const branches = await this.prisma.plant.findMany({
-        where: { companyId: c.id, active: true },
-        select: { id: true, name: true, address: true },
-      });
-      results.push({
-        companyId: c.id,
-        companyName: c.name,
-        branches: branches.map(b => ({ id: b.id, name: b.name })),
-      });
-    }
+    const results = companies.map(c => ({
+      companyId: c.id,
+      companyName: c.name,
+      branches: c.plants.map(b => ({ id: b.id, name: b.name })),
+    }));
 
     return JSON.stringify({ plants: results });
   }
@@ -1105,9 +1148,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         dto.overrideOriginLat = pending.customOriginLat;
         dto.overrideOriginLng = pending.customOriginLng;
       } else if (!dto.overrideOriginLat) {
-        // Default fallback coords (Montevideo) so freight creation doesn't fail
-        dto.overrideOriginLat = -34.0;
-        dto.overrideOriginLng = -56.0;
+        // No coordinates available — leave as null, freight service handles it
       }
     }
 
@@ -1589,16 +1630,24 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- generate_tracking_link ----
-  private async toolGenerateTrackingLink(input: any): Promise<string> {
+  private async toolGenerateTrackingLink(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
     if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
-      select: { id: true, status: true, shareToken: true, code: true },
+      select: { id: true, status: true, shareToken: true, code: true, originCompanyId: true, destCompanyId: true },
     });
 
     if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    if (!allUserCompanies.some(c => [freight.originCompanyId, freight.destCompanyId].includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
+    }
 
     if (['finished', 'canceled'].includes(freight.status)) {
       return JSON.stringify({ error: `El flete ${code} ya esta ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
@@ -1624,16 +1673,24 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- generate_report_link ----
-  private async toolGenerateReportLink(input: any): Promise<string> {
+  private async toolGenerateReportLink(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
     if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
-      select: { id: true, status: true, shareToken: true, code: true },
+      select: { id: true, status: true, shareToken: true, code: true, originCompanyId: true, destCompanyId: true },
     });
 
     if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    if (!allUserCompanies.some(c => [freight.originCompanyId, freight.destCompanyId].includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
+    }
 
     // Reuse existing token or generate new one
     let token = freight.shareToken;
@@ -1676,23 +1733,28 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
     }
 
-    const companies = await this.prisma.company.findMany({
-      where: { active: true },
-      select: { id: true, name: true, phone: true, type: true, types: true, hasInternalFleet: true },
+    const transporters = await this.prisma.company.findMany({
+      where: {
+        active: true,
+        OR: [
+          { type: 'transporter' },
+          { types: { array_contains: ['transporter'] } },
+        ],
+      },
+      select: { id: true, name: true, phone: true },
       orderBy: { name: 'asc' },
+      take: 15,
     });
-
-    const transporters = companies.filter(c =>
-      c.type === 'transporter' ||
-      (Array.isArray(c.types) && (c.types as string[]).includes('transporter')),
-    ).slice(0, 15);
 
     const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
 
     // Add own company as "Flota interna" at the top
-    if (hasOwnFleet && ownCompanyId) {
-      const ownCompany = companies.find(c => c.id === ownCompanyId);
-      if (ownCompany && !result.some(r => r.id === ownCompanyId)) {
+    if (hasOwnFleet && ownCompanyId && !result.some(r => r.id === ownCompanyId)) {
+      const ownCompany = await this.prisma.company.findUnique({
+        where: { id: ownCompanyId },
+        select: { id: true, name: true, phone: true },
+      });
+      if (ownCompany) {
         result.unshift({ id: ownCompany.id, name: `${ownCompany.name} (Flota interna)`, phone: ownCompany.phone, ownFleet: true });
       }
     }

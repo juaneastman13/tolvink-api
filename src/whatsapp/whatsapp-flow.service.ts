@@ -33,10 +33,17 @@ export class WhatsAppFlowService {
     user: any,
     initialData?: Record<string, any>,
   ) {
-    // Clean up old sessions for this user
-    await this.prisma.whatsAppSession.deleteMany({
-      where: { userId: user.id },
+    // Clean up old sessions for this user, but preserve sessions with active locationToken or pendingDocument
+    const existingSessions = await this.prisma.whatsAppSession.findMany({ where: { userId: user.id } });
+    const toDelete = existingSessions.filter(s => {
+      const st = (s.flowState as any) || {};
+      return !st.locationToken && !st.pendingDocument;
     });
+    if (toDelete.length > 0) {
+      await this.prisma.whatsAppSession.deleteMany({
+        where: { id: { in: toDelete.map(s => s.id) } },
+      });
+    }
 
     const expiresAt = new Date(Date.now() + FLOW_TIMEOUT_MINUTES * 60 * 1000);
 
@@ -103,8 +110,12 @@ export class WhatsAppFlowService {
           await this.endFlow(session.id);
       }
     } catch (e) {
-      this.logger.error(`Flow "${flowType}" step "${flowStep}" error: ${e.message}`);
-      await this.wa.sendText(phone, `Error: ${e.message}`);
+      this.logger.error(`Flow "${flowType}" step "${flowStep}" error: ${e.message}`, e.stack);
+      // Sanitize: never expose internal error details to user
+      const userMessage = e.status === 400 || e.response?.statusCode === 400
+        ? e.message
+        : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
+      await this.wa.sendText(phone, userMessage);
       await this.endFlow(session.id);
     }
   }

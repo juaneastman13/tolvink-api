@@ -116,13 +116,11 @@ export class FreightsService {
 
     const freight = await this.prisma.$transaction(async (tx) => {
       // Generate code inside transaction (fixes race condition)
-      const lastFreight = await tx.freight.findFirst({
-        orderBy: { code: 'desc' },
-        select: { code: true },
-      });
-      const lastNum = lastFreight?.code
-        ? parseInt(lastFreight.code.replace('FLT-', ''), 10) || 0
-        : 0;
+      // Use raw SQL MAX to get highest numeric code (avoids string ordering bug with FLT-9999 > FLT-10000)
+      const maxResult = await tx.$queryRaw<{ max_num: number | null }[]>`
+        SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) as max_num FROM freights WHERE code LIKE 'FLT-%'
+      `;
+      const lastNum = maxResult[0]?.max_num || 0;
       const code = `FLT-${String(lastNum + 1).padStart(4, '0')}`;
 
       const f = await tx.freight.create({
@@ -807,26 +805,22 @@ export class FreightsService {
   async confirmFinished(freightId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
-    if (freight.status !== FreightStatus.loaded) {
-      throw new BadRequestException(
-        `Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`,
-      );
-    }
-
     const ct = await this.resolveCompanyType(user);
 
     if (ct === 'transporter') {
-      if (freight.transporterFinishedConfirmedAt) {
-        throw new BadRequestException('El transportista ya confirmo la entrega');
-      }
-
-      const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
-
       const tFinishResult = await this.prisma.$transaction(async (tx) => {
+        // Read freight INSIDE transaction to prevent race condition
+        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+        if (freight.status !== FreightStatus.loaded) {
+          throw new BadRequestException(`Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`);
+        }
+        if (freight.transporterFinishedConfirmedAt) {
+          throw new BadRequestException('El transportista ya confirmo la entrega');
+        }
+
+        const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
         const data: any = { transporterFinishedConfirmedAt: new Date() };
         if (plantAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
@@ -848,34 +842,40 @@ export class FreightsService {
           },
         });
 
-        return updated;
+        return { updated, freight, plantAlsoConfirmed };
       });
 
       // Notify dest company (plant)
-      if (freight.destCompanyId) {
-        const nType = plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      if (tFinishResult.freight.destCompanyId) {
+        const nType = tFinishResult.plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
         this.notifications.notifyCompany(
-          freight.destCompanyId, nType,
-          plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
-          `${freight.code}: el transportista confirmó la entrega`,
+          tFinishResult.freight.destCompanyId, nType,
+          tFinishResult.plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
+          `${tFinishResult.freight.code}: el transportista confirmó la entrega`,
           freightId, user.sub,
         ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: tFinishResult.freight.code, status: tFinishResult.plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-      return tFinishResult;
+      return tFinishResult.updated;
     }
 
     if (ct === 'plant') {
-      if (freight.plantFinishedConfirmedAt) {
-        throw new BadRequestException('La planta ya confirmo la recepcion');
-      }
-
-      const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
-
       const pFinishResult = await this.prisma.$transaction(async (tx) => {
+        // Read freight INSIDE transaction to prevent race condition
+        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+        if (freight.status !== FreightStatus.loaded) {
+          throw new BadRequestException(`Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`);
+        }
+        if (freight.plantFinishedConfirmedAt) {
+          throw new BadRequestException('La planta ya confirmo la recepcion');
+        }
+
+        const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
         const data: any = { plantFinishedConfirmedAt: new Date() };
         if (transporterAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'plant');
@@ -897,30 +897,29 @@ export class FreightsService {
           },
         });
 
-        return updated;
+        return { updated, freight, transporterAlsoConfirmed };
       });
 
       // Notify origin company + transporter
-      const finishNotifyIds = [freight.originCompanyId].filter(Boolean) as string[];
-      // Also get transporter company from assignment
+      const finishNotifyIds = [pFinishResult.freight.originCompanyId].filter(Boolean) as string[];
       const activeAssignment = await this.prisma.freightAssignment.findFirst({
         where: { freightId, status: { in: ['active', 'accepted'] } },
       });
       if (activeAssignment?.transportCompanyId) finishNotifyIds.push(activeAssignment.transportCompanyId);
-      const nType = transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      const nType = pFinishResult.transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
       for (const cid of finishNotifyIds) {
         this.notifications.notifyCompany(
           cid, nType,
-          transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
-          `${freight.code}: la planta confirmó la recepción`,
+          pFinishResult.transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
+          `${pFinishResult.freight.code}: la planta confirmó la recepción`,
           freightId, user.sub,
         ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: pFinishResult.freight.code, status: pFinishResult.transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-      return pFinishResult;
+      return pFinishResult.updated;
     }
 
     throw new ForbiddenException('Solo transportista o planta pueden confirmar finalizacion');

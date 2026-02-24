@@ -519,8 +519,11 @@ export class WhatsAppRouterService {
         }
       }
     } catch (e) {
-      this.logger.error(`Button action "${action}" failed: ${e.message}`);
-      await this.wa.sendText(phone, `Error: ${e.message}`);
+      this.logger.error(`Button action "${action}" failed: ${e.message}`, e.stack);
+      const userMessage = e.status === 400 || e.response?.statusCode === 400
+        ? e.message
+        : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
+      await this.wa.sendText(phone, userMessage);
     }
   }
 

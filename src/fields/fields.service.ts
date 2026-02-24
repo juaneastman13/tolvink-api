@@ -98,8 +98,8 @@ export class FieldsService {
         companyId,
         fieldId: fieldId,
         hectares: dto.hectares || null,
-        lat: lat || 0,
-        lng: lng || 0,
+        lat: lat || null,
+        lng: lng || null,
       },
     });
   }

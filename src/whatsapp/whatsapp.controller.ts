@@ -4,7 +4,7 @@
 // =====================================================================
 
 import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import * as crypto from 'crypto';
@@ -255,8 +255,8 @@ export class WhatsAppController {
 
     const rawBody = (req as any).rawBody;
     if (!rawBody) {
-      this.logger.warn('Raw body not available for signature verification');
-      return true; // Allow if raw body not captured (graceful degradation)
+      this.logger.warn('Raw body not available for signature verification — rejecting');
+      return false;
     }
 
     const expected = 'sha256=' + crypto
@@ -316,53 +316,44 @@ export class WhatsAppController {
    * Public endpoint — validated only by the one-time token.
    */
   @Post('save-location')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(200)
   async saveLocation(@Body() body: { token: string; lat: number; lng: number; name?: string; address?: string }) {
     if (!body.token || body.lat == null || body.lng == null) {
       throw new BadRequestException('token, lat, lng required');
     }
 
-    // Find session with this token — search ALL sessions (including recently expired)
-    const sessions = await this.prisma.whatsAppSession.findMany({
-      where: {
-        expiresAt: { gt: new Date(Date.now() - 60 * 60 * 1000) }, // include up to 1h expired
-      },
-    });
+    // Find session with this token using PostgreSQL JSON containment (indexed)
+    const sessions = await this.prisma.$queryRaw<any[]>`
+      SELECT id, flow_state FROM whatsapp_sessions
+      WHERE flow_state::jsonb @> ${JSON.stringify({ locationToken: { token: body.token } })}::jsonb
+      AND expires_at > ${new Date(Date.now() - 60 * 60 * 1000)}
+      LIMIT 1
+    `;
 
-    console.log(`[WA-LOCATION] save-location token=${body.token}, sessions found=${sessions.length}`);
-    // Debug: log sessions that have any locationToken
-    for (const s of sessions) {
-      const st = (s.flowState as any) || {};
-      if (st.locationToken) {
-        console.log(`[WA-LOCATION] session ${s.id} has locationToken=${st.locationToken.token}, match=${st.locationToken.token === body.token}`);
-      }
-    }
-
-    const session = sessions.find((s: any) => {
-      const state = (s.flowState as any) || {};
-      return state.locationToken?.token === body.token;
-    });
-
+    const session = sessions[0];
     if (!session) {
-      console.log(`[WA-LOCATION] TOKEN NOT FOUND — searched ${sessions.length} sessions for token=${body.token}`);
+      this.logger.warn(`save-location: token not found — ${body.token}`);
       throw new NotFoundException('Token invalido o expirado');
     }
 
-    // Check token age (max 30 minutes — extended for mobile users)
-    const state = (session.flowState as any) || {};
+    // Check token age (max 30 minutes)
+    const state = session.flow_state || {};
     const tokenCreated = new Date(state.locationToken.createdAt).getTime();
     const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
-    console.log(`[WA-LOCATION] Token found in session ${session.id}, age=${tokenAgeMin.toFixed(1)} min`);
     if (tokenAgeMin > 30) {
       throw new BadRequestException('Token expirado (max 30 min)');
     }
 
-    // Save location and clear token
+    // Re-read full session via Prisma for safe update
+    const fullSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const fullState = (fullSession?.flowState as any) || {};
+
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
         flowState: {
-          ...state,
+          ...fullState,
           lastLocation: {
             lat: body.lat,
             lng: body.lng,

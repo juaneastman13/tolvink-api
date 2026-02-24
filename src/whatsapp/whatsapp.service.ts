@@ -3,7 +3,7 @@
 // Sends messages with native interactive buttons and lists
 // =====================================================================
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 
@@ -26,11 +26,12 @@ export interface WAListSection {
 }
 
 @Injectable()
-export class WhatsAppService {
+export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppService.name);
   private readonly phoneNumberId: string | undefined;
   private readonly accessToken: string | undefined;
   private readonly enabled: boolean;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private config: ConfigService,
@@ -44,6 +45,35 @@ export class WhatsAppService {
       this.logger.log(`WhatsApp (Meta Cloud API) configured — phone ID: ${this.phoneNumberId}`);
     } else {
       this.logger.warn('WhatsApp not configured — WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_ACCESS_TOKEN missing');
+    }
+  }
+
+  onModuleInit() {
+    // Cleanup expired sessions and refresh tokens every 30 minutes
+    this.cleanupInterval = setInterval(() => this.cleanupExpired(), 30 * 60 * 1000);
+    this.logger.log('Session/token cleanup scheduler started (every 30 min)');
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+  }
+
+  private async cleanupExpired() {
+    try {
+      const now = new Date();
+      // Delete expired WhatsApp sessions (older than 2 hours past expiry)
+      const sessResult = await this.prisma.whatsAppSession.deleteMany({
+        where: { expiresAt: { lt: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
+      });
+      // Delete expired refresh tokens
+      const tokResult = await this.prisma.refreshToken.deleteMany({
+        where: { expiresAt: { lt: now } },
+      });
+      if (sessResult.count > 0 || tokResult.count > 0) {
+        this.logger.log(`Cleanup: ${sessResult.count} expired sessions, ${tokResult.count} expired tokens deleted`);
+      }
+    } catch (e) {
+      this.logger.error(`Cleanup failed: ${e.message}`);
     }
   }
 
