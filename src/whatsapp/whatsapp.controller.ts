@@ -206,6 +206,27 @@ export class WhatsAppController {
           },
         };
 
+      case 'image':
+        return {
+          type: 'image',
+          payload: {
+            mediaId: message.image?.id,
+            mimeType: message.image?.mime_type || 'image/jpeg',
+            caption: message.image?.caption || '',
+          },
+        };
+
+      case 'document':
+        return {
+          type: 'document',
+          payload: {
+            mediaId: message.document?.id,
+            mimeType: message.document?.mime_type || 'application/pdf',
+            filename: message.document?.filename || 'documento',
+            caption: message.document?.caption || '',
+          },
+        };
+
       default:
         return { type: message.type || 'unknown', payload: { body: '' } };
     }

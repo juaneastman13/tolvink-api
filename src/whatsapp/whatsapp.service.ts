@@ -192,6 +192,34 @@ export class WhatsAppService {
     return { buffer, mimeType };
   }
 
+  // ======================== UPLOAD TO SUPABASE STORAGE =====================
+
+  async uploadToStorage(buffer: Buffer, path: string, mimeType: string): Promise<string> {
+    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+    const supabaseKey = this.config.get<string>('SUPABASE_SERVICE_KEY');
+
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY)');
+    }
+
+    const bucket = 'freight-docs';
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/${bucket}/${path}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${supabaseKey}`,
+        'Content-Type': mimeType,
+      },
+      body: new Uint8Array(buffer),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(`Storage upload failed (${res.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    return `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`;
+  }
+
   // ======================== INTERNAL: SEND VIA META API ===================
 
   private async send(phone: string, payload: any): Promise<string | null> {

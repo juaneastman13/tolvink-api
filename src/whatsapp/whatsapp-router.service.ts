@@ -118,8 +118,10 @@ export class WhatsAppRouterService {
         await this.handleLocation(phone, user, payload);
       } else if (type === 'audio') {
         await this.handleAudio(phone, user, payload);
+      } else if (type === 'image' || type === 'document') {
+        await this.handleMedia(phone, user, type, payload);
       } else {
-        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio y ubicaciones. Escriba "menu" para ver las opciones disponibles.');
+        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio, ubicaciones e imagenes/documentos. Escriba "menu" para ver las opciones disponibles.');
       }
     } catch (e) {
       this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
@@ -348,6 +350,80 @@ export class WhatsAppRouterService {
     } catch (e) {
       this.logger.error(`Audio processing error: ${e.message}`, e.stack?.slice(0, 300));
       await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envie un mensaje de texto.');
+    }
+  }
+
+  // ======================== MEDIA HANDLER (IMAGE / DOCUMENT) =============
+
+  private async handleMedia(phone: string, user: any, type: string, payload: any) {
+    try {
+      const { mediaId, mimeType } = payload;
+      const filename = payload.filename || '';
+      const caption = payload.caption || '';
+
+      // 1. Download from Meta API
+      const { buffer } = await this.wa.downloadMedia(mediaId);
+      this.logger.log(`Media downloaded: type=${type}, mime=${mimeType}, size=${buffer.length}`);
+
+      // Size guard (16 MB WhatsApp limit)
+      if (buffer.length > 16 * 1024 * 1024) {
+        await this.wa.sendText(phone, 'El archivo es demasiado grande. El limite es 16 MB.');
+        return;
+      }
+
+      // 2. Upload to Supabase Storage
+      const extMap: Record<string, string> = {
+        'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
+        'application/pdf': '.pdf', 'application/msword': '.doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+      };
+      const ext = extMap[mimeType] || (filename ? `.${filename.split('.').pop()}` : '.bin');
+      const storagePath = `whatsapp/${user.id}/${Date.now()}${ext}`;
+
+      const publicUrl = await this.wa.uploadToStorage(buffer, storagePath, mimeType);
+      this.logger.log(`Media uploaded to storage: ${publicUrl}`);
+
+      // 3. Determine display name
+      const displayName = filename || `${type === 'image' ? 'foto' : 'documento'}${ext}`;
+      const docType = type === 'image' ? 'photo' : 'document';
+
+      // 4. Store pendingDocument in AI session
+      let session = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (!session) {
+        session = await this.prisma.whatsAppSession.create({
+          data: {
+            userId: user.id,
+            phone: this.wa.normalizePhone(phone),
+            flowType: null,
+            flowStep: '0',
+            flowState: {},
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+          },
+        });
+      }
+
+      const state = (session.flowState as any) || {};
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: {
+          flowState: { ...state, pendingDocument: { url: publicUrl, name: displayName, type: docType } },
+        },
+      });
+
+      // 5. Forward to AI with context
+      const contextMsg = caption
+        ? `[El usuario envio ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${caption}`
+        : `[El usuario envio ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}]`;
+
+      await this.handleAiChat(phone, user, contextMsg);
+    } catch (e) {
+      this.logger.error(`Media processing error: ${e.message}`, e.stack?.slice(0, 300));
+      await this.wa.sendText(phone, 'No fue posible procesar el archivo. Por favor, intente nuevamente.');
     }
   }
 

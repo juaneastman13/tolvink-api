@@ -276,6 +276,7 @@ Herramientas que requieren confirmacion via confirm_action:
 - assign_transporter, assign_truck_to_trip
 - update_user_role, deactivate_user
 - create_field, create_lot, create_truck, create_user
+- attach_document
 
 Excepcion — patron propio (NO usan confirm_action):
 - prepare_freight → usa confirm_create_freight
@@ -338,6 +339,16 @@ MODIFICAR (solo admin/gerente):
 - deactivate_user → prepara desactivacion para confirmacion.
 - Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
+
+═══ ARCHIVOS Y DOCUMENTOS ═══
+
+- Cuando el usuario envia una imagen o documento por WhatsApp, se descarga y almacena automaticamente.
+- El sistema le informara: "[El usuario envio una imagen/documento: nombre.ext]"
+- SIEMPRE pregunte a que flete desea adjuntarlo. Ejemplo: "A que flete desea adjuntar este archivo?"
+- Cuando el usuario indique el codigo (ej: FLT-0042) → usar attach_document con el codigo.
+- attach_document prepara la accion para confirmacion → confirm_action para ejecutar.
+- Si el usuario envia archivo sin contexto de flete, pregunte antes de proceder.
+- Tipos soportados: imagenes (jpg, png) y documentos (pdf, etc).
 
 ═══ ERRORES ═══
 
@@ -584,6 +595,19 @@ MODIFICAR (solo admin/gerente):
         required: ['name', 'email', 'password'],
       },
     },
+    // ---- Document attachment ----
+    {
+      name: 'attach_document',
+      description: 'Adjunta un archivo (foto/documento) enviado por WhatsApp a un flete. El archivo debe haberse enviado previamente en la conversacion. Siempre preguntar a que flete adjuntar. Prepara la accion para confirmacion.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+          step: { type: 'string', enum: ['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'], description: 'Etapa del documento (opcional)' },
+        },
+        required: ['code'],
+      },
+    },
     // ---- Location picker ----
     {
       name: 'generate_location_link',
@@ -731,6 +755,7 @@ MODIFICAR (solo admin/gerente):
         case 'list_trucks': return await this.toolListTrucks(user);
         case 'create_truck': return await this.toolCreateTruck(input, user, session);
         case 'create_user': return await this.toolCreateUser(input, user, session);
+        case 'attach_document': return await this.toolAttachDocument(input, user, synUser, session);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
         case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input);
         case 'generate_report_link': return await this.toolGenerateReportLink(input);
@@ -1181,6 +1206,17 @@ MODIFICAR (solo admin/gerente):
           break;
         }
 
+        case 'attach_document': {
+          const doc = await this.freights.addDocument(params.freightId, {
+            name: params.document.name,
+            url: params.document.url,
+            type: params.document.type,
+            step: params.step || null,
+          }, synUser);
+          result = JSON.stringify({ status: 'attached', code: params.code, document: params.document.name, docId: (doc as any).id });
+          break;
+        }
+
         default:
           result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
@@ -1189,11 +1225,12 @@ MODIFICAR (solo admin/gerente):
       result = JSON.stringify({ error: e.message || 'Error al ejecutar la accion.' });
     }
 
-    // Clear pendingAction from session
-    const { pendingAction, ...cleanState } = state;
+    // Clear pendingAction (and pendingDocument if attach_document) from session
+    const { pendingAction: _pa, pendingDocument: _pd, ...cleanState } = state;
+    const finalState = tool === 'attach_document' ? cleanState : { ...cleanState, ...(state.pendingDocument ? { pendingDocument: state.pendingDocument } : {}) };
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
-      data: { flowState: cleanState },
+      data: { flowState: finalState },
     });
 
     return result;
@@ -1407,6 +1444,32 @@ MODIFICAR (solo admin/gerente):
 
     const summary = `Crear usuario "${input.name}" (${input.email}) con rol ${inputRole}`;
     return this.stageAction(session, 'create_user', { dto, roleLabel: inputRole }, summary);
+  }
+
+  // ======================== DOCUMENT ATTACHMENT TOOL =======================
+
+  // ---- attach_document ----
+  private async toolAttachDocument(input: any, user: any, synUser: any, session: any): Promise<string> {
+    // Read pendingDocument from session
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const state = (freshSession?.flowState as any) || {};
+    const pending = state.pendingDocument;
+
+    if (!pending) {
+      return JSON.stringify({ error: 'No hay archivo pendiente. El usuario debe enviar una imagen o documento primero.' });
+    }
+
+    const freight = await this.resolveFreight(input.code);
+    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+
+    const summary = `Adjuntar ${pending.type === 'photo' ? 'imagen' : 'documento'} "${pending.name}" a flete ${freight.code}`;
+
+    return this.stageAction(session, 'attach_document', {
+      freightId: freight.id,
+      code: freight.code,
+      document: pending,
+      step: input.step || null,
+    }, summary);
   }
 
   // ======================== LOCATION PICKER TOOL ==========================
