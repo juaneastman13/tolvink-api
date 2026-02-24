@@ -331,18 +331,22 @@ INFORME PDF:
 - Disponible para cualquier flete, incluso finalizados o cancelados.
 - El link no expira y puede compartirse.
 
-═══ ASIGNAR TRANSPORTISTA (PLANTAS Y PRODUCTORES) ═══
+═══ ASIGNAR TRANSPORTISTA ═══
 
-1. El usuario de planta o productor solicita asignar transportista a un flete.
-2. Utilizar list_transporters para presentar opciones disponibles.
-   - Productores con flota interna veran su empresa como "Flota interna" en la lista.
-3. Al seleccionar → assign_transporter prepara la accion y presenta resumen.
-4. Cuando confirme → llamar confirm_action.
-5. Opcional: list_trucks y list_drivers para asignar camion/chofer especifico.
-6. assign_truck_to_trip para modificar camion de un viaje existente.
-7. Para fletes multi-camion, indicar que utilicen la aplicacion web.
+FLOTA INTERNA (PRIORIDAD): Si el encabezado USUARIO indica "FLOTA INTERNA", el usuario tiene flota propia.
+→ Usar assign_transporter con transporterCompanyId="own_fleet" DIRECTAMENTE.
+→ NO llamar list_transporters. NO preguntar cual empresa.
+→ Solo preguntar el codigo del flete si no fue indicado.
 
-FLOTA INTERNA: Si el productor tiene flota propia (hasInternalFleet), puede autoasignarse como transportista seleccionando su propia empresa de la lista.
+SIN FLOTA INTERNA:
+1. Utilizar list_transporters para presentar opciones disponibles.
+2. Al seleccionar → assign_transporter prepara la accion y presenta resumen.
+3. Cuando confirme → llamar confirm_action.
+
+OPCIONALES:
+- list_trucks y list_drivers para asignar camion/chofer especifico.
+- assign_truck_to_trip para modificar camion de un viaje existente.
+- Para fletes multi-camion, indicar que utilicen la aplicacion web.
 
 ═══ GESTIONAR EQUIPO ═══
 
@@ -1614,6 +1618,19 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden listar transportistas.' });
     }
 
+    // Check if user has own fleet — if so, tell AI to use own_fleet directly
+    const ownCompanyId = user.activeCompanyId || user.companyId;
+    let hasOwnFleet = false;
+    if (ownCompanyId) {
+      const ownCompany = await this.prisma.company.findUnique({
+        where: { id: ownCompanyId },
+        select: { name: true, hasInternalFleet: true },
+      });
+      if (ownCompany?.hasInternalFleet) {
+        hasOwnFleet = true;
+      }
+    }
+
     const companies = await this.prisma.company.findMany({
       where: { active: true },
       select: { id: true, name: true, phone: true, type: true, types: true, hasInternalFleet: true },
@@ -1627,11 +1644,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
 
-    // Add own company as "Flota interna" if hasInternalFleet (works for any company type)
-    const ownCompanyId = user.activeCompanyId || user.companyId;
-    if (ownCompanyId) {
+    // Add own company as "Flota interna" at the top
+    if (hasOwnFleet && ownCompanyId) {
       const ownCompany = companies.find(c => c.id === ownCompanyId);
-      if (ownCompany?.hasInternalFleet && !result.some(r => r.id === ownCompanyId)) {
+      if (ownCompany && !result.some(r => r.id === ownCompanyId)) {
         result.unshift({ id: ownCompany.id, name: `${ownCompany.name} (Flota interna)`, phone: ownCompany.phone, ownFleet: true });
       }
     }
@@ -1640,10 +1656,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ total: 0, transporters: [], message: 'No hay transportistas disponibles.' });
     }
 
-    return JSON.stringify({
+    const response: any = {
       total: result.length,
       transporters: result,
-    });
+    };
+
+    // Strong hint for AI when user has own fleet
+    if (hasOwnFleet) {
+      response.NOTA = 'Este usuario tiene FLOTA INTERNA. Para asignar su propia flota, llamar assign_transporter con transporterCompanyId="own_fleet". No es necesario preguntar al usuario cual empresa.';
+    }
+
+    return JSON.stringify(response);
   }
 
   // ---- assign_transporter ----
