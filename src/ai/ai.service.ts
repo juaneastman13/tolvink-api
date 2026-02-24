@@ -89,6 +89,12 @@ export class AiService {
       }
     }
 
+    // Pending document: inject context so AI knows to use attach_document
+    if (state.pendingDocument) {
+      const doc = state.pendingDocument;
+      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${doc.name}" (${doc.type}). Si el usuario indica un codigo de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+    }
+
     // Add user message
     aiMessages.push({ role: 'user', content: messageToSend });
 
