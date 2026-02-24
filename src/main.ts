@@ -36,7 +36,7 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
-    rawBody: true, // Capture raw body for HMAC-SHA256 signature verification (WhatsApp webhook)
+    bodyParser: false, // Disable built-in parser — we configure our own below
   });
 
   // Security
@@ -49,8 +49,11 @@ async function bootstrap() {
   // Gzip compression — ~60-70% bandwidth reduction on JSON responses
   app.use(compression());
 
-  // Body size limits (prevent DoS with large payloads)
-  app.use(bodyParser.json({ limit: '10mb' }));
+  // Body parsing with raw body capture for WhatsApp HMAC-SHA256 verification
+  app.use(bodyParser.json({
+    limit: '10mb',
+    verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; },
+  }));
   app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
   // Request-scoped cache (AsyncLocalStorage) — must be before guards/interceptors
