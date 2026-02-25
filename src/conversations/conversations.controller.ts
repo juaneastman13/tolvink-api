@@ -3,7 +3,7 @@
 // User-level tracking, mark-read, freight visibility for all parties
 // =====================================================================
 
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
@@ -41,21 +41,31 @@ interface ParticipantsCache {
 const participantsCache = new Map<string, ParticipantsCache>();
 const PARTICIPANTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-// Periodic cleanup: evict stale entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of participantsCache) {
-    if (now - entry.timestamp > PARTICIPANTS_CACHE_TTL_MS) participantsCache.delete(key);
-  }
-}, PARTICIPANTS_CACHE_TTL_MS);
-
 @Injectable()
-export class ConversationsService {
+export class ConversationsService implements OnModuleInit, OnModuleDestroy {
+  private cacheCleanupInterval: ReturnType<typeof setInterval>;
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
     private sse: SseService,
   ) {}
+
+  onModuleInit() {
+    // Periodic cleanup: evict stale entries every 5 minutes
+    this.cacheCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of participantsCache) {
+        if (now - entry.timestamp > PARTICIPANTS_CACHE_TTL_MS) participantsCache.delete(key);
+      }
+    }, PARTICIPANTS_CACHE_TTL_MS);
+  }
+
+  onModuleDestroy() {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+    }
+  }
 
   private async resolveAllCompanyIds(user: any): Promise<string[]> {
     return this.companyRes.resolveAllCompanyIds(user);

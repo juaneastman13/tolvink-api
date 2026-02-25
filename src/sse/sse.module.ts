@@ -1,4 +1,4 @@
-import { Module, Global, OnModuleInit } from '@nestjs/common';
+import { Module, Global, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from './sse.service';
@@ -19,11 +19,19 @@ import { PrismaService } from '../database/prisma.service';
   providers: [SseService, PrismaService],
   exports: [SseService],
 })
-export class SseModule implements OnModuleInit {
+export class SseModule implements OnModuleInit, OnModuleDestroy {
+  private heartbeatInterval: ReturnType<typeof setInterval>;
+
   constructor(private sseService: SseService) {}
 
   onModuleInit() {
     // Heartbeat every 30 seconds to keep connections alive
-    setInterval(() => this.sseService.heartbeat(), 30000);
+    this.heartbeatInterval = setInterval(() => this.sseService.heartbeat(), 30000);
+  }
+
+  onModuleDestroy() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
   }
 }

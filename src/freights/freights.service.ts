@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
@@ -8,7 +8,7 @@ import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreight
 import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/client';
 
 @Injectable()
-export class FreightsService {
+export class FreightsService implements OnModuleInit {
   private readonly logger = new Logger(FreightsService.name);
 
   constructor(
@@ -18,6 +18,23 @@ export class FreightsService {
     private notifications: NotificationService,
     private sse: SseService,
   ) {}
+
+  async onModuleInit() {
+    // Create the freight_code_seq sequence once at startup (not on every create())
+    try {
+      await this.prisma.$executeRaw`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'freight_code_seq') THEN
+            CREATE SEQUENCE freight_code_seq;
+            PERFORM setval('freight_code_seq', COALESCE((SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) FROM freights WHERE code LIKE 'FLT-%'), 0));
+          END IF;
+        END $$;
+      `;
+      this.logger.log('freight_code_seq sequence ensured');
+    } catch (e) {
+      this.logger.error(`Failed to ensure freight_code_seq: ${e.message}`);
+    }
+  }
 
   // Delegate to shared CompanyResolutionService
   private resolveProducerCompanyId(user: any) { return this.companyRes.resolveProducerCompanyId(user); }
@@ -128,16 +145,7 @@ export class FreightsService {
     }
 
     const freight = await this.prisma.$transaction(async (tx) => {
-      // Generate code inside transaction using PostgreSQL sequence (O(1) instead of O(n) full scan)
-      // Create sequence on first use, seeded from current MAX code
-      await tx.$executeRaw`
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'freight_code_seq') THEN
-            CREATE SEQUENCE freight_code_seq;
-            PERFORM setval('freight_code_seq', COALESCE((SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) FROM freights WHERE code LIKE 'FLT-%'), 0));
-          END IF;
-        END $$;
-      `;
+      // Generate code using PostgreSQL sequence (created in onModuleInit)
       const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`SELECT nextval('freight_code_seq')`;
       const nextNum = Number(seqResult[0].nextval);
       const code = `FLT-${String(nextNum).padStart(4, '0')}`;
@@ -479,13 +487,6 @@ export class FreightsService {
   // ======================== RESPOND (accept/reject) ===================
 
   async respond(freightId: string, dto: RespondAssignmentDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: 'active' } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
     // Chofer can only respond to their own assigned freights
     if (user.role === 'chofer') {
       await this.assertDriverAccess(freightId, user.sub);
@@ -497,10 +498,6 @@ export class FreightsService {
     }
 
     const allIds = await this.resolveAllCompanyIds(user);
-    const assignment = freight.assignments[0];
-    if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
-      throw new ForbiddenException('Tu empresa no esta asignada a este flete');
-    }
 
     if (dto.action === 'rejected') {
       if (!dto.reason || dto.reason.trim().length === 0) {
@@ -508,6 +505,19 @@ export class FreightsService {
       }
 
       const result = await this.prisma.$transaction(async (tx) => {
+        // Read freight INSIDE transaction to prevent TOCTOU race
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { assignments: { where: { status: 'active' } } },
+        });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+
+        const assignment = freight.assignments[0];
+        if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
+          throw new ForbiddenException('Tu empresa no esta asignada a este flete');
+        }
+
         await tx.freightAssignment.update({
           where: { id: assignment.id },
           data: { status: AssignmentStatus.rejected, reason: dto.reason },
@@ -530,23 +540,36 @@ export class FreightsService {
           },
         });
 
-        return updated;
+        return { updated, freight };
       });
 
       // Notify origin company about rejection
-      if (freight.originCompanyId) {
+      if (result.freight.originCompanyId) {
         this.notifications.notifyCompany(
-          freight.originCompanyId, NotificationType.freight_rejected,
+          result.freight.originCompanyId, NotificationType.freight_rejected,
           'Flete rechazado',
-          `${freight.code}: ${dto.reason}`,
+          `${result.freight.code}: ${dto.reason}`,
           freightId, user.sub,
         ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'pending_assignment' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'pending_assignment' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-      return result;
+      return result.updated;
+    }
+
+    // For accept path, also read inside transaction below
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: 'active' } } },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+
+    const assignment = freight.assignments[0];
+    if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
+      throw new ForbiddenException('Tu empresa no esta asignada a este flete');
     }
 
     this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
@@ -1007,25 +1030,27 @@ export class FreightsService {
   async cancel(freightId: string, dto: CancelFreightDto, user: any) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden cancelar fletes');
 
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-
-    if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
-      throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
-    }
-
     const cancelCt = await this.resolveCompanyType(user);
-    this.stateMachine.validateTransition(
-      freight.status,
-      FreightStatus.canceled,
-      cancelCt,
-      dto.reason,
-    );
 
     const cancelResult = await this.prisma.$transaction(async (tx) => {
+      // Read freight INSIDE transaction to prevent TOCTOU race
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
+        throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
+      }
+
+      this.stateMachine.validateTransition(
+        freight.status,
+        FreightStatus.canceled,
+        cancelCt,
+        dto.reason,
+      );
+
       await tx.freightAssignment.updateMany({
         where: { freightId, status: { in: ['active', 'accepted'] } },
         data: { status: AssignmentStatus.canceled, reason: 'Flete cancelado' },
@@ -1048,29 +1073,29 @@ export class FreightsService {
         },
       });
 
-      return updated;
+      return { updated, freight };
     });
 
     // Notify all parties about cancellation
     const cancelNotifyIds = new Set<string>();
-    if (freight.originCompanyId) cancelNotifyIds.add(freight.originCompanyId);
-    if (freight.destCompanyId) cancelNotifyIds.add(freight.destCompanyId);
-    for (const a of (freight as any).assignments || []) {
+    if (cancelResult.freight.originCompanyId) cancelNotifyIds.add(cancelResult.freight.originCompanyId);
+    if (cancelResult.freight.destCompanyId) cancelNotifyIds.add(cancelResult.freight.destCompanyId);
+    for (const a of (cancelResult.freight as any).assignments || []) {
       if (a.transportCompanyId) cancelNotifyIds.add(a.transportCompanyId);
     }
     for (const cid of cancelNotifyIds) {
       this.notifications.notifyCompany(
         cid, NotificationType.freight_canceled,
         'Flete cancelado',
-        `${freight.code}: ${dto.reason}`,
+        `${cancelResult.freight.code}: ${dto.reason}`,
         freightId, user.sub,
       ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'canceled' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: cancelResult.freight.code, status: 'canceled' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-    return cancelResult;
+    return cancelResult.updated;
   }
 
   // ======================== AUTHORIZE (plant approves own fleet) =======
@@ -1126,9 +1151,9 @@ export class FreightsService {
       throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
     }
     if (freight.requestedById !== user.sub) {
-      // Also allow users from the origin or dest company
-      const userCompanyId = user.companyId;
-      if (userCompanyId !== freight.originCompanyId && userCompanyId !== freight.destCompanyId) {
+      // Also allow users from the origin or dest company (multi-company aware)
+      const allIds = await this.resolveAllCompanyIds(user);
+      if (!allIds.includes(freight.originCompanyId) && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
         throw new ForbiddenException('Solo el solicitante o su empresa pueden editar');
       }
     }
@@ -1564,20 +1589,24 @@ export class FreightsService {
       throw new BadRequestException('No hay cambios para aplicar');
     }
 
-    const updated = await (this.prisma.freightAssignment as any).update({
-      where: { id: assignmentId },
-      data: updateData,
-      include: { transportCompany: { select: { id: true, name: true } }, truck: true, driver: { select: { id: true, name: true, phone: true } } },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await (tx.freightAssignment as any).update({
+        where: { id: assignmentId },
+        data: updateData,
+        include: { transportCompany: { select: { id: true, name: true } }, truck: true, driver: { select: { id: true, name: true, phone: true } } },
+      });
 
-    await this.prisma.auditLog.create({
-      data: {
-        entityType: 'freight',
-        entityId: freightId,
-        action: 'assignment_updated',
-        userId: user.sub,
-        metadata: { assignmentId, changes: updateData },
-      },
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight',
+          entityId: freightId,
+          action: 'assignment_updated',
+          userId: user.sub,
+          metadata: { assignmentId, changes: updateData },
+        },
+      });
+
+      return result;
     });
 
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));

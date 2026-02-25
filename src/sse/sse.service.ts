@@ -94,7 +94,11 @@ export class SseService {
     const clients = this.byUser.get(userId);
     if (!clients || clients.size === 0) return;
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const c of clients) c.res.write(payload);
+    const dead: SseClient[] = [];
+    for (const c of clients) {
+      try { c.res.write(payload); } catch { dead.push(c); }
+    }
+    for (const c of dead) { try { c.res.end(); } catch {} this.removeFromIndex(c); }
   }
 
   /** Send event to all users of a company — O(k) where k = company clients */
@@ -102,9 +106,13 @@ export class SseService {
     const clients = this.byCompany.get(companyId);
     if (!clients || clients.size === 0) return;
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const dead: SseClient[] = [];
     for (const c of clients) {
-      if (c.userId !== excludeUserId) c.res.write(payload);
+      if (c.userId !== excludeUserId) {
+        try { c.res.write(payload); } catch { dead.push(c); }
+      }
     }
+    for (const c of dead) { try { c.res.end(); } catch {} this.removeFromIndex(c); }
   }
 
   /** Broadcast freight update to all involved companies (including actor) */
@@ -133,16 +141,18 @@ export class SseService {
 
     const payload = `event: freight:updated\ndata: ${JSON.stringify(data)}\n\n`;
     const sent = new Set<SseClient>();
+    const dead: SseClient[] = [];
     for (const cid of companyIds) {
       const clients = this.byCompany.get(cid);
       if (!clients) continue;
       for (const c of clients) {
         if (!sent.has(c)) {
-          c.res.write(payload);
+          try { c.res.write(payload); } catch { dead.push(c); }
           sent.add(c);
         }
       }
     }
+    for (const c of dead) { try { c.res.end(); } catch {} this.removeFromIndex(c); }
   }
 
   /** Broadcast to conversation participants — O(1) per user, cached */

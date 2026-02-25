@@ -90,7 +90,7 @@ export class AiService {
       aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
     }
     // Cleanup stale entries periodically
-    if (aiRateMap.size > 100) {
+    if (aiRateMap.size > 20) {
       for (const [k, v] of aiRateMap) {
         if (now > v.resetAt) aiRateMap.delete(k);
       }
@@ -1332,11 +1332,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const freight = await this.freights.create(dto, producerSynUser);
     this.logger.log(`Freight created: ${(freight as any).code}`);
 
-    // Clear pending freight
+    // Clear pending freight — re-read session to avoid overwriting aiMessages updated by chat()
+    const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const latestState = (freshSess?.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
-        flowState: { ...state, pendingFreight: null },
+        flowState: { ...latestState, pendingFreight: null },
       },
     });
 
@@ -1616,6 +1618,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ---- list_fields ----
   private async toolListFields(user: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No sos productor', fields: [] });
     const fields = await this.prisma.field.findMany({
       where: { companyId: producerCompanyId, active: true },
       include: { lots: { where: { active: true } } },
