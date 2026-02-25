@@ -114,6 +114,20 @@ export class FreightsService {
     const originLat = dto.overrideOriginLat ?? lotLat ?? fieldLat ?? null;
     const originLng = dto.overrideOriginLng ?? lotLng ?? fieldLng ?? null;
 
+    // Determine useOwnFleet: explicit DTO value or infer from truckId + hasInternalFleet
+    let useOwnFleet: boolean | null = null;
+    if (dto.useOwnFleet != null) {
+      useOwnFleet = dto.useOwnFleet;
+    } else {
+      const originCompany = await this.prisma.company.findUnique({
+        where: { id: producerCompanyId },
+        select: { hasInternalFleet: true },
+      });
+      if (originCompany?.hasInternalFleet) {
+        useOwnFleet = !!dto.truckId;
+      }
+    }
+
     const freight = await this.prisma.$transaction(async (tx) => {
       // Generate code inside transaction (fixes race condition)
       // Use raw SQL MAX to get highest numeric code (avoids string ordering bug with FLT-9999 > FLT-10000)
@@ -143,6 +157,7 @@ export class FreightsService {
           scheduledAt,
           requestedById: user.sub,
           notes: dto.notes,
+          useOwnFleet,
           truckCount: dto.truckCount || 1,
           assignedTruckCount: 0,
           isMultiTruck: (dto.truckCount || 1) > 1,

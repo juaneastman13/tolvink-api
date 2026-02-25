@@ -981,6 +981,9 @@ export class WhatsAppFlowService {
         truckCount: state.truckCount || 1,
       };
 
+      // Own fleet decision (persisted on freight)
+      dto.useOwnFleet = state.truckId ? true : false;
+
       // Own fleet truck assignment
       if (state.truckId) {
         dto.truckId = state.truckId;
@@ -1008,8 +1011,8 @@ export class WhatsAppFlowService {
       const shareToken = require('crypto').randomUUID();
       await this.prisma.freight.update({ where: { id: (freight as any).id }, data: { shareToken } });
 
-      const freightLink = `\n\n${APP_URL}/track?token=${shareToken}`;
       const code = (freight as any).code;
+      const freightLink = `\n\n${APP_URL}/${code}/ubicacion`;
       const successMsg = state.truckId
         ? `✅ Flete creado: ${code}\n🚛 Asignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
         : `✅ Flete creado: ${code}\n📋 Pendiente de asignacion de transportista.` + freightLink;

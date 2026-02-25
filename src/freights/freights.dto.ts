@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -112,6 +112,11 @@ export class CreateFreightDto {
   @IsOptional()
   @IsUUID()
   truckId?: string;
+
+  @ApiProperty({ required: false, description: 'Decisión explícita: true=flota propia, false=delegar a planta' })
+  @IsOptional()
+  @IsBoolean()
+  useOwnFleet?: boolean;
 
   @IsOptional()
   @IsNumber()

@@ -218,7 +218,7 @@ export class AiService {
     const hasOwnFleet = user.company?.hasInternalFleet ||
       user.memberships?.some((m: any) => m.company?.hasInternalFleet);
     const ownFleetNote = hasOwnFleet
-      ? `\nFLOTA INTERNA: Este usuario tiene flota propia. Para asignar SU flota interna como transportista, usar assign_transporter con transporterCompanyId="own_fleet" (se resuelve automaticamente). NO es necesario llamar list_transporters ni preguntar cual empresa. Si el usuario quiere usar su flota, ir directo con "own_fleet".`
+      ? `\nFLOTA INTERNA: Este usuario tiene flota propia disponible. IMPORTANTE: NO asumir que quiere usarla. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne transportista?". Si dice que si, usar assign_transporter con transporterCompanyId="own_fleet". Si dice que no, el flete queda pendiente de asignacion por la planta.`
       : '';
 
     // Multi-company note
@@ -1768,6 +1768,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ---- generate_location_link ----
   private async toolGenerateLocationLink(input: any, session: any): Promise<string> {
     const token = require('crypto').randomUUID();
+    const purposeLabel = (input.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
+    const slug = `${purposeLabel}-${require('crypto').randomBytes(2).toString('hex')}`;
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
     const state = (freshSession?.flowState as any) || {};
 
@@ -1779,6 +1781,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
           ...state,
           locationToken: {
             token,
+            slug,
             purpose: input.purpose || 'general',
             createdAt: new Date().toISOString(),
           },
@@ -1789,10 +1792,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       },
     });
 
-    this.logger.log(`generate_location_link — token=${token}, sessionId=${session.id}`);
+    this.logger.log(`generate_location_link — slug=${slug}, sessionId=${session.id}`);
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const url = `${frontendUrl}/pick-location?token=${token}`;
+    const url = `${frontendUrl}/campo/${slug}/ubicacion`;
 
     const purposeLabels: Record<string, string> = {
       origin: 'origen del flete',
@@ -1848,7 +1851,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const url = `${frontendUrl}/track?token=${token}`;
+    const url = `${frontendUrl}/${freight.code}/ubicacion`;
 
     return JSON.stringify({
       url,
@@ -1892,7 +1895,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const url = `${frontendUrl}/report?token=${token}`;
+    const url = `${frontendUrl}/${freight.code}/informe`;
 
     return JSON.stringify({
       url,
@@ -2116,7 +2119,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     // Resolve "own_fleet" shortcut to user's own company
     let transporterCompanyId = input.transporterCompanyId;
-    if (transporterCompanyId === OWN_FLEET_SHORTCUT) {
+    const isOwnFleetShortcut = transporterCompanyId === OWN_FLEET_SHORTCUT;
+    if (isOwnFleetShortcut) {
       transporterCompanyId = user.activeCompanyId || user.companyId;
     }
 
@@ -2126,6 +2130,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
     if (!transporter) return JSON.stringify({ error: 'Empresa transportista no encontrada.' });
     const transporterName = transporter.name;
+
+    // Persist own fleet decision if using own_fleet shortcut
+    if (isOwnFleetShortcut && (freight as any).useOwnFleet == null) {
+      await this.prisma.freight.update({ where: { id: freight.id }, data: { useOwnFleet: true } as any });
+    }
 
     // Resolve the acting company: plant for plant users, producer for own-fleet producers
     let actingCompanyId: string;
@@ -2630,7 +2639,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       where: { code: code.toUpperCase() },
       select: {
         id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-        isMultiTruck: true, destCompanyId: true, originCompanyId: true,
+        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
       },
     });

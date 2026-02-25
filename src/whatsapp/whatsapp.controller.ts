@@ -293,6 +293,8 @@ export class WhatsAppController {
     if (!session) throw new NotFoundException('Session not found');
 
     const token = crypto.randomUUID();
+    const purposeLabel = (body.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
+    const slug = `${purposeLabel}-${crypto.randomBytes(2).toString('hex')}`;
     const state = (session.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: body.sessionId },
@@ -301,6 +303,7 @@ export class WhatsAppController {
           ...state,
           locationToken: {
             token,
+            slug,
             purpose: body.purpose || 'general',
             createdAt: new Date().toISOString(),
           },
@@ -311,7 +314,8 @@ export class WhatsAppController {
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
     return {
       token,
-      url: `${frontendUrl}/pick-location?token=${token}`,
+      slug,
+      url: `${frontendUrl}/campo/${slug}/ubicacion`,
     };
   }
 
@@ -375,6 +379,69 @@ export class WhatsAppController {
     this.logger.log(`Location saved for session ${session.id}: ${body.lat},${body.lng}`);
 
     // Auto-trigger AI flow continuation (fire-and-forget)
+    this.router.onLocationSaved(session.id).catch(err =>
+      this.logger.error(`onLocationSaved failed: ${err.message}`),
+    );
+
+    return { success: true };
+  }
+
+  /**
+   * Save a picked location from the frontend map picker — by slug (clean URL).
+   * Same logic as save-location but finds session by slug instead of token.
+   */
+  @Post('save-location-by-slug')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @HttpCode(200)
+  async saveLocationBySlug(@Body() body: { slug: string; lat: number; lng: number; name?: string; address?: string }) {
+    if (!body.slug || body.lat == null || body.lng == null) {
+      throw new BadRequestException('slug, lat, lng required');
+    }
+
+    const sessions = await this.prisma.$queryRaw<any[]>`
+      SELECT id, flow_state FROM whatsapp_sessions
+      WHERE flow_state::jsonb @> ${JSON.stringify({ locationToken: { slug: body.slug } })}::jsonb
+      AND expires_at > ${new Date(Date.now() - 60 * 60 * 1000)}
+      LIMIT 1
+    `;
+
+    const session = sessions[0];
+    if (!session) {
+      this.logger.warn(`save-location-by-slug: slug not found — ${body.slug}`);
+      throw new NotFoundException('Enlace invalido o expirado');
+    }
+
+    const state = session.flow_state || {};
+    if (!state.locationToken?.createdAt) {
+      throw new BadRequestException('Enlace invalido o expirado');
+    }
+    const tokenCreated = new Date(state.locationToken.createdAt).getTime();
+    const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
+    if (tokenAgeMin > 30) {
+      throw new BadRequestException('Enlace expirado (max 30 min)');
+    }
+
+    const fullSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const fullState = (fullSession?.flowState as any) || {};
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...fullState,
+          lastLocation: {
+            lat: body.lat,
+            lng: body.lng,
+            name: body.name || '',
+            address: body.address || '',
+          },
+          locationToken: null,
+        },
+      },
+    });
+
+    this.logger.log(`Location saved by slug for session ${session.id}: ${body.lat},${body.lng}`);
+
     this.router.onLocationSaved(session.id).catch(err =>
       this.logger.error(`onLocationSaved failed: ${err.message}`),
     );

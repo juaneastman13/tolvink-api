@@ -1263,7 +1263,7 @@ export class WhatsAppRouterService {
     text += `👤 Transporte: ${transportLine}\n`;
     if (loadDate) text += `📅 Fecha: ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `📝 Obs: ${freight.notes}\n`;
-    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/track?token=${freight.shareToken}`;
+    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/${freight.code}/ubicacion`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);
