@@ -218,9 +218,18 @@ export class AiService {
       ? `\nFLOTA INTERNA: Este usuario tiene flota propia. Para asignar SU flota interna como transportista, usar assign_transporter con transporterCompanyId="own_fleet" (se resuelve automaticamente). NO es necesario llamar list_transporters ni preguntar cual empresa. Si el usuario quiere usar su flota, ir directo con "own_fleet".`
       : '';
 
+    // Multi-company note
+    const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = activeMemberships.find((m: any) => m.companyId === activeCoId);
+    const activeCoName = activeMem?.company?.name || user.company?.name || '';
+    const multiCompanyNote = activeMemberships.length > 1
+      ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Este usuario pertenece a ${activeMemberships.length} empresas. Si solicita cambiar de empresa u operar con otra, usar switch_company. Sin companyId devuelve la lista; con companyId ejecuta el cambio.`
+      : '';
+
     return `Usted se comunica con Tolvink, plataforma de gestion de fletes de granos.
 
-USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}
+USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}${multiCompanyNote}
 
 ═══ PROTOCOLO DE COMUNICACION (OBLIGATORIO) ═══
 
@@ -789,6 +798,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['userIdentifier'],
       },
     },
+    {
+      name: 'switch_company',
+      description: 'Cambia la empresa activa del usuario. Sin companyId: lista empresas disponibles. Con companyId: ejecuta el cambio. Usar cuando el usuario quiere operar con otra empresa.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          companyId: { type: 'string', description: 'ID de la empresa destino (opcional, de la lista)' },
+        },
+        required: [],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -833,6 +853,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'list_drivers': return await this.toolListDrivers(user);
         case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
         case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
+        case 'switch_company': return await this.toolSwitchCompany(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -2116,6 +2137,81 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       targetUserId: membership.user.id,
       userName: membership.user.name,
     }, `Desactivar usuario "${membership.user.name}" de su empresa`);
+  }
+
+  // ---- switch_company ----
+  private async toolSwitchCompany(input: any, user: any, session: any): Promise<string> {
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    if (memberships.length <= 1) {
+      return JSON.stringify({ error: 'Solo pertenece a una empresa. No es posible cambiar.' });
+    }
+
+    const TYPE_LABELS: Record<string, string> = {
+      producer: 'Productor', plant: 'Planta', transporter: 'Transportista',
+    };
+
+    // If no companyId, list available companies
+    if (!input.companyId) {
+      const activeCompanyId = user.activeCompanyId || user.companyId;
+      const companies = memberships.map((m: any) => ({
+        id: m.companyId,
+        name: m.company?.name || 'Empresa',
+        type: TYPE_LABELS[m.company?.type] || m.company?.type || 'Desconocido',
+        active: m.companyId === activeCompanyId,
+      }));
+      return JSON.stringify({
+        companies,
+        message: 'Presentar esta lista al usuario para que elija una empresa.',
+      });
+    }
+
+    // Validate membership
+    const target = memberships.find((m: any) => m.companyId === input.companyId);
+    if (!target) {
+      return JSON.stringify({ error: 'No pertenece a esa empresa.' });
+    }
+
+    // Perform the switch in DB
+    const oldCompanyId = user.activeCompanyId || user.companyId;
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { activeCompanyId: input.companyId, companyId: input.companyId },
+    });
+
+    // Audit log (fire-and-forget)
+    this.prisma.auditLog.create({
+      data: {
+        entityType: 'user', entityId: user.id,
+        action: 'switch_company',
+        fromValue: oldCompanyId || undefined,
+        toValue: input.companyId, userId: user.id,
+        metadata: { source: 'whatsapp_ai' },
+      },
+    }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
+
+    // Update session: mark confirmed + clear AI history for clean context
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          companyConfirmed: true,
+          selectedCompanyId: input.companyId,
+          aiMessages: [],
+        },
+      },
+    });
+
+    const companyName = target.company?.name || 'Empresa';
+    const companyType = TYPE_LABELS[target.company?.type] || target.company?.type || '';
+
+    return JSON.stringify({
+      status: 'switched',
+      companyName,
+      companyType,
+      message: `Empresa activa cambiada a "${companyName}" (${companyType}). Todas las operaciones se realizaran con esta empresa.`,
+    });
   }
 
   // ======================== MESSAGE PREPROCESSING ========================

@@ -77,6 +77,30 @@ export class WhatsAppRouterService {
         return;
       }
 
+      // Multi-company: prompt company selection if not confirmed in session
+      const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
+      if (activeMemberships.length > 1) {
+        const mcSession = await this.prisma.whatsAppSession.findFirst({
+          where: { userId: user.id, expiresAt: { gt: new Date() } },
+          orderBy: { updatedAt: 'desc' },
+        });
+        const sState = (mcSession?.flowState as any) || {};
+        const dbCompanyId = user.activeCompanyId || user.companyId;
+        const isConfirmed = sState.companyConfirmed === true
+          && sState.selectedCompanyId
+          && sState.selectedCompanyId === dbCompanyId;
+
+        if (!isConfirmed) {
+          // Let company selection list replies through
+          if (type === 'list_reply' && payload.id?.startsWith('selco:')) {
+            await this.handleCompanySelection(phone, user, payload.id.split(':').slice(1).join(':'));
+            return;
+          }
+          await this.sendCompanySelectionList(phone, user);
+          return;
+        }
+      }
+
       // Check for active flow
       const session = await this.prisma.whatsAppSession.findFirst({
         where: { userId: user.id, expiresAt: { gt: new Date() } },
@@ -555,17 +579,94 @@ export class WhatsAppRouterService {
   // ======================== LIST REPLY HANDLER ==========================
 
   private async handleListReply(phone: string, user: any, listId: string, title: string) {
-    // List IDs: "freight:uuid" or "action:freightId"
     const parts = listId.split(':');
     const type = parts[0];
     const id = parts.slice(1).join(':');
 
-    if (type === 'freight') {
+    if (type === 'selco') {
+      await this.handleCompanySelection(phone, user, id);
+    } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
     } else {
-      // Treat as button reply for action-based lists
       await this.handleButtonReply(phone, user, listId, title);
     }
+  }
+
+  // ======================== COMPANY SELECTION (multi-company) ============
+
+  private async sendCompanySelectionList(phone: string, user: any) {
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    const TYPE_LABELS: Record<string, string> = {
+      producer: 'Productor', plant: 'Planta', transporter: 'Transportista',
+    };
+    const activeId = user.activeCompanyId || user.companyId;
+    const rows = memberships.slice(0, 10).map((m: any) => ({
+      id: `selco:${m.companyId}`,
+      title: (m.company?.name || 'Empresa').slice(0, 24),
+      description: ((TYPE_LABELS[m.company?.type] || m.company?.type || '') +
+        (m.companyId === activeId ? ' (actual)' : '')).slice(0, 72),
+    }));
+    await this.wa.sendList(phone,
+      'Tiene acceso a varias empresas.\nSeleccione con cual desea operar:',
+      'Ver empresas',
+      [{ title: 'Sus empresas', rows }],
+    );
+  }
+
+  private async handleCompanySelection(phone: string, user: any, companyId: string) {
+    const membership = (user.memberships || []).find(
+      (m: any) => m.companyId === companyId && m.active,
+    );
+    if (!membership) {
+      await this.wa.sendText(phone, 'Empresa no valida. Intente de nuevo.');
+      await this.sendCompanySelectionList(phone, user);
+      return;
+    }
+
+    // Update DB (same as web switchCompany — but do NOT invalidate refresh tokens)
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { activeCompanyId: companyId, companyId: companyId },
+    });
+
+    // Audit log (fire-and-forget)
+    this.prisma.auditLog.create({
+      data: {
+        entityType: 'user', entityId: user.id,
+        action: 'switch_company',
+        fromValue: user.activeCompanyId || user.companyId || undefined,
+        toValue: companyId, userId: user.id,
+        metadata: { source: 'whatsapp' },
+      },
+    }).catch(e => this.logger.warn(`Audit log failed: ${e.message}`));
+
+    // Mark company as confirmed in session
+    let session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const flowData = { companyConfirmed: true, selectedCompanyId: companyId };
+    if (session) {
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { flowState: { ...((session.flowState as any) || {}), ...flowData } },
+      });
+    } else {
+      await this.prisma.whatsAppSession.create({
+        data: {
+          userId: user.id, phone: this.wa.normalizePhone(phone),
+          flowType: null, flowStep: '0', flowState: flowData,
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      });
+    }
+
+    // Re-load user with updated company + show menu
+    const updatedUser = await this.findUserByPhone(phone);
+    const companyName = membership.company?.name || 'Empresa';
+    await this.wa.sendText(phone,
+      `─────────────────────\n  Operando como: *${companyName}*\n─────────────────────`);
+    if (updatedUser) await this.showMainMenu(phone, updatedUser);
   }
 
   // ======================== SHOW MAIN MENU ==============================
@@ -573,7 +674,9 @@ export class WhatsAppRouterService {
   async showMainMenu(phone: string, user: any) {
     const name = user.name || 'Usuario';
     const role = this.getUserRole(user);
-    const companyName = user.company?.name || '';
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
+    const companyName = activeMem?.company?.name || user.company?.name || '';
     const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
 
     const userLine = `${name}` +
@@ -625,6 +728,17 @@ export class WhatsAppRouterService {
   // ======================== ROLE HELPERS ================================
 
   private getUserRole(user: any): string {
+    // Prefer active company's type for multi-company users
+    const activeCoId = user.activeCompanyId || user.companyId;
+    if (activeCoId && user.memberships?.length > 0) {
+      const am = user.memberships.find((m: any) => m.companyId === activeCoId && m.active);
+      if (am?.company) {
+        const types = Array.isArray(am.company.types) && am.company.types.length > 0
+          ? am.company.types : [am.company.type];
+        if (types[0]) return types[0];
+      }
+    }
+    // Fallback
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
     if (userTypes.length > 0) return userTypes[0];
     if (user.company?.type) return user.company.type;
