@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { FreightsService } from '../freights/freights.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
+import { fuzzySearch, classifyFuzzyResult, GRAIN_ALIASES } from '../common/fuzzy-match';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
@@ -357,11 +358,16 @@ export class WhatsAppFlowService {
       if (type === 'list_reply' && payload.id?.startsWith('grain:')) {
         grain = payload.id.split(':')[1];
       } else if (type === 'text') {
-        // Allow text input
+        // Allow text input — fuzzy match for audio transcription tolerance
         const g = payload.body?.trim();
-        const valid = ['soja', 'maiz', 'trigo', 'girasol', 'sorgo', 'cebada', 'otros'];
-        const match = valid.find(v => v === g.toLowerCase());
-        if (match) grain = match.charAt(0).toUpperCase() + match.slice(1);
+        if (g) {
+          const grainItems = ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'];
+          const results = fuzzySearch(g, grainItems, (x) => x, { aliases: GRAIN_ALIASES, threshold: 0.65 });
+          const cls = classifyFuzzyResult(results);
+          if (cls === 'exact' || cls === 'confident') {
+            grain = results[0].item;
+          }
+        }
       }
 
       if (!grain) {

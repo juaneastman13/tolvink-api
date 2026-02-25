@@ -3,6 +3,8 @@
 // Used by WhatsAppService, WhatsAppFlowService, WhatsAppRouterService
 // =====================================================================
 
+import { fuzzySearch, classifyFuzzyResult } from './fuzzy-match';
+
 export interface SelectionItem {
   id: string;
   title: string;
@@ -76,6 +78,13 @@ export function resolveSelectionReply(
     (item) => item.title.toLowerCase().startsWith(t),
   );
   if (byPartial) return byPartial;
+
+  // Fuzzy name match (audio transcription tolerance)
+  const fuzzyResults = fuzzySearch(t, ctx.shownItems, (item) => item.title);
+  const classification = classifyFuzzyResult(fuzzyResults);
+  if (classification === 'exact' || classification === 'confident') {
+    return fuzzyResults[0].item;
+  }
 
   return null;
 }

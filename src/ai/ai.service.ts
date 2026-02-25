@@ -13,6 +13,7 @@ import { AdminService } from '../admin/admin.controller';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
+import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
 
 const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
@@ -318,7 +319,8 @@ PRIORIDAD EN CADA RESPUESTA:
 5. Si no dispone de la informacion, responda: "No se dispone de esa informacion."
 6. Ante incertidumbre, consulte antes de actuar.
 7. NUNCA exponga UUIDs internos. Solo codigos FLT-XXXX.
-8. Audio transcripto puede contener errores. Interprete la INTENCION del usuario.
+8. Audio transcripto puede contener errores foneticos (ej: "solla" = Soja, "el triyo" = El Trillo).
+   Interpretar la INTENCION del usuario. Si una busqueda no devuelve resultados, intentar variaciones foneticas.
 
 [MANEJO DE DATOS FALTANTES]
 
@@ -1060,13 +1062,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ plants: [], message: 'No tenes plantas habilitadas' });
     }
 
-    // Single query with include to avoid N+1
-    const nameFilter = input.query ? { contains: input.query, mode: 'insensitive' as const } : undefined;
+    // Fetch all accessible plants, then apply fuzzy search in memory
     const companies = await this.prisma.company.findMany({
       where: {
         id: { in: plantCompanyIds },
         active: true,
-        ...(nameFilter ? { name: nameFilter } : {}),
       },
       select: {
         id: true, name: true,
@@ -1075,13 +1075,26 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
           select: { id: true, name: true },
         },
       },
-      take: 10,
+      take: 50,
     });
 
-    const results = companies.map(c => ({
+    if (input.query) {
+      // Fuzzy search tolerates audio transcription errors (e.g., "el triyo" → "El Trillo")
+      const fuzzyResults = fuzzySearch(input.query, companies, (c) => c.name, { threshold: 0.55, maxResults: 10 });
+      const matchType = classifyFuzzyResult(fuzzyResults);
+      const results = fuzzyResults.map((r) => ({
+        companyId: r.item.id,
+        companyName: r.item.name,
+        branches: (r.item as any).plants.map((b: any) => ({ id: b.id, name: b.name })),
+        matchScore: Math.round(r.score * 100),
+      }));
+      return JSON.stringify({ plants: results, matchType });
+    }
+
+    const results = companies.map((c) => ({
       companyId: c.id,
       companyName: c.name,
-      branches: c.plants.map(b => ({ id: b.id, name: b.name })),
+      branches: c.plants.map((b) => ({ id: b.id, name: b.name })),
     }));
 
     return JSON.stringify({ plants: results });
@@ -2491,10 +2504,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ======================== MESSAGE PREPROCESSING ========================
 
-  /** Clean audio transcription: strip filler words, normalize whitespace */
+  /** Clean audio transcription: strip filler words, normalize whitespace, expand spelled-out letters */
   private preprocessMessage(text: string): string {
     let clean = text
       .replace(AUDIO_FILLERS, ' ')       // Strip filler words from voice
+      .replace(/\bv\s+corta\b/gi, 'v')  // Whisper spells out "v corta" → v
+      .replace(/\bb\s+larga\b/gi, 'b')  // Whisper spells out "b larga" → b
+      .replace(/\bese\s+de\b/gi, 's')   // "ese de" → s
+      .replace(/\bdoble\s+ele\b/gi, 'll') // "doble ele" → ll
       .replace(/\s{2,}/g, ' ')           // Collapse multiple spaces
       .replace(/^[\s,.:;]+/, '')         // Trim leading punctuation artifacts
       .trim();
