@@ -116,16 +116,15 @@ export class FreightsService {
 
     // Determine useOwnFleet: explicit DTO value or infer from truckId + hasInternalFleet
     let useOwnFleet: boolean | null = null;
+    const originCompany = await this.prisma.company.findUnique({
+      where: { id: producerCompanyId },
+      select: { hasInternalFleet: true },
+    });
     if (dto.useOwnFleet != null) {
-      useOwnFleet = dto.useOwnFleet;
-    } else {
-      const originCompany = await this.prisma.company.findUnique({
-        where: { id: producerCompanyId },
-        select: { hasInternalFleet: true },
-      });
-      if (originCompany?.hasInternalFleet) {
-        useOwnFleet = !!dto.truckId;
-      }
+      // Only accept useOwnFleet=true if the company actually has internal fleet
+      useOwnFleet = dto.useOwnFleet === true && !originCompany?.hasInternalFleet ? null : dto.useOwnFleet;
+    } else if (originCompany?.hasInternalFleet) {
+      useOwnFleet = !!dto.truckId;
     }
 
     const freight = await this.prisma.$transaction(async (tx) => {

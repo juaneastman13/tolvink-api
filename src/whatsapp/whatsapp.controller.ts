@@ -294,7 +294,7 @@ export class WhatsAppController {
 
     const token = crypto.randomUUID();
     const purposeLabel = (body.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
-    const slug = `${purposeLabel}-${crypto.randomBytes(2).toString('hex')}`;
+    const slug = `${purposeLabel}-${crypto.randomBytes(4).toString('hex')}`;
     const state = (session.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: body.sessionId },
@@ -330,6 +330,11 @@ export class WhatsAppController {
     if (!body.token || body.lat == null || body.lng == null) {
       throw new BadRequestException('token, lat, lng required');
     }
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
+      throw new BadRequestException('Invalid coordinates');
+    }
+    if (body.name && body.name.length > 255) body.name = body.name.slice(0, 255);
+    if (body.address && body.address.length > 500) body.address = body.address.slice(0, 500);
 
     // Find session with this token using PostgreSQL JSON containment (indexed)
     const sessions = await this.prisma.$queryRaw<any[]>`
@@ -397,6 +402,14 @@ export class WhatsAppController {
     if (!body.slug || body.lat == null || body.lng == null) {
       throw new BadRequestException('slug, lat, lng required');
     }
+    if (typeof body.slug !== 'string' || !/^[a-z0-9-]{3,30}$/.test(body.slug)) {
+      throw new BadRequestException('Invalid slug format');
+    }
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
+      throw new BadRequestException('Invalid coordinates');
+    }
+    if (body.name && body.name.length > 255) body.name = body.name.slice(0, 255);
+    if (body.address && body.address.length > 500) body.address = body.address.slice(0, 500);
 
     const sessions = await this.prisma.$queryRaw<any[]>`
       SELECT id, flow_state FROM whatsapp_sessions
