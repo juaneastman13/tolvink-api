@@ -367,6 +367,7 @@ model Freight {
   conversation    Conversation?       @relation("FreightConversation")
   auditLogs       AuditLog[]
   trackingPoints  FreightTracking[]
+  liveLocations   LiveLocation[]
 
   @@index([loadDate])
   @@index([code])
@@ -479,6 +480,29 @@ model FreightTracking {
   @@index([createdAt])
   @@index([freightId, createdAt])
   @@map("freight_tracking")
+}
+
+// ======================== LIVE LOCATION (real-time sharing) ============
+
+model LiveLocation {
+  id        String   @id @default(uuid())
+  freightId String   @map("freight_id")
+  userId    String   @map("user_id")
+  userName  String   @map("user_name") @db.VarChar(255)
+  userRole  String   @map("user_role") @db.VarChar(30)
+  lat       Decimal  @db.Decimal(10, 6)
+  lng       Decimal  @db.Decimal(10, 6)
+  speed     Decimal? @db.Decimal(6, 2)
+  heading   Decimal? @db.Decimal(5, 2)
+  active    Boolean  @default(true)
+  updatedAt DateTime @updatedAt @map("updated_at")
+  expiresAt DateTime @map("expires_at")
+
+  freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+
+  @@unique([freightId, userId])
+  @@index([freightId, active])
+  @@map("live_locations")
 }
 
 // ======================== CONVERSATIONS ===============================

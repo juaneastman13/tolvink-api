@@ -12,7 +12,7 @@ import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-
 const FLOW_TIMEOUT_MINUTES = 10;
 
 // Header hint shown at the top of every flow message
-const FLOW_HINT = '_cancelar · menu_\n─────────────────────\n\n';
+const FLOW_HINT = '_cancelar / menu_\n\n';
 
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
 
@@ -168,7 +168,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.respond(state.freightId, { action: 'rejected', reason } as any, synUser);
-      await this.wa.sendText(phone, `─────────────────────\n  Flete rechazado\n─────────────────────\nMotivo: ${reason}`);
+      await this.wa.sendText(phone, `❌ Flete rechazado.\n\n📝 Motivo: ${reason}`);
       await this.endFlow(session.id);
       return;
     }
@@ -225,7 +225,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.confirmLoaded(state.freightId, synUser, tons);
-      await this.wa.sendText(phone, `─────────────────────\n  Carga confirmada: ${tons} tn\n─────────────────────`);
+      await this.wa.sendText(phone, `✅ Carga confirmada: ${tons} tn.`);
       await this.endFlow(session.id);
       return;
     }
@@ -237,10 +237,10 @@ export class WhatsAppFlowService {
         const tons = state.pendingTons;
         const synUser = this.buildSyntheticUser(user);
         await this.freights.confirmLoaded(state.freightId, synUser, tons);
-        await this.wa.sendText(phone, `─────────────────────\n  Carga confirmada: ${tons} tn\n─────────────────────`);
+        await this.wa.sendText(phone, `✅ Carga confirmada: ${tons} tn.`);
         await this.endFlow(session.id);
       } else {
-        await this.wa.sendText(phone, '─────────────────────\n  Operacion cancelada\n─────────────────────');
+        await this.wa.sendText(phone, '❌ Operacion cancelada.');
         await this.endFlow(session.id);
       }
       return;
@@ -272,7 +272,7 @@ export class WhatsAppFlowService {
 
       const synUser = this.buildSyntheticUser(user);
       await this.freights.cancel(state.freightId, { reason } as any, synUser);
-      await this.wa.sendText(phone, `─────────────────────\n  Flete cancelado\n─────────────────────\nMotivo: ${reason}`);
+      await this.wa.sendText(phone, `❌ Flete cancelado.\n\n📝 Motivo: ${reason}`);
       await this.endFlow(session.id);
       return;
     }
@@ -374,7 +374,7 @@ export class WhatsAppFlowService {
       const truckWord = suggested === 1 ? 'camion' : 'camiones';
       await this.wa.sendButtons(phone,
         FLOW_HINT +
-        `${state.grain}  ·  ${tons} tn\n\n` +
+        `${state.grain}, ${tons} tn\n\n` +
         `Para ${tons} tn se necesita${suggested > 1 ? 'n' : ''} aprox. ${suggested} ${truckWord}.\n` +
         `Indique la cantidad de camiones:`,
         [
@@ -948,8 +948,8 @@ export class WhatsAppFlowService {
       const freightLink = `\n\n${APP_URL}/track?token=${shareToken}`;
       const code = (freight as any).code;
       const successMsg = state.truckId
-        ? `─────────────────────\n  Flete creado: ${code}\n─────────────────────\nAsignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
-        : `─────────────────────\n  Flete creado: ${code}\n─────────────────────\nPendiente de asignacion de transportista.` + freightLink;
+        ? `✅ Flete creado: ${code}\n🚛 Asignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
+        : `✅ Flete creado: ${code}\n📋 Pendiente de asignacion de transportista.` + freightLink;
       await this.wa.sendText(phone, successMsg);
       await this.endFlow(session.id);
       return;
@@ -1063,7 +1063,7 @@ export class WhatsAppFlowService {
 
     await this.updateState(session.id, 'awaiting_plant', state);
     await this.wa.sendList(phone,
-      FLOW_HINT + `${state.grain}  ·  ${state.tons} tn  ·  ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
+      FLOW_HINT + `${state.grain}, ${state.tons} tn, ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
       'SELECCIONAR PLANTA',
       [{
         title: 'PLANTAS DISPONIBLES',
@@ -1161,19 +1161,17 @@ export class WhatsAppFlowService {
     const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
     const truckCount = finalState.truckCount || 1;
     const truckLine = finalState.truckPlate
-      ? `${truckCount} camion${truckCount > 1 ? 'es' : ''}  ·  Flota propia (${finalState.truckPlate})`
+      ? `${truckCount} camion${truckCount > 1 ? 'es' : ''} - Flota propia (${finalState.truckPlate})`
       : `${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
 
     await this.updateState(session.id, 'awaiting_confirm', finalState);
     await this.wa.sendButtons(phone,
-      `RESUMEN DEL FLETE\n` +
-      `─────────────────────\n` +
-      `Carga: ${finalState.grain}  ·  ${finalState.tons} tn\n` +
-      `Transporte: ${truckLine}\n` +
-      `Origen: ${originName}\n` +
-      `Destino: ${destName}\n` +
-      `Fecha: ${dateFormatted}  ${finalState.loadTime}\n` +
-      `─────────────────────\n\n` +
+      `📋 Resumen del flete\n\n` +
+      `📦 Carga: ${finalState.grain}, ${finalState.tons} tn\n` +
+      `🚛 Transporte: ${truckLine}\n` +
+      `📍 Origen: ${originName}\n` +
+      `📍 Destino: ${destName}\n` +
+      `📅 Fecha: ${dateFormatted} ${finalState.loadTime}\n\n` +
       `¿Confirma la creacion del flete?`,
       [
         { id: 'flow_confirm:yes', title: 'CONFIRMAR' },

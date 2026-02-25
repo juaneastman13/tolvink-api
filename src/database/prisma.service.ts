@@ -7,9 +7,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor() {
     const url = process.env.DATABASE_URL || '';
-    const poolUrl = url.includes('connection_limit')
-      ? url
-      : `${url}${url.includes('?') ? '&' : '?'}connection_limit=8&pool_timeout=10`;
+    const sep = url.includes('?') ? '&' : '?';
+    const params: string[] = [];
+    if (!url.includes('connection_limit')) params.push('connection_limit=5');
+    if (!url.includes('pool_timeout')) params.push('pool_timeout=10');
+    if (!url.includes('pgbouncer')) params.push('pgbouncer=true');
+    const poolUrl = params.length > 0 ? `${url}${sep}${params.join('&')}` : url;
     super({
       datasources: { db: { url: poolUrl } },
       log: process.env.NODE_ENV === 'production' ? ['error'] : ['warn', 'error'],

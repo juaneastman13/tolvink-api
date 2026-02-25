@@ -12,6 +12,7 @@ import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
+import { createSignedToken } from '../common/signed-token';
 
 const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
@@ -232,7 +233,7 @@ export class AiService {
     let roleRestrictions = '';
     const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
     if (isChofer) {
-      roleRestrictions = '\n- Choferes: SOLO accept_freight, reject_freight, start_freight, confirm_loaded, confirm_finished, get_freight_detail, list_freights, generate_tracking_link.';
+      roleRestrictions = '\n- Choferes: SOLO accept_freight, reject_freight, start_freight, confirm_loaded, confirm_finished, get_freight_detail, list_freights, generate_tracking_link, share_live_location, view_live_locations.';
     } else if (companyType.includes('producer') && !companyType.includes('plant')) {
       roleRestrictions = '\n- Productores: NO usar accept_freight, reject_freight, start_freight (excepto chofer de flota interna).';
     } else if (companyType.includes('plant') && !companyType.includes('producer')) {
@@ -245,7 +246,7 @@ export class AiService {
 
 USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}${multiCompanyNote}
 
-═══ PROTOCOLO DE COMUNICACION (OBLIGATORIO) ═══
+[PROTOCOLO DE COMUNICACION — OBLIGATORIO]
 
 ESTILO:
 - Tono profesional operativo. Claro, directo y natural.
@@ -272,17 +273,21 @@ EMOJIS — SISTEMA OFICIAL:
 - NUNCA colocar emojis en el medio o al final de una linea.
 
 FORMATO:
-- Cada linea representa UNA accion o estado concreto.
+- Cada linea representa UNA accion o dato concreto. NO agrupar multiples datos en una linea.
 - Estructura base: [Emoji] Accion concreta.
 - "Siguiente paso:" se incluye solo si corresponde. NUNCA lleva emoji.
 - Separar bloques con un salto de linea.
 - Si no hay siguiente paso, cerrar con una linea clara sin texto innecesario.
 - PROHIBIDO usar asteriscos para negritas. NUNCA escriba *texto*. Texto plano siempre.
-- Use "·" como separador entre datos en una misma linea.
-- Use "─────────────────────" como linea divisoria cuando necesite separar bloques.
+- PROHIBIDO usar separadores visuales: lineas (────), guiones (----), signos iguales (═══), barras.
+- PROHIBIDO usar tablas ASCII o bloques tipo consola.
+- PROHIBIDO usar el punto medio "·" como separador. Un dato por linea.
 - NUNCA use markdown de enlaces [text](url). Incluya URLs directas.
+- Si incluye un enlace, debe ir precedido por una linea de contexto con emoji:
+  [Emoji] Contexto del enlace.
+  https://url-directa...
 - Listas: maximo 5 items, una linea por item.
-- Titulos breves en mayusculas cuando corresponda.
+- PROHIBIDO titulos en mayusculas decorativos. Solo texto operativo directo.
 
 COHERENCIA EVOLUTIVA:
 - Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
@@ -295,7 +300,7 @@ PRIORIDAD EN CADA RESPUESTA:
 3. Siguientes pasos concretos.
 4. Eliminar contenido ornamental o innecesario.
 
-═══ REGLAS ANTI-ALUCINACION (CRITICAS) ═══
+[REGLAS ANTI-ALUCINACION — CRITICAS]
 
 1. SOLO afirme datos provenientes de resultados de herramientas. NUNCA invente.
 2. Si una herramienta devuelve error o vacio, informelo. No improvise datos.
@@ -306,7 +311,7 @@ PRIORIDAD EN CADA RESPUESTA:
 7. NUNCA exponga UUIDs internos. Solo codigos FLT-XXXX.
 8. Audio transcripto puede contener errores. Interprete la INTENCION del usuario.
 
-═══ MANEJO DE DATOS FALTANTES ═══
+[MANEJO DE DATOS FALTANTES]
 
 - Falta 1 dato → consulte ESE dato puntualmente.
 - Faltan 2+ datos → solicite todos en una lista con bullets.
@@ -314,14 +319,14 @@ PRIORIDAD EN CADA RESPUESTA:
 - Cambio de tema → continue con el nuevo tema sin mezclar.
 - Mensaje confuso → solicite aclaracion en una linea.
 
-═══ PRIORIDAD DE CONTEXTO ═══
+[PRIORIDAD DE CONTEXTO]
 
 1. Ultimo mensaje del usuario (maxima prioridad).
 2. Datos de operacion en curso (flete pendiente, ubicacion guardada).
 3. Resultados de herramientas ejecutadas (datos facticos).
 4. Historial de conversacion (solo como referencia).
 
-═══ DOMINIO: FLETES DE GRANOS ═══
+[DOMINIO — FLETES DE GRANOS]
 
 ESTADOS: pending_assignment → assigned → accepted → in_progress → loaded → finished (o canceled)
 GRANOS: Soja, Maiz, Trigo, Girasol, Sorgo, Cebada, Otros
@@ -334,7 +339,7 @@ PERMISOS:
 - NO se permite cancelar en estado in_progress o loaded.
 - Confirmacion de carga requiere toneladas reales.${roleRestrictions}
 
-═══ CONFIRMACION DE ACCIONES (CRITICO) ═══
+[CONFIRMACION DE ACCIONES — CRITICO]
 
 TODA accion critica requiere confirmacion explicita del usuario antes de ejecutarse.
 Esto incluye: crear, modificar, cancelar, asignar, duplicar, cambiar fecha, cambiar rol, desactivar.
@@ -362,7 +367,7 @@ Excepcion — patron propio (NO usan confirm_action):
 IMPORTANTE: Los botones CONFIRMAR/CANCELAR se envian automaticamente.
 No es necesario mencionarlos en el texto. Solo presente el resumen y pregunte.
 
-═══ CREAR FLETES (INSTRUCCIONES CRITICAS) ═══
+[CREAR FLETES — INSTRUCCIONES CRITICAS]
 
 1. Resolver IDs primero: usar search_plants y list_lots (o list_fields).
 2. Llamar prepare_freight con los datos. Esto NO crea el flete, solo lo prepara.
@@ -395,7 +400,19 @@ INFORME PDF:
 - Disponible para cualquier flete, incluso finalizados o cancelados.
 - El link no expira y puede compartirse.
 
-═══ ASIGNAR TRANSPORTISTA ═══
+MAPA DEL DIA:
+- generate_daily_map_link para generar un mapa interactivo con todos los fletes del dia.
+- Muestra los fletes de la empresa activa con marcadores de colores segun estado.
+- Permite filtrar por estado y tocar cada marcador para ver detalles.
+- El link expira en 24 horas.
+
+UBICACION EN VIVO:
+- share_live_location para compartir la ubicacion del usuario en tiempo real durante un flete.
+- view_live_locations para ver las ubicaciones de todos los participantes de un flete en el mapa.
+- Solo disponible para fletes activos (no finalizados ni cancelados).
+- La ubicacion se comparte por un maximo de 8 horas.
+
+[ASIGNAR TRANSPORTISTA]
 
 FLOTA INTERNA (PRIORIDAD): Si el encabezado USUARIO indica "FLOTA INTERNA", el usuario tiene flota propia.
 → Usar assign_transporter con transporterCompanyId="own_fleet" DIRECTAMENTE.
@@ -417,7 +434,7 @@ MULTI-CAMION:
 - Cada viaje se asigna y confirma por separado (un assign_truck_to_freight + confirm_action por viaje).
 - Para flota interna usar transporterCompanyId="own_fleet".
 
-═══ GESTIONAR EQUIPO ═══
+[GESTIONAR EQUIPO]
 
 CONSULTAR (cualquier usuario):
 - list_company_users → miembros de la empresa con rol y estado.
@@ -429,7 +446,7 @@ MODIFICAR (solo admin/gerente):
 - Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
 
-═══ ARCHIVOS Y DOCUMENTOS (CRITICO) ═══
+[ARCHIVOS Y DOCUMENTOS — CRITICO]
 
 Cuando el mensaje contiene "[El usuario envio una imagen" o "[El usuario envio un documento":
 1. El archivo YA fue descargado y almacenado automaticamente.
@@ -441,7 +458,7 @@ Cuando el mensaje contiene "[El usuario envio una imagen" o "[El usuario envio u
 
 REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UNICA herramienta correcta es attach_document.
 
-═══ ERRORES ═══
+[ERRORES]
 
 - Traduzca errores tecnicos a lenguaje claro y profesional.
 - Plataforma web: ${APP_URL}`;
@@ -735,6 +752,38 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['code'],
       },
     },
+    // ---- Map & live location ----
+    {
+      name: 'generate_daily_map_link',
+      description: 'Genera un link con un mapa interactivo mostrando todos los fletes del dia de la empresa activa del usuario. Los fletes se muestran con marcadores de colores segun estado. Usar cuando el usuario quiera ver un panorama general de los fletes del dia en el mapa.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'share_live_location',
+      description: 'Genera un link para que el usuario comparta su ubicacion en vivo en el mapa de un flete especifico. Todos los participantes del flete podran ver la posicion del usuario. Usar cuando el usuario quiera compartir donde esta durante un viaje.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'view_live_locations',
+      description: 'Genera un link para ver las ubicaciones en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver donde estan los involucrados en un flete.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+        },
+        required: ['code'],
+      },
+    },
     // ---- Transporter assignment (plant + producer with own fleet) ----
     {
       name: 'list_transporters',
@@ -876,6 +925,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
         case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input, user);
         case 'generate_report_link': return await this.toolGenerateReportLink(input, user);
+        case 'generate_daily_map_link': return await this.toolGenerateDailyMapLink(user);
+        case 'share_live_location': return await this.toolShareLiveLocation(input, user);
+        case 'view_live_locations': return await this.toolViewLiveLocations(input, user);
         case 'list_transporters': return await this.toolListTransporters(user);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
@@ -1823,6 +1875,120 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return JSON.stringify({
       url,
       message: `Aca tenes el link para descargar el informe PDF del flete ${code}. Abrilo desde cualquier dispositivo.`,
+    });
+  }
+
+  // ======================== MAP & LIVE LOCATION TOOLS =====================
+
+  // ---- generate_daily_map_link ----
+  private async toolGenerateDailyMapLink(user: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar la empresa activa.' });
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+
+    const token = createSignedToken({ uid: user.id, cid: companyId }, secret, 1440); // 24h
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const url = `${frontendUrl}/daily-map?t=${token}`;
+
+    return JSON.stringify({
+      url,
+      message: 'Abra el siguiente link para ver el mapa con todos los fletes del dia. Puede filtrar por estado y tocar cada marcador para ver detalles.',
+    });
+  }
+
+  // ---- share_live_location ----
+  private async toolShareLiveLocation(input: any, user: any): Promise<string> {
+    const code = input.code?.toUpperCase();
+    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: {
+        id: true, status: true, code: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
+      },
+    });
+    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    if (['finished', 'canceled'].includes(freight.status)) {
+      return JSON.stringify({ error: `El flete ${code} esta ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}. Solo se puede compartir ubicacion en fletes activos.` });
+    }
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
+    }
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+
+    const companyType = this.resolveCompanyType(user);
+    const role = companyType.includes('chofer') ? 'chofer'
+      : companyType.includes('transporter') ? 'transporter'
+      : companyType.includes('plant') ? 'plant' : 'producer';
+
+    const token = createSignedToken(
+      { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario' },
+      secret,
+      480, // 8h
+    );
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const url = `${frontendUrl}/live-freight?t=${token}&mode=share`;
+
+    return JSON.stringify({
+      url,
+      message: `Abra el siguiente link para compartir su ubicacion en tiempo real en el flete ${code}. Los demas participantes del flete podran ver su posicion en el mapa.`,
+    });
+  }
+
+  // ---- view_live_locations ----
+  private async toolViewLiveLocations(input: any, user: any): Promise<string> {
+    const code = input.code?.toUpperCase();
+    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: {
+        id: true, status: true, code: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
+      },
+    });
+    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
+    }
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+
+    const token = createSignedToken(
+      { uid: user.id, cid: userCompanyId, fid: freight.id },
+      secret,
+      480, // 8h
+    );
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const url = `${frontendUrl}/live-freight?t=${token}&mode=view`;
+
+    return JSON.stringify({
+      url,
+      message: `Abra el siguiente link para ver las ubicaciones en tiempo real de los participantes del flete ${code}.`,
     });
   }
 

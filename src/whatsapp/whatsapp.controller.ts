@@ -11,6 +11,7 @@ import * as crypto from 'crypto';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
+import { verifySignedToken } from '../common/signed-token';
 
 @SkipThrottle()
 @Controller('whatsapp')
@@ -377,6 +378,234 @@ export class WhatsAppController {
     this.router.onLocationSaved(session.id).catch(err =>
       this.logger.error(`onLocationSaved failed: ${err.message}`),
     );
+
+    return { success: true };
+  }
+
+  // ======================== DAILY MAP DATA ================================
+
+  @Get('daily-map-data')
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  async getDailyMapData(@Query('t') token: string) {
+    if (!token) throw new BadRequestException('Token requerido');
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+
+    const payload = verifySignedToken(token, secret);
+    if (!payload) throw new BadRequestException('Token invalido o expirado');
+
+    const { cid } = payload;
+    if (!cid) throw new BadRequestException('Token invalido');
+
+    // Compute "today" in Uruguay timezone (UTC-3)
+    const nowUy = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const today = new Date(nowUy.getFullYear(), nowUy.getMonth(), nowUy.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const freights = await this.prisma.freight.findMany({
+      where: {
+        loadDate: { gte: today, lt: tomorrow },
+        OR: [
+          { originCompanyId: cid },
+          { destCompanyId: cid },
+          { assignments: { some: { transportCompanyId: cid, status: { in: ['active', 'accepted'] } } } },
+        ],
+      },
+      select: {
+        code: true,
+        status: true,
+        originName: true,
+        originLat: true,
+        originLng: true,
+        destName: true,
+        destLat: true,
+        destLng: true,
+        items: { select: { grain: true, tons: true }, take: 1 },
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          take: 1,
+          select: {
+            transportCompany: { select: { name: true } },
+            driverName: true,
+            plate: true,
+            driver: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    return freights.map(f => {
+      const a = f.assignments[0];
+      const item = f.items[0];
+      return {
+        code: f.code,
+        status: f.status,
+        grain: item?.grain || null,
+        tons: item?.tons ? Number(item.tons) : null,
+        originName: f.originName,
+        originLat: f.originLat ? Number(f.originLat) : null,
+        originLng: f.originLng ? Number(f.originLng) : null,
+        destName: f.destName,
+        destLat: f.destLat ? Number(f.destLat) : null,
+        destLng: f.destLng ? Number(f.destLng) : null,
+        transporterName: a?.transportCompany?.name || null,
+        driverName: a?.driver?.name || a?.driverName || null,
+        plate: a?.plate || null,
+      };
+    });
+  }
+
+  // ======================== LIVE LOCATION =================================
+
+  @Post('live-location')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @HttpCode(200)
+  async upsertLiveLocation(@Body() body: { t: string; lat: number; lng: number; speed?: number; heading?: number }) {
+    if (!body.t || body.lat == null || body.lng == null) {
+      throw new BadRequestException('t, lat, lng requeridos');
+    }
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+
+    const payload = verifySignedToken(body.t, secret);
+    if (!payload) throw new BadRequestException('Token invalido o expirado');
+
+    const { uid, fid, role, name } = payload;
+    if (!uid || !fid) throw new BadRequestException('Token invalido');
+
+    // Verify freight exists and is active
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: fid },
+      select: { id: true, status: true },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (['finished', 'canceled'].includes(freight.status)) {
+      throw new BadRequestException('El flete no esta activo');
+    }
+
+    await this.prisma.liveLocation.upsert({
+      where: { freightId_userId: { freightId: fid, userId: uid } },
+      update: {
+        lat: body.lat,
+        lng: body.lng,
+        speed: body.speed ?? null,
+        heading: body.heading ?? null,
+        active: true,
+        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2h
+      },
+      create: {
+        freightId: fid,
+        userId: uid,
+        userName: name || 'Usuario',
+        userRole: role || 'unknown',
+        lat: body.lat,
+        lng: body.lng,
+        speed: body.speed ?? null,
+        heading: body.heading ?? null,
+        active: true,
+        expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      },
+    });
+
+    return { success: true };
+  }
+
+  @Get('live-locations')
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  async getLiveLocations(@Query('t') token: string) {
+    if (!token) throw new BadRequestException('Token requerido');
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+
+    const payload = verifySignedToken(token, secret);
+    if (!payload) throw new BadRequestException('Token invalido o expirado');
+
+    const { fid } = payload;
+    if (!fid) throw new BadRequestException('Token invalido');
+
+    // Get freight data for map context
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: fid },
+      select: {
+        code: true, status: true,
+        originName: true, originLat: true, originLng: true,
+        destName: true, destLat: true, destLng: true,
+        items: { select: { grain: true, tons: true }, take: 1 },
+      },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    // Get active live locations
+    const locations = await this.prisma.liveLocation.findMany({
+      where: {
+        freightId: fid,
+        active: true,
+        expiresAt: { gt: new Date() },
+      },
+      select: {
+        userId: true,
+        userName: true,
+        userRole: true,
+        lat: true,
+        lng: true,
+        speed: true,
+        heading: true,
+        updatedAt: true,
+      },
+    });
+
+    const item = freight.items[0];
+    return {
+      freight: {
+        code: freight.code,
+        status: freight.status,
+        grain: item?.grain || null,
+        tons: item?.tons ? Number(item.tons) : null,
+        originName: freight.originName,
+        originLat: freight.originLat ? Number(freight.originLat) : null,
+        originLng: freight.originLng ? Number(freight.originLng) : null,
+        destName: freight.destName,
+        destLat: freight.destLat ? Number(freight.destLat) : null,
+        destLng: freight.destLng ? Number(freight.destLng) : null,
+      },
+      locations: locations.map(l => ({
+        userId: l.userId,
+        userName: l.userName,
+        userRole: l.userRole,
+        lat: Number(l.lat),
+        lng: Number(l.lng),
+        speed: l.speed ? Number(l.speed) : null,
+        heading: l.heading ? Number(l.heading) : null,
+        updatedAt: l.updatedAt.toISOString(),
+      })),
+    };
+  }
+
+  @Post('live-location/stop')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @HttpCode(200)
+  async stopLiveLocation(@Body() body: { t: string }) {
+    if (!body.t) throw new BadRequestException('Token requerido');
+
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+
+    const payload = verifySignedToken(body.t, secret);
+    if (!payload) throw new BadRequestException('Token invalido o expirado');
+
+    const { uid, fid } = payload;
+    if (!uid || !fid) throw new BadRequestException('Token invalido');
+
+    await this.prisma.liveLocation.updateMany({
+      where: { freightId: fid, userId: uid },
+      data: { active: false },
+    });
 
     return { success: true };
   }

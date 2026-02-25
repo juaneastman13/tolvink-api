@@ -40,6 +40,9 @@ const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
 export class WhatsAppRouterService {
   private readonly logger = new Logger(WhatsAppRouterService.name);
   private openai: OpenAI | null = null;
+  /** In-memory TTL cache for freight counts per company (60s) */
+  private freightCountsCache = new Map<string, { data: Record<string, number>; ts: number }>();
+  private readonly COUNTS_TTL = 60_000;
 
   constructor(
     private prisma: PrismaService,
@@ -113,7 +116,7 @@ export class WhatsAppRouterService {
         const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
-          await this.wa.sendText(phone, '─────────────────────\n  Operacion cancelada\n─────────────────────');
+          await this.wa.sendText(phone, '❌ Operacion cancelada.');
           await this.showMainMenu(phone, user);
           return;
         }
@@ -514,7 +517,7 @@ export class WhatsAppRouterService {
       switch (action) {
         case 'accept': {
           await this.freights.respond(entityId, { action: 'accepted' } as any, synUser);
-          await this.wa.sendText(phone, '─────────────────────\n  Flete aceptado\n─────────────────────');
+          await this.wa.sendText(phone, '✅ Flete aceptado.');
           break;
         }
         case 'reject': {
@@ -524,7 +527,7 @@ export class WhatsAppRouterService {
         }
         case 'start': {
           await this.freights.start(entityId, synUser);
-          await this.wa.sendText(phone, '─────────────────────\n  Viaje iniciado\n─────────────────────');
+          await this.wa.sendText(phone, '🚛 Viaje iniciado.');
           break;
         }
         case 'confirm_loaded': {
@@ -534,7 +537,7 @@ export class WhatsAppRouterService {
         }
         case 'confirm_finished': {
           await this.freights.confirmFinished(entityId, synUser);
-          await this.wa.sendText(phone, '─────────────────────\n  Entrega confirmada\n─────────────────────');
+          await this.wa.sendText(phone, '✅ Entrega confirmada.');
           break;
         }
         case 'cancel': {
@@ -692,36 +695,92 @@ export class WhatsAppRouterService {
     // Re-load user with updated company + show menu
     const updatedUser = await this.findUserByPhone(phone);
     const companyName = membership.company?.name || 'Empresa';
-    await this.wa.sendText(phone,
-      `─────────────────────\n  Operando como: *${companyName}*\n─────────────────────`);
+    await this.wa.sendText(phone, `🏢 Operando como: ${companyName}.`);
     if (updatedUser) await this.showMainMenu(phone, updatedUser);
+  }
+
+  // ======================== FREIGHT COUNTS (cached) ====================
+
+  private async getFreightCounts(companyId: string): Promise<Record<string, number>> {
+    const cached = this.freightCountsCache.get(companyId);
+    if (cached && Date.now() - cached.ts < this.COUNTS_TTL) return cached.data;
+
+    const counts = await this.prisma.freight.groupBy({
+      by: ['status'],
+      where: {
+        status: { notIn: ['finished', 'canceled'] },
+        OR: [
+          { originCompanyId: companyId },
+          { destCompanyId: companyId },
+          {
+            assignments: {
+              some: {
+                transportCompanyId: companyId,
+                status: { in: ['active', 'accepted'] },
+              },
+            },
+          },
+        ],
+      },
+      _count: true,
+    });
+
+    const data: Record<string, number> = {};
+    for (const c of counts) data[c.status] = c._count;
+    this.freightCountsCache.set(companyId, { data, ts: Date.now() });
+
+    // Prune stale entries (>5min)
+    for (const [k, v] of this.freightCountsCache) {
+      if (Date.now() - v.ts > 300_000) this.freightCountsCache.delete(k);
+    }
+
+    return data;
   }
 
   // ======================== SHOW MAIN MENU ==============================
 
   async showMainMenu(phone: string, user: any) {
-    const name = user.name || 'Usuario';
     const role = this.getUserRole(user);
     const activeCoId = user.activeCompanyId || user.companyId;
     const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
     const companyName = activeMem?.company?.name || user.company?.name || '';
     const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
 
-    const userLine = `${name}` +
-      (companyName ? `  ·  ${companyName}` : '') +
-      (roleLabel ? `  ·  ${roleLabel}` : '');
+    // Freight counts for active company (cached 60s)
+    let statsBlock = '';
+    if (activeCoId) {
+      try {
+        const byStatus = await this.getFreightCounts(activeCoId);
+        let total = 0;
+        for (const v of Object.values(byStatus)) total += v;
+
+        const pendientes = (byStatus['pending_assignment'] || 0);
+        const confirmados = (byStatus['assigned'] || 0) + (byStatus['accepted'] || 0);
+        const enCurso = (byStatus['in_progress'] || 0) + (byStatus['loaded'] || 0);
+
+        if (total > 0) {
+          statsBlock =
+            `\n📊 Estado actual de fletes:\n` +
+            `🚛 Activos: ${total}\n` +
+            (pendientes > 0 ? `⏳ Pendientes: ${pendientes}\n` : '') +
+            (confirmados > 0 ? `✅ Confirmados: ${confirmados}\n` : '') +
+            (enCurso > 0 ? `🔄 En curso: ${enCurso}\n` : '');
+        }
+      } catch {
+        // Non-critical — show menu without stats
+      }
+    }
 
     const header =
-      `T O L V I N K\n` +
-      `─────────────────────\n` +
-      `${userLine}\n` +
-      `─────────────────────\n\n`;
+      `*Tolvink*\n\n` +
+      (companyName ? `🏢 Empresa activa: ${companyName}.\n` : '') +
+      (roleLabel ? `👤 Rol: ${roleLabel}.\n` : '');
 
     const features = this.getRoleFeatureSummary(role);
 
     await this.wa.sendButtons(phone,
-      header + features +
-      `\nEnvie un mensaje de texto o un audio con su pedido, o seleccione una opcion.`,
+      header + statsBlock + features +
+      `\nSiguiente paso: escriba la opcion o describa su pedido.`,
       this.getRoleMenuButtons(role),
     );
   }
@@ -731,9 +790,7 @@ export class WhatsAppRouterService {
   private async showHelp(phone: string, user: any) {
     const role = this.getUserRole(user);
 
-    const header =
-      `GUIA DE USO\n` +
-      `─────────────────────\n\n`;
+    const header = `GUIA DE USO\n\n`;
 
     const body =
       `Enviando un mensaje de texto o audio puede realizar las gestiones que tenga habilitadas. ` +
@@ -741,9 +798,7 @@ export class WhatsAppRouterService {
 
     const roleSection = this.getRoleHelpSection(role);
 
-    const footer =
-      `─────────────────────\n` +
-      `Plataforma web:\n${APP_URL}`;
+    const footer = `Plataforma web:\n${APP_URL}`;
 
     await this.wa.sendText(phone, header + body + roleSection + footer);
 
@@ -781,47 +836,40 @@ export class WhatsAppRouterService {
   private getRoleFeatureSummary(role: string): string {
     if (role === 'producer') {
       return (
-        `Funciones disponibles\n\n` +
-        `  ▸ Crear fletes\n` +
-        `  ▸ Gestionar flota propia\n` +
-        `  ▸ Consultar estado en tiempo real\n` +
-        `  ▸ Confirmar cargas\n` +
-        `  ▸ Seguimiento en vivo\n` +
-        `  ▸ Informes PDF\n` +
-        `  ▸ Campos y lotes\n` +
-        `  ▸ Equipo\n`
+        `\n📌 Acciones principales:\n` +
+        `🚛 Crear flete\n` +
+        `📊 Ver fletes del dia\n` +
+        `🌾 Gestionar campos y lotes\n` +
+        `👥 Equipo\n` +
+        `📄 Informes\n`
       );
     }
     if (role === 'plant') {
       return (
-        `Funciones disponibles\n\n` +
-        `  ▸ Fletes pendientes de asignacion\n` +
-        `  ▸ Asignar transportistas\n` +
-        `  ▸ Confirmar recepciones y entregas\n` +
-        `  ▸ Seguimiento en vivo\n` +
-        `  ▸ Informes PDF\n` +
-        `  ▸ Equipo\n`
+        `\n📌 Acciones principales:\n` +
+        `📋 Fletes pendientes de asignacion\n` +
+        `🚛 Asignar transportistas\n` +
+        `📊 Ver fletes del dia\n` +
+        `👥 Equipo\n` +
+        `📄 Informes\n`
       );
     }
     if (role === 'transporter') {
       return (
-        `Funciones disponibles\n\n` +
-        `  ▸ Fletes asignados\n` +
-        `  ▸ Aceptar o rechazar asignaciones\n` +
-        `  ▸ Iniciar viajes\n` +
-        `  ▸ Confirmar carga y entrega\n` +
-        `  ▸ Seguimiento en vivo\n` +
-        `  ▸ Informes PDF\n` +
-        `  ▸ Choferes y camiones\n`
+        `\n📌 Acciones principales:\n` +
+        `📋 Mis asignaciones\n` +
+        `🚛 Aceptar o rechazar viajes\n` +
+        `📊 Ver fletes del dia\n` +
+        `👥 Choferes y camiones\n` +
+        `📄 Informes\n`
       );
     }
     return (
-      `Funciones disponibles\n\n` +
-      `  ▸ Crear y gestionar fletes\n` +
-      `  ▸ Consultar estado\n` +
-      `  ▸ Confirmar cargas y entregas\n` +
-      `  ▸ Seguimiento en vivo\n` +
-      `  ▸ Informes PDF\n`
+      `\n📌 Acciones principales:\n` +
+      `🚛 Crear y gestionar fletes\n` +
+      `📊 Ver fletes del dia\n` +
+      `👥 Equipo\n` +
+      `📄 Informes\n`
     );
   }
 
@@ -967,7 +1015,7 @@ export class WhatsAppRouterService {
     });
 
     await this.wa.sendList(phone,
-      `${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}\n─────────────────────\nSeleccione uno para ver el detalle.`,
+      `🚛 ${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}.\n\nSeleccione uno para ver el detalle.`,
       'VER FLETES',
       [{ title: 'FLETES ACTIVOS', rows }],
     );
@@ -1048,16 +1096,14 @@ export class WhatsAppRouterService {
       ? new Date(freight.loadDate).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit', year: 'numeric' })
       : '';
 
-    let text = `${freight.code}  ·  ${statusLabel}\n`;
-    text += `─────────────────────\n`;
-    text += `Carga: ${items}\n`;
-    text += `Origen: ${freight.originName || freight.originCompany?.name || '–'}\n`;
-    text += `Destino: ${freight.destName || freight.destCompany?.name || '–'}\n`;
-    text += `Transporte: ${transportLine}\n`;
-    if (loadDate) text += `Fecha: ${loadDate}${freight.loadTime ? `  ${freight.loadTime}` : ''}\n`;
-    if (freight.notes) text += `Obs: ${freight.notes}\n`;
-    text += `─────────────────────\n`;
-    text += `${APP_URL}/track?token=${freight.shareToken}`;
+    let text = `🚛 ${freight.code} — ${statusLabel}\n\n`;
+    text += `📦 Carga: ${items}\n`;
+    text += `📍 Origen: ${freight.originName || freight.originCompany?.name || '–'}\n`;
+    text += `📍 Destino: ${freight.destName || freight.destCompany?.name || '–'}\n`;
+    text += `👤 Transporte: ${transportLine}\n`;
+    if (loadDate) text += `📅 Fecha: ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
+    if (freight.notes) text += `📝 Obs: ${freight.notes}\n`;
+    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/track?token=${freight.shareToken}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);
