@@ -162,7 +162,7 @@ export class AiService implements OnModuleDestroy {
           const READ_ONLY_TOOLS = new Set([
             'list_freights', 'get_freight_detail', 'search_plants', 'list_lots', 'list_fields',
             'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers',
-            'generate_tracking_link', 'generate_report_link', 'generate_daily_map_link',
+            'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
           ]);
 
           const toolBlocks = response.content.filter((b: any) => b.type === 'tool_use');
@@ -357,6 +357,10 @@ PRIORIDAD EN CADA RESPUESTA:
 7. NUNCA exponga UUIDs internos. Solo codigos FLT-XXXX.
 8. Audio transcripto puede contener errores foneticos (ej: "solla" = Soja, "el triyo" = El Trillo).
    Interpretar la INTENCION del usuario. Si una busqueda no devuelve resultados, intentar variaciones foneticas.
+9. NUNCA muestre coordenadas numericas (latitud/longitud) al usuario. Si el usuario pregunta por una ubicacion
+   (campo, lote, planta, origen, destino, flete), SIEMPRE use generate_map_link o generate_tracking_link para
+   generar un link al mapa Tolvink. Si get_freight_detail devuelve mapLink, incluirlo directamente.
+   El usuario debe recibir un LINK clickeable, nunca numeros de coordenadas.
 
 [MANEJO DE DATOS FALTANTES]
 
@@ -531,7 +535,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'get_freight_detail',
-      description: 'Detalle completo de un flete por codigo FLT-XXXX.',
+      description: 'Detalle completo de un flete por codigo FLT-XXXX. Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicacion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -786,6 +790,23 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['code'],
       },
     },
+    // ---- View location on map ----
+    {
+      name: 'generate_map_link',
+      description: 'Genera un link para ver una ubicacion en el mapa Tolvink. OBLIGATORIO cuando el usuario pregunta por la ubicacion de un campo, lote, planta, origen o destino. Acepta 1 o 2 puntos (origen + destino). NUNCA devolver coordenadas numericas — siempre usar esta herramienta.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          lat: { type: 'number', description: 'Latitud del punto principal' },
+          lng: { type: 'number', description: 'Longitud del punto principal' },
+          name: { type: 'string', description: 'Nombre del lugar (campo, lote, planta, origen)' },
+          destLat: { type: 'number', description: 'Latitud del destino (opcional, para mostrar ruta)' },
+          destLng: { type: 'number', description: 'Longitud del destino (opcional)' },
+          destName: { type: 'string', description: 'Nombre del destino (opcional)' },
+        },
+        required: ['lat', 'lng', 'name'],
+      },
+    },
     // ---- Report PDF link ----
     {
       name: 'generate_report_link',
@@ -970,6 +991,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'attach_document': return await this.toolAttachDocument(input, user, synUser, session);
         case 'generate_location_link': return await this.toolGenerateLocationLink(input, session);
         case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input, user);
+        case 'generate_map_link': return await this.toolGenerateMapLink(input);
         case 'generate_report_link': return await this.toolGenerateReportLink(input, user);
         case 'generate_daily_map_link': return await this.toolGenerateDailyMapLink(user);
         case 'share_live_location': return await this.toolShareLiveLocation(input, user);
@@ -1103,12 +1125,28 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       c === freight.originCompanyId || c === freight.destCompanyId);
 
     const assignment = freight.assignments[0];
+    const originName = (freight as any).originName || freight.originCompany?.name || 'N/A';
+    const destName = (freight as any).destName || freight.destCompany?.name || 'N/A';
+    const oLat = (freight as any).originLat ? Number((freight as any).originLat) : null;
+    const oLng = (freight as any).originLng ? Number((freight as any).originLng) : null;
+    const dLat = (freight as any).destLat ? Number((freight as any).destLat) : null;
+    const dLng = (freight as any).destLng ? Number((freight as any).destLng) : null;
+
+    // Build map link if coordinates available
+    let mapLink: string | null = null;
+    if (oLat && oLng) {
+      const p = new URLSearchParams();
+      p.set('lat', oLat.toFixed(6)); p.set('lng', oLng.toFixed(6)); p.set('n', originName.slice(0, 60));
+      if (dLat && dLng) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
+      mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
+    }
+
     return JSON.stringify({
       code: freight.code,
       status: freight.status,
       items: freight.items.map((i: any) => ({ grain: i.grain, tons: i.tons })),
-      origin: (freight as any).originName || freight.originCompany?.name || 'N/A',
-      dest: (freight as any).destName || freight.destCompany?.name || 'N/A',
+      origin: originName,
+      dest: destName,
       date: freight.loadDate ? new Date(freight.loadDate).toISOString().split('T')[0] : null,
       time: (freight as any).loadTime || null,
       transporter: assignment?.transportCompany?.name || 'Sin asignar',
@@ -1117,6 +1155,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       // Hide internal notes from pure transporters/drivers
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       link: `${APP_URL}/freights/${freight.id}`,
+      mapLink,
+      originLat: oLat, originLng: oLng,
+      destLat: dLat, destLng: dLng,
     });
   }
 
@@ -1195,7 +1236,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const lots = await this.prisma.lot.findMany({
       where: { companyId: producerCompanyId, active: true },
-      include: { field: { select: { id: true, name: true } } },
+      include: { field: { select: { id: true, name: true, lat: true, lng: true } } },
       take: 100,
     });
 
@@ -1209,11 +1250,18 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       description: (l.field?.name || 'Sin campo').slice(0, 72),
     }));
 
+    // Include lot data with coords so AI can generate map links
+    const lotsData = lots.map((l: any) => ({
+      id: l.id, name: l.name, fieldName: l.field?.name || null,
+      lat: l.lat ? Number(l.lat) : (l.field?.lat ? Number(l.field.lat) : null),
+      lng: l.lng ? Number(l.lng) : (l.field?.lng ? Number(l.field.lng) : null),
+    }));
+
     return this.storePendingSelection(session, items, {
       headerText: '🗺️ Lotes registrados.\nSeleccione uno para ver detalles:',
       listButtonLabel: 'Ver lotes',
       sectionTitle: 'LOTES',
-    }, 'lot_info');
+    }, 'lot_info', { lots: lotsData });
   }
 
   // ---- prepare_freight ----
@@ -1699,9 +1747,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       description: `${f.lots?.length || 0} lote${f.lots?.length !== 1 ? 's' : ''}${f.address ? ' · ' + f.address : ''}`.slice(0, 72),
     }));
 
-    // Include full field data so AI can answer follow-up questions
+    // Include full field data so AI can answer follow-up questions (includes coords for map links)
     const fieldsData = fields.map((f: any) => ({
       id: f.id, name: f.name, address: f.address,
+      lat: f.lat ? Number(f.lat) : null, lng: f.lng ? Number(f.lng) : null,
       lots: f.lots.map((l: any) => ({ id: l.id, name: l.name })),
     }));
 
@@ -1957,6 +2006,30 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return JSON.stringify({
       url,
       message: `Aca tenes el link de seguimiento en vivo del flete ${code}. Abrilo para ver la ruta y posicion del camion en tiempo real.`,
+    });
+  }
+
+  // ---- generate_map_link ----
+  private toolGenerateMapLink(input: any): string {
+    const lat = Number(input.lat);
+    const lng = Number(input.lng);
+    if (isNaN(lat) || isNaN(lng)) return JSON.stringify({ error: 'Coordenadas invalidas' });
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const params = new URLSearchParams();
+    params.set('lat', lat.toFixed(6));
+    params.set('lng', lng.toFixed(6));
+    params.set('n', (input.name || 'Ubicación').slice(0, 60));
+    if (input.destLat != null && input.destLng != null) {
+      params.set('dlat', Number(input.destLat).toFixed(6));
+      params.set('dlng', Number(input.destLng).toFixed(6));
+      if (input.destName) params.set('dn', input.destName.slice(0, 60));
+    }
+    const url = `${frontendUrl}/ver-mapa?${params.toString()}`;
+
+    return JSON.stringify({
+      url,
+      message: `Abra el link para ver la ubicacion de ${input.name || 'este punto'} en el mapa Tolvink.`,
     });
   }
 
