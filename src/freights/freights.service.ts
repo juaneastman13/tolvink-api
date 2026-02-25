@@ -665,22 +665,23 @@ export class FreightsService implements OnModuleInit {
   async start(freightId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
-    const isOwnFleet = freight.assignments?.some(
-      (a) => a.transportCompanyId === freight.originCompanyId,
-    );
     const ct = await this.resolveCompanyType(user);
-    const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
 
-    this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
+    const { updated: startResult, freight } = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
-    const startResult = await this.prisma.$transaction(async (tx) => {
+      const isOwnFleet = freight.assignments?.some(
+        (a) => a.transportCompanyId === freight.originCompanyId,
+      );
+      const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
+
+      this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
+
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.in_progress, startedAt: new Date() },
@@ -691,13 +692,13 @@ export class FreightsService implements OnModuleInit {
           entityType: 'freight',
           entityId: freightId,
           action: 'started',
-          fromValue: 'accepted',
+          fromValue: freight.status,
           toValue: 'in_progress',
           userId: user.sub,
         },
       });
 
-      return updated;
+      return { updated, freight };
     });
 
     // Notify origin + dest companies
@@ -1106,16 +1107,16 @@ export class FreightsService implements OnModuleInit {
       throw new ForbiddenException('Solo la planta puede autorizar');
     }
 
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (freight.status !== FreightStatus.assigned) {
-      throw new BadRequestException('El flete no esta en estado asignado');
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (freight.status !== FreightStatus.assigned) {
+        throw new BadRequestException('El flete no esta en estado asignado');
+      }
+
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.accepted },

@@ -71,7 +71,6 @@ export class WhatsAppRouterService {
       this.wa.markRead(waMessageId).catch(() => {});
 
       // Find user by phone
-      const normalized = this.wa.normalizePhone(phone);
       const user = await this.findUserByPhone(phone);
 
       if (!user) {

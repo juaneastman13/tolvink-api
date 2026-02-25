@@ -96,7 +96,7 @@ export class SseService {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     const dead: SseClient[] = [];
     for (const c of clients) {
-      try { c.res.write(payload); } catch { dead.push(c); }
+      try { c.res.write(payload); c.lastActivity = Date.now(); } catch { dead.push(c); }
     }
     for (const c of dead) { try { c.res.end(); } catch {} this.removeFromIndex(c); }
   }
@@ -109,7 +109,7 @@ export class SseService {
     const dead: SseClient[] = [];
     for (const c of clients) {
       if (c.userId !== excludeUserId) {
-        try { c.res.write(payload); } catch { dead.push(c); }
+        try { c.res.write(payload); c.lastActivity = Date.now(); } catch { dead.push(c); }
       }
     }
     for (const c of dead) { try { c.res.end(); } catch {} this.removeFromIndex(c); }
