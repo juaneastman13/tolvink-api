@@ -8,6 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { FreightsService } from '../freights/freights.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
+import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
@@ -318,6 +319,38 @@ export class WhatsAppFlowService {
   ) {
     const step = session.flowStep;
 
+    // ---- Generic: resolve numbered text replies for any step with selectionContext ----
+    if (type === 'text' && state.selectionContext) {
+      const resolved = resolveSelectionReply(payload.body?.trim() || '', state.selectionContext);
+      if (resolved === 'next_page' || resolved === 'prev_page') {
+        const ctx = state.selectionContext;
+        const newPage = resolved === 'next_page' ? ctx.page + 1 : ctx.page - 1;
+        if (newPage < 1 || newPage > ctx.totalPages) {
+          await this.wa.sendText(phone, FLOW_HINT + 'No hay mas opciones.');
+          return;
+        }
+        const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
+        await this.updateState(session.id, step, {
+          ...state,
+          selectionContext: { ...ctx, page: result.page, shownItems: result.shownItems },
+        });
+        return;
+      }
+      if (resolved && typeof resolved === 'object') {
+        // Clear selectionContext and re-invoke as synthetic list_reply
+        const { selectionContext: _sc, ...cleanState } = state;
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { flowState: cleanState },
+        });
+        const synPayload = { id: resolved.id, title: resolved.title };
+        return this.createFreightContinue(phone, session, 'list_reply', synPayload, user, cleanState);
+      }
+      // Not a valid selection reply — clear stale context, fall through
+      const { selectionContext: _sc, ...cleanState } = state;
+      state = cleanState;
+    }
+
     // ---- Step: Grain Selection ----
     if (step === 'awaiting_grain') {
       let grain: string | null = null;
@@ -445,7 +478,7 @@ export class WhatsAppFlowService {
       const trucks = await this.prisma.truck.findMany({
         where: { companyId: state.producerCompanyId, active: true },
         include: { assignedUser: { select: { id: true, name: true } } },
-        take: 10,
+        take: 30,
       });
 
       if (trucks.length === 0) {
@@ -454,23 +487,31 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_truck_select', state);
-      await this.wa.sendList(phone,
-        FLOW_HINT + 'Seleccione un camion de su flota:',
-        'VER CAMIONES',
-        [{
-          title: 'CAMIONES DISPONIBLES',
-          rows: trucks.map((t: any) => {
-            const driver = t.assignedUser?.name ? ` · ${t.assignedUser.name}` : '';
-            const info = [t.brand, t.model].filter(Boolean).join(' ');
-            return {
-              id: `truck:${t.id}`,
-              title: t.plate.toUpperCase().slice(0, 24),
-              description: `${info}${driver}`.slice(0, 72) || undefined,
-            };
-          }),
-        }],
-      );
+      const items: SelectionItem[] = trucks.map((t: any) => {
+        const driver = t.assignedUser?.name ? ` - ${t.assignedUser.name}` : '';
+        const info = [t.brand, t.model].filter(Boolean).join(' ');
+        return {
+          id: `truck:${t.id}`,
+          title: t.plate.toUpperCase().slice(0, 24),
+          description: `${info}${driver}`.slice(0, 72) || undefined,
+        };
+      });
+
+      const selConfig = {
+        headerText: FLOW_HINT + 'Seleccione un camion de su flota:',
+        listButtonLabel: 'VER CAMIONES',
+        sectionTitle: 'CAMIONES DISPONIBLES',
+      };
+      const result = await this.wa.sendSelection(phone, items, selConfig);
+      const newState: any = { ...state };
+      if (result.mode === 'numbered_text') {
+        newState.selectionContext = {
+          items, shownItems: result.shownItems,
+          page: result.page, totalPages: result.totalPages, pageSize: 20,
+          purpose: 'truck_select', config: selConfig,
+        };
+      }
+      await this.updateState(session.id, 'awaiting_truck_select', newState);
       return;
     }
 
@@ -515,7 +556,7 @@ export class WhatsAppFlowService {
       const branches = await this.prisma.plant.findMany({
         where: { companyId, active: true },
         select: { id: true, name: true, address: true },
-        take: 10,
+        take: 30,
       });
 
       let plantId = companyId; // Default: company ID (fallback path in freights.service)
@@ -525,21 +566,28 @@ export class WhatsAppFlowService {
         plantId = branches[0].id;
       } else if (branches.length > 1) {
         // Multiple branches → show selection
-        await this.updateState(session.id, 'awaiting_plant_branch', {
+        const branchItems: SelectionItem[] = branches.map(b => ({
+          id: `branch:${b.id}`,
+          title: b.name.toUpperCase().slice(0, 24),
+          description: b.address?.slice(0, 72) || '',
+        }));
+        const selConfig = {
+          headerText: FLOW_HINT + 'Seleccione la sucursal:',
+          listButtonLabel: 'VER SUCURSALES',
+          sectionTitle: 'SUCURSALES',
+        };
+        const result = await this.wa.sendSelection(phone, branchItems, selConfig);
+        const branchState: any = {
           ...state, destCompanyId: companyId, editing: state.editing || false,
-        });
-        await this.wa.sendList(phone,
-          FLOW_HINT + 'Seleccione la sucursal:',
-          'VER SUCURSALES',
-          [{
-            title: 'SUCURSALES',
-            rows: branches.map(b => ({
-              id: `branch:${b.id}`,
-              title: b.name.toUpperCase().slice(0, 24),
-              description: b.address?.slice(0, 72) || '',
-            })),
-          }],
-        );
+        };
+        if (result.mode === 'numbered_text') {
+          branchState.selectionContext = {
+            items: branchItems, shownItems: result.shownItems,
+            page: result.page, totalPages: result.totalPages, pageSize: 20,
+            purpose: 'branch_select', config: selConfig,
+          };
+        }
+        await this.updateState(session.id, 'awaiting_plant_branch', branchState);
         return;
       }
       // 0 or 1 branch → continue with plantId
@@ -574,7 +622,7 @@ export class WhatsAppFlowService {
       const lots = await this.prisma.lot.findMany({
         where: { companyId: state.producerCompanyId, active: true },
         include: { field: { select: { id: true, name: true } } },
-        take: 9,
+        take: 30,
       });
 
       if (lots.length === 0) {
@@ -583,18 +631,27 @@ export class WhatsAppFlowService {
         return;
       }
 
-      await this.updateState(session.id, 'awaiting_lot', { ...state, customDestName });
-      await this.wa.sendList(phone, FLOW_HINT + 'Indicar desde qué lote / campo se carga.', 'SELECCIONAR LOTE', [{
-        title: 'LOTES REGISTRADOS',
-        rows: [
-          ...lots.map((l: any) => ({
-            id: `lot:${l.id}`,
-            title: l.name.toUpperCase().slice(0, 24),
-            description: l.field?.name?.slice(0, 72) || '',
-          })),
-          { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
-        ],
-      }]);
+      const lotItems: SelectionItem[] = lots.map((l: any) => ({
+        id: `lot:${l.id}`,
+        title: l.name.toUpperCase().slice(0, 24),
+        description: l.field?.name?.slice(0, 72) || '',
+      }));
+      const lotConfig = {
+        headerText: FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
+        listButtonLabel: 'SELECCIONAR LOTE',
+        sectionTitle: 'LOTES REGISTRADOS',
+        footer: { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
+      };
+      const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
+      const lotState: any = { ...state, customDestName };
+      if (lotResult.mode === 'numbered_text') {
+        lotState.selectionContext = {
+          items: lotItems, shownItems: lotResult.shownItems,
+          page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
+          footer: lotConfig.footer, purpose: 'lot_select', config: lotConfig,
+        };
+      }
+      await this.updateState(session.id, 'awaiting_lot', lotState);
       return;
     }
 
@@ -1006,7 +1063,7 @@ export class WhatsAppFlowService {
     const lots = await this.prisma.lot.findMany({
       where: { companyId: state.producerCompanyId, active: true },
       include: { field: { select: { id: true, name: true } } },
-      take: 9,
+      take: 30,
     });
 
     if (lots.length === 0) {
@@ -1018,22 +1075,27 @@ export class WhatsAppFlowService {
       return;
     }
 
-    await this.updateState(session.id, 'awaiting_lot', { ...state, destPlantId: plantId });
-    await this.wa.sendList(phone,
-      FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
-      'SELECCIONAR LOTE',
-      [{
-        title: 'LOTES REGISTRADOS',
-        rows: [
-          ...lots.map((l: any) => ({
-            id: `lot:${l.id}`,
-            title: l.name.toUpperCase().slice(0, 24),
-            description: l.field?.name?.slice(0, 72) || '',
-          })),
-          { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
-        ],
-      }],
-    );
+    const lotItems: SelectionItem[] = lots.map((l: any) => ({
+      id: `lot:${l.id}`,
+      title: l.name.toUpperCase().slice(0, 24),
+      description: l.field?.name?.slice(0, 72) || '',
+    }));
+    const lotConfig = {
+      headerText: FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
+      listButtonLabel: 'SELECCIONAR LOTE',
+      sectionTitle: 'LOTES REGISTRADOS',
+      footer: { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
+    };
+    const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
+    const lotState: any = { ...state, destPlantId: plantId };
+    if (lotResult.mode === 'numbered_text') {
+      lotState.selectionContext = {
+        items: lotItems, shownItems: lotResult.shownItems,
+        page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
+        footer: lotConfig.footer, purpose: 'lot_select', config: lotConfig,
+      };
+    }
+    await this.updateState(session.id, 'awaiting_lot', lotState);
   }
 
   /** Show plant selection (reused from multiple steps) */
@@ -1049,7 +1111,7 @@ export class WhatsAppFlowService {
       plantCompanies = await this.prisma.company.findMany({
         where: { id: { in: plantCompanyIds }, active: true },
         select: { id: true, name: true },
-        take: 10,
+        take: 30,
       });
     }
 
@@ -1061,18 +1123,25 @@ export class WhatsAppFlowService {
       return;
     }
 
-    await this.updateState(session.id, 'awaiting_plant', state);
-    await this.wa.sendList(phone,
-      FLOW_HINT + `${state.grain}, ${state.tons} tn, ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
-      'SELECCIONAR PLANTA',
-      [{
-        title: 'PLANTAS DISPONIBLES',
-        rows: plantCompanies.map((c: any) => ({
-          id: `plant:${c.id}`,
-          title: c.name.toUpperCase().slice(0, 24),
-        })),
-      }],
-    );
+    const plantItems: SelectionItem[] = plantCompanies.map((c: any) => ({
+      id: `plant:${c.id}`,
+      title: c.name.toUpperCase().slice(0, 24),
+    }));
+    const plantConfig = {
+      headerText: FLOW_HINT + `${state.grain}, ${state.tons} tn, ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
+      listButtonLabel: 'SELECCIONAR PLANTA',
+      sectionTitle: 'PLANTAS DISPONIBLES',
+    };
+    const result = await this.wa.sendSelection(phone, plantItems, plantConfig);
+    const plantState: any = { ...state };
+    if (result.mode === 'numbered_text') {
+      plantState.selectionContext = {
+        items: plantItems, shownItems: result.shownItems,
+        page: result.page, totalPages: result.totalPages, pageSize: 20,
+        purpose: 'plant_select', config: plantConfig,
+      };
+    }
+    await this.updateState(session.id, 'awaiting_plant', plantState);
   }
 
   /** Show date selection buttons */

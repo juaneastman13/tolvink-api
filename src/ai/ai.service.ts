@@ -289,6 +289,15 @@ FORMATO:
 - Listas: maximo 5 items, una linea por item.
 - PROHIBIDO titulos en mayusculas decorativos. Solo texto operativo directo.
 
+LISTAS Y SELECCION:
+- Listas informativas (consulta sin accion): texto numerado, maximo 10 items por mensaje.
+- Listas para seleccion (el usuario debe elegir): texto numerado con indicacion clara.
+  Formato: "1. Nombre (detalle)\n2. Nombre (detalle)\n..."
+  Cerrar con: "Responda con el numero o nombre."
+- NUNCA listar mas de 20 items en un mensaje. Si hay mas, indicar: "Mostrando 1-20 de N. Diga 'mas' para ver mas."
+- NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
+- Cuando switch_company retorna _selectionSent, NO repetir la lista. Solo confirmar que se mostro.
+
 COHERENCIA EVOLUTIVA:
 - Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
 - Mantener el emoji inicial como bullet. Frases cortas. Una accion por linea.
@@ -2389,7 +2398,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       producer: 'Productor', plant: 'Planta', transporter: 'Transportista',
     };
 
-    // If no companyId, list available companies
+    // If no companyId, send interactive selection to user
     if (!input.companyId) {
       const activeCompanyId = user.activeCompanyId || user.companyId;
       const companies = memberships.map((m: any) => ({
@@ -2398,9 +2407,36 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         type: TYPE_LABELS[m.company?.type] || m.company?.type || 'Desconocido',
         active: m.companyId === activeCompanyId,
       }));
+
+      // Store pending selection for the router to send as interactive list
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const currentState = (freshSession?.flowState as any) || {};
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: {
+          flowState: {
+            ...currentState,
+            _pendingSelection: {
+              items: companies.map(c => ({
+                id: `selco:${c.id}`,
+                title: c.name,
+                description: `${c.type}${c.active ? ' (actual)' : ''}`,
+              })),
+              config: {
+                headerText: 'Seleccione la empresa con la que desea operar:',
+                listButtonLabel: 'Ver empresas',
+                sectionTitle: 'Sus empresas',
+              },
+              purpose: 'company_selection',
+            },
+          },
+        },
+      });
+
       return JSON.stringify({
         companies,
-        message: 'Presentar esta lista al usuario para que elija una empresa.',
+        message: 'Se presenta la lista de empresas al usuario. Espere a que seleccione una.',
+        _selectionSent: true,
       });
     }
 

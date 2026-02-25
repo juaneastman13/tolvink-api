@@ -6,6 +6,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
+import { SelectionItem, SelectionConfig, SelectionResult } from '../common/selection-helpers';
 
 const META_API = 'https://graph.facebook.com/v22.0';
 
@@ -145,6 +146,91 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         },
       },
     });
+  }
+
+  // ======================== SEND SELECTION (auto list vs numbered text) ====
+  // ≤10 items → sendList, >10 → numbered text with pagination
+
+  async sendSelection(
+    phone: string,
+    items: SelectionItem[],
+    config: SelectionConfig,
+  ): Promise<SelectionResult> {
+    const pageSize = Math.min(config.pageSize || 20, 20);
+    const page = config.page || 1;
+    const totalItems = items.length;
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    const currentPage = Math.min(page, totalPages);
+
+    const footerCount = config.footer ? 1 : 0;
+
+    // ≤10 items (including footer): use WhatsApp interactive list
+    if (totalItems + footerCount <= 10) {
+      const rows: WAListRow[] = items.map((item) => ({
+        id: item.id.slice(0, 200),
+        title: item.title.slice(0, 24),
+        description: item.description?.slice(0, 72),
+      }));
+      if (config.footer) {
+        rows.push({
+          id: config.footer.id.slice(0, 200),
+          title: config.footer.title.slice(0, 24),
+          description: config.footer.description?.slice(0, 72),
+        });
+      }
+
+      await this.sendList(
+        phone,
+        config.headerText,
+        (config.listButtonLabel || 'Ver opciones').slice(0, 20),
+        [{ title: (config.sectionTitle || 'Opciones').slice(0, 24), rows }],
+      );
+
+      const allShown = config.footer ? [...items, config.footer] : [...items];
+      return { mode: 'list', shownItems: allShown, page: 1, totalPages: 1, totalItems };
+    }
+
+    // >10 items: numbered text with pagination
+    const startIdx = (currentPage - 1) * pageSize;
+    const endIdx = Math.min(startIdx + pageSize, totalItems);
+    const pageItems = items.slice(startIdx, endIdx);
+
+    let text = config.headerText + '\n\n';
+
+    if (totalPages > 1) {
+      text += `Mostrando ${startIdx + 1}-${endIdx} de ${totalItems}\n\n`;
+    }
+
+    pageItems.forEach((item, i) => {
+      const num = startIdx + i + 1;
+      const desc = item.description ? ` (${item.description})` : '';
+      text += `${num}. ${item.title}${desc}\n`;
+    });
+
+    if (config.footer) {
+      text += `\n0. ${config.footer.title}`;
+      if (config.footer.description) text += ` (${config.footer.description})`;
+      text += '\n';
+    }
+
+    text += '\nResponda con el numero o nombre exacto.';
+
+    if (totalPages > 1 && currentPage < totalPages) {
+      text += '\nEscriba "mas" para ver mas opciones.';
+    }
+    if (currentPage > 1) {
+      text += '\nEscriba "anterior" para la pagina anterior.';
+    }
+
+    await this.sendText(phone, text);
+
+    return {
+      mode: 'numbered_text',
+      shownItems: pageItems,
+      page: currentPage,
+      totalPages,
+      totalItems,
+    };
   }
 
   // ======================== SEND TEMPLATE ================================

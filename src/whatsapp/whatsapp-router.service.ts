@@ -10,6 +10,7 @@ import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AiService } from '../ai/ai.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
+import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -100,6 +101,18 @@ export class WhatsAppRouterService {
             await this.handleCompanySelection(phone, user, payload.id.split(':').slice(1).join(':'));
             return;
           }
+          // Handle numeric/text reply for company selection (>10 companies)
+          if (type === 'text' && sState.selectionContext?.purpose === 'company_selection') {
+            const resolved = resolveSelectionReply(payload.body?.trim() || '', sState.selectionContext);
+            if (resolved === 'next_page' || resolved === 'prev_page') {
+              await this.handleSelectionPagination(phone, user, mcSession!, sState, resolved);
+              return;
+            }
+            if (resolved && typeof resolved === 'object' && resolved.id.startsWith('selco:')) {
+              await this.handleCompanySelection(phone, user, resolved.id.replace('selco:', ''));
+              return;
+            }
+          }
           await this.sendCompanySelectionList(phone, user);
           return;
         }
@@ -164,6 +177,38 @@ export class WhatsAppRouterService {
 
     // Edge case: empty or whitespace-only message
     if (!t) return;
+
+    // ---- Check for active selection context (numbered text reply) ----
+    const selSession = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (selSession) {
+      const selState = (selSession.flowState as any) || {};
+      if (selState.selectionContext) {
+        const resolved = resolveSelectionReply(t, selState.selectionContext);
+        if (resolved === 'next_page' || resolved === 'prev_page') {
+          await this.handleSelectionPagination(phone, user, selSession, selState, resolved);
+          return;
+        }
+        if (resolved && typeof resolved === 'object') {
+          // Clear selection context + dispatch
+          const { selectionContext, ...cleanState } = selState;
+          await this.prisma.whatsAppSession.update({
+            where: { id: selSession.id },
+            data: { flowState: cleanState },
+          });
+          await this.dispatchSelectionResult(phone, user, resolved, selectionContext.purpose);
+          return;
+        }
+        // Not a selection reply — clear stale context, fall through
+        const { selectionContext, ...cleanState } = selState;
+        await this.prisma.whatsAppSession.update({
+          where: { id: selSession.id },
+          data: { flowState: cleanState },
+        });
+      }
+    }
 
     // Fast path: freight code lookup (no AI needed)
     if (/^FLT-\d{4,}$/i.test(t)) {
@@ -254,6 +299,30 @@ export class WhatsAppRouterService {
       const result = await this.ai.chat(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;
+
+      // Check for pending selection (set by AI tools like switch_company)
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const latestState = (freshSession?.flowState as any) || {};
+      if (latestState._pendingSelection) {
+        const { _pendingSelection, ...cleanState } = latestState;
+        const selResult = await this.wa.sendSelection(phone, _pendingSelection.items, _pendingSelection.config);
+
+        // Store selection context for numeric reply resolution
+        const selCtx: any = {
+          items: _pendingSelection.items,
+          shownItems: selResult.shownItems,
+          page: selResult.page,
+          totalPages: selResult.totalPages,
+          pageSize: 20,
+          purpose: _pendingSelection.purpose,
+          config: _pendingSelection.config,
+        };
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { flowState: { ...cleanState, selectionContext: selCtx } },
+        });
+        return;
+      }
 
       // Split long messages (WhatsApp max ~4096 chars per message)
       if (reply.length > 4000) {
@@ -631,17 +700,43 @@ export class WhatsAppRouterService {
       producer: 'Productor', plant: 'Planta', transporter: 'Transportista',
     };
     const activeId = user.activeCompanyId || user.companyId;
-    const rows = memberships.slice(0, 10).map((m: any) => ({
+    const items: SelectionItem[] = memberships.map((m: any) => ({
       id: `selco:${m.companyId}`,
       title: (m.company?.name || 'Empresa').slice(0, 24),
       description: ((TYPE_LABELS[m.company?.type] || m.company?.type || '') +
         (m.companyId === activeId ? ' (actual)' : '')).slice(0, 72),
     }));
-    await this.wa.sendList(phone,
-      'Tiene acceso a varias empresas.\nSeleccione con cual desea operar:',
-      'Ver empresas',
-      [{ title: 'Sus empresas', rows }],
-    );
+
+    const selConfig = {
+      headerText: 'Tiene acceso a varias empresas.\nSeleccione con cual desea operar:',
+      listButtonLabel: 'Ver empresas',
+      sectionTitle: 'Sus empresas',
+    };
+    const result = await this.wa.sendSelection(phone, items, selConfig);
+
+    if (result.mode === 'numbered_text') {
+      // Store selection context in session for numeric reply resolution
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (session) {
+        const state = (session.flowState as any) || {};
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            flowState: {
+              ...state,
+              selectionContext: {
+                items, shownItems: result.shownItems,
+                page: result.page, totalPages: result.totalPages, pageSize: 20,
+                purpose: 'company_selection', config: selConfig,
+              },
+            },
+          },
+        });
+      }
+    }
   }
 
   private async handleCompanySelection(phone: string, user: any, companyId: string) {
@@ -697,6 +792,46 @@ export class WhatsAppRouterService {
     const companyName = membership.company?.name || 'Empresa';
     await this.wa.sendText(phone, `🏢 Operando como: ${companyName}.`);
     if (updatedUser) await this.showMainMenu(phone, updatedUser);
+  }
+
+  // ======================== SELECTION DISPATCH ========================
+
+  private async dispatchSelectionResult(
+    phone: string, user: any, item: SelectionItem, purpose: string,
+  ) {
+    const id = item.id.includes(':') ? item.id.split(':').slice(1).join(':') : item.id;
+
+    switch (purpose) {
+      case 'company_selection':
+        await this.handleCompanySelection(phone, user, id);
+        break;
+      case 'freight_selection':
+        await this.showFreightDetail(phone, user, id);
+        break;
+      default:
+        await this.handleListReply(phone, user, item.id, item.title);
+    }
+  }
+
+  private async handleSelectionPagination(
+    phone: string, user: any, session: any, state: any, direction: 'next_page' | 'prev_page',
+  ) {
+    const ctx = state.selectionContext;
+    const newPage = direction === 'next_page' ? ctx.page + 1 : ctx.page - 1;
+    if (newPage < 1 || newPage > ctx.totalPages) {
+      await this.wa.sendText(phone, 'No hay mas paginas.');
+      return;
+    }
+    const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          selectionContext: { ...ctx, page: result.page, shownItems: result.shownItems },
+        },
+      },
+    });
   }
 
   // ======================== FREIGHT COUNTS (cached) ====================
@@ -983,7 +1118,7 @@ export class WhatsAppRouterService {
         ],
       },
       orderBy: { createdAt: 'desc' },
-      take: 10,
+      take: 30,
       include: {
         items: true,
         assignments: {
@@ -1000,8 +1135,8 @@ export class WhatsAppRouterService {
       return;
     }
 
-    // Build list message
-    const rows = activeFreights.slice(0, 10).map((f: any) => {
+    // Build selection items
+    const items: SelectionItem[] = activeFreights.map((f: any) => {
       const grain = f.items?.[0]?.grain || 'Sin grano';
       const tons = f.items?.[0]?.tons || '?';
       const emoji = STATUS_EMOJI[f.status] || '';
@@ -1014,11 +1149,36 @@ export class WhatsAppRouterService {
       };
     });
 
-    await this.wa.sendList(phone,
-      `🚛 ${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}.\n\nSeleccione uno para ver el detalle.`,
-      'VER FLETES',
-      [{ title: 'FLETES ACTIVOS', rows }],
-    );
+    const selConfig = {
+      headerText: `🚛 ${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}.\n\nSeleccione uno para ver el detalle.`,
+      listButtonLabel: 'VER FLETES',
+      sectionTitle: 'FLETES ACTIVOS',
+    };
+    const result = await this.wa.sendSelection(phone, items, selConfig);
+
+    if (result.mode === 'numbered_text') {
+      // Store selection context in session
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (session) {
+        const state = (session.flowState as any) || {};
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            flowState: {
+              ...state,
+              selectionContext: {
+                items, shownItems: result.shownItems,
+                page: result.page, totalPages: result.totalPages, pageSize: 20,
+                purpose: 'freight_selection', config: selConfig,
+              },
+            },
+          },
+        });
+      }
+    }
   }
 
   // ======================== SHOW FREIGHT BY CODE ========================
