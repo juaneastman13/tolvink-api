@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AiService } from '../ai/ai.service';
+import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import OpenAI from 'openai';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -317,6 +318,29 @@ export class WhatsAppRouterService {
     await this.handleAiChat(phone, user, textForAi);
   }
 
+  // ======================== LOCATION SAVED (auto-trigger from save-location endpoint) ===
+
+  async onLocationSaved(sessionId: string): Promise<void> {
+    const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+    if (!session?.phone) {
+      this.logger.warn(`onLocationSaved: session ${sessionId} not found or missing phone`);
+      return;
+    }
+
+    const user = await this.findUserByPhone(session.phone);
+    if (!user) {
+      this.logger.warn(`onLocationSaved: user not found for phone ${session.phone}`);
+      return;
+    }
+
+    const state = (session.flowState as any) || {};
+    const loc = state.lastLocation;
+    const desc = loc?.address || loc?.name || (loc ? `${loc.lat}, ${loc.lng}` : 'sin detalle');
+    const textForAi = `[Ubicacion confirmada desde el mapa: ${desc} (lat: ${loc?.lat}, lng: ${loc?.lng})]`;
+
+    await this.handleAiChat(session.phone, user, textForAi);
+  }
+
   // ======================== AUDIO HANDLER =================================
 
   private async handleAudio(phone: string, user: any, payload: any) {
@@ -569,10 +593,14 @@ export class WhatsAppRouterService {
       }
     } catch (e) {
       this.logger.error(`Button action "${action}" failed: ${e.message}`, e.stack);
-      const userMessage = e.status === 400 || e.response?.statusCode === 400
-        ? e.message
+      // H2: Sanitize error messages — only pass safe business errors
+      const raw = String(e.message || '');
+      const isSafe400 = (e.status === 400 || e.response?.statusCode === 400)
+        && /no encontrad|no se puede|debe|requiere|invalido|ya.*asignad/i.test(raw);
+      const userMessage = isSafe400
+        ? raw.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim().slice(0, 200)
         : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
-      await this.wa.sendText(phone, userMessage);
+      await this.wa.sendText(phone, userMessage || 'Ocurrio un error procesando su solicitud.');
     }
   }
 
@@ -1124,34 +1152,6 @@ export class WhatsAppRouterService {
   // ======================== BUILD SYNTHETIC USER ========================
 
   buildSyntheticUser(dbUser: any): any {
-    // Build a user object compatible with FreightsService methods
-    const companyByType = (dbUser.companyByType as any) || {};
-    const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];
-
-    // Determine primary company type from memberships
-    let companyType = 'unknown';
-    let companyId = dbUser.activeCompanyId || dbUser.companyId || null;
-
-    if (userTypes.length > 0) {
-      companyType = userTypes[0];
-    } else if (dbUser.company?.type) {
-      companyType = dbUser.company.type;
-    } else if (dbUser.memberships?.length > 0) {
-      const firstMembership = dbUser.memberships[0];
-      const types = Array.isArray(firstMembership.company?.types) && firstMembership.company.types.length > 0
-        ? firstMembership.company.types
-        : [firstMembership.company?.type];
-      companyType = types[0] || 'unknown';
-      companyId = companyId || firstMembership.companyId;
-    }
-
-    return {
-      sub: dbUser.id,
-      role: dbUser.role || 'operator',
-      companyId,
-      companyType,
-      userType: companyType,
-      activeCompanyId: dbUser.activeCompanyId,
-    };
+    return buildSyntheticUserHelper(dbUser);
   }
 }

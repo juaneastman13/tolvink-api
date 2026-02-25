@@ -1973,8 +1973,24 @@ export class FreightsService {
     body: { name: string; url: string; type?: string; step?: string },
     user: any,
   ) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: {
+        id: true, originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
+      },
+    });
     if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    // Access control: user must belong to one of the freight's companies or be the assigned driver
+    if (user.role !== 'platform_admin') {
+      const allIds = await this.resolveAllCompanyIds(user);
+      const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
+        ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+      const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+      const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
+      if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
+    }
 
     return this.prisma.freightDocument.create({
       data: {

@@ -372,6 +372,12 @@ export class WhatsAppController {
     });
 
     this.logger.log(`Location saved for session ${session.id}: ${body.lat},${body.lng}`);
+
+    // Auto-trigger AI flow continuation (fire-and-forget)
+    this.router.onLocationSaved(session.id).catch(err =>
+      this.logger.error(`onLocationSaved failed: ${err.message}`),
+    );
+
     return { success: true };
   }
 }

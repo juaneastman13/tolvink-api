@@ -7,6 +7,7 @@ import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { FreightsService } from '../freights/freights.service';
+import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
@@ -14,6 +15,11 @@ const FLOW_TIMEOUT_MINUTES = 10;
 const FLOW_HINT = '_cancelar · menu_\n─────────────────────\n\n';
 
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
+
+// M4: Per-user flow rate limiting (30 flow messages per 5 minutes)
+const FLOW_RATE_WINDOW_MS = 5 * 60 * 1000;
+const FLOW_RATE_MAX = 30;
+const flowRateMap = new Map<string, { count: number; resetAt: number }>();
 
 @Injectable()
 export class WhatsAppFlowService {
@@ -91,6 +97,23 @@ export class WhatsAppFlowService {
     const flowStep = session.flowStep;
     const state = (session.flowState as any) || {};
 
+    // M4: Flow rate limiting
+    const userId = user?.id || phone;
+    const now = Date.now();
+    const rateEntry = flowRateMap.get(userId);
+    if (rateEntry && now < rateEntry.resetAt) {
+      if (rateEntry.count >= FLOW_RATE_MAX) {
+        await this.wa.sendText(phone, 'Ha enviado muchos mensajes en poco tiempo. Aguarde unos minutos.');
+        return;
+      }
+      rateEntry.count++;
+    } else {
+      flowRateMap.set(userId, { count: 1, resetAt: now + FLOW_RATE_WINDOW_MS });
+    }
+    if (flowRateMap.size > 100) {
+      for (const [k, v] of flowRateMap) { if (now > v.resetAt) flowRateMap.delete(k); }
+    }
+
     try {
       switch (flowType) {
         case 'reject_freight':
@@ -111,15 +134,14 @@ export class WhatsAppFlowService {
       }
     } catch (e) {
       this.logger.error(`Flow "${flowType}" step "${flowStep}" error: ${e.message}`, e.stack);
-      // Sanitize: never expose internal error details to user
-      const raw400 = e.status === 400 || e.response?.statusCode === 400
-        ? String(e.message || '').slice(0, 200)
-        : '';
-      const userMessage = raw400
-        ? raw400.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim() || 'Datos inválidos.'
-        : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
-      await this.wa.sendText(phone, userMessage);
-      await this.endFlow(session.id);
+      // H2: Sanitize — map known safe patterns, strip everything else
+      const raw = String(e.message || '').slice(0, 200);
+      const isSafe = e.status === 400 || e.response?.statusCode === 400;
+      const cleaned = isSafe ? raw.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim() : '';
+      const userMessage = cleaned || 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
+      // H3: Guarantee endFlow even if sendText fails
+      try { await this.wa.sendText(phone, userMessage); } catch {}
+      try { await this.endFlow(session.id); } catch {}
     }
   }
 
@@ -1242,32 +1264,6 @@ export class WhatsAppFlowService {
   }
 
   private buildSyntheticUser(dbUser: any): any {
-    const companyByType = (dbUser.companyByType as any) || {};
-    const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];
-
-    let companyType = 'unknown';
-    let companyId = dbUser.activeCompanyId || dbUser.companyId || '';
-
-    if (userTypes.length > 0) {
-      companyType = userTypes[0];
-    } else if (dbUser.company?.type) {
-      companyType = dbUser.company.type;
-    } else if (dbUser.memberships?.length > 0) {
-      const firstMembership = dbUser.memberships[0];
-      const types = Array.isArray(firstMembership.company?.types) && firstMembership.company.types.length > 0
-        ? firstMembership.company.types
-        : [firstMembership.company?.type];
-      companyType = types[0] || 'unknown';
-      companyId = companyId || firstMembership.companyId;
-    }
-
-    return {
-      sub: dbUser.id,
-      role: dbUser.role || 'operator',
-      companyId,
-      companyType,
-      userType: companyType,
-      activeCompanyId: dbUser.activeCompanyId,
-    };
+    return buildSyntheticUserHelper(dbUser);
   }
 }

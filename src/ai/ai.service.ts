@@ -11,6 +11,7 @@ import { FieldsService } from '../fields/fields.service';
 import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
 import Anthropic from '@anthropic-ai/sdk';
+import { buildSyntheticUser } from '../common/build-synthetic-user';
 
 const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
@@ -227,6 +228,19 @@ export class AiService {
       ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Este usuario pertenece a ${activeMemberships.length} empresas. Si solicita cambiar de empresa u operar con otra, usar switch_company. Sin companyId devuelve la lista; con companyId ejecuta el cambio.`
       : '';
 
+    // M3: Role-specific tool restrictions
+    let roleRestrictions = '';
+    const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
+    if (isChofer) {
+      roleRestrictions = '\n- Choferes: SOLO accept_freight, reject_freight, start_freight, confirm_loaded, confirm_finished, get_freight_detail, list_freights, generate_tracking_link.';
+    } else if (companyType.includes('producer') && !companyType.includes('plant')) {
+      roleRestrictions = '\n- Productores: NO usar accept_freight, reject_freight, start_freight (excepto chofer de flota interna).';
+    } else if (companyType.includes('plant') && !companyType.includes('producer')) {
+      roleRestrictions = '\n- Plantas: NO usar prepare_freight, create_field, create_lot.';
+    } else if (companyType.includes('transporter') && !companyType.includes('plant') && !companyType.includes('producer')) {
+      roleRestrictions = '\n- Transportistas: NO usar prepare_freight, assign_transporter, create_field, create_lot.';
+    }
+
     return `Usted se comunica con Tolvink, plataforma de gestion de fletes de granos.
 
 USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}${multiCompanyNote}
@@ -234,33 +248,46 @@ USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}${mult
 ═══ PROTOCOLO DE COMUNICACION (OBLIGATORIO) ═══
 
 ESTILO:
-- Tono formal, profesional e institucional.
+- Tono profesional operativo. Claro, directo y natural.
+- Evitar rigidez institucional y evitar informalidad.
 - Tratamiento de USTED en toda comunicacion (usted, su, le, puede, debe).
 - PROHIBIDO: tuteo, voseo, expresiones coloquiales (genial, dale, barbaro, jaja, etc.).
 - PROHIBIDO: interjecciones informales, risas, muletillas conversacionales.
 - PROHIBIDO: disclaimers ("cabe mencionar", "es importante notar").
+- PROHIBIDO: parrafos extensos. Cada mensaje debe leerse en menos de 5 segundos.
 - NO salude si ya lo hizo en esta conversacion.
-- NO repita informacion ya proporcionada.
+- NO repita informacion ya confirmada.
 - SALUDOS SIN SOLICITUD: Si el usuario envia un saludo generico ("hola", "buenas", "buen dia", etc.)
   sin una solicitud concreta, responda UNICAMENTE con el menu de presentacion del sistema.
   NO genere respuestas conversacionales ante saludos iniciales.
 
-EMOJIS:
-- Solo emojis funcionales relacionados con operaciones logisticas.
-- Permitidos: 🚛 📍 🏢 👤 📦 📅 ⚠️ 📋 📄
-- PROHIBIDOS: emojis recreativos, emocionales o decorativos.
+EMOJIS — SISTEMA OFICIAL:
+- 🌾 Campo | 🗺️ Lote | 🚛 Viaje | 📦 Carga
+- 📍 Origen/Destino | 📅 Fecha | 🕒 Hora | 👤 Transportista
+- 🏢 Empresa | 🔄 Modificacion | 📝 Registro | ⏳ Pendiente
+- ✅ Confirmado | ⚠️ Advertencia | 🔐 Accion restringida | ⛔ Denegado | ❌ Error
 - Maximo 2 emojis por mensaje.
+- PROHIBIDOS: emojis recreativos, emocionales o decorativos fuera de este sistema.
+- El emoji SIEMPRE va al INICIO de la linea, funciona como bullet visual.
+- NUNCA colocar emojis en el medio o al final de una linea.
 
 FORMATO:
-- Respuestas breves: 2-4 lineas para consultas simples.
-- Listas: maximo 5 items, una linea por item con "▸" como viñeta.
+- Cada linea representa UNA accion o estado concreto.
+- Estructura base: [Emoji] Accion concreta.
+- "Siguiente paso:" se incluye solo si corresponde. NUNCA lleva emoji.
+- Separar bloques con un salto de linea.
+- Si no hay siguiente paso, cerrar con una linea clara sin texto innecesario.
 - PROHIBIDO usar asteriscos para negritas. NUNCA escriba *texto*. Texto plano siempre.
 - Use "·" como separador entre datos en una misma linea.
 - Use "─────────────────────" como linea divisoria cuando necesite separar bloques.
 - NUNCA use markdown de enlaces [text](url). Incluya URLs directas.
-- Estructura en bloques claros. Titulos breves en mayusculas cuando corresponda.
-- Separar informacion critica en lineas independientes.
-- Evitar parrafos extensos. Priorizar bullets concretos.
+- Listas: maximo 5 items, una linea por item.
+- Titulos breves en mayusculas cuando corresponda.
+
+COHERENCIA EVOLUTIVA:
+- Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
+- Mantener el emoji inicial como bullet. Frases cortas. Una accion por linea.
+- No inventar nuevos formatos. No agregar emojis fuera del sistema oficial.
 
 PRIORIDAD EN CADA RESPUESTA:
 1. Claridad operativa.
@@ -305,16 +332,20 @@ PERMISOS:
 - Transportistas/Choferes: aceptar, rechazar, iniciar viaje, confirmar carga/entrega.
 - Rechazo/cancelacion SIEMPRE requiere motivo.
 - NO se permite cancelar en estado in_progress o loaded.
-- Confirmacion de carga requiere toneladas reales.
+- Confirmacion de carga requiere toneladas reales.${roleRestrictions}
 
 ═══ CONFIRMACION DE ACCIONES (CRITICO) ═══
 
-TODAS las herramientas de accion siguen un patron de DOS ETAPAS:
+TODA accion critica requiere confirmacion explicita del usuario antes de ejecutarse.
+Esto incluye: crear, modificar, cancelar, asignar, duplicar, cambiar fecha, cambiar rol, desactivar.
+
+PATRON OBLIGATORIO — DOS ETAPAS:
 1. Al llamar una herramienta de accion, esta PREPARA la accion sin ejecutarla.
-2. Presente el resumen al usuario y consulte: "Confirma la operacion?"
-3. Cuando confirme → OBLIGATORIO llamar confirm_action.
+2. Presente el resumen y el boton CONFIRMAR se muestra automaticamente.
+3. NO ejecutar la accion hasta que el usuario presione CONFIRMAR.
+4. Cuando confirme → OBLIGATORIO llamar confirm_action.
    SIN esta llamada la accion NO se ejecuta. NUNCA indique que se ejecuto sin llamarla.
-4. Si cancela → reconozca la cancelacion. La accion pendiente se descarta automaticamente.
+5. Si cancela → reconozca la cancelacion. La accion pendiente se descarta automaticamente.
 
 Herramientas que requieren confirmacion via confirm_action:
 - accept_freight, reject_freight, start_freight
@@ -829,12 +860,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
         case 'confirm_create_freight': return await this.toolConfirmCreateFreight(user, synUser, session);
         case 'confirm_action': return await this.toolConfirmAction(user, synUser, session);
-        case 'accept_freight': return await this.toolAcceptFreight(input, synUser, session);
-        case 'reject_freight': return await this.toolRejectFreight(input, synUser, session);
-        case 'start_freight': return await this.toolStartFreight(input, synUser, session);
-        case 'confirm_loaded': return await this.toolConfirmLoaded(input, synUser, session);
-        case 'confirm_finished': return await this.toolConfirmFinished(input, synUser, session);
-        case 'cancel_freight': return await this.toolCancelFreight(input, synUser, session);
+        case 'accept_freight': return await this.toolAcceptFreight(input, user, synUser, session);
+        case 'reject_freight': return await this.toolRejectFreight(input, user, synUser, session);
+        case 'start_freight': return await this.toolStartFreight(input, user, synUser, session);
+        case 'confirm_loaded': return await this.toolConfirmLoaded(input, user, synUser, session);
+        case 'confirm_finished': return await this.toolConfirmFinished(input, user, synUser, session);
+        case 'cancel_freight': return await this.toolCancelFreight(input, user, synUser, session);
         case 'list_fields': return await this.toolListFields(user);
         case 'create_field': return await this.toolCreateField(input, user, session);
         case 'create_lot': return await this.toolCreateLot(input, user, session);
@@ -858,7 +889,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
     } catch (e) {
       this.logger.error(`Tool ${toolName} error: ${e.message}`);
-      return JSON.stringify({ error: e.message || 'Error desconocido' });
+      // H2: Don't leak raw error messages to AI/user
+      const safeMsg = /no encontrad|no tiene acceso|no se puede|solo.*pueden|no.*permiso/i.test(e.message || '')
+        ? e.message
+        : 'Error al procesar la solicitud.';
+      return JSON.stringify({ error: safeMsg });
     }
   }
 
@@ -925,6 +960,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: `No tiene acceso al flete ${input.code}` });
     }
 
+    // M1: Determine if user is only a transporter/driver (not origin/dest company)
+    const isOriginOrDest = allUserCompanies.some(c =>
+      c === freight.originCompanyId || c === freight.destCompanyId);
+
     const assignment = freight.assignments[0];
     return JSON.stringify({
       code: freight.code,
@@ -937,7 +976,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       transporter: assignment?.transportCompany?.name || 'Sin asignar',
       driver: assignment?.driver?.name || null,
       truck: assignment?.truck?.plate || null,
-      notes: (freight as any).notes || null,
+      // Hide internal notes from pure transporters/drivers
+      notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       link: `${APP_URL}/freights/${freight.id}`,
     });
   }
@@ -1216,6 +1256,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const { tool, params } = pending;
     this.logger.log(`confirm_action — dispatching: ${tool}`);
 
+    // M2: Clear pendingAction BEFORE execution to prevent double-tap race condition
+    const { pendingAction: _cleared, _pendingButtons: _clearedBtns, ...preExecState } = state;
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { flowState: preExecState },
+    });
+
     let result: string;
 
     try {
@@ -1358,25 +1405,44 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
     } catch (e) {
       this.logger.error(`confirm_action dispatch error (${tool}): ${e.message}`, e.stack?.slice(0, 300));
-      // Don't clear pendingAction on error — user can retry
-      return JSON.stringify({ error: e.message || 'Error al ejecutar la accion. Intente nuevamente.' });
+      // Restore pendingAction so user can retry
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { flowState: { ...preExecState, pendingAction: pending } },
+      }).catch(() => {});
+      // H2: Sanitize — map known error patterns to user-friendly messages
+      const msg = String(e.message || '');
+      const SAFE_ERRORS: [RegExp, string][] = [
+        [/no encontrad/i, 'El recurso no fue encontrado.'],
+        [/no se puede cancelar/i, msg],
+        [/estado.*inv[aá]lido|transici[oó]n/i, 'La operacion no es valida en el estado actual del flete.'],
+        [/ya.*asignad|ya.*acept/i, 'La accion ya fue realizada previamente.'],
+        [/permiso|forbidden|autoriza/i, 'No tiene permisos para realizar esta accion.'],
+        [/chofer no encontrado/i, 'El chofer indicado no fue encontrado en la empresa.'],
+        [/empresa.*no.*encontr/i, 'La empresa indicada no fue encontrada.'],
+        [/membres[ií]a/i, 'El usuario ya no pertenece a la empresa.'],
+      ];
+      const safeMsg = SAFE_ERRORS.find(([re]) => re.test(msg))?.[1] || 'No se pudo ejecutar la accion. Intente nuevamente.';
+      return JSON.stringify({ error: safeMsg });
     }
 
-    // Clear pendingAction (and pendingDocument if attach_document) from session — only on success
-    const { pendingAction: _pa, pendingDocument: _pd, ...cleanState } = state;
-    const finalState = tool === 'attach_document' ? cleanState : { ...cleanState, ...(state.pendingDocument ? { pendingDocument: state.pendingDocument } : {}) };
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: { flowState: finalState },
-    });
+    // pendingAction already cleared pre-execution (M2). Clean up pendingDocument if attach_document.
+    if (tool === 'attach_document') {
+      const { pendingDocument: _pd, ...finalState } = preExecState;
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { flowState: finalState },
+      });
+    }
 
     return result;
   }
 
   // ---- accept_freight ----
-  private async toolAcceptFreight(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolAcceptFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     return this.stageAction(session, 'accept_freight', {
       freightId: freight.id, code: freight.code,
@@ -1384,9 +1450,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- reject_freight ----
-  private async toolRejectFreight(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolRejectFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     return this.stageAction(session, 'reject_freight', {
       freightId: freight.id, code: freight.code, reason: input.reason,
@@ -1394,9 +1461,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- start_freight ----
-  private async toolStartFreight(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolStartFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     return this.stageAction(session, 'start_freight', {
       freightId: freight.id, code: freight.code,
@@ -1404,9 +1472,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- confirm_loaded ----
-  private async toolConfirmLoaded(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolConfirmLoaded(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     return this.stageAction(session, 'confirm_loaded', {
       freightId: freight.id, code: freight.code, tons: input.tons,
@@ -1414,9 +1483,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- confirm_finished ----
-  private async toolConfirmFinished(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolConfirmFinished(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     return this.stageAction(session, 'confirm_finished', {
       freightId: freight.id, code: freight.code,
@@ -1424,9 +1494,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- cancel_freight ----
-  private async toolCancelFreight(input: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+  private async toolCancelFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
     if (['in_progress', 'loaded'].includes(freight.status)) {
       return JSON.stringify({ error: `No se puede cancelar ${input.code} en estado ${freight.status}` });
     }
@@ -1540,6 +1611,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ---- create_truck ----
   private async toolCreateTruck(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden registrar camiones.' });
+    }
     const synUser = this.buildSyntheticUser(user);
     const dto = { plate: input.plate, model: input.model || null };
     const summary = `Registrar camion ${input.plate}${input.model ? ` (${input.model})` : ''}`;
@@ -1551,12 +1626,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ---- create_user ----
   private async toolCreateUser(input: any, user: any, session: any): Promise<string> {
-    if (!this.isCallerAdmin(user)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden crear usuarios.' });
-    }
-
     const producerCompanyId = this.resolveProducerCompanyId(user);
     const companyType = this.resolveCompanyType(user);
+    const targetCompanyId = producerCompanyId || user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, targetCompanyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden crear usuarios.' });
+    }
     const primaryType = companyType.split(',')[0]?.trim() || 'producer';
 
     // Map Spanish role names to Prisma UserRole enum (admin | operator | platform_admin)
@@ -1600,8 +1675,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: 'No hay archivo pendiente. El usuario debe enviar una imagen o documento primero.' });
     }
 
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     const summary = `Adjuntar ${pending.type === 'photo' ? 'imagen' : 'documento'} "${pending.name}" a flete ${freight.code}`;
 
@@ -1846,8 +1922,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden asignar transportistas.' });
     }
 
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     // Resolve "own_fleet" shortcut to user's own company
     let transporterCompanyId = input.transporterCompanyId;
@@ -1868,11 +1945,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       actingCompanyId = this.resolvePlantCompanyId(user);
     } else {
       // Producer assigning own fleet — use the freight's destCompanyId (the plant) as the acting company
-      const fullFreight = await this.prisma.freight.findUnique({
-        where: { id: freight.id },
-        select: { destCompanyId: true },
-      });
-      actingCompanyId = fullFreight?.destCompanyId || this.resolveProducerCompanyId(user);
+      actingCompanyId = freight.destCompanyId || this.resolveProducerCompanyId(user);
     }
 
     const userCompanyId = user.activeCompanyId || user.companyId;
@@ -1896,8 +1969,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
     }
 
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     const assignment = await this.prisma.freightAssignment.findFirst({
       where: { freightId: freight.id, status: { in: ['active', 'accepted'] } },
@@ -1926,8 +2000,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ---- assign_truck_to_freight (multi-truck) ----
   private async toolAssignTruckToFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreight(input.code);
-    if (!freight) return JSON.stringify({ error: `No se encontro ${input.code}` });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
 
     const truckCount = freight.truckCount || 1;
     const assigned = freight.assignedTruckCount || 0;
@@ -2055,11 +2130,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ---- update_user_role ----
   private async toolUpdateUserRole(input: any, user: any, session: any): Promise<string> {
-    if (!this.isCallerAdmin(user)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden cambiar roles.' });
-    }
-
     const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden cambiar roles.' });
+    }
     if (!companyId) {
       return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
     }
@@ -2099,11 +2173,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ---- deactivate_user ----
   private async toolDeactivateUser(input: any, user: any, session: any): Promise<string> {
-    if (!this.isCallerAdmin(user)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden desactivar usuarios.' });
-    }
-
     const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden desactivar usuarios.' });
+    }
     if (!companyId) {
       return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
     }
@@ -2332,11 +2405,30 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
   // ======================== HELPERS =====================================
 
-  private async resolveFreight(code: string): Promise<any | null> {
-    return this.prisma.freight.findFirst({
+  /** Resolve freight by code WITH access control — returns { freight } or { error } */
+  private async resolveFreightWithAccess(code: string, user: any): Promise<{ freight?: any; error?: string }> {
+    const freight = await this.prisma.freight.findFirst({
       where: { code: code.toUpperCase() },
-      select: { id: true, code: true, status: true, truckCount: true, assignedTruckCount: true, isMultiTruck: true, destCompanyId: true },
+      select: {
+        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
+        isMultiTruck: true, destCompanyId: true, originCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
+      },
     });
+    if (!freight) return { error: `No se encontro ${code}` };
+
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [
+      freight.originCompanyId, freight.destCompanyId,
+      ...freight.assignments.map((a: any) => a.transportCompanyId),
+    ].filter(Boolean);
+    const isDriver = freight.assignments.some((a: any) => a.driverId === user.id);
+    if (!isDriver && !allUserCompanies.some((c: string) => freightCompanies.includes(c))) {
+      return { error: `No tiene acceso al flete ${code}` };
+    }
+    return { freight };
   }
 
   private resolveCompanyType(user: any): string {
@@ -2386,36 +2478,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return user.activeCompanyId || user.companyId || null;
   }
 
-  private isCallerAdmin(user: any): boolean {
-    const userRole = user.role || '';
-    const memberRoles = user.memberships?.map((m: any) => m.role) || [];
-    const allRoles = [userRole, ...memberRoles];
-    return allRoles.some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r)) || user.isSuperAdmin;
+  /** Check if caller is admin/gerente — scoped to specific company when provided */
+  private isCallerAdminForCompany(user: any, companyId?: string): boolean {
+    if (user.isSuperAdmin || user.role === 'platform_admin') return true;
+    if (!companyId) {
+      // Fallback: check any membership
+      const memberRoles = (user.memberships || []).map((m: any) => m.role);
+      return [user.role || '', ...memberRoles].some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r));
+    }
+    // Scoped: check membership for the specific company
+    const membership = (user.memberships || []).find((m: any) => m.companyId === companyId && m.active);
+    if (!membership) return false;
+    return ['admin', 'gerente'].includes(membership.role);
   }
 
   private buildSyntheticUser(dbUser: any): any {
-    const companyByType = (dbUser.companyByType as any) || {};
-    const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];
-    let companyType = 'unknown';
-    let companyId = dbUser.activeCompanyId || dbUser.companyId || '';
-    if (userTypes.length > 0) {
-      companyType = userTypes[0];
-    } else if (dbUser.company?.type) {
-      companyType = dbUser.company.type;
-    } else if (dbUser.memberships?.length > 0) {
-      const first = dbUser.memberships[0];
-      const types = Array.isArray(first.company?.types) && first.company.types.length > 0
-        ? first.company.types : [first.company?.type];
-      companyType = types[0] || 'unknown';
-      companyId = companyId || first.companyId;
-    }
-    return {
-      sub: dbUser.id,
-      role: dbUser.role || 'operator',
-      companyId,
-      companyType,
-      userType: companyType,
-      activeCompanyId: dbUser.activeCompanyId,
-    };
+    return buildSyntheticUser(dbUser);
   }
 }
