@@ -148,89 +148,86 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  // ======================== SEND SELECTION (auto list vs numbered text) ====
-  // ≤10 items → sendList, >10 → numbered text with pagination
+  // ======================== SEND SELECTION (always interactive list) ========
+  // Always uses WhatsApp interactive list (max 10 rows).
+  // If >10 items: shows 9 per page + "Mostrar más" row for pagination.
 
   async sendSelection(
     phone: string,
     items: SelectionItem[],
     config: SelectionConfig,
   ): Promise<SelectionResult> {
-    const pageSize = Math.min(config.pageSize || 20, 20);
     const page = config.page || 1;
     const totalItems = items.length;
-    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    const hasFooter = !!config.footer;
+
+    // Items per page: leave room for footer + "Mostrar más" (max 10 rows total)
+    const itemsPerPage = hasFooter ? 8 : 9;
+
+    let pageItems: SelectionItem[];
+    let showMore = false;
+    let totalPages: number;
+
+    if (totalItems + (hasFooter ? 1 : 0) <= 10) {
+      // Everything fits in one list — no pagination
+      pageItems = items;
+      totalPages = 1;
+    } else {
+      // Last page can hold up to 10 items (or 9 with footer) since no "Mostrar más" needed
+      const lastPageMax = hasFooter ? 9 : 10;
+      totalPages = Math.ceil((totalItems - lastPageMax) / itemsPerPage) + 1;
+      const currentPage = Math.min(page, totalPages);
+
+      const startIdx = (currentPage - 1) * itemsPerPage;
+      const remaining = totalItems - startIdx;
+
+      if (remaining <= lastPageMax) {
+        pageItems = items.slice(startIdx);
+      } else {
+        pageItems = items.slice(startIdx, startIdx + itemsPerPage);
+        showMore = true;
+      }
+    }
+
     const currentPage = Math.min(page, totalPages);
 
-    const footerCount = config.footer ? 1 : 0;
+    // Build rows
+    const rows: WAListRow[] = pageItems.map((item) => ({
+      id: item.id.slice(0, 200),
+      title: item.title.slice(0, 24),
+      description: item.description?.slice(0, 72),
+    }));
 
-    // ≤10 items (including footer): use WhatsApp interactive list
-    if (totalItems + footerCount <= 10) {
-      const rows: WAListRow[] = items.map((item) => ({
-        id: item.id.slice(0, 200),
-        title: item.title.slice(0, 24),
-        description: item.description?.slice(0, 72),
-      }));
-      if (config.footer) {
-        rows.push({
-          id: config.footer.id.slice(0, 200),
-          title: config.footer.title.slice(0, 24),
-          description: config.footer.description?.slice(0, 72),
-        });
-      }
-
-      await this.sendList(
-        phone,
-        config.headerText,
-        (config.listButtonLabel || 'Ver opciones').slice(0, 20),
-        [{ title: (config.sectionTitle || 'Opciones').slice(0, 24), rows }],
-      );
-
-      const allShown = config.footer ? [...items, config.footer] : [...items];
-      return { mode: 'list', shownItems: allShown, page: 1, totalPages: 1, totalItems };
+    if (hasFooter) {
+      rows.push({
+        id: config.footer!.id.slice(0, 200),
+        title: config.footer!.title.slice(0, 24),
+        description: config.footer!.description?.slice(0, 72),
+      });
     }
 
-    // >10 items: numbered text with pagination
-    const startIdx = (currentPage - 1) * pageSize;
-    const endIdx = Math.min(startIdx + pageSize, totalItems);
-    const pageItems = items.slice(startIdx, endIdx);
+    if (showMore) {
+      rows.push({
+        id: '__show_more__',
+        title: 'Mostrar más',
+        description: `Página ${currentPage} de ${totalPages}`,
+      });
+    }
 
-    let text = config.headerText + '\n\n';
-
+    let headerText = config.headerText;
     if (totalPages > 1) {
-      text += `Mostrando ${startIdx + 1}-${endIdx} de ${totalItems}\n\n`;
+      headerText += `\n\n📄 Página ${currentPage}/${totalPages}`;
     }
 
-    pageItems.forEach((item, i) => {
-      const num = startIdx + i + 1;
-      const desc = item.description ? ` (${item.description})` : '';
-      text += `${num}. ${item.title}${desc}\n`;
-    });
+    await this.sendList(
+      phone,
+      headerText,
+      (config.listButtonLabel || 'Ver opciones').slice(0, 20),
+      [{ title: (config.sectionTitle || 'Opciones').slice(0, 24), rows }],
+    );
 
-    if (config.footer) {
-      text += `\n0. ${config.footer.title}`;
-      if (config.footer.description) text += ` (${config.footer.description})`;
-      text += '\n';
-    }
-
-    text += '\nResponda con el numero o nombre exacto.';
-
-    if (totalPages > 1 && currentPage < totalPages) {
-      text += '\nEscriba "mas" para ver mas opciones.';
-    }
-    if (currentPage > 1) {
-      text += '\nEscriba "anterior" para la pagina anterior.';
-    }
-
-    await this.sendText(phone, text);
-
-    return {
-      mode: 'numbered_text',
-      shownItems: pageItems,
-      page: currentPage,
-      totalPages,
-      totalItems,
-    };
+    const shownItems = hasFooter ? [...pageItems, config.footer!] : [...pageItems];
+    return { mode: 'list', shownItems, page: currentPage, totalPages, totalItems };
   }
 
   // ======================== SEND TEMPLATE ================================

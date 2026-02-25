@@ -721,6 +721,19 @@ export class WhatsAppRouterService {
   // ======================== LIST REPLY HANDLER ==========================
 
   private async handleListReply(phone: string, user: any, listId: string, title: string) {
+    // Pagination: "Mostrar más" from any selection list
+    if (listId === '__show_more__') {
+      const session = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const state = (session?.flowState as any) || {};
+      if (state.selectionContext) {
+        await this.handleSelectionPagination(phone, user, session, state, 'next_page');
+        return;
+      }
+    }
+
     const parts = listId.split(':');
     const type = parts[0];
     const id = parts.slice(1).join(':');
@@ -756,8 +769,8 @@ export class WhatsAppRouterService {
     };
     const result = await this.wa.sendSelection(phone, items, selConfig);
 
-    if (result.mode === 'numbered_text') {
-      // Store selection context in session for numeric reply resolution
+    if (result.totalPages > 1) {
+      // Store selection context in session for pagination
       const session = await this.prisma.whatsAppSession.findFirst({
         where: { userId: user.id, expiresAt: { gt: new Date() } },
         orderBy: { updatedAt: 'desc' },
@@ -1203,8 +1216,8 @@ export class WhatsAppRouterService {
     };
     const result = await this.wa.sendSelection(phone, items, selConfig);
 
-    if (result.mode === 'numbered_text') {
-      // Store selection context in session
+    if (result.totalPages > 1) {
+      // Store selection context in session for pagination
       const session = await this.prisma.whatsAppSession.findFirst({
         where: { userId: user.id, expiresAt: { gt: new Date() } },
         orderBy: { updatedAt: 'desc' },

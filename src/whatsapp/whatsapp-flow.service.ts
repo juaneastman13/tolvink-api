@@ -330,6 +330,22 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   ) {
     const step = session.flowStep;
 
+    // ---- Generic: handle "Mostrar más" from interactive list pagination ----
+    if (type === 'list_reply' && payload.id === '__show_more__' && state.selectionContext) {
+      const ctx = state.selectionContext;
+      const newPage = ctx.page + 1;
+      if (newPage > ctx.totalPages) {
+        await this.wa.sendText(phone, FLOW_HINT + 'No hay mas opciones.');
+        return;
+      }
+      const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
+      await this.updateState(session.id, step, {
+        ...state,
+        selectionContext: { ...ctx, page: result.page, shownItems: result.shownItems },
+      });
+      return;
+    }
+
     // ---- Generic: resolve numbered text replies for any step with selectionContext ----
     if (type === 'text' && state.selectionContext) {
       const resolved = resolveSelectionReply(payload.body?.trim() || '', state.selectionContext);
@@ -520,7 +536,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       };
       const result = await this.wa.sendSelection(phone, items, selConfig);
       const newState: any = { ...state };
-      if (result.mode === 'numbered_text') {
+      if (result.totalPages > 1) {
         newState.selectionContext = {
           items, shownItems: result.shownItems,
           page: result.page, totalPages: result.totalPages, pageSize: 20,
@@ -596,7 +612,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         const branchState: any = {
           ...state, destCompanyId: companyId, editing: state.editing || false,
         };
-        if (result.mode === 'numbered_text') {
+        if (result.totalPages > 1) {
           branchState.selectionContext = {
             items: branchItems, shownItems: result.shownItems,
             page: result.page, totalPages: result.totalPages, pageSize: 20,
@@ -660,7 +676,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       };
       const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
       const lotState: any = { ...state, customDestName };
-      if (lotResult.mode === 'numbered_text') {
+      if (lotResult.totalPages > 1) {
         lotState.selectionContext = {
           items: lotItems, shownItems: lotResult.shownItems,
           page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
@@ -1107,7 +1123,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     };
     const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
     const lotState: any = { ...state, destPlantId: plantId };
-    if (lotResult.mode === 'numbered_text') {
+    if (lotResult.totalPages > 1) {
       lotState.selectionContext = {
         items: lotItems, shownItems: lotResult.shownItems,
         page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
@@ -1153,7 +1169,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     };
     const result = await this.wa.sendSelection(phone, plantItems, plantConfig);
     const plantState: any = { ...state };
-    if (result.mode === 'numbered_text') {
+    if (result.totalPages > 1) {
       plantState.selectionContext = {
         items: plantItems, shownItems: result.shownItems,
         page: result.page, totalPages: result.totalPages, pageSize: 20,

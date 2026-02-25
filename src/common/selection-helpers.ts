@@ -21,7 +21,7 @@ export interface SelectionConfig {
 }
 
 export interface SelectionResult {
-  mode: 'list' | 'numbered_text';
+  mode: 'list';
   shownItems: SelectionItem[];
   page: number;
   totalPages: number;
