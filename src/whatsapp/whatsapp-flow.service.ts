@@ -3,7 +3,7 @@
 // Manages multi-step WhatsApp interactions (reject, confirm loaded, etc.)
 // =====================================================================
 
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { FreightsService } from '../freights/freights.service';
@@ -24,14 +24,20 @@ const FLOW_RATE_MAX = 30;
 const flowRateMap = new Map<string, { count: number; resetAt: number }>();
 
 @Injectable()
-export class WhatsAppFlowService {
+export class WhatsAppFlowService implements OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppFlowService.name);
+  private rateCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of flowRateMap) { if (now > v.resetAt) flowRateMap.delete(k); }
+  }, 5 * 60 * 1000);
 
   constructor(
     private prisma: PrismaService,
     private wa: WhatsAppService,
     @Inject(forwardRef(() => FreightsService)) private freights: FreightsService,
   ) {}
+
+  onModuleDestroy() { clearInterval(this.rateCleanupTimer); }
 
   // ======================== START FLOW ==================================
 

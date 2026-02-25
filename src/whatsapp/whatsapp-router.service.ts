@@ -44,6 +44,10 @@ export class WhatsAppRouterService {
   /** In-memory TTL cache for freight counts per company (60s) */
   private freightCountsCache = new Map<string, { data: Record<string, number>; ts: number }>();
   private readonly COUNTS_TTL = 60_000;
+  /** Per-phone processing lock — ensures sequential message handling per user */
+  private phoneLocks = new Map<string, Promise<void>>();
+  /** Cooldown for "not registered" replies — avoids spamming unregistered phones */
+  private unregisteredCooldown = new Map<string, number>();
 
   constructor(
     private prisma: PrismaService,
@@ -64,6 +68,21 @@ export class WhatsAppRouterService {
   // ======================== MAIN ENTRY POINT ============================
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
+    // Serialize per phone — prevents concurrent AI/session races for same user
+    const prev = this.phoneLocks.get(phone) || Promise.resolve();
+    let unlock: () => void;
+    const lock = new Promise<void>(r => unlock = r);
+    this.phoneLocks.set(phone, lock);
+    await prev;
+    try {
+      return await this._handleMessage(phone, type, payload, waMessageId);
+    } finally {
+      unlock!();
+      if (this.phoneLocks.get(phone) === lock) this.phoneLocks.delete(phone);
+    }
+  }
+
+  private async _handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
       this.logger.log(`handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
 
@@ -74,10 +93,22 @@ export class WhatsAppRouterService {
       const user = await this.findUserByPhone(phone);
 
       if (!user) {
-        await this.wa.sendText(phone,
-          'Este numero no se encuentra registrado en Tolvink.\n\n' +
-          `Registrese en la plataforma: ${APP_URL}`,
-        );
+        // Cooldown: only send "not registered" once per 10 minutes per phone
+        const lastSent = this.unregisteredCooldown.get(phone);
+        if (!lastSent || Date.now() - lastSent > 10 * 60 * 1000) {
+          this.unregisteredCooldown.set(phone, Date.now());
+          await this.wa.sendText(phone,
+            'Este numero no se encuentra registrado en Tolvink.\n\n' +
+            `Registrese en la plataforma: ${APP_URL}`,
+          );
+          // Prune stale cooldown entries
+          if (this.unregisteredCooldown.size > 500) {
+            const now = Date.now();
+            for (const [k, v] of this.unregisteredCooldown) {
+              if (now - v > 10 * 60 * 1000) this.unregisteredCooldown.delete(k);
+            }
+          }
+        }
         return;
       }
 
@@ -775,6 +806,11 @@ export class WhatsAppRouterService {
       where: { userId: user.id, expiresAt: { gt: new Date() } },
       orderBy: { updatedAt: 'desc' },
     });
+    // Invalidate cached freight counts for old & new company
+    const oldCoId = user.activeCompanyId || user.companyId;
+    if (oldCoId) this.freightCountsCache.delete(oldCoId);
+    this.freightCountsCache.delete(companyId);
+
     const flowData = { companyConfirmed: true, selectedCompanyId: companyId };
     if (session) {
       await this.prisma.whatsAppSession.update({

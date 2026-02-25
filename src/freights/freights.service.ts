@@ -1475,19 +1475,19 @@ export class FreightsService implements OnModuleInit {
   }
 
   async cancelAssignment(freightId: string, assignmentId: string, reason: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint cancel');
-
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede cancelar asignaciones');
 
-    const assignment = await this.prisma.freightAssignment.findFirst({
-      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
-    });
-    if (!assignment) throw new NotFoundException('Asignación no encontrada o ya cancelada');
+    const { result, freight } = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint cancel');
 
-    const result = await this.prisma.$transaction(async (tx) => {
+      const assignment = await (tx.freightAssignment as any).findFirst({
+        where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+      });
+      if (!assignment) throw new NotFoundException('Asignación no encontrada o ya cancelada');
+
       await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
         data: { status: AssignmentStatus.canceled, reason: reason || 'Cancelado por planta', tripStatus: 'canceled' },
@@ -1512,7 +1512,7 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return updated;
+      return { result: updated, freight };
     });
 
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));

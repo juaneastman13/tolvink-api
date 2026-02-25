@@ -273,6 +273,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           status: 'read',
           message_id: waMessageId,
         }),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (e) {
       this.logger.debug(`markRead failed: ${e.message}`);
@@ -287,6 +288,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     // Step 1: Get media URL from Meta
     const metaRes = await fetch(`${META_API}/${mediaId}`, {
       headers: { Authorization: `Bearer ${this.accessToken}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!metaRes.ok) {
       const errBody = await metaRes.text();
@@ -299,6 +301,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     // Step 2: Download the actual file
     const fileRes = await fetch(url, {
       headers: { Authorization: `Bearer ${this.accessToken}` },
+      signal: AbortSignal.timeout(30_000),
     });
     if (!fileRes.ok) {
       throw new Error(`Media download failed (${fileRes.status})`);
@@ -326,6 +329,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         'Content-Type': mimeType,
       },
       body: new Uint8Array(buffer),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {
@@ -355,6 +359,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10_000),
       });
 
       if (!res.ok) {
@@ -401,9 +406,13 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     let p = phone.replace(/[\s\-\(\)]/g, '');
     if (p.startsWith('whatsapp:')) p = p.replace('whatsapp:', '');
     if (p.startsWith('+')) p = p.slice(1);
-    if (p.startsWith('598')) return p;
-    if (p.startsWith('0')) return '598' + p.slice(1);
-    if (p.length === 8 || p.length === 9) return '598' + p;
+    if (p.startsWith('598')) { /* already prefixed */ }
+    else if (p.startsWith('0')) p = '598' + p.slice(1);
+    else if (p.length === 8 || p.length === 9) p = '598' + p;
+    // Validate E.164 length (10-15 digits)
+    if (p.length < 10 || p.length > 15) {
+      this.logger.warn(`normalizePhone: invalid length ${p.length} for "${phone}"`);
+    }
     return p;
   }
 }

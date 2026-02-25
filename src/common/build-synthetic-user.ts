@@ -3,6 +3,7 @@
  * Shared across AI, Router, and Flow services to avoid duplication.
  */
 export function buildSyntheticUser(dbUser: any): any {
+  if (!dbUser) throw new Error('buildSyntheticUser: dbUser is required');
   const companyByType = (dbUser.companyByType as any) || {};
   const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];
 

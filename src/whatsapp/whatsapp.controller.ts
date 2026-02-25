@@ -105,12 +105,16 @@ export class WhatsAppController {
       }
       if (waMessageId) {
         this.processedMessages.set(waMessageId, Date.now());
-        // Cleanup old entries every 100 messages
+        // Cleanup old entries every 100 messages, hard cap at 5000
         if (this.processedMessages.size > 100) {
           const now = Date.now();
           for (const [id, ts] of this.processedMessages) {
             if (now - ts > this.DEDUP_TTL_MS) this.processedMessages.delete(id);
           }
+        }
+        if (this.processedMessages.size > 5000) {
+          this.logger.warn(`Dedup map overflow (${this.processedMessages.size}), clearing`);
+          this.processedMessages.clear();
         }
       }
 

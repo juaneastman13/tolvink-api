@@ -3,7 +3,7 @@
 // Conversational assistant for WhatsApp with tool use
 // =====================================================================
 
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { FreightsService } from '../freights/freights.service';
@@ -40,9 +40,13 @@ const AI_RATE_LIMIT_MAX = 20;
 const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 
 @Injectable()
-export class AiService {
+export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
+  private rateCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
+  }, 5 * 60 * 1000);
 
   constructor(
     private config: ConfigService,
@@ -60,6 +64,8 @@ export class AiService {
       this.logger.warn('ANTHROPIC_API_KEY not set — AI assistant disabled');
     }
   }
+
+  onModuleDestroy() { clearInterval(this.rateCleanupTimer); }
 
   isEnabled(): boolean {
     return !!this.client;
