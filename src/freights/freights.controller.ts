@@ -27,16 +27,19 @@ export class FreightsController {
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'company', required: false, description: 'Filter to a specific company (activeCompanyId)' })
   findAll(
     @CurrentUser() user: any,
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('company') company?: string,
   ) {
     return this.service.findAll(user, {
       status,
       page: page ? parseInt(page) : undefined,
       limit: limit ? parseInt(limit) : undefined,
+      company,
     });
   }
 

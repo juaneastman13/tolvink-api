@@ -237,7 +237,7 @@ export class FreightsService {
 
   // ======================== LIST (multi-tenant) =======================
 
-  async findAll(user: any, query: { status?: string; page?: number; limit?: number }) {
+  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string }) {
     const page = query.page || 1;
     const limit = Math.min(query.limit || 20, 100);
     const skip = (page - 1) * limit;
@@ -245,14 +245,19 @@ export class FreightsService {
     const where: any = {};
 
     if (user.role !== 'platform_admin') {
+      // If company filter provided, verify user actually belongs to it
       const allIds = await this.resolveAllCompanyIds(user);
+      const filterIds = query.company && allIds.includes(query.company)
+        ? [query.company]
+        : allIds;
+
       where.OR = [
-        { originCompanyId: { in: allIds } },
-        { destCompanyId: { in: allIds } },
+        { originCompanyId: { in: filterIds } },
+        { destCompanyId: { in: filterIds } },
         {
           assignments: {
             some: {
-              transportCompanyId: { in: allIds },
+              transportCompanyId: { in: filterIds },
               status: { in: ['active', 'accepted'] },
             },
           },
