@@ -327,13 +327,10 @@ FORMATO:
 - PROHIBIDO titulos en mayusculas decorativos. Solo texto operativo directo.
 
 LISTAS Y SELECCION:
+- Cuando una herramienta retorna _selectionSent: true, la lista YA se envio como menu interactivo de WhatsApp. NO repita, NO reformatee, NO enumere los datos. Solo confirme brevemente (ej: "Estos son sus fletes. Seleccione uno para ver detalles.").
 - Listas informativas (consulta sin accion): texto numerado, maximo 10 items por mensaje.
-- Listas para seleccion (el usuario debe elegir): texto numerado con indicacion clara.
-  Formato: "1. Nombre (detalle)\n2. Nombre (detalle)\n..."
-  Cerrar con: "Responda con el numero o nombre."
 - NUNCA listar mas de 20 items en un mensaje. Si hay mas, indicar: "Mostrando 1-20 de N. Diga 'mas' para ver mas."
 - NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
-- Cuando switch_company retorna _selectionSent, NO repetir la lista. Solo confirmar que se mostro.
 
 COHERENCIA EVOLUTIVA:
 - Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
@@ -516,7 +513,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private readonly tools = [
     {
       name: 'list_freights',
-      description: 'Lista los fletes del usuario. Puede filtrar por estado.',
+      description: 'Lista los fletes del usuario como menu interactivo de WhatsApp. Puede filtrar por estado. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -525,7 +522,6 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
             enum: ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded', 'finished', 'canceled'],
             description: 'Filtrar por estado (opcional)',
           },
-          limit: { type: 'number', description: 'Cantidad maxima (default 10)' },
         },
         required: [],
       },
@@ -949,7 +945,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   ): Promise<string> {
     try {
       switch (toolName) {
-        case 'list_freights': return await this.toolListFreights(synUser, input);
+        case 'list_freights': return await this.toolListFreights(synUser, input, session);
         case 'get_freight_detail': return await this.toolGetFreightDetail(input, user);
         case 'search_plants': return await this.toolSearchPlants(input, user);
         case 'list_lots': return await this.toolListLots(user);
@@ -997,10 +993,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- list_freights ----
-  private async toolListFreights(synUser: any, input: any): Promise<string> {
+  private async toolListFreights(synUser: any, input: any, session: any): Promise<string> {
     const result = await this.freights.findAll(synUser, {
       status: input.status,
-      limit: Math.min(input.limit || 10, 20),
+      limit: 100, // Fetch all for interactive list pagination
       page: 1,
     } as any);
 
@@ -1008,18 +1004,60 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ total: 0, freights: [], message: 'No hay fletes que coincidan' });
     }
 
-    const freights = result.data.map((f: any) => ({
-      code: f.code,
-      status: f.status,
-      grain: f.items?.[0]?.grain || 'N/A',
-      tons: f.items?.[0]?.tons || 0,
-      origin: f.originName || f.originCompany?.name || 'N/A',
-      dest: f.destName || f.destCompany?.name || 'N/A',
-      date: f.loadDate ? new Date(f.loadDate).toISOString().split('T')[0] : 'N/A',
-      transporter: f.assignments?.[0]?.transportCompany?.name || 'Sin asignar',
-    }));
+    const STATUS_SHORT: Record<string, string> = {
+      pending_assignment: 'Pend. asig.',
+      assigned: 'Asignado',
+      accepted: 'Aceptado',
+      in_progress: 'En viaje',
+      loaded: 'Cargado',
+      finished: 'Completado',
+      cancelled: 'Cancelado',
+      rejected: 'Rechazado',
+    };
 
-    return JSON.stringify({ total: result.total, showing: freights.length, freights });
+    // Build selection items for interactive WhatsApp list
+    const items = result.data.map((f: any) => {
+      const grain = f.items?.[0]?.grain || 'N/A';
+      const tons = f.items?.[0]?.tons || 0;
+      const origin = f.originName || f.originCompany?.name || '?';
+      const dest = f.destName || f.destCompany?.name || '?';
+      const status = STATUS_SHORT[f.status] || f.status;
+      return {
+        id: `freight:${f.id}`,
+        title: `${f.code} | ${grain} ${tons}tn`.slice(0, 24),
+        description: `${origin} → ${dest} | ${status}`.slice(0, 72),
+      };
+    });
+
+    const statusLabel = input.status ? ` (${STATUS_SHORT[input.status] || input.status})` : '';
+
+    // Store pending selection for the router to send as interactive list
+    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const currentState = (freshSession?.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...currentState,
+          _pendingSelection: {
+            items,
+            config: {
+              headerText: `📦 ${result.total} flete${result.total !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
+              listButtonLabel: 'Ver fletes',
+              sectionTitle: 'FLETES',
+            },
+            purpose: 'freight_selection',
+          },
+        },
+      },
+    });
+
+    return JSON.stringify({
+      total: result.total,
+      showing: items.length,
+      message: `Se presento lista interactiva de ${items.length} fletes al usuario. Espere a que seleccione uno.`,
+      _selectionSent: true,
+    });
   }
 
   // ---- get_freight_detail ----
