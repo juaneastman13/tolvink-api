@@ -179,6 +179,11 @@ export class SseService {
     }
   }
 
+  /** Invalidate cached participant list for a conversation */
+  invalidateParticipantsCache(conversationId: string) {
+    this.participantsCache.delete(conversationId);
+  }
+
   /** Heartbeat + timeout cleanup */
   heartbeat() {
     const payload = `event: ping\ndata: {}\n\n`;

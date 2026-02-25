@@ -166,11 +166,16 @@ export class AiService {
           if (allReadOnly && toolBlocks.length > 1) {
             // Execute all read-only tools in parallel
             this.logger.log(`Executing ${toolBlocks.length} read-only tools in parallel`);
-            toolResults = await Promise.all(toolBlocks.map(async (block: any) => {
+            const settled = await Promise.allSettled(toolBlocks.map(async (block: any) => {
               this.logger.log(`AI tool call (parallel): ${block.name}(${JSON.stringify(block.input).slice(0, 200)})`);
               const result = await this.executeTool(block.name, block.input, user, synUser, session);
               return { type: 'tool_result' as const, tool_use_id: block.id, content: result };
             }));
+            toolResults = settled.map((s, i) =>
+              s.status === 'fulfilled'
+                ? s.value
+                : { type: 'tool_result' as const, tool_use_id: toolBlocks[i].id, content: 'Error: ' + (s.reason?.message || 'Unknown error'), is_error: true },
+            );
           } else {
             // Sequential execution for mutating tools or single tool
             toolResults = [];
@@ -203,21 +208,27 @@ export class AiService {
 
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const latestState = (freshSession?.flowState as any) || {};
+      const latestFlowStep = freshSession?.flowStep ?? session.flowStep;
+      const latestFlowType = freshSession?.flowType ?? session.flowType;
 
       // Extract pending buttons (set by tools during execution) and exclude from saved state
       const pendingButtons = latestState._pendingButtons || undefined;
       const { _pendingButtons, ...cleanState } = latestState;
 
+      const updateData: any = {
+        flowState: {
+          ...cleanState,
+          aiMessages: currentMessages.slice(-MAX_HISTORY),
+          lastMessageAt: new Date().toISOString(),
+        },
+        expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
+      };
+      if (latestFlowStep !== session.flowStep) updateData.flowStep = latestFlowStep;
+      if (latestFlowType !== session.flowType) updateData.flowType = latestFlowType;
+
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
-        data: {
-          flowState: {
-            ...cleanState,
-            aiMessages: currentMessages.slice(-MAX_HISTORY),
-            lastMessageAt: new Date().toISOString(),
-          },
-          expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
-        },
+        data: updateData,
       });
 
       return { text: finalText, buttons: pendingButtons };

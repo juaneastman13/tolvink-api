@@ -142,6 +142,7 @@ export class ConversationsService {
     if (!targetUser) throw new BadRequestException('Usuario no encontrado');
 
     const allIds = await this.resolveAllCompanyIds(user);
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
     const myPrimaryId = allIds[0];
     const targetCompanyId = targetUser.companyId;
 
@@ -158,7 +159,7 @@ export class ConversationsService {
     });
     if (existing) return existing;
 
-    return this.prisma.conversation.create({
+    const conv = await this.prisma.conversation.create({
       data: {
         participants: {
           create: [
@@ -169,10 +170,13 @@ export class ConversationsService {
       },
       include: { participants: true },
     });
+    this.sse.invalidateParticipantsCache(conv.id);
+    return conv;
   }
 
   async listConversations(user: any, search?: string, skip?: number, take?: number) {
     const allIds = await this.resolveAllCompanyIds(user);
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
 
     const takeNum = Math.min(take || 50, 100); // Max 100 conversations per request
     const skipNum = skip || 0;
@@ -218,6 +222,7 @@ export class ConversationsService {
         skipDuplicates: true,
       }).catch(() => {});
       for (const c of toAdd) {
+        this.sse.invalidateParticipantsCache(c.id);
         c.participants.push({ id: 'auto', conversationId: c.id, companyId: allIds[0], userId: user.sub, joinedAt: new Date(), lastReadAt: null } as any);
       }
     }
@@ -352,6 +357,7 @@ export class ConversationsService {
 
   async getMessages(conversationId: string, user: any, pagination?: { take?: number; before?: string }) {
     const allIds = await this.resolveAllCompanyIds(user);
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
 
     const participant = await this.prisma.conversationParticipant.findFirst({
       where: { conversationId, companyId: { in: allIds } },
@@ -371,6 +377,7 @@ export class ConversationsService {
           await this.prisma.conversationParticipant.create({
             data: { conversationId, companyId: allIds[0], userId: user.sub },
           }).catch(() => {});
+          this.sse.invalidateParticipantsCache(conversationId);
         } else {
           const assignment = await this.prisma.freightAssignment.findFirst({
             where: {
@@ -383,6 +390,7 @@ export class ConversationsService {
             await this.prisma.conversationParticipant.create({
               data: { conversationId, companyId: allIds[0], userId: user.sub },
             }).catch(() => {});
+            this.sse.invalidateParticipantsCache(conversationId);
           } else {
             throw new ForbiddenException('No participás en esta conversación');
           }
@@ -430,6 +438,7 @@ export class ConversationsService {
 
   async sendMessage(conversationId: string, dto: SendMessageDto, user: any) {
     const allIds = await this.resolveAllCompanyIds(user);
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
 
     const participant = await this.prisma.conversationParticipant.findFirst({
       where: { conversationId, companyId: { in: allIds } },
@@ -457,6 +466,7 @@ export class ConversationsService {
           await this.prisma.conversationParticipant.create({
             data: { conversationId, companyId: allIds[0], userId: user.sub },
           }).catch(() => {});
+          this.sse.invalidateParticipantsCache(conversationId);
         } else {
           throw new ForbiddenException('No participás en esta conversación');
         }
