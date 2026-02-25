@@ -10,6 +10,7 @@ import { FreightsService } from '../freights/freights.service';
 import { FieldsService } from '../fields/fields.service';
 import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
@@ -52,6 +53,7 @@ export class AiService implements OnModuleDestroy {
     private config: ConfigService,
     private prisma: PrismaService,
     @Inject(forwardRef(() => FreightsService)) private freights: FreightsService,
+    @Inject(forwardRef(() => WhatsAppService)) private wa: WhatsAppService,
     private fieldsService: FieldsService,
     private trucksService: TrucksService,
     private adminService: AdminService,
@@ -1514,6 +1516,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'start_freight':
           await this.freights.start(params.freightId, synUser);
           result = JSON.stringify({ status: 'started', code: params.code });
+          // Fire-and-forget: send tracking links + GPS request to driver
+          this.sendPostStartTrackingMessages(params.freightId, params.code, user).catch(err =>
+            this.logger.error(`Post-start tracking failed for ${params.code}: ${err.message}`),
+          );
           break;
 
         case 'confirm_loaded':
@@ -2214,6 +2220,109 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       url,
       message: `Abra el siguiente link para ver las ubicaciones en tiempo real de los participantes del flete ${code}.`,
     });
+  }
+
+  // ======================== POST-START TRACKING MESSAGES =================
+
+  /**
+   * Fire-and-forget: after a freight is started, send tracking links to stakeholders
+   * and prompt the driver to share GPS location.
+   */
+  private async sendPostStartTrackingMessages(freightId: string, code: string, triggerUser: any): Promise<void> {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: {
+        id: true, code: true, shareToken: true,
+        originName: true, destName: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          select: {
+            transportCompanyId: true,
+            driverId: true,
+            driver: { select: { phone: true, name: true, id: true } },
+          },
+        },
+      },
+    });
+    if (!freight) return;
+
+    // Ensure shareToken exists for tracking URL
+    let shareToken = freight.shareToken;
+    if (!shareToken) {
+      shareToken = require('crypto').randomUUID();
+      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken } });
+    }
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion`;
+
+    // 1) Send GPS sharing request to each driver with a phone number
+    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    for (const a of freight.assignments) {
+      const driver = a.driver;
+      if (!driver?.phone) continue;
+
+      // Build live-share link for this driver
+      let liveShareUrl = '';
+      if (secret) {
+        const token = createSignedToken(
+          { uid: driver.id, cid: a.transportCompanyId, fid: freight.id, role: 'chofer', name: driver.name || 'Chofer' },
+          secret, 480,
+        );
+        liveShareUrl = `${frontendUrl}/live-freight?t=${token}&mode=share`;
+      }
+
+      const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} → ${freight.destName}\n\n`
+        + `Para que las empresas vean tu ubicacion en tiempo real, abri este link:\n${liveShareUrl || trackingUrl}\n\n`
+        + `Tambien podes compartir tu ubicacion directamente en este chat (adjuntar → Ubicacion).`;
+
+      await this.wa.sendText(driver.phone, driverMsg);
+    }
+
+    // 2) Send tracking link to stakeholder companies (origin, dest, transport)
+    const companyIds = new Set<string>();
+    if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
+    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
+    for (const a of freight.assignments) {
+      if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
+    }
+
+    const stakeholders = await this.prisma.user.findMany({
+      where: {
+        phone: { not: null },
+        active: true,
+        OR: [
+          { companyId: { in: Array.from(companyIds) } },
+          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true } } },
+        ],
+      },
+      select: { phone: true, id: true, companyId: true },
+    });
+
+    // Exclude drivers and the user who triggered the start (they already got confirmation)
+    const driverIds = new Set(freight.assignments.map(a => a.driverId).filter(Boolean));
+    const triggerUserId = triggerUser.id;
+
+    for (const s of stakeholders) {
+      if (driverIds.has(s.id) || s.id === triggerUserId) continue;
+      if (!s.phone) continue;
+
+      // Build live-freight view link for this stakeholder
+      let liveViewUrl = '';
+      if (secret && s.companyId) {
+        const viewToken = createSignedToken(
+          { uid: s.id, cid: s.companyId, fid: freight.id },
+          secret, 480,
+        );
+        liveViewUrl = `${frontendUrl}/live-freight?t=${viewToken}&mode=view`;
+      }
+
+      const trackMsg = `*Flete ${freight.code} en camino*\n${freight.originName} → ${freight.destName}\n\n`
+        + `Seguimiento en vivo: ${liveViewUrl || trackingUrl}`;
+
+      await this.wa.sendText(s.phone, trackMsg);
+    }
   }
 
   // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================

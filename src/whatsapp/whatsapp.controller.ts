@@ -596,6 +596,20 @@ export class WhatsAppController {
       },
     });
 
+    // Also write to FreightTracking for public tracking screen + historical audit trail
+    this.prisma.freightTracking.create({
+      data: {
+        freightId: fid,
+        userId: uid,
+        lat: body.lat,
+        lng: body.lng,
+        speed: body.speed ?? null,
+        heading: body.heading ?? null,
+      },
+    }).catch((err) => {
+      this.logger.warn(`FreightTracking write failed: ${err.message}`);
+    });
+
     return { success: true };
   }
 

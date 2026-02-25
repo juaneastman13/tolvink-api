@@ -417,6 +417,29 @@ export class WhatsAppRouterService {
       },
     });
 
+    // GPS tracking: if driver has an active in_progress freight, save position to FreightTracking
+    this.prisma.freightAssignment.findFirst({
+      where: {
+        driverId: user.id,
+        status: 'accepted',
+        tripStatus: 'in_progress',
+      },
+      select: { freightId: true },
+    }).then(async (assignment) => {
+      if (!assignment) return;
+      await this.prisma.freightTracking.create({
+        data: {
+          freightId: assignment.freightId,
+          userId: user.id,
+          lat: latitude,
+          lng: longitude,
+        },
+      });
+      this.logger.log(`GPS tracked for freight ${assignment.freightId} from driver ${user.id}`);
+    }).catch((err) => {
+      this.logger.error(`GPS tracking save failed: ${err.message}`);
+    });
+
     // Forward as text to AI so Claude knows the user shared a location
     const locationDesc = name || address || `${latitude}, ${longitude}`;
     const textForAi = `[Ubicacion compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
