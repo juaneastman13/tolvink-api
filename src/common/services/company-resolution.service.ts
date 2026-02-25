@@ -38,7 +38,7 @@ export class CompanyResolutionService {
     return memberships;
   }
 
-  async resolveAllCompanyIds(user: { sub: string; companyId?: string }): Promise<string[]> {
+  async resolveAllCompanyIds(user: { sub: string; companyId?: string; companyByType?: any }): Promise<string[]> {
     const cache = this.getCache();
     const key = `allIds:${user.sub}`;
     if (cache?.has(key)) return cache.get(key);
@@ -46,6 +46,20 @@ export class CompanyResolutionService {
     const ids = new Set<string>();
     if (user.companyId) ids.add(user.companyId);
 
+    // Fast path: if companyByType is already available (e.g. from WhatsApp synthetic user or enriched JWT),
+    // extract IDs and only query memberships (skip the user DB query)
+    const jwtCbt = (user as any).companyByType;
+    if (jwtCbt && typeof jwtCbt === 'object' && Object.keys(jwtCbt).length > 0) {
+      Object.values(jwtCbt).forEach((v: any) => { if (v) ids.add(v); });
+      // Still need memberships for completeness (e.g. newly added memberships not in JWT)
+      const memberships = await this.getMemberships(user.sub);
+      for (const m of memberships) ids.add(m.companyId);
+      const result = Array.from(ids);
+      cache?.set(key, result);
+      return result;
+    }
+
+    // Full path: query both memberships and user record
     const [memberships, dbUser] = await Promise.all([
       this.getMemberships(user.sub),
       this.prisma.user.findUnique({

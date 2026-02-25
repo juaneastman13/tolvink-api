@@ -82,14 +82,16 @@ export class WhatsAppRouterService {
         return;
       }
 
+      // Load session ONCE at the top — reused by multi-company check, flow check, and sub-handlers
+      let cachedSession = await this.prisma.whatsAppSession.findFirst({
+        where: { userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
+      });
+
       // Multi-company: prompt company selection if not confirmed in session
       const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
       if (activeMemberships.length > 1) {
-        const mcSession = await this.prisma.whatsAppSession.findFirst({
-          where: { userId: user.id, expiresAt: { gt: new Date() } },
-          orderBy: { updatedAt: 'desc' },
-        });
-        const sState = (mcSession?.flowState as any) || {};
+        const sState = (cachedSession?.flowState as any) || {};
         const dbCompanyId = user.activeCompanyId || user.companyId;
         const isConfirmed = sState.companyConfirmed === true
           && sState.selectedCompanyId
@@ -105,7 +107,7 @@ export class WhatsAppRouterService {
           if (type === 'text' && sState.selectionContext?.purpose === 'company_selection') {
             const resolved = resolveSelectionReply(payload.body?.trim() || '', sState.selectionContext);
             if (resolved === 'next_page' || resolved === 'prev_page') {
-              await this.handleSelectionPagination(phone, user, mcSession!, sState, resolved);
+              await this.handleSelectionPagination(phone, user, cachedSession!, sState, resolved);
               return;
             }
             if (resolved && typeof resolved === 'object' && resolved.id.startsWith('selco:')) {
@@ -118,11 +120,8 @@ export class WhatsAppRouterService {
         }
       }
 
-      // Check for active flow
-      const session = await this.prisma.whatsAppSession.findFirst({
-        where: { userId: user.id, expiresAt: { gt: new Date() } },
-        orderBy: { updatedAt: 'desc' },
-      });
+      // Check for active flow (reuse cached session)
+      const session = cachedSession;
 
       if (session?.flowType) {
         // Handle cancel/menu command inside any flow
@@ -143,7 +142,7 @@ export class WhatsAppRouterService {
         return;
       }
 
-      // Route by message type
+      // Route by message type — pass cached session to avoid redundant DB lookups
       if (type === 'button_reply') {
         await this.handleButtonReply(phone, user, payload.id, payload.title);
       } else if (type === 'list_reply') {
@@ -154,13 +153,13 @@ export class WhatsAppRouterService {
         if (payload.forwarded) {
           textBody = `[Mensaje reenviado] ${textBody}`;
         }
-        await this.handleText(phone, user, textBody);
+        await this.handleText(phone, user, textBody, session);
       } else if (type === 'location') {
-        await this.handleLocation(phone, user, payload);
+        await this.handleLocation(phone, user, payload, session);
       } else if (type === 'audio') {
         await this.handleAudio(phone, user, payload);
       } else if (type === 'image' || type === 'document') {
-        await this.handleMedia(phone, user, type, payload);
+        await this.handleMedia(phone, user, type, payload, session);
       } else {
         await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio, ubicaciones e imagenes/documentos. Escriba "menu" para ver las opciones disponibles.');
       }
@@ -172,17 +171,20 @@ export class WhatsAppRouterService {
 
   // ======================== TEXT HANDLER =================================
 
-  private async handleText(phone: string, user: any, text: string) {
+  private async handleText(phone: string, user: any, text: string, cachedSession?: any) {
     const t = text.trim();
 
     // Edge case: empty or whitespace-only message
     if (!t) return;
 
     // ---- Check for active selection context (numbered text reply) ----
-    const selSession = await this.prisma.whatsAppSession.findFirst({
-      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // Reuse cached session if available and matches (no flowType, not expired)
+    const selSession = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
+      ? cachedSession
+      : await this.prisma.whatsAppSession.findFirst({
+          where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+          orderBy: { updatedAt: 'desc' },
+        });
     if (selSession) {
       const selState = (selSession.flowState as any) || {};
       if (selState.selectionContext) {
@@ -228,15 +230,12 @@ export class WhatsAppRouterService {
     const emojiOnly = /^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\s]{1,16}$/u.test(t) && !/[a-zA-Z0-9]/.test(t);
     const tooShort = t.length <= 2 && !/^(si|no|ok)$/i.test(t);
     if (emojiOnly || tooShort) {
-      // Check for active AI session — if exists, forward to AI for context continuity
-      const activeSession = await this.prisma.whatsAppSession.findFirst({
-        where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
-        select: { id: true, flowState: true },
-      });
-      const hasHistory = activeSession && ((activeSession.flowState as any)?.aiMessages?.length > 0);
+      // Check for active AI session — reuse cached session if available
+      const activeSession = selSession || cachedSession;
+      const hasHistory = activeSession && !activeSession.flowType && ((activeSession.flowState as any)?.aiMessages?.length > 0);
       if (hasHistory && this.ai.isEnabled()) {
         const msg = emojiOnly ? `[El usuario envio solo emojis: ${t}]` : t;
-        await this.handleAiChat(phone, user, msg);
+        await this.handleAiChat(phone, user, msg, cachedSession);
       } else {
         await this.showMainMenu(phone, user);
       }
@@ -245,7 +244,7 @@ export class WhatsAppRouterService {
 
     // AI-powered handler for all other text (actual requests/queries)
     if (this.ai.isEnabled()) {
-      await this.handleAiChat(phone, user, t);
+      await this.handleAiChat(phone, user, t, cachedSession);
       return;
     }
 
@@ -271,17 +270,19 @@ export class WhatsAppRouterService {
 
   // ======================== AI CHAT HANDLER ==============================
 
-  private async handleAiChat(phone: string, user: any, text: string) {
+  private async handleAiChat(phone: string, user: any, text: string, cachedSession?: any) {
     try {
-      // Find or create an AI session (flowType = null)
-      let session = await this.prisma.whatsAppSession.findFirst({
-        where: {
-          userId: user.id,
-          flowType: null,
-          expiresAt: { gt: new Date() },
-        },
-        orderBy: { updatedAt: 'desc' },
-      });
+      // Reuse cached session if it's a valid AI session (no flowType, not expired)
+      let session = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
+        ? cachedSession
+        : await this.prisma.whatsAppSession.findFirst({
+            where: {
+              userId: user.id,
+              flowType: null,
+              expiresAt: { gt: new Date() },
+            },
+            orderBy: { updatedAt: 'desc' },
+          });
 
       if (!session) {
         session = await this.prisma.whatsAppSession.create({
@@ -351,14 +352,16 @@ export class WhatsAppRouterService {
 
   // ======================== LOCATION HANDLER ==============================
 
-  private async handleLocation(phone: string, user: any, payload: any) {
+  private async handleLocation(phone: string, user: any, payload: any, cachedSession?: any) {
     const { latitude, longitude, name, address } = payload;
 
-    // Save location in AI session for later use (create_field, create_lot, prepare_freight)
-    let session = await this.prisma.whatsAppSession.findFirst({
-      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // Reuse cached session if it's a valid AI session (no flowType, not expired)
+    let session = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
+      ? cachedSession
+      : await this.prisma.whatsAppSession.findFirst({
+          where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+          orderBy: { updatedAt: 'desc' },
+        });
 
     if (!session) {
       session = await this.prisma.whatsAppSession.create({
@@ -474,7 +477,7 @@ export class WhatsAppRouterService {
 
   // ======================== MEDIA HANDLER (IMAGE / DOCUMENT) =============
 
-  private async handleMedia(phone: string, user: any, type: string, payload: any) {
+  private async handleMedia(phone: string, user: any, type: string, payload: any, cachedSession?: any) {
     try {
       const { mediaId, mimeType } = payload;
       const filename = payload.filename || '';
@@ -513,11 +516,13 @@ export class WhatsAppRouterService {
       const displayName = filename || `${type === 'image' ? 'foto' : 'documento'}${ext}`;
       const docType = type === 'image' ? 'photo' : 'document';
 
-      // 4. Store pendingDocument in AI session
-      let session = await this.prisma.whatsAppSession.findFirst({
-        where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
-        orderBy: { updatedAt: 'desc' },
-      });
+      // 4. Store pendingDocument in AI session — reuse cached session if valid
+      let session = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
+        ? cachedSession
+        : await this.prisma.whatsAppSession.findFirst({
+            where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+            orderBy: { updatedAt: 'desc' },
+          });
 
       if (!session) {
         session = await this.prisma.whatsAppSession.create({

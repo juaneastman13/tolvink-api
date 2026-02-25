@@ -92,10 +92,14 @@ export class NotificationService {
           { memberships: { some: { companyId, active: true } } },
         ],
       },
-      select: { id: true },
+      select: { id: true, phone: true },
     });
-    const userIds = Array.from(new Set(users.map((u: any) => u.id)))
-      .filter(uid => uid !== excludeUserId);
+    // Deduplicate by user id and build a map of id->phone
+    const userMap = new Map<string, string | null>();
+    for (const u of users) {
+      if (u.id !== excludeUserId) userMap.set(u.id, u.phone);
+    }
+    const userIds = Array.from(userMap.keys());
 
     if (userIds.length === 0) return;
 
@@ -108,7 +112,8 @@ export class NotificationService {
     for (const uid of userIds) {
       this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
         .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
-      this.sendWhatsApp(uid, type, title, body, entityId)
+      const phone = userMap.get(uid) || null;
+      this.sendWhatsAppDirect(uid, phone, type, title, body, entityId)
         .catch((e) => this.logger.error(`WhatsApp send failed for user ${uid}: ${e.message}`));
       this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
     }
@@ -165,14 +170,32 @@ export class NotificationService {
     body: string,
     entityId?: string,
   ) {
+    // Delegate to sendWhatsAppDirect with phone=null (will query DB)
+    return this.sendWhatsAppDirect(userId, null, type, title, body, entityId);
+  }
+
+  /** Send WhatsApp notification — accepts pre-fetched phone to avoid extra DB query */
+  private async sendWhatsAppDirect(
+    userId: string,
+    phone: string | null,
+    type: NotificationType,
+    title: string,
+    body: string,
+    entityId?: string,
+  ) {
     const wa = this.getWhatsAppService();
     if (!wa || !wa.isEnabled()) return;
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { phone: true },
-    });
-    if (!user?.phone) return;
+    // Use pre-fetched phone or fall back to DB query
+    let userPhone = phone;
+    if (!userPhone) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { phone: true },
+      });
+      userPhone = user?.phone || null;
+    }
+    if (!userPhone) return;
 
     // Build message with action buttons based on notification type
     const buttons = this.getWhatsAppButtons(type, entityId);
@@ -180,9 +203,9 @@ export class NotificationService {
     const text = `*${title}*\n${body}`;
 
     if (buttons.length > 0 && entityId) {
-      await wa.sendButtons(user.phone, text, buttons);
+      await wa.sendButtons(userPhone, text, buttons);
     } else {
-      await wa.sendText(user.phone, text);
+      await wa.sendText(userPhone, text);
     }
   }
 

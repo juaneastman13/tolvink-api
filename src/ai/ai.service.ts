@@ -152,15 +152,34 @@ export class AiService {
           // Add assistant response to messages
           currentMessages.push({ role: 'assistant', content: response.content });
 
-          // Execute tool calls
-          const toolResults: any[] = [];
-          for (const block of response.content) {
-            if (block.type === 'tool_use') {
-              this.logger.log(`AI tool call: ${block.name}(${JSON.stringify(block.input).slice(0, 200)})`);
+          // Execute tool calls — parallel for read-only tools, sequential otherwise
+          const READ_ONLY_TOOLS = new Set([
+            'list_freights', 'get_freight_detail', 'search_plants', 'list_lots', 'list_fields',
+            'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers',
+            'generate_tracking_link', 'generate_report_link', 'generate_daily_map_link',
+          ]);
+
+          const toolBlocks = response.content.filter((b: any) => b.type === 'tool_use');
+          const allReadOnly = toolBlocks.every((b: any) => READ_ONLY_TOOLS.has(b.name));
+
+          let toolResults: any[];
+          if (allReadOnly && toolBlocks.length > 1) {
+            // Execute all read-only tools in parallel
+            this.logger.log(`Executing ${toolBlocks.length} read-only tools in parallel`);
+            toolResults = await Promise.all(toolBlocks.map(async (block: any) => {
+              this.logger.log(`AI tool call (parallel): ${block.name}(${JSON.stringify(block.input).slice(0, 200)})`);
               const result = await this.executeTool(block.name, block.input, user, synUser, session);
+              return { type: 'tool_result' as const, tool_use_id: block.id, content: result };
+            }));
+          } else {
+            // Sequential execution for mutating tools or single tool
+            toolResults = [];
+            for (const block of toolBlocks) {
+              this.logger.log(`AI tool call: ${(block as any).name}(${JSON.stringify((block as any).input).slice(0, 200)})`);
+              const result = await this.executeTool((block as any).name, (block as any).input, user, synUser, session);
               toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
+                type: 'tool_result' as const,
+                tool_use_id: (block as any).id,
                 content: result,
               });
             }

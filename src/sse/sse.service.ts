@@ -20,7 +20,30 @@ export class SseService {
   private byCompany = new Map<string, Set<SseClient>>();
   private allClients = new Set<SseClient>();
 
+  // In-memory cache for conversation participants (avoids repeated DB queries)
+  private participantsCache = new Map<string, { userIds: string[]; ts: number }>();
+  private readonly PARTICIPANTS_CACHE_TTL = 30_000; // 30 seconds
+
   constructor(private prisma: PrismaService) {}
+
+  private async getParticipantIds(conversationId: string): Promise<string[]> {
+    const cached = this.participantsCache.get(conversationId);
+    if (cached && Date.now() - cached.ts < this.PARTICIPANTS_CACHE_TTL) return cached.userIds;
+    const participants = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    });
+    const userIds = participants.map(p => p.userId);
+    this.participantsCache.set(conversationId, { userIds, ts: Date.now() });
+    // Cleanup old entries periodically
+    if (this.participantsCache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of this.participantsCache) {
+        if (now - v.ts > this.PARTICIPANTS_CACHE_TTL) this.participantsCache.delete(k);
+      }
+    }
+    return userIds;
+  }
 
   private addToIndex(client: SseClient) {
     // User index
@@ -122,46 +145,36 @@ export class SseService {
     }
   }
 
-  /** Broadcast to conversation participants — O(1) per user */
+  /** Broadcast to conversation participants — O(1) per user, cached */
   async broadcastMessage(conversationId: string, senderId: string) {
-    const participants = await this.prisma.conversationParticipant.findMany({
-      where: { conversationId },
-      select: { userId: true },
-    });
+    const userIds = await this.getParticipantIds(conversationId);
 
     const data = { conversationId };
-    const payload = `event: message:new\ndata: ${JSON.stringify(data)}\n\n`;
-    for (const p of participants) {
-      if (p.userId && p.userId !== senderId) {
-        this.emitToUser(p.userId, 'message:new', data);
+    for (const uid of userIds) {
+      if (uid && uid !== senderId) {
+        this.emitToUser(uid, 'message:new', data);
       }
     }
   }
 
-  /** Broadcast typing indicator to conversation participants */
+  /** Broadcast typing indicator to conversation participants — cached */
   async broadcastTyping(conversationId: string, userId: string, userName: string) {
-    const participants = await this.prisma.conversationParticipant.findMany({
-      where: { conversationId },
-      select: { userId: true },
-    });
+    const userIds = await this.getParticipantIds(conversationId);
     const data = { conversationId, userId, userName };
-    for (const p of participants) {
-      if (p.userId && p.userId !== userId) {
-        this.emitToUser(p.userId, 'typing', data);
+    for (const uid of userIds) {
+      if (uid && uid !== userId) {
+        this.emitToUser(uid, 'typing', data);
       }
     }
   }
 
-  /** Notify other participants that user read the conversation */
+  /** Notify other participants that user read the conversation — cached */
   async broadcastRead(conversationId: string, readByUserId: string) {
-    const participants = await this.prisma.conversationParticipant.findMany({
-      where: { conversationId },
-      select: { userId: true },
-    });
+    const userIds = await this.getParticipantIds(conversationId);
     const data = { conversationId, readByUserId, readAt: new Date().toISOString() };
-    for (const p of participants) {
-      if (p.userId && p.userId !== readByUserId) {
-        this.emitToUser(p.userId, 'read', data);
+    for (const uid of userIds) {
+      if (uid && uid !== readByUserId) {
+        this.emitToUser(uid, 'read', data);
       }
     }
   }

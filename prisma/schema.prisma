@@ -444,6 +444,7 @@ model FreightAssignment {
   @@index([transportCompanyId, status])
   @@index([truckId])
   @@index([driverId])
+  @@index([driverId, status])
   @@map("freight_assignments")
 }
 
@@ -694,6 +695,7 @@ model WhatsAppSession {
 
   @@index([phone])
   @@index([userId])
+  @@index([userId, expiresAt])
   @@map("whatsapp_sessions")
 }
 

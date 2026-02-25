@@ -128,13 +128,19 @@ export class FreightsService {
     }
 
     const freight = await this.prisma.$transaction(async (tx) => {
-      // Generate code inside transaction (fixes race condition)
-      // Use raw SQL MAX to get highest numeric code (avoids string ordering bug with FLT-9999 > FLT-10000)
-      const maxResult = await tx.$queryRaw<{ max_num: number | null }[]>`
-        SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) as max_num FROM freights WHERE code LIKE 'FLT-%'
+      // Generate code inside transaction using PostgreSQL sequence (O(1) instead of O(n) full scan)
+      // Create sequence on first use, seeded from current MAX code
+      await tx.$executeRaw`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'freight_code_seq') THEN
+            CREATE SEQUENCE freight_code_seq;
+            PERFORM setval('freight_code_seq', COALESCE((SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) FROM freights WHERE code LIKE 'FLT-%'), 0));
+          END IF;
+        END $$;
       `;
-      const lastNum = maxResult[0]?.max_num || 0;
-      const code = `FLT-${String(lastNum + 1).padStart(4, '0')}`;
+      const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`SELECT nextval('freight_code_seq')`;
+      const nextNum = Number(seqResult[0].nextval);
+      const code = `FLT-${String(nextNum).padStart(4, '0')}`;
 
       const f = await tx.freight.create({
         data: {
