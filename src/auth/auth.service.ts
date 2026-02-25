@@ -34,6 +34,7 @@ export class AuthService {
       throw new BadRequestException('Email o telefono requerido');
     }
 
+    if (dto.email) dto.email = dto.email.toLowerCase().trim();
     const where = dto.phone
       ? { phone: dto.phone }
       : { email: dto.email };
@@ -107,6 +108,7 @@ export class AuthService {
   }
 
   async register(dto: RegisterDto) {
+    dto.email = dto.email.toLowerCase().trim();
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (emailExists) throw new ConflictException('Email ya registrado');
 

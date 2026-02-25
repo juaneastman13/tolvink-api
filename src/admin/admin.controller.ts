@@ -419,6 +419,7 @@ export class AdminService {
 
   async createUser(dto: CreateUserDto, preHashedPassword?: string) {
     const bcrypt = require('bcryptjs');
+    dto.email = dto.email.toLowerCase().trim();
 
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (emailExists) throw new BadRequestException('Email ya registrado');

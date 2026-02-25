@@ -1590,7 +1590,18 @@ export class FreightsService implements OnModuleInit {
       throw new BadRequestException('No hay cambios para aplicar');
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const { updated, freight: freshFreight } = await this.prisma.$transaction(async (tx) => {
+      // Re-read inside tx to prevent TOCTOU (tripStatus could have changed)
+      const freshAssignment: any = await (tx.freightAssignment as any).findFirst({
+        where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+      });
+      if (!freshAssignment) throw new NotFoundException('Asignación no encontrada o ya modificada');
+      if (freshAssignment.tripStatus && !['pending', 'accepted'].includes(freshAssignment.tripStatus)) {
+        throw new BadRequestException('Solo se pueden editar viajes que no hayan iniciado');
+      }
+
+      const freshFreight = await tx.freight.findUnique({ where: { id: freightId } });
+
       const result = await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
         data: updateData,
@@ -1607,10 +1618,10 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return result;
+      return { updated: result, freight: freshFreight || freight };
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freshFreight.code, status: freshFreight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return updated;
   }
 
@@ -1729,10 +1740,6 @@ export class FreightsService implements OnModuleInit {
   }
 
   async startTrip(freightId: string, assignmentId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint start');
-
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
         where: { id: assignmentId, freightId, driverId: user.sub },
@@ -1740,14 +1747,18 @@ export class FreightsService implements OnModuleInit {
       if (!a) throw new ForbiddenException('No sos el chofer asignado');
     }
 
-    const assignment: any = await (this.prisma.freightAssignment as any).findFirst({
-      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
-    });
-    if (!assignment) throw new NotFoundException('Asignación no encontrada');
+    const { result, freight, assignment } = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint start');
 
-    this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'in_progress' as any);
+      const assignment: any = await (tx.freightAssignment as any).findFirst({
+        where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+      });
+      if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
-    const result = await this.prisma.$transaction(async (tx) => {
+      this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'in_progress' as any);
+
       await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
         data: { tripStatus: 'in_progress', startedAt: new Date() },
@@ -1770,7 +1781,7 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return updated;
+      return { result: updated, freight, assignment };
     });
 
     const notifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];

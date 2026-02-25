@@ -460,6 +460,13 @@ export class WhatsAppRouterService {
       // Download audio from Meta
       const { buffer, mimeType } = await this.wa.downloadMedia(payload.mediaId);
 
+      // MIME type validation — only accept audio formats
+      if (!mimeType.startsWith('audio/')) {
+        this.logger.warn(`Non-audio MIME from ${phone}: ${mimeType}`);
+        await this.wa.sendText(phone, 'El archivo no es un audio valido. Por favor, envie un mensaje de voz.');
+        return;
+      }
+
       // Size check: Whisper API limit is 25MB, WhatsApp max ~16MB
       const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB safety margin
       if (buffer.length > MAX_AUDIO_BYTES) {
