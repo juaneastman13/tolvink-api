@@ -742,6 +742,9 @@ export class WhatsAppRouterService {
       await this.handleCompanySelection(phone, user, id);
     } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
+    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant'].includes(type)) {
+      // Generic AI list selection — feed back to AI as synthetic message
+      await this.handleAiChat(phone, user, `[Seleccionó: ${title} (id: ${id})]`);
     } else {
       await this.handleButtonReply(phone, user, listId, title);
     }
@@ -869,7 +872,8 @@ export class WhatsAppRouterService {
         await this.showFreightDetail(phone, user, id);
         break;
       default:
-        await this.handleListReply(phone, user, item.id, item.title);
+        // Generic: feed selection back to AI as synthetic user message
+        await this.handleAiChat(phone, user, `[Seleccionó: ${item.title} (id: ${id})]`);
     }
   }
 

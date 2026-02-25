@@ -327,9 +327,12 @@ FORMATO:
 - PROHIBIDO titulos en mayusculas decorativos. Solo texto operativo directo.
 
 LISTAS Y SELECCION:
-- Cuando una herramienta retorna _selectionSent: true, la lista YA se envio como menu interactivo de WhatsApp. NO repita, NO reformatee, NO enumere los datos. Solo confirme brevemente (ej: "Estos son sus fletes. Seleccione uno para ver detalles.").
-- Listas informativas (consulta sin accion): texto numerado, maximo 10 items por mensaje.
-- NUNCA listar mas de 20 items en un mensaje. Si hay mas, indicar: "Mostrando 1-20 de N. Diga 'mas' para ver mas."
+- Cuando una herramienta retorna _selectionSent: true, la lista YA se envio como menu interactivo de WhatsApp.
+  NO repita, NO reformatee, NO enumere los datos. Solo confirme brevemente (ej: "Seleccione un flete para ver detalles.").
+  Herramientas que usan este patron: list_freights, list_lots, list_fields, list_trucks,
+  list_transporters, list_company_users, list_drivers, search_plants, switch_company.
+- Si el usuario selecciona un item de la lista, recibira un mensaje "[Seleccionó: ...]". Use esa informacion para responder.
+- NUNCA generar listas numeradas largas. Todo listado debe ir como menu interactivo via herramientas.
 - NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
 
 COHERENCIA EVOLUTIVA:
@@ -539,7 +542,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'search_plants',
-      description: 'Busca plantas/empresas destino disponibles para el productor por nombre.',
+      description: 'Busca plantas/empresas destino. Envia menu interactivo si hay multiples resultados. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -550,7 +553,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'list_lots',
-      description: 'Lista los lotes/campos de origen del productor.',
+      description: 'Lista lotes del productor como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -672,7 +675,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Field & Lot management ----
     {
       name: 'list_fields',
-      description: 'Lista todos los campos y lotes del productor con sus coordenadas.',
+      description: 'Lista campos del productor como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -711,7 +714,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Truck management ----
     {
       name: 'list_trucks',
-      description: 'Lista los camiones/flota de la empresa del usuario.',
+      description: 'Lista camiones de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -762,7 +765,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Location picker ----
     {
       name: 'generate_location_link',
-      description: 'Genera un link para que el usuario elija una ubicacion en un mapa de Google Maps. Usalo cuando el usuario necesite marcar una ubicacion personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan automaticamente en la sesion.',
+      description: 'Genera un link para que el usuario elija una ubicacion en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicacion personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan automaticamente en la sesion.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -774,7 +777,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Tracking link ----
     {
       name: 'generate_tracking_link',
-      description: 'Genera un link publico para rastrear un flete en vivo en Google Maps. Muestra ruta completa (origen → destino) y posicion del camion en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
+      description: 'Genera un link publico para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posicion del camion en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -830,7 +833,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Transporter assignment (plant + producer with own fleet) ----
     {
       name: 'list_transporters',
-      description: 'Lista las empresas transportistas disponibles. Para plantas y productores con flota interna. Los productores con flota interna veran su propia empresa como opcion "Flota interna".',
+      description: 'Lista transportistas como menu interactivo. Retorna _selectionSent: true — NO reformatear. Para plantas y productores con flota interna.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -882,7 +885,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Company team management ----
     {
       name: 'list_company_users',
-      description: 'Lista todos los usuarios de la empresa del usuario actual con roles y estado.',
+      description: 'Lista usuarios de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -891,7 +894,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'list_drivers',
-      description: 'Lista los choferes de la empresa con camion asignado.',
+      description: 'Lista choferes de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -947,8 +950,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       switch (toolName) {
         case 'list_freights': return await this.toolListFreights(synUser, input, session);
         case 'get_freight_detail': return await this.toolGetFreightDetail(input, user);
-        case 'search_plants': return await this.toolSearchPlants(input, user);
-        case 'list_lots': return await this.toolListLots(user);
+        case 'search_plants': return await this.toolSearchPlants(input, user, session);
+        case 'list_lots': return await this.toolListLots(user, session);
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
         case 'confirm_create_freight': return await this.toolConfirmCreateFreight(user, synUser, session);
         case 'confirm_action': return await this.toolConfirmAction(user, synUser, session);
@@ -958,10 +961,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'confirm_loaded': return await this.toolConfirmLoaded(input, user, synUser, session);
         case 'confirm_finished': return await this.toolConfirmFinished(input, user, synUser, session);
         case 'cancel_freight': return await this.toolCancelFreight(input, user, synUser, session);
-        case 'list_fields': return await this.toolListFields(user);
+        case 'list_fields': return await this.toolListFields(user, session);
         case 'create_field': return await this.toolCreateField(input, user, session);
         case 'create_lot': return await this.toolCreateLot(input, user, session);
-        case 'list_trucks': return await this.toolListTrucks(user);
+        case 'list_trucks': return await this.toolListTrucks(user, session);
         case 'create_truck': return await this.toolCreateTruck(input, user, session);
         case 'create_user': return await this.toolCreateUser(input, user, session);
         case 'attach_document': return await this.toolAttachDocument(input, user, synUser, session);
@@ -971,12 +974,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'generate_daily_map_link': return await this.toolGenerateDailyMapLink(user);
         case 'share_live_location': return await this.toolShareLiveLocation(input, user);
         case 'view_live_locations': return await this.toolViewLiveLocations(input, user);
-        case 'list_transporters': return await this.toolListTransporters(user);
+        case 'list_transporters': return await this.toolListTransporters(user, session);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
         case 'assign_truck_to_freight': return await this.toolAssignTruckToFreight(input, user, synUser, session);
-        case 'list_company_users': return await this.toolListCompanyUsers(user);
-        case 'list_drivers': return await this.toolListDrivers(user);
+        case 'list_company_users': return await this.toolListCompanyUsers(user, session);
+        case 'list_drivers': return await this.toolListDrivers(user, session);
         case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
         case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
         case 'switch_company': return await this.toolSwitchCompany(input, user, session);
@@ -996,26 +999,20 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private async toolListFreights(synUser: any, input: any, session: any): Promise<string> {
     const result = await this.freights.findAll(synUser, {
       status: input.status,
-      limit: 100, // Fetch all for interactive list pagination
+      limit: 100,
       page: 1,
     } as any);
 
     if (result.data.length === 0) {
-      return JSON.stringify({ total: 0, freights: [], message: 'No hay fletes que coincidan' });
+      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan' });
     }
 
     const STATUS_SHORT: Record<string, string> = {
-      pending_assignment: 'Pend. asig.',
-      assigned: 'Asignado',
-      accepted: 'Aceptado',
-      in_progress: 'En viaje',
-      loaded: 'Cargado',
-      finished: 'Completado',
-      cancelled: 'Cancelado',
-      rejected: 'Rechazado',
+      pending_assignment: 'Pend. asig.', assigned: 'Asignado', accepted: 'Aceptado',
+      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
+      cancelled: 'Cancelado', rejected: 'Rechazado',
     };
 
-    // Build selection items for interactive WhatsApp list
     const items = result.data.map((f: any) => {
       const grain = f.items?.[0]?.grain || 'N/A';
       const tons = f.items?.[0]?.tons || 0;
@@ -1030,8 +1027,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
 
     const statusLabel = input.status ? ` (${STATUS_SHORT[input.status] || input.status})` : '';
+    return this.storePendingSelection(session, items, {
+      headerText: `📦 ${result.total} flete${result.total !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
+      listButtonLabel: 'Ver fletes',
+      sectionTitle: 'FLETES',
+    }, 'freight_selection');
+  }
 
-    // Store pending selection for the router to send as interactive list
+  // ---- Helper: store _pendingSelection for interactive list ----
+  private async storePendingSelection(
+    session: any,
+    items: { id: string; title: string; description?: string }[],
+    config: { headerText: string; listButtonLabel: string; sectionTitle: string },
+    purpose: string,
+    extraJson?: Record<string, any>,
+  ): Promise<string> {
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
     const currentState = (freshSession?.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
@@ -1039,24 +1049,15 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       data: {
         flowState: {
           ...currentState,
-          _pendingSelection: {
-            items,
-            config: {
-              headerText: `📦 ${result.total} flete${result.total !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
-              listButtonLabel: 'Ver fletes',
-              sectionTitle: 'FLETES',
-            },
-            purpose: 'freight_selection',
-          },
+          _pendingSelection: { items, config, purpose },
         },
       },
     });
-
     return JSON.stringify({
-      total: result.total,
-      showing: items.length,
-      message: `Se presento lista interactiva de ${items.length} fletes al usuario. Espere a que seleccione uno.`,
+      total: items.length,
+      message: `Se presento lista interactiva de ${items.length} elemento(s). Espere a que seleccione uno.`,
       _selectionSent: true,
+      ...extraJson,
     });
   }
 
@@ -1120,7 +1121,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   }
 
   // ---- search_plants ----
-  private async toolSearchPlants(input: any, user: any): Promise<string> {
+  private async toolSearchPlants(input: any, user: any, session: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No sos productor', plants: [] });
@@ -1136,46 +1137,57 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ plants: [], message: 'No tenes plantas habilitadas' });
     }
 
-    // Fetch all accessible plants, then apply fuzzy search in memory
     const companies = await this.prisma.company.findMany({
-      where: {
-        id: { in: plantCompanyIds },
-        active: true,
-      },
+      where: { id: { in: plantCompanyIds }, active: true },
       select: {
         id: true, name: true,
-        plants: {
-          where: { active: true },
-          select: { id: true, name: true },
-        },
+        plants: { where: { active: true }, select: { id: true, name: true } },
       },
       take: 50,
     });
 
+    let filtered = companies;
+    let matchType: string | undefined;
     if (input.query) {
-      // Fuzzy search tolerates audio transcription errors (e.g., "el triyo" → "El Trillo")
       const fuzzyResults = fuzzySearch(input.query, companies, (c) => c.name, { threshold: 0.55, maxResults: 10 });
-      const matchType = classifyFuzzyResult(fuzzyResults);
-      const results = fuzzyResults.map((r) => ({
-        companyId: r.item.id,
-        companyName: r.item.name,
-        branches: (r.item as any).plants.map((b: any) => ({ id: b.id, name: b.name })),
-        matchScore: Math.round(r.score * 100),
-      }));
-      return JSON.stringify({ plants: results, matchType });
+      matchType = classifyFuzzyResult(fuzzyResults);
+      filtered = fuzzyResults.map(r => r.item) as any;
     }
 
-    const results = companies.map((c) => ({
-      companyId: c.id,
-      companyName: c.name,
-      branches: c.plants.map((b) => ({ id: b.id, name: b.name })),
+    if (filtered.length === 0) {
+      return JSON.stringify({ plants: [], message: 'No se encontraron plantas' });
+    }
+
+    // If exact/confident match on a single plant, return data directly for AI to use
+    if (matchType === 'exact' || (matchType === 'confident' && filtered.length === 1)) {
+      const c = filtered[0];
+      return JSON.stringify({
+        plants: [{ companyId: c.id, companyName: c.name, branches: (c as any).plants.map((b: any) => ({ id: b.id, name: b.name })) }],
+        matchType,
+      });
+    }
+
+    const items = filtered.map((c: any) => ({
+      id: `plant:${c.id}`,
+      title: c.name.slice(0, 24),
+      description: `${c.plants?.length || 0} sucursal${c.plants?.length !== 1 ? 'es' : ''}`.slice(0, 72),
     }));
 
-    return JSON.stringify({ plants: results });
+    // Include branch data in extraJson so AI has it for follow-up
+    const plantsData = filtered.map((c: any) => ({
+      companyId: c.id, companyName: c.name,
+      branches: c.plants.map((b: any) => ({ id: b.id, name: b.name })),
+    }));
+
+    return this.storePendingSelection(session, items, {
+      headerText: '🏢 Plantas disponibles.\nSeleccione una:',
+      listButtonLabel: 'Ver plantas',
+      sectionTitle: 'PLANTAS',
+    }, 'plant_info', { plants: plantsData, matchType });
   }
 
   // ---- list_lots ----
-  private async toolListLots(user: any): Promise<string> {
+  private async toolListLots(user: any, session: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No sos productor', lots: [] });
@@ -1184,16 +1196,24 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const lots = await this.prisma.lot.findMany({
       where: { companyId: producerCompanyId, active: true },
       include: { field: { select: { id: true, name: true } } },
-      take: 20,
+      take: 100,
     });
 
-    return JSON.stringify({
-      lots: lots.map((l: any) => ({
-        id: l.id,
-        name: l.name,
-        field: l.field?.name || null,
-      })),
-    });
+    if (lots.length === 0) {
+      return JSON.stringify({ total: 0, message: 'No hay lotes registrados.' });
+    }
+
+    const items = lots.map((l: any) => ({
+      id: `lot:${l.id}`,
+      title: (l.name || 'Sin nombre').slice(0, 24),
+      description: (l.field?.name || 'Sin campo').slice(0, 72),
+    }));
+
+    return this.storePendingSelection(session, items, {
+      headerText: '🗺️ Lotes registrados.\nSeleccione uno para ver detalles:',
+      listButtonLabel: 'Ver lotes',
+      sectionTitle: 'LOTES',
+    }, 'lot_info');
   }
 
   // ---- prepare_freight ----
@@ -1660,7 +1680,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ======================== FIELD & LOT TOOLS ===========================
 
   // ---- list_fields ----
-  private async toolListFields(user: any): Promise<string> {
+  private async toolListFields(user: any, session: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) return JSON.stringify({ error: 'No sos productor', fields: [] });
     const fields = await this.prisma.field.findMany({
@@ -1670,25 +1690,26 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
 
     if (fields.length === 0) {
-      return JSON.stringify({ total: 0, fields: [], message: 'No hay campos registrados. Podes crear uno con create_field.' });
+      return JSON.stringify({ total: 0, message: 'No hay campos registrados. Puede crear uno con create_field.' });
     }
 
-    const result = fields.map((f: any) => ({
-      id: f.id,
-      name: f.name,
-      address: f.address,
-      lat: f.lat ? Number(f.lat) : null,
-      lng: f.lng ? Number(f.lng) : null,
-      lots: f.lots.map((l: any) => ({
-        id: l.id,
-        name: l.name,
-        hectares: l.hectares ? Number(l.hectares) : null,
-        lat: l.lat ? Number(l.lat) : null,
-        lng: l.lng ? Number(l.lng) : null,
-      })),
+    const items = fields.map((f: any) => ({
+      id: `field:${f.id}`,
+      title: (f.name || 'Sin nombre').slice(0, 24),
+      description: `${f.lots?.length || 0} lote${f.lots?.length !== 1 ? 's' : ''}${f.address ? ' · ' + f.address : ''}`.slice(0, 72),
     }));
 
-    return JSON.stringify({ total: fields.length, fields: result });
+    // Include full field data so AI can answer follow-up questions
+    const fieldsData = fields.map((f: any) => ({
+      id: f.id, name: f.name, address: f.address,
+      lots: f.lots.map((l: any) => ({ id: l.id, name: l.name })),
+    }));
+
+    return this.storePendingSelection(session, items, {
+      headerText: '🌾 Campos registrados.\nSeleccione uno para ver detalles:',
+      listButtonLabel: 'Ver campos',
+      sectionTitle: 'CAMPOS',
+    }, 'field_info', { fields: fieldsData });
   }
 
   // ---- create_field ----
@@ -1742,22 +1763,25 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ======================== TRUCK TOOLS ==================================
 
   // ---- list_trucks ----
-  private async toolListTrucks(user: any): Promise<string> {
+  private async toolListTrucks(user: any, session: any): Promise<string> {
     const synUser = this.buildSyntheticUser(user);
     const trucks = await this.trucksService.list(synUser);
 
     if ((trucks as any[]).length === 0) {
-      return JSON.stringify({ total: 0, trucks: [], message: 'No hay camiones registrados. Podes crear uno con create_truck.' });
+      return JSON.stringify({ total: 0, message: 'No hay camiones registrados. Puede crear uno con create_truck.' });
     }
 
-    const result = (trucks as any[]).map((t: any) => ({
-      id: t.id,
-      plate: t.plate,
-      model: t.model,
-      driver: t.assignedUser ? t.assignedUser.name : null,
+    const items = (trucks as any[]).map((t: any) => ({
+      id: `truck:${t.id}`,
+      title: (t.plate || '').toUpperCase().slice(0, 24),
+      description: `${[t.brand, t.model].filter(Boolean).join(' ')}${t.assignedUser?.name ? ' · ' + t.assignedUser.name : ''}`.slice(0, 72) || 'Sin detalle',
     }));
 
-    return JSON.stringify({ total: result.length, trucks: result });
+    return this.storePendingSelection(session, items, {
+      headerText: '🚛 Camiones registrados.\nSeleccione uno para ver detalles:',
+      listButtonLabel: 'Ver camiones',
+      sectionTitle: 'CAMIONES',
+    }, 'truck_info');
   }
 
   // ---- create_truck ----
@@ -2097,13 +2121,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================
 
   // ---- list_transporters ----
-  private async toolListTransporters(user: any): Promise<string> {
+  private async toolListTransporters(user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
     if (!companyType.includes('plant') && !companyType.includes('producer')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden listar transportistas.' });
     }
 
-    // Check if user has own fleet — if so, tell AI to use own_fleet directly
     const ownCompanyId = user.activeCompanyId || user.companyId;
     let hasOwnFleet = false;
     if (ownCompanyId) {
@@ -2111,12 +2134,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         where: { id: ownCompanyId },
         select: { name: true, hasInternalFleet: true },
       });
-      if (ownCompany?.hasInternalFleet) {
-        hasOwnFleet = true;
-      }
+      if (ownCompany?.hasInternalFleet) hasOwnFleet = true;
     }
 
-    // Scope to transporters with business relationship (PlantProducerAccess)
     const accessRecords = await this.prisma.plantProducerAccess.findMany({
       where: { OR: [{ producerCompanyId: ownCompanyId }, { plantCompanyId: ownCompanyId }], active: true },
       select: { producerCompanyId: true, plantCompanyId: true },
@@ -2124,7 +2144,6 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const relatedCompanyIds = [...new Set(accessRecords.map(a =>
       a.producerCompanyId === ownCompanyId ? a.plantCompanyId : a.producerCompanyId,
     ))];
-    // Also include companies from freight assignments
     const freightRelated = await this.prisma.freightAssignment.findMany({
       where: { transportCompanyId: { not: null } },
       distinct: ['transportCompanyId'],
@@ -2140,22 +2159,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const transporters = uniqueIds.length > 0
       ? await this.prisma.company.findMany({
           where: {
-            id: { in: uniqueIds },
-            active: true,
-            OR: [
-              { type: 'transporter' },
-              { types: { array_contains: ['transporter'] } },
-            ],
+            id: { in: uniqueIds }, active: true,
+            OR: [{ type: 'transporter' }, { types: { array_contains: ['transporter'] } }],
           },
           select: { id: true, name: true, phone: true },
           orderBy: { name: 'asc' },
-          take: 15,
+          take: 50,
         })
       : [];
 
     const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
 
-    // Add own company as "Flota interna" at the top
     if (hasOwnFleet && ownCompanyId && !result.some(r => r.id === ownCompanyId)) {
       const ownCompany = await this.prisma.company.findUnique({
         where: { id: ownCompanyId },
@@ -2167,20 +2181,25 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     if (result.length === 0) {
-      return JSON.stringify({ total: 0, transporters: [], message: 'No hay transportistas disponibles.' });
+      return JSON.stringify({ total: 0, message: 'No hay transportistas disponibles.' });
     }
 
-    const response: any = {
-      total: result.length,
-      transporters: result,
-    };
+    const items = result.map(c => ({
+      id: `transporter:${c.id}`,
+      title: c.name.slice(0, 24),
+      description: (c.phone || 'Sin teléfono').slice(0, 72),
+    }));
 
-    // Strong hint for AI when user has own fleet
+    const extraJson: any = { transporters: result };
     if (hasOwnFleet) {
-      response.NOTA = 'Este usuario tiene FLOTA INTERNA. Para asignar su propia flota, llamar assign_transporter con transporterCompanyId="own_fleet". No es necesario preguntar al usuario cual empresa.';
+      extraJson.NOTA = 'Este usuario tiene FLOTA INTERNA. Para asignar su propia flota, llamar assign_transporter con transporterCompanyId="own_fleet". No es necesario preguntar al usuario cual empresa.';
     }
 
-    return JSON.stringify(response);
+    return this.storePendingSelection(session, items, {
+      headerText: '👤 Transportistas disponibles.\nSeleccione uno:',
+      listButtonLabel: 'Ver transportistas',
+      sectionTitle: 'TRANSPORTISTAS',
+    }, 'transporter_info', extraJson);
   }
 
   // ---- assign_transporter ----
@@ -2331,7 +2350,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   // ======================== TEAM MANAGEMENT TOOLS =========================
 
   // ---- list_company_users ----
-  private async toolListCompanyUsers(user: any): Promise<string> {
+  private async toolListCompanyUsers(user: any, session: any): Promise<string> {
     const companyIds: string[] = [];
     if (user.activeCompanyId) companyIds.push(user.activeCompanyId);
     else if (user.companyId) companyIds.push(user.companyId);
@@ -2355,29 +2374,41 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         company: { select: { name: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 30,
+      take: 50,
     });
 
-    const users = memberships
-      .filter(m => m.user.active)
-      .map(m => ({
-        name: m.user.name,
-        email: m.user.email,
-        phone: m.user.phone,
-        role: m.role,
-        company: m.company.name,
-      }));
+    const ROLE_LABEL: Record<string, string> = { admin: 'Admin', operator: 'Operador', chofer: 'Chofer' };
+    const activeUsers = memberships.filter(m => m.user.active);
 
-    return JSON.stringify({ total: users.length, users });
+    if (activeUsers.length === 0) {
+      return JSON.stringify({ total: 0, message: 'No hay usuarios activos.' });
+    }
+
+    const items = activeUsers.map(m => ({
+      id: `user:${m.user.id}`,
+      title: (m.user.name || 'Sin nombre').slice(0, 24),
+      description: `${ROLE_LABEL[m.role] || m.role} · ${m.company.name}`.slice(0, 72),
+    }));
+
+    const usersData = activeUsers.map(m => ({
+      id: m.user.id, name: m.user.name, email: m.user.email,
+      phone: m.user.phone, role: m.role, company: m.company.name,
+    }));
+
+    return this.storePendingSelection(session, items, {
+      headerText: '👤 Usuarios de la empresa.\nSeleccione uno para ver detalles:',
+      listButtonLabel: 'Ver usuarios',
+      sectionTitle: 'USUARIOS',
+    }, 'user_info', { users: usersData });
   }
 
   // ---- list_drivers ----
-  private async toolListDrivers(user: any): Promise<string> {
+  private async toolListDrivers(user: any, session: any): Promise<string> {
     const synUser = this.buildSyntheticUser(user);
     const drivers = await this.trucksService.listDrivers(synUser);
 
     if ((drivers as any[]).length === 0) {
-      return JSON.stringify({ total: 0, drivers: [], message: 'No hay choferes registrados.' });
+      return JSON.stringify({ total: 0, message: 'No hay choferes registrados.' });
     }
 
     const driverIds = (drivers as any[]).map(d => d.id);
@@ -2387,17 +2418,29 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
     const truckByDriver = new Map(trucks.map(t => [t.assignedUserId, t]));
 
-    const result = (drivers as any[]).map((d: any) => {
+    const items = (drivers as any[]).map((d: any) => {
+      const truck = truckByDriver.get(d.id);
+      const truckLabel = truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : 'Sin camión';
+      return {
+        id: `driver:${d.id}`,
+        title: (d.name || 'Sin nombre').slice(0, 24),
+        description: truckLabel.slice(0, 72),
+      };
+    });
+
+    const driversData = (drivers as any[]).map((d: any) => {
       const truck = truckByDriver.get(d.id);
       return {
-        id: d.id,
-        name: d.name,
-        phone: d.phone,
+        id: d.id, name: d.name, phone: d.phone,
         assignedTruck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : null,
       };
     });
 
-    return JSON.stringify({ total: result.length, drivers: result });
+    return this.storePendingSelection(session, items, {
+      headerText: '👤 Choferes registrados.\nSeleccione uno para ver detalles:',
+      listButtonLabel: 'Ver choferes',
+      sectionTitle: 'CHOFERES',
+    }, 'driver_info', { drivers: driversData });
   }
 
   // ======================== ACCESS MANAGEMENT TOOLS ========================
