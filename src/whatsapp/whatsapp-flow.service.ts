@@ -174,6 +174,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
+      if (!state.freightId) { await this.wa.sendText(phone, 'No se pudo identificar el flete. Intente de nuevo.'); await this.endFlow(session.id); return; }
       const synUser = this.buildSyntheticUser(user);
       await this.freights.respond(state.freightId, { action: 'rejected', reason } as any, synUser);
       await this.wa.sendText(phone, `❌ Flete rechazado.\n\n📝 Motivo: ${reason}`);
@@ -231,6 +232,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
+      if (!state.freightId) { await this.wa.sendText(phone, 'No se pudo identificar el flete. Intente de nuevo.'); await this.endFlow(session.id); return; }
       const synUser = this.buildSyntheticUser(user);
       await this.freights.confirmLoaded(state.freightId, synUser, tons);
       await this.wa.sendText(phone, `✅ Carga confirmada: ${tons} tn.`);
@@ -242,6 +244,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     if (session.flowStep === 'awaiting_tons_confirm' && type === 'button_reply') {
       const btnId = payload.id || '';
       if (btnId === 'tons_confirm:yes') {
+        if (!state.freightId) { await this.wa.sendText(phone, 'No se pudo identificar el flete. Intente de nuevo.'); await this.endFlow(session.id); return; }
         const tons = state.pendingTons;
         const synUser = this.buildSyntheticUser(user);
         await this.freights.confirmLoaded(state.freightId, synUser, tons);
@@ -278,6 +281,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
+      if (!state.freightId) { await this.wa.sendText(phone, 'No se pudo identificar el flete. Intente de nuevo.'); await this.endFlow(session.id); return; }
       const synUser = this.buildSyntheticUser(user);
       await this.freights.cancel(state.freightId, { reason } as any, synUser);
       await this.wa.sendText(phone, `❌ Flete cancelado.\n\n📝 Motivo: ${reason}`);
