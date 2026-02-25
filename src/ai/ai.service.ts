@@ -357,10 +357,9 @@ PRIORIDAD EN CADA RESPUESTA:
 7. NUNCA exponga UUIDs internos. Solo codigos FLT-XXXX.
 8. Audio transcripto puede contener errores foneticos (ej: "solla" = Soja, "el triyo" = El Trillo).
    Interpretar la INTENCION del usuario. Si una busqueda no devuelve resultados, intentar variaciones foneticas.
-9. NUNCA muestre coordenadas numericas (latitud/longitud) al usuario. Si el usuario pregunta por una ubicacion
-   (campo, lote, planta, origen, destino, flete), SIEMPRE use generate_map_link o generate_tracking_link para
-   generar un link al mapa Tolvink. Si get_freight_detail devuelve mapLink, incluirlo directamente.
-   El usuario debe recibir un LINK clickeable, nunca numeros de coordenadas.
+9. PROHIBIDO mostrar coordenadas numericas (latitud, longitud, numeros como -34.xxx, -57.xxx).
+   Los datos de herramientas incluyen "mapLink" con un URL al mapa Tolvink. SIEMPRE incluir ese link.
+   Si no hay mapLink, usar generate_map_link. JAMAS escribir numeros de coordenadas en el mensaje.
 
 [MANEJO DE DATOS FALTANTES]
 
@@ -1156,8 +1155,6 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       link: `${APP_URL}/freights/${freight.id}`,
       mapLink,
-      originLat: oLat, originLng: oLng,
-      destLat: dLat, destLng: dLng,
     });
   }
 
@@ -1250,12 +1247,18 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       description: (l.field?.name || 'Sin campo').slice(0, 72),
     }));
 
-    // Include lot data with coords so AI can generate map links
-    const lotsData = lots.map((l: any) => ({
-      id: l.id, name: l.name, fieldName: l.field?.name || null,
-      lat: l.lat ? Number(l.lat) : (l.field?.lat ? Number(l.field.lat) : null),
-      lng: l.lng ? Number(l.lng) : (l.field?.lng ? Number(l.field.lng) : null),
-    }));
+    // Include lot data with mapLink instead of raw coords
+    const lotsData = lots.map((l: any) => {
+      const lLat = l.lat ? Number(l.lat) : (l.field?.lat ? Number(l.field.lat) : null);
+      const lLng = l.lng ? Number(l.lng) : (l.field?.lng ? Number(l.field.lng) : null);
+      let mapLink: string | null = null;
+      if (lLat && lLng) {
+        const p = new URLSearchParams();
+        p.set('lat', lLat.toFixed(6)); p.set('lng', lLng.toFixed(6)); p.set('n', (l.name || 'Lote').slice(0, 60));
+        mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
+      }
+      return { id: l.id, name: l.name, fieldName: l.field?.name || null, mapLink };
+    });
 
     return this.storePendingSelection(session, items, {
       headerText: '🗺️ Lotes registrados.\nSeleccione uno para ver detalles:',
@@ -1747,12 +1750,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       description: `${f.lots?.length || 0} lote${f.lots?.length !== 1 ? 's' : ''}${f.address ? ' · ' + f.address : ''}`.slice(0, 72),
     }));
 
-    // Include full field data so AI can answer follow-up questions (includes coords for map links)
-    const fieldsData = fields.map((f: any) => ({
-      id: f.id, name: f.name, address: f.address,
-      lat: f.lat ? Number(f.lat) : null, lng: f.lng ? Number(f.lng) : null,
-      lots: f.lots.map((l: any) => ({ id: l.id, name: l.name })),
-    }));
+    // Include full field data so AI can answer follow-up questions (mapLink instead of raw coords)
+    const fieldsData = fields.map((f: any) => {
+      const fLat = f.lat ? Number(f.lat) : null;
+      const fLng = f.lng ? Number(f.lng) : null;
+      let mapLink: string | null = null;
+      if (fLat && fLng) {
+        const p = new URLSearchParams();
+        p.set('lat', fLat.toFixed(6)); p.set('lng', fLng.toFixed(6)); p.set('n', (f.name || 'Campo').slice(0, 60));
+        mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
+      }
+      return {
+        id: f.id, name: f.name, address: f.address, mapLink,
+        lots: f.lots.map((l: any) => ({ id: l.id, name: l.name })),
+      };
+    });
 
     return this.storePendingSelection(session, items, {
       headerText: '🌾 Campos registrados.\nSeleccione uno para ver detalles:',
