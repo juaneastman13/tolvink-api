@@ -44,6 +44,7 @@ const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
+  private _requestLocationCooldowns = new Map<string, number>();
   private rateCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
@@ -2275,6 +2276,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     if (!['in_progress', 'loaded', 'accepted'].includes(freight.status)) {
       return JSON.stringify({ error: `El flete ${code} no esta activo (estado: ${freight.status})` });
     }
+
+    // Cooldown: max 1 request_location per freight per 5 minutes
+    const cooldownKey = `req_loc_${freight.id}`;
+    const now = Date.now();
+    if ((this._requestLocationCooldowns.get(cooldownKey) || 0) > now) {
+      return JSON.stringify({ error: `Ya se solicito ubicacion para ${code} hace poco. Intente en unos minutos.` });
+    }
+    this._requestLocationCooldowns.set(cooldownKey, now + 5 * 60 * 1000);
 
     // Collect all participant companies
     const companyIds = new Set<string>();

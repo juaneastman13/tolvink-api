@@ -41,6 +41,8 @@ const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 export class WhatsAppRouterService {
   private readonly logger = new Logger(WhatsAppRouterService.name);
   private openai: OpenAI | null = null;
+  /** Per-user GPS write cooldown — max 1 location save per 30s */
+  private gpsWriteCooldowns = new Map<string, number>();
   /** In-memory TTL cache for freight counts per company (60s) */
   private freightCountsCache = new Map<string, { data: Record<string, number>; ts: number }>();
   private readonly COUNTS_TTL = 60_000;
@@ -448,6 +450,15 @@ export class WhatsAppRouterService {
 
   // Save GPS to FreightTracking for all active freights the user is involved in
   private async saveLocationToActiveFreights(user: any, lat: number, lng: number): Promise<void> {
+    // Rate limit: max 1 GPS save per user per 30 seconds
+    const now = Date.now();
+    const lastWrite = this.gpsWriteCooldowns.get(user.id) || 0;
+    if (now - lastWrite < 30_000) {
+      this.logger.debug(`GPS throttled for user ${user.id} (${Math.round((30_000 - (now - lastWrite)) / 1000)}s remaining)`);
+      return;
+    }
+    this.gpsWriteCooldowns.set(user.id, now);
+
     // 1) Check if user is a driver with an active in_progress freight
     const driverAssignment = await this.prisma.freightAssignment.findFirst({
       where: { driverId: user.id, status: 'accepted', tripStatus: 'in_progress' },
@@ -484,7 +495,7 @@ export class WhatsAppRouterService {
     for (const f of activeFreights) {
       await this.prisma.freightTracking.create({
         data: { freightId: f.id, userId: user.id, lat, lng },
-      }).catch(() => {});
+      }).catch((err) => this.logger.warn(`GPS write failed for freight ${f.id}: ${err.message}`));
     }
     if (activeFreights.length > 0) {
       this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);

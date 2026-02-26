@@ -2044,7 +2044,7 @@ export class FreightsService implements OnModuleInit {
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.in_progress && freight.status !== FreightStatus.loaded) {
-      throw new BadRequestException('Solo se puede trackear un flete en curso');
+      throw new BadRequestException('Solo se puede trackear un flete en curso o cargado');
     }
 
     return this.prisma.freightTracking.create({
