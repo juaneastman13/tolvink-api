@@ -269,11 +269,11 @@ export class FreightsController {
     return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
   }
 
-  @Get(':id/tracking')
+  @Get(':id/tracking/participants')
   @UseGuards(FreightAccessGuard)
-  @ApiOperation({ summary: 'Obtener puntos de tracking' })
-  getTracking(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.getTrackingPoints(id);
+  @ApiOperation({ summary: 'Última posición de cada participante' })
+  getParticipantPositions(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getParticipantPositions(id);
   }
 
   @Get(':id/tracking/last')
@@ -283,11 +283,11 @@ export class FreightsController {
     return this.service.getLastPosition(id);
   }
 
-  @Get(':id/tracking/participants')
+  @Get(':id/tracking')
   @UseGuards(FreightAccessGuard)
-  @ApiOperation({ summary: 'Última posición de cada participante' })
-  getParticipantPositions(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.getParticipantPositions(id);
+  @ApiOperation({ summary: 'Obtener puntos de tracking' })
+  getTracking(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getTrackingPoints(id);
   }
 
   @Get(':id/audit')
