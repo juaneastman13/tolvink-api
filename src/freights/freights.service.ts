@@ -2065,7 +2065,7 @@ export class FreightsService implements OnModuleInit {
       where: { freightId },
       orderBy: { createdAt: 'desc' },
       take: 500,
-      select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
+      select: { id: true, userId: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
     return points.reverse();
   }
@@ -2074,8 +2074,23 @@ export class FreightsService implements OnModuleInit {
     return this.prisma.freightTracking.findFirst({
       where: { freightId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
+      select: { id: true, userId: true, lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
+  }
+
+  /** Latest position per participant (for map pins) */
+  async getParticipantPositions(freightId: string) {
+    // Get all tracking points grouped by user — latest per user
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT DISTINCT ON (t.user_id)
+        t.id, t.user_id AS "userId", t.lat, t.lng, t.speed, t.heading, t.created_at AS "createdAt",
+        u.name AS "userName", u.role AS "userRole"
+      FROM freight_tracking t
+      LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.freight_id = ${freightId} AND t.user_id IS NOT NULL
+      ORDER BY t.user_id, t.created_at DESC
+    `;
+    return rows;
   }
 
   // ======================== ADD DOCUMENT ================================
