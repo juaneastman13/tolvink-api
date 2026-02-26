@@ -272,7 +272,7 @@ export class AiService implements OnModuleDestroy {
     let roleRestrictions = '';
     const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
     if (isChofer) {
-      roleRestrictions = '\n- Choferes: SOLO accept_freight, reject_freight, start_freight, confirm_loaded, confirm_finished, get_freight_detail, list_freights, generate_tracking_link, share_live_location, view_live_locations.';
+      roleRestrictions = '\n- Choferes: SOLO accept_freight, reject_freight, start_freight, confirm_loaded, confirm_finished, get_freight_detail, list_freights, generate_tracking_link, share_live_location, view_live_locations, request_location.';
     } else if (companyType.includes('producer') && !companyType.includes('plant')) {
       roleRestrictions = '\n- Productores: NO usar accept_freight, reject_freight, start_freight (excepto chofer de flota interna).';
     } else if (companyType.includes('plant') && !companyType.includes('producer')) {
@@ -474,8 +474,8 @@ MAPA DEL DIA:
 UBICACION EN VIVO:
 - share_live_location para compartir la ubicacion del usuario en tiempo real durante un flete.
 - view_live_locations para ver las ubicaciones de todos los participantes de un flete en el mapa.
+- request_location para solicitar a los involucrados que compartan su ubicacion. Envia WhatsApp a todos los participantes del flete pidiendoles que envien su pin. Usar cuando preguntan "donde esta el chofer/camion" o "solicitar ubicacion".
 - Solo disponible para fletes activos (no finalizados ni cancelados).
-- La ubicacion se comparte por un maximo de 8 horas.
 
 [ASIGNAR TRANSPORTISTA]
 
@@ -865,6 +865,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         required: ['code'],
       },
     },
+    {
+      name: 'request_location',
+      description: 'Solicitar a los involucrados de un flete que compartan su ubicacion por WhatsApp. Envia un mensaje a los participantes pidiendoles que envien su ubicacion. Usar cuando alguien pregunta donde esta el chofer o pide ubicacion.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+        },
+        required: ['code'],
+      },
+    },
     // ---- Transporter assignment (plant + producer with own fleet) ----
     {
       name: 'list_transporters',
@@ -1010,6 +1021,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         case 'generate_daily_map_link': return await this.toolGenerateDailyMapLink(user);
         case 'share_live_location': return await this.toolShareLiveLocation(input, user);
         case 'view_live_locations': return await this.toolViewLiveLocations(input, user);
+        case 'request_location': return await this.toolRequestLocation(input, user);
         case 'list_transporters': return await this.toolListTransporters(user, session);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
@@ -2224,6 +2236,96 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return JSON.stringify({
       url,
       message: `Abra el siguiente link para ver las ubicaciones en tiempo real de los participantes del flete ${code}.`,
+    });
+  }
+
+  // ---- request_location ----
+  private async toolRequestLocation(input: any, user: any): Promise<string> {
+    const code = input.code?.toUpperCase();
+    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: {
+        id: true, code: true, status: true,
+        originName: true, destName: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          select: {
+            transportCompanyId: true,
+            driverId: true,
+            driver: { select: { phone: true, name: true, id: true } },
+          },
+        },
+      },
+    });
+    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
+
+    // Access check
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
+      ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
+    }
+
+    if (!['in_progress', 'loaded', 'accepted'].includes(freight.status)) {
+      return JSON.stringify({ error: `El flete ${code} no esta activo (estado: ${freight.status})` });
+    }
+
+    // Collect all participant companies
+    const companyIds = new Set<string>();
+    if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
+    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
+    for (const a of freight.assignments) {
+      if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
+    }
+
+    const participants = await this.prisma.user.findMany({
+      where: {
+        phone: { not: null },
+        active: true,
+        OR: [
+          { companyId: { in: Array.from(companyIds) } },
+          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true } } },
+        ],
+      },
+      select: { phone: true, id: true, name: true },
+      take: 50,
+    });
+
+    // Merge drivers + company users, deduplicate, exclude requester
+    const allTargets = new Map<string, { phone: string; name: string }>();
+    for (const a of freight.assignments) {
+      const d = a.driver;
+      if (d?.phone && d.id !== user.id) allTargets.set(d.id, { phone: d.phone, name: d.name || 'Chofer' });
+    }
+    for (const p of participants) {
+      if (p.id !== user.id && !allTargets.has(p.id)) {
+        allTargets.set(p.id, { phone: p.phone!, name: p.name || 'Usuario' });
+      }
+    }
+
+    if (allTargets.size === 0) {
+      return JSON.stringify({ error: 'No hay participantes con WhatsApp a quienes solicitar ubicacion' });
+    }
+
+    const requesterName = user.name?.split(' ')[0] || 'Un participante';
+    const msg = `*Solicitud de ubicacion*\n${requesterName} solicita tu ubicacion para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicacion en este chat (adjuntar \u2192 Ubicacion).`;
+
+    let sent = 0;
+    for (const [, target] of allTargets) {
+      await this.wa.sendText(target.phone, msg).catch(() => {});
+      sent++;
+    }
+
+    return JSON.stringify({
+      status: 'ok',
+      message: `Solicitud enviada a ${sent} participante${sent > 1 ? 's' : ''}`,
+      sent,
     });
   }
 
