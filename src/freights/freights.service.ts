@@ -2080,13 +2080,25 @@ export class FreightsService implements OnModuleInit {
 
   /** Latest position per participant (for map pins) */
   async getParticipantPositions(freightId: string) {
-    // Get all tracking points grouped by user — latest per user
     const rows: any[] = await this.prisma.$queryRaw`
       SELECT DISTINCT ON (t.user_id)
-        t.id, t.user_id AS "userId", t.lat, t.lng, t.speed, t.heading, t.created_at AS "createdAt",
-        u.name AS "userName", u.role AS "userRole"
+        t.id, t.user_id AS "userId",
+        CAST(t.lat AS double precision) AS lat,
+        CAST(t.lng AS double precision) AS lng,
+        CAST(t.speed AS double precision) AS speed,
+        CAST(t.heading AS double precision) AS heading,
+        t.created_at AS "createdAt",
+        u.name AS "userName",
+        CASE
+          WHEN EXISTS (SELECT 1 FROM freight_assignments fa WHERE fa.freight_id = t.freight_id AND fa.driver_id = t.user_id) THEN 'chofer'
+          WHEN u.company_id = f.origin_company_id THEN 'producer'
+          WHEN u.company_id = f.dest_company_id THEN 'plant'
+          WHEN EXISTS (SELECT 1 FROM freight_assignments fa WHERE fa.freight_id = t.freight_id AND fa.transport_company_id = u.company_id) THEN 'transporter'
+          ELSE 'other'
+        END AS "participantType"
       FROM freight_tracking t
       LEFT JOIN users u ON u.id = t.user_id
+      LEFT JOIN freights f ON f.id = t.freight_id
       WHERE t.freight_id = ${freightId} AND t.user_id IS NOT NULL
       ORDER BY t.user_id, t.created_at DESC
     `;
