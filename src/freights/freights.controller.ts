@@ -245,7 +245,7 @@ export class FreightsController {
 
   @Post(':id/tracking')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Enviar punto de tracking GPS' })
   addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AddTrackingDto, @CurrentUser() user: any) {
     return this.service.addTrackingPoint(id, dto, user);

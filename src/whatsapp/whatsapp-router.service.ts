@@ -435,26 +435,8 @@ export class WhatsAppRouterService {
       },
     });
 
-    // GPS tracking: if driver has an active in_progress freight, save position to FreightTracking
-    this.prisma.freightAssignment.findFirst({
-      where: {
-        driverId: user.id,
-        status: 'accepted',
-        tripStatus: 'in_progress',
-      },
-      select: { freightId: true },
-    }).then(async (assignment) => {
-      if (!assignment) return;
-      await this.prisma.freightTracking.create({
-        data: {
-          freightId: assignment.freightId,
-          userId: user.id,
-          lat: latitude,
-          lng: longitude,
-        },
-      });
-      this.logger.log(`GPS tracked for freight ${assignment.freightId} from driver ${user.id}`);
-    }).catch((err) => {
+    // GPS tracking: save position to FreightTracking for any active freight the user is involved in
+    this.saveLocationToActiveFreights(user, latitude, longitude).catch((err) => {
       this.logger.error(`GPS tracking save failed: ${err.message}`);
     });
 
@@ -462,6 +444,51 @@ export class WhatsAppRouterService {
     const locationDesc = name || address || `${latitude}, ${longitude}`;
     const textForAi = `[Ubicacion compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
     await this.handleAiChat(phone, user, textForAi);
+  }
+
+  // Save GPS to FreightTracking for all active freights the user is involved in
+  private async saveLocationToActiveFreights(user: any, lat: number, lng: number): Promise<void> {
+    // 1) Check if user is a driver with an active in_progress freight
+    const driverAssignment = await this.prisma.freightAssignment.findFirst({
+      where: { driverId: user.id, status: 'accepted', tripStatus: 'in_progress' },
+      select: { freightId: true },
+    });
+    if (driverAssignment) {
+      await this.prisma.freightTracking.create({
+        data: { freightId: driverAssignment.freightId, userId: user.id, lat, lng },
+      });
+      this.logger.log(`GPS tracked for freight ${driverAssignment.freightId} from driver ${user.id}`);
+      return;
+    }
+
+    // 2) Non-driver: find active freights where user's company is involved
+    const userCompanyIds = [
+      user.companyId,
+      ...((user.memberships || []).filter((m: any) => m.active).map((m: any) => m.companyId)),
+    ].filter(Boolean);
+    if (userCompanyIds.length === 0) return;
+
+    const activeFreights = await this.prisma.freight.findMany({
+      where: {
+        status: { in: ['in_progress', 'loaded'] },
+        OR: [
+          { originCompanyId: { in: userCompanyIds } },
+          { destCompanyId: { in: userCompanyIds } },
+          { assignments: { some: { transportCompanyId: { in: userCompanyIds }, status: { in: ['active', 'accepted'] } } } },
+        ],
+      },
+      select: { id: true },
+      take: 10,
+    });
+
+    for (const f of activeFreights) {
+      await this.prisma.freightTracking.create({
+        data: { freightId: f.id, userId: user.id, lat, lng },
+      }).catch(() => {});
+    }
+    if (activeFreights.length > 0) {
+      this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);
+    }
   }
 
   // ======================== LOCATION SAVED (auto-trigger from save-location endpoint) ===
