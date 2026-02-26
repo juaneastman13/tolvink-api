@@ -2278,9 +2278,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         liveShareUrl = `${frontendUrl}/live-freight?t=${token}&mode=share`;
       }
 
-      const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} → ${freight.destName}\n\n`
-        + `Para que las empresas vean tu ubicacion en tiempo real, abri este link:\n${liveShareUrl || trackingUrl}\n\n`
-        + `Tambien podes compartir tu ubicacion directamente en este chat (adjuntar → Ubicacion).`;
+      const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} \u2192 ${freight.destName}\n\n`
+        + `Podes enviar tu ubicacion en este chat (adjuntar \u2192 Ubicacion) para que las empresas sigan el viaje.\n\n`
+        + `Seguimiento: ${trackingUrl}`;
 
       await this.wa.sendText(driver.phone, driverMsg);
     }
