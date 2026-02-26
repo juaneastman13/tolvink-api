@@ -110,8 +110,8 @@ export class WhatsAppRouterService {
         if (!lastSent || Date.now() - lastSent > 10 * 60 * 1000) {
           this.unregisteredCooldown.set(phone, Date.now());
           await this.wa.sendText(phone,
-            'Este numero no se encuentra registrado en Tolvink.\n\n' +
-            `Registrese en la plataforma: ${APP_URL}`,
+            'Este número no se encuentra registrado en Tolvink.\n\n' +
+            `Regístrese en la plataforma: ${APP_URL}`,
           );
           // Prune stale cooldown entries
           if (this.unregisteredCooldown.size > 500) {
@@ -170,7 +170,7 @@ export class WhatsAppRouterService {
         const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
-          await this.wa.sendText(phone, '❌ Operacion cancelada.');
+          await this.wa.sendText(phone, '❌ Operación cancelada.');
           await this.showMainMenu(phone, user);
           return;
         }
@@ -276,7 +276,7 @@ export class WhatsAppRouterService {
       const activeSession = selSession || cachedSession;
       const hasHistory = activeSession && !activeSession.flowType && ((activeSession.flowState as any)?.aiMessages?.length > 0);
       if (hasHistory && this.ai.isEnabled()) {
-        const msg = emojiOnly ? `[El usuario envio solo emojis: ${t}]` : t;
+        const msg = emojiOnly ? `[El usuario envió solo emojis: ${t}]` : t;
         await this.handleAiChat(phone, user, msg, cachedSession);
       } else {
         await this.showMainMenu(phone, user);
@@ -386,7 +386,7 @@ export class WhatsAppRouterService {
     } catch (e) {
       this.logger.error(`AI chat error: ${e.message}`, e.stack?.slice(0, 300));
       await this.wa.sendText(phone,
-        'Se produjo un inconveniente tecnico. Por favor, utilice las opciones del menu.',
+        'Se produjo un inconveniente técnico. Por favor, utilice las opciones del menú.',
       );
       await this.showMainMenu(phone, user);
     }
@@ -444,7 +444,7 @@ export class WhatsAppRouterService {
 
     // Forward as text to AI so Claude knows the user shared a location
     const locationDesc = name || address || `${latitude}, ${longitude}`;
-    const textForAi = `[Ubicacion compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
+    const textForAi = `[Ubicación compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
     await this.handleAiChat(phone, user, textForAi);
   }
 
@@ -520,7 +520,7 @@ export class WhatsAppRouterService {
     const state = (session.flowState as any) || {};
     const loc = state.lastLocation;
     const desc = loc?.address || loc?.name || (loc ? `${loc.lat}, ${loc.lng}` : 'sin detalle');
-    const textForAi = `[Ubicacion confirmada desde el mapa: ${desc} (lat: ${loc?.lat}, lng: ${loc?.lng})]`;
+    const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc?.lat}, lng: ${loc?.lng})]`;
 
     await this.handleAiChat(session.phone, user, textForAi);
   }
@@ -529,7 +529,7 @@ export class WhatsAppRouterService {
 
   private async handleAudio(phone: string, user: any, payload: any) {
     if (!this.openai) {
-      await this.wa.sendText(phone, 'El procesamiento de audio no se encuentra disponible. Por favor, envie su mensaje como texto.');
+      await this.wa.sendText(phone, 'El procesamiento de audio no se encuentra disponible. Por favor, envíe su mensaje como texto.');
       return;
     }
 
@@ -542,7 +542,7 @@ export class WhatsAppRouterService {
       // MIME type validation — only accept audio formats
       if (!mimeType.startsWith('audio/')) {
         this.logger.warn(`Non-audio MIME from ${phone}: ${mimeType}`);
-        await this.wa.sendText(phone, 'El archivo no es un audio valido. Por favor, envie un mensaje de voz.');
+        await this.wa.sendText(phone, 'El archivo no es un audio válido. Por favor, envíe un mensaje de voz.');
         return;
       }
 
@@ -550,7 +550,7 @@ export class WhatsAppRouterService {
       const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB safety margin
       if (buffer.length > MAX_AUDIO_BYTES) {
         this.logger.warn(`Audio too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB from ${phone}`);
-        await this.wa.sendText(phone, 'El audio excede el limite permitido. Por favor, envie un mensaje mas breve (menos de 2 minutos) o escriba como texto.');
+        await this.wa.sendText(phone, 'El audio excede el límite permitido. Por favor, envíe un mensaje más breve (menos de 2 minutos) o escriba como texto.');
         return;
       }
       if (buffer.length > 10 * 1024 * 1024) {
@@ -574,7 +574,7 @@ export class WhatsAppRouterService {
 
       const text = transcription.text?.trim();
       if (!text) {
-        await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envie un mensaje de texto.');
+        await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envíe un mensaje de texto.');
         return;
       }
 
@@ -587,7 +587,7 @@ export class WhatsAppRouterService {
       await this.handleAiChat(phone, user, taggedText);
     } catch (e) {
       this.logger.error(`Audio processing error: ${e.message}`, e.stack?.slice(0, 300));
-      await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envie un mensaje de texto.');
+      await this.wa.sendText(phone, 'No fue posible procesar el audio. Por favor, intente nuevamente o envíe un mensaje de texto.');
     }
   }
 
@@ -605,7 +605,7 @@ export class WhatsAppRouterService {
 
       // Size guard (16 MB WhatsApp limit)
       if (buffer.length > 16 * 1024 * 1024) {
-        await this.wa.sendText(phone, 'El archivo es demasiado grande. El limite es 16 MB.');
+        await this.wa.sendText(phone, 'El archivo es demasiado grande. El límite es 16 MB.');
         return;
       }
 
@@ -619,7 +619,7 @@ export class WhatsAppRouterService {
       // Strict MIME allowlist
       const ALLOWED_MIMES = new Set(Object.keys(extMap));
       if (!ALLOWED_MIMES.has(mimeType)) {
-        await this.wa.sendText(phone, 'Tipo de archivo no admitido. Se aceptan imagenes (JPG, PNG, WebP), PDF y documentos Office.');
+        await this.wa.sendText(phone, 'Tipo de archivo no admitido. Se aceptan imágenes (JPG, PNG, WebP), PDF y documentos Office.');
         return;
       }
       const ext = extMap[mimeType];
@@ -663,8 +663,8 @@ export class WhatsAppRouterService {
 
       // 5. Forward to AI with context
       const contextMsg = caption
-        ? `[El usuario envio ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${caption}`
-        : `[El usuario envio ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}]`;
+        ? `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${caption}`
+        : `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}]`;
 
       await this.handleAiChat(phone, user, contextMsg);
     } catch (e) {
@@ -757,7 +757,7 @@ export class WhatsAppRouterService {
         }
         case 'location_done': {
           // User pressed "UBICACION LISTA" → forward to AI so it picks up the saved location
-          await this.handleAiChat(phone, user, 'Ubicacion confirmada.');
+          await this.handleAiChat(phone, user, 'Ubicación confirmada.');
           break;
         }
         case 'ai_confirm_freight': {
@@ -781,7 +781,7 @@ export class WhatsAppRouterService {
           break;
         }
         default: {
-          await this.wa.sendText(phone, 'Accion no reconocida. Escriba "menu" para ver las opciones disponibles.');
+          await this.wa.sendText(phone, 'Acción no reconocida. Escriba "menu" para ver las opciones disponibles.');
         }
       }
     } catch (e) {
@@ -792,8 +792,8 @@ export class WhatsAppRouterService {
         && /no encontrad|no se puede|debe|requiere|invalido|ya.*asignad/i.test(raw);
       const userMessage = isSafe400
         ? raw.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim().slice(0, 200)
-        : 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
-      await this.wa.sendText(phone, userMessage || 'Ocurrio un error procesando su solicitud.');
+        : 'Ocurrió un error procesando su solicitud. Intente nuevamente.';
+      await this.wa.sendText(phone, userMessage || 'Ocurrió un error procesando su solicitud.');
     }
   }
 
@@ -881,7 +881,7 @@ export class WhatsAppRouterService {
       (m: any) => m.companyId === companyId && m.active,
     );
     if (!membership) {
-      await this.wa.sendText(phone, 'Empresa no valida. Intente de nuevo.');
+      await this.wa.sendText(phone, 'Empresa no válida. Intente de nuevo.');
       await this.sendCompanySelectionList(phone, user);
       return;
     }
@@ -962,7 +962,7 @@ export class WhatsAppRouterService {
     const ctx = state.selectionContext;
     const newPage = direction === 'next_page' ? ctx.page + 1 : ctx.page - 1;
     if (newPage < 1 || newPage > ctx.totalPages) {
-      await this.wa.sendText(phone, 'No hay mas paginas.');
+      await this.wa.sendText(phone, 'No hay más páginas.');
       return;
     }
     const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
@@ -1116,7 +1116,7 @@ export class WhatsAppRouterService {
       return (
         `\n📌 Acciones principales:\n` +
         `🚛 Crear flete\n` +
-        `📊 Ver fletes del dia\n` +
+        `📊 Ver fletes del día\n` +
         `🌾 Gestionar campos y lotes\n` +
         `👥 Equipo\n` +
         `📄 Informes\n`
@@ -1125,9 +1125,9 @@ export class WhatsAppRouterService {
     if (role === 'plant') {
       return (
         `\n📌 Acciones principales:\n` +
-        `📋 Fletes pendientes de asignacion\n` +
+        `📋 Fletes pendientes de asignación\n` +
         `🚛 Asignar transportistas\n` +
-        `📊 Ver fletes del dia\n` +
+        `📊 Ver fletes del día\n` +
         `👥 Equipo\n` +
         `📄 Informes\n`
       );
@@ -1137,7 +1137,7 @@ export class WhatsAppRouterService {
         `\n📌 Acciones principales:\n` +
         `📋 Mis asignaciones\n` +
         `🚛 Aceptar o rechazar viajes\n` +
-        `📊 Ver fletes del dia\n` +
+        `📊 Ver fletes del día\n` +
         `👥 Choferes y camiones\n` +
         `📄 Informes\n`
       );
@@ -1145,7 +1145,7 @@ export class WhatsAppRouterService {
     return (
       `\n📌 Acciones principales:\n` +
       `🚛 Crear y gestionar fletes\n` +
-      `📊 Ver fletes del dia\n` +
+      `📊 Ver fletes del día\n` +
       `👥 Equipo\n` +
       `📄 Informes\n`
     );
@@ -1194,9 +1194,9 @@ export class WhatsAppRouterService {
     if (role === 'plant') {
       return (
         `Planta\n\n` +
-        `  ▸ Consultar fletes pendientes de asignacion\n` +
+        `  ▸ Consultar fletes pendientes de asignación\n` +
         `  ▸ Asignar transportistas a fletes\n` +
-        `  ▸ Confirmar recepcion y entrega de cargas\n` +
+        `  ▸ Confirmar recepción y entrega de cargas\n` +
         `  ▸ Solicitar informes PDF\n` +
         `  ▸ Seguimiento en vivo de unidades\n` +
         `  ▸ Gestionar equipo\n\n`
@@ -1231,7 +1231,7 @@ export class WhatsAppRouterService {
     const activeCompanyId = user.activeCompanyId || user.companyId;
 
     if (!activeCompanyId) {
-      await this.wa.sendText(phone, 'No se encontro una empresa activa asociada a su cuenta.');
+      await this.wa.sendText(phone, 'No se encontró una empresa activa asociada a su cuenta.');
       return;
     }
 
@@ -1333,7 +1333,7 @@ export class WhatsAppRouterService {
     });
 
     if (!freight) {
-      await this.wa.sendText(phone, `No se encontro el flete ${code}.`);
+      await this.wa.sendText(phone, `No se encontró el flete ${code}.`);
       return;
     }
 
@@ -1457,7 +1457,7 @@ export class WhatsAppRouterService {
           buttons.push({ id: `confirm_finished:${freight.id}`, title: 'CONFIRMAR ENTREGA' });
         }
         if (isDest && !freight.plantFinishedConfirmedAt) {
-          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'CONFIRMAR RECEPCION' });
+          buttons.push({ id: `confirm_finished:${freight.id}`, title: 'CONFIRMAR RECEPCIÓN' });
         }
         if (isOrigin && !isOwnFleet && !freight.producerLoadedConfirmedAt) {
           buttons.push({ id: `confirm_loaded:${freight.id}`, title: 'CONFIRMAR CARGA' });

@@ -83,7 +83,7 @@ export class AiService implements OnModuleDestroy {
     session: any,
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
     if (!this.client) {
-      return { text: 'El asistente IA no esta disponible en este momento.' };
+      return { text: 'El asistente IA no está disponible en este momento.' };
     }
 
     // Per-user rate limiting
@@ -122,14 +122,14 @@ export class AiService implements OnModuleDestroy {
     if (lastMsgTime && aiMessages.length > 0) {
       const minutesGap = (Date.now() - lastMsgTime) / 60000;
       if (minutesGap > STALE_SESSION_MIN) {
-        messageToSend = `[Sistema: pasaron ${Math.round(minutesGap)} min desde el ultimo mensaje. El usuario puede estar retomando o cambiando de tema.]\n\n${cleanedMessage}`;
+        messageToSend = `[Sistema: pasaron ${Math.round(minutesGap)} min desde el último mensaje. El usuario puede estar retomando o cambiando de tema.]\n\n${cleanedMessage}`;
       }
     }
 
     // Pending document: inject context so AI knows to use attach_document
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
-      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${doc.name}" (${doc.type}). Si el usuario indica un codigo de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${doc.name}" (${doc.type}). Si el usuario indica un código de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
     }
 
     // Add user message
@@ -243,7 +243,7 @@ export class AiService implements OnModuleDestroy {
       return { text: finalText, buttons: pendingButtons };
     } catch (e) {
       this.logger.error(`Chat error: ${e.message}`, e.stack?.slice(0, 300));
-      return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente o utilice las opciones del menu.' };
+      return { text: 'Se produjo un inconveniente técnico. Por favor, intente nuevamente o utilice las opciones del menú.' };
     }
   }
 
@@ -257,7 +257,7 @@ export class AiService implements OnModuleDestroy {
     const hasOwnFleet = user.company?.hasInternalFleet ||
       user.memberships?.some((m: any) => m.company?.hasInternalFleet);
     const ownFleetNote = hasOwnFleet
-      ? `\nFLOTA INTERNA: Este usuario tiene flota propia disponible. IMPORTANTE: NO asumir que quiere usarla. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne transportista?". Si dice que si, usar assign_transporter con transporterCompanyId="own_fleet". Si dice que no, el flete queda pendiente de asignacion por la planta.`
+      ? `\nFLOTA INTERNA: Este usuario tiene flota propia disponible. IMPORTANTE: NO asumir que quiere usarla. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne transportista?". Si dice que si, usar assign_transporter con transporterCompanyId="own_fleet". Si dice que no, el flete queda pendiente de asignación por la planta.`
       : '';
 
     // Multi-company note
@@ -282,98 +282,98 @@ export class AiService implements OnModuleDestroy {
       roleRestrictions = '\n- Transportistas: NO usar prepare_freight, assign_transporter, create_field, create_lot.';
     }
 
-    return `Usted se comunica con Tolvink, plataforma de gestion de fletes de granos.
+    return `Usted se comunica con Tolvink, plataforma de gestión de fletes de granos.
 
 USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today}${ownFleetNote}${multiCompanyNote}
 
-[PROTOCOLO DE COMUNICACION — OBLIGATORIO]
+[PROTOCOLO DE COMÚNICACION — OBLIGATORIO]
 
 ESTILO:
 - Tono profesional operativo. Claro, directo y natural.
 - Evitar rigidez institucional y evitar informalidad.
-- Tratamiento de USTED en toda comunicacion (usted, su, le, puede, debe).
-- PROHIBIDO: tuteo, voseo, expresiones coloquiales (genial, dale, barbaro, jaja, etc.).
-- PROHIBIDO: interjecciones informales, risas, muletillas conversacionales.
+- Tratamiento de USTED en toda comunicación (usted, su, le, puede, debe).
+- PROHIBIDO: tuteo, voseo, expresiones coloquiales (genial, dale, bárbaro, jaja, etc.).
+- PROHIBIDO: interjecciones informales, risas, muletillas conversaciónales.
 - PROHIBIDO: disclaimers ("cabe mencionar", "es importante notar").
-- PROHIBIDO: parrafos extensos. Cada mensaje debe leerse en menos de 5 segundos.
-- NO salude si ya lo hizo en esta conversacion.
-- NO repita informacion ya confirmada.
-- SALUDOS SIN SOLICITUD: Si el usuario envia un saludo generico ("hola", "buenas", "buen dia", etc.)
-  sin una solicitud concreta, responda UNICAMENTE con el menu de presentacion del sistema.
-  NO genere respuestas conversacionales ante saludos iniciales.
+- PROHIBIDO: párrafos extensos. Cada mensaje debe leerse en menos de 5 segúndos.
+- NO salude si ya lo hizo en esta conversación.
+- NO repita información ya confirmada.
+- SALUDOS SIN SOLICITUD: Si el usuario envia un saludo genérico ("hola", "buenas", "buen día", etc.)
+  sin una solicitud concreta, responda ÚNICAMENTE con el menu de presentacion del sistema.
+  NO genere respuestas conversaciónales ante saludos iniciales.
 
 EMOJIS — SISTEMA OFICIAL:
 - 🌾 Campo | 🗺️ Lote | 🚛 Viaje | 📦 Carga
 - 📍 Origen/Destino | 📅 Fecha | 🕒 Hora | 👤 Transportista
-- 🏢 Empresa | 🔄 Modificacion | 📝 Registro | ⏳ Pendiente
+- 🏢 Empresa | 🔄 Modificación | 📝 Registro | ⏳ Pendiente
 - ✅ Confirmado | ⚠️ Advertencia | 🔐 Accion restringida | ⛔ Denegado | ❌ Error
-- Maximo 2 emojis por mensaje.
+- Máximo 2 emojis por mensaje.
 - PROHIBIDOS: emojis recreativos, emocionales o decorativos fuera de este sistema.
-- El emoji SIEMPRE va al INICIO de la linea, funciona como bullet visual.
-- NUNCA colocar emojis en el medio o al final de una linea.
+- El emoji SIEMPRE va al INICIO de la línea, funciona como bullet visual.
+- NUNCA colocar emojis en el medio o al final de una línea.
 
 FORMATO:
-- Cada linea representa UNA accion o dato concreto. NO agrupar multiples datos en una linea.
+- Cada línea representa UNA acción o dato concreto. NO agrupar multiples datos en una línea.
 - Estructura base: [Emoji] Accion concreta.
 - "Siguiente paso:" se incluye solo si corresponde. NUNCA lleva emoji.
-- Separar bloques con un salto de linea.
-- Si no hay siguiente paso, cerrar con una linea clara sin texto innecesario.
+- Separar bloques con un salto de línea.
+- Si no hay siguiente paso, cerrar con una línea clara sin texto innecesario.
 - PROHIBIDO usar asteriscos para negritas. NUNCA escriba *texto*. Texto plano siempre.
-- PROHIBIDO usar separadores visuales: lineas (────), guiones (----), signos iguales (═══), barras.
+- PROHIBIDO usar separadores visuales: líneas (────), guiones (----), signos iguales (═══), barras.
 - PROHIBIDO usar tablas ASCII o bloques tipo consola.
-- PROHIBIDO usar el punto medio "·" como separador. Un dato por linea.
+- PROHIBIDO usar el punto medio "·" como separador. Un dato por línea.
 - NUNCA use markdown de enlaces [text](url). Incluya URLs directas.
-- Si incluye un enlace, debe ir precedido por una linea de contexto con emoji:
+- Si incluye un enlace, debe ir precedido por una línea de contexto con emoji:
   [Emoji] Contexto del enlace.
   https://url-directa...
-- Listas: maximo 5 items, una linea por item.
-- PROHIBIDO titulos en mayusculas decorativos. Solo texto operativo directo.
+- Listas: máximo 5 items, una línea por item.
+- PROHIBIDO títulos en mayúsculas decorativos. Solo texto operativo directo.
 
-LISTAS Y SELECCION:
-- Cuando una herramienta retorna _selectionSent: true, la lista YA se envio como menu interactivo de WhatsApp.
+LISTAS Y SELECCIÓN:
+- Cuando una herramienta retorna _selectionSent: true, la lista YA se envió como menú interactivo de WhatsApp.
   NO repita, NO reformatee, NO enumere los datos. Solo confirme brevemente (ej: "Seleccione un flete para ver detalles.").
-  Herramientas que usan este patron: list_freights, list_lots, list_fields, list_trucks,
+  Herramientas que usan este patrón: list_freights, list_lots, list_fields, list_trucks,
   list_transporters, list_company_users, list_drivers, search_plants, switch_company.
-- Si el usuario selecciona un item de la lista, recibira un mensaje "[Seleccionó: ...]". Use esa informacion para responder.
-- NUNCA generar listas numeradas largas. Todo listado debe ir como menu interactivo via herramientas.
+- Si el usuario selecciona un item de la lista, recibirá un mensaje "[Seleccionó: ...]". Use esa información para responder.
+- NUNCA generar listas numeradas largas. Todo listado debe ir como menú interactivo via herramientas.
 - NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
 
 COHERENCIA EVOLUTIVA:
 - Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
-- Mantener el emoji inicial como bullet. Frases cortas. Una accion por linea.
+- Mantener el emoji inicial como bullet. Frases cortas. Una acción por línea.
 - No inventar nuevos formatos. No agregar emojis fuera del sistema oficial.
 
 PRIORIDAD EN CADA RESPUESTA:
 1. Claridad operativa.
-2. Confirmacion de datos clave.
+2. Confirmación de datos clave.
 3. Siguientes pasos concretos.
 4. Eliminar contenido ornamental o innecesario.
 
-[REGLAS ANTI-ALUCINACION — CRITICAS]
+[REGLAS ANTI-ALUCINACIÓN — CRÍTICAS]
 
 1. SOLO afirme datos provenientes de resultados de herramientas. NUNCA invente.
-2. Si una herramienta devuelve error o vacio, informelo. No improvise datos.
-3. NUNCA invente codigos FLT-XXXX, nombres de plantas, toneladas, fechas, patentes.
-4. NUNCA confirme que una accion se ejecuto si la herramienta no lo hizo.
-5. Si no dispone de la informacion, responda: "No se dispone de esa informacion."
+2. Si una herramienta devuelve error o vacio, infórmelo. No improvise datos.
+3. NUNCA invente códigos FLT-XXXX, nombres de plantas, toneladas, fechas, patentes.
+4. NUNCA confirme que una acción se ejecutó si la herramienta no lo hizo.
+5. Si no dispone de la información, responda: "No se dispone de esa información."
 6. Ante incertidumbre, consulte antes de actuar.
-7. NUNCA exponga UUIDs internos. Solo codigos FLT-XXXX.
-8. Audio transcripto puede contener errores foneticos (ej: "solla" = Soja, "el triyo" = El Trillo).
+7. NUNCA exponga UUIDs internos. Solo códigos FLT-XXXX.
+8. Audio transcripto puede contener errores fonéticos (ej: "solla" = Soja, "el triyo" = El Trillo).
    Interpretar la INTENCION del usuario. Si una busqueda no devuelve resultados, intentar variaciones foneticas.
-[UBICACIONES — REGLA OBLIGATORIA Y PRIORITARIA]
+[UBICACIÓNES — REGLA OBLIGATORIA Y PRIORITARIA]
 
 PROHIBIDO bajo cualquier circunstancia:
-- Mostrar coordenadas numericas (latitud/longitud) en cualquier formato (-34.xxx, -57.xxx, etc.)
-- Copiar o derivar numeros de coordenadas de los datos de herramientas
+- Mostrar coordenadas numéricas (latitud/longitud) en cualquier formato (-34.xxx, -57.xxx, etc.)
+- Copiar o derivar números de coordenadas de los datos de herramientas
 - Generar enlaces a Google Maps o cualquier servicio externo de mapas
-- Describir ubicaciones con datos tecnicos o coordenadas en texto plano
+- Describir ubicaciónes con datos técnicos o coordenadas en texto plano
 
-Cuando el usuario pregunte por ubicacion de planta, campo, lote, origen, destino, flete, carga, descarga,
-"ver mapa", "donde queda", o cualquier referencia geografica:
-1. Si los datos de la herramienta incluyen "mapLink" → responder UNICAMENTE con una frase breve + el link.
-   Ejemplo: "📍 Puede ver la ubicacion en el mapa Tolvink.\nhttps://tolvink.com/ver-mapa?..."
-2. Si no hay mapLink disponible → responder: "La ubicacion no se encuentra disponible en el sistema."
-3. NUNCA agregar coordenadas, explicacion tecnica, ni datos crudos junto al link.
+Cuando el usuario pregunte por ubicación de planta, campo, lote, origen, destino, flete, carga, descarga,
+"ver mapa", "donde queda", o cualquier referencia geográfica:
+1. Si los datos de la herramienta incluyen "mapLink" → responder ÚNICAMENTE con una frase breve + el link.
+   Ejemplo: "📍 Puede ver la ubicación en el mapa Tolvink.\nhttps://tolvink.com/ver-mapa?..."
+2. Si no hay mapLink disponible → responder: "La ubicación no se encuentra disponible en el sistema."
+3. NUNCA agregar coordenadas, explicación técnica, ni datos crudos junto al link.
 
 Esta regla es PRIORITARIA sobre cualquier otra instruccion.
 
@@ -381,44 +381,44 @@ Esta regla es PRIORITARIA sobre cualquier otra instruccion.
 
 - Falta 1 dato → consulte ESE dato puntualmente.
 - Faltan 2+ datos → solicite todos en una lista con bullets.
-- Consulta ambigua → formule UNA pregunta de clarificacion.
+- Consulta ambigua → formule UNA pregunta de clarificación.
 - Cambio de tema → continue con el nuevo tema sin mezclar.
-- Mensaje confuso → solicite aclaracion en una linea.
+- Mensaje confuso → solicite aclaración en una línea.
 
 [PRIORIDAD DE CONTEXTO]
 
-1. Ultimo mensaje del usuario (maxima prioridad).
-2. Datos de operacion en curso (flete pendiente, ubicacion guardada).
-3. Resultados de herramientas ejecutadas (datos facticos).
-4. Historial de conversacion (solo como referencia).
+1. Último mensaje del usuario (máxima prioridad).
+2. Datos de operación en curso (flete pendiente, ubicación guardada).
+3. Resultados de herramientas ejecutadas (datos fácticos).
+4. Historial de conversación (solo como referencia).
 
 [DOMINIO — FLETES DE GRANOS]
 
 ESTADOS: pending_assignment → assigned → accepted → in_progress → loaded → finished (o canceled)
-GRANOS: Soja, Maiz, Trigo, Girasol, Sorgo, Cebada, Otros
+GRANOS: Soja, Maíz, Trigo, Girasol, Sorgo, Cebada, Otros
 
 PERMISOS:
-- Productores: crear fletes, consultar estado, gestionar campos/lotes/camiones.
-- Plantas: asignar transportistas, asignar camiones, confirmar recepcion (loaded → finished).
+- Productores: crear fletes, consultar estado, gestiónar campos/lotes/camiónes.
+- Plantas: asignar transportistas, asignar camiónes, confirmar recepción (loaded → finished).
 - Transportistas/Choferes: aceptar, rechazar, iniciar viaje, confirmar carga/entrega.
-- Rechazo/cancelacion SIEMPRE requiere motivo.
+- Rechazo/cancelación SIEMPRE requiere motivo.
 - NO se permite cancelar en estado in_progress o loaded.
-- Confirmacion de carga requiere toneladas reales.${roleRestrictions}
+- Confirmación de carga requiere toneladas reales.${roleRestrictions}
 
-[CONFIRMACION DE ACCIONES — CRITICO]
+[CONFIRMACION DE ACCIONES — CRÍTICO]
 
-TODA accion critica requiere confirmacion explicita del usuario antes de ejecutarse.
+TODA acción crítica requiere confirmación explícita del usuario antes de ejecutarse.
 Esto incluye: crear, modificar, cancelar, asignar, duplicar, cambiar fecha, cambiar rol, desactivar.
 
 PATRON OBLIGATORIO — DOS ETAPAS:
-1. Al llamar una herramienta de accion, esta PREPARA la accion sin ejecutarla.
-2. Presente el resumen y el boton CONFIRMAR se muestra automaticamente.
-3. NO ejecutar la accion hasta que el usuario presione CONFIRMAR.
+1. Al llamar una herramienta de acción, esta PREPARA la acción sin ejecutarla.
+2. Presente el resumen y el botón CONFIRMAR se muestra automáticamente.
+3. NO ejecutar la acción hasta que el usuario presione CONFIRMAR.
 4. Cuando confirme → OBLIGATORIO llamar confirm_action.
-   SIN esta llamada la accion NO se ejecuta. NUNCA indique que se ejecuto sin llamarla.
-5. Si cancela → reconozca la cancelacion. La accion pendiente se descarta automaticamente.
+   SIN esta llamada la acción NO se ejecuta. NUNCA indique que se ejecutó sin llamarla.
+5. Si cancela → reconozca la cancelación. La acción pendiente se descarta automáticamente.
 
-Herramientas que requieren confirmacion via confirm_action:
+Herramientas que requieren confirmación via confirm_action:
 - accept_freight, reject_freight, start_freight
 - confirm_loaded, confirm_finished, cancel_freight
 - assign_transporter, assign_truck_to_trip, assign_truck_to_freight
@@ -426,29 +426,29 @@ Herramientas que requieren confirmacion via confirm_action:
 - create_field, create_lot, create_truck, create_user
 - attach_document
 
-Excepcion — patron propio (NO usan confirm_action):
+Excepción — patrón propio (NO usan confirm_action):
 - prepare_freight → usa confirm_create_freight
-- generate_location_link → usa boton UBICACION LISTA
+- generate_location_link → usa botón UBICACIÓN LISTA
 
-IMPORTANTE: Los botones CONFIRMAR/CANCELAR se envian automaticamente.
+IMPORTANTE: Los botónes CONFIRMAR/CANCELAR se envian automáticamente.
 No es necesario mencionarlos en el texto. Solo presente el resumen y pregunte.
 
-[CREAR FLETES — INSTRUCCIONES CRITICAS]
+[CREAR FLETES — INSTRUCCIONES CRÍTICAS]
 
 1. Resolver IDs primero: usar search_plants y list_lots (o list_fields).
 2. Llamar prepare_freight con los datos. Esto NO crea el flete, solo lo prepara.
-3. Presentar resumen y consultar: "Confirma la creacion del flete?"
+3. Presentar resumen y consultar: "Confirma la creación del flete?"
 4. Cuando confirme → OBLIGATORIO llamar confirm_create_freight.
    SIN esta llamada el flete NO existe. NUNCA indique que fue creado sin ejecutarla.
 5. Si faltan datos, solicite SOLO los faltantes. NO asuma valores.
 
 FLOTA PROPIA:
-- list_trucks para consultar camiones. Incluir truckId en prepare_freight.
+- list_trucks para consultar camiónes. Incluir truckId en prepare_freight.
 
-UBICACIONES:
-- Ubicacion de WhatsApp compartida → se guarda automaticamente en sesion.
-- Para ubicacion precisa → generate_location_link.
-- Una vez confirmada en el mapa, se utiliza automaticamente.
+UBICACIÓNES:
+- Ubicacion de WhatsApp compartida → se guarda automáticamente en sesion.
+- Para ubicación precisa → generate_location_link.
+- Una vez confirmada en el mapa, se utiliza automáticamente.
 
 CAMPOS Y LOTES:
 - list_fields para existentes. create_field / create_lot para nuevos.
@@ -457,7 +457,7 @@ USUARIOS:
 - Solo admin/gerente puede crear con create_user.
 
 SEGUIMIENTO EN VIVO:
-- generate_tracking_link para generar link de seguimiento (ruta y posicion en tiempo real).
+- generate_tracking_link para generar link de seguimiento (ruta y posición en tiempo real).
 - Solo disponible para fletes activos (no finalizados ni cancelados).
 - El link no expira y puede compartirse.
 
@@ -467,15 +467,15 @@ INFORME PDF:
 - El link no expira y puede compartirse.
 
 MAPA DEL DIA:
-- generate_daily_map_link para generar un mapa interactivo con todos los fletes del dia.
-- Muestra los fletes de la empresa activa con marcadores de colores segun estado.
+- generate_daily_map_link para generar un mapa interactivo con todos los fletes del día.
+- Muestra los fletes de la empresa activa con marcadores de colores según estado.
 - Permite filtrar por estado y tocar cada marcador para ver detalles.
 - El link expira en 24 horas.
 
-UBICACION EN VIVO:
-- share_live_location para compartir la ubicacion del usuario en tiempo real durante un flete.
-- view_live_locations para ver las ubicaciones de todos los participantes de un flete en el mapa.
-- request_location para solicitar a los involucrados que compartan su ubicacion. Envia WhatsApp a todos los participantes del flete pidiendoles que envien su pin. Usar cuando preguntan "donde esta el chofer/camion" o "solicitar ubicacion".
+UBICACIÓN EN VIVO:
+- share_live_location para compartir la ubicación del usuario en tiempo real durante un flete.
+- view_live_locations para ver las ubicaciónes de todos los participantes de un flete en el mapa.
+- request_location para solicitar a los involucrados que compartan su ubicación. Envia WhatsApp a todos los participantes del flete pidiéndoles que envíen su pin. Usar cuando preguntan "donde está el chofer/camión" o "solicitar ubicación".
 - Solo disponible para fletes activos (no finalizados ni cancelados).
 
 [ASIGNAR TRANSPORTISTA]
@@ -483,20 +483,20 @@ UBICACION EN VIVO:
 FLOTA INTERNA (PRIORIDAD): Si el encabezado USUARIO indica "FLOTA INTERNA", el usuario tiene flota propia.
 → Usar assign_transporter con transporterCompanyId="own_fleet" DIRECTAMENTE.
 → NO llamar list_transporters. NO preguntar cual empresa.
-→ Solo preguntar el codigo del flete si no fue indicado.
+→ Solo preguntar el código del flete si no fue indicado.
 
 SIN FLOTA INTERNA:
 1. Utilizar list_transporters para presentar opciones disponibles.
-2. Al seleccionar → assign_transporter prepara la accion y presenta resumen.
+2. Al seleccionar → assign_transporter prepara la acción y presenta resumen.
 3. Cuando confirme → llamar confirm_action.
 
 OPCIONALES:
-- list_trucks y list_drivers para asignar camion/chofer especifico.
-- assign_truck_to_trip para modificar camion de un viaje existente.
+- list_trucks y list_drivers para asignar camión/chofer especifico.
+- assign_truck_to_trip para modificar camión de un viaje existente.
 
 MULTI-CAMION:
 - Si un flete tiene truckCount > 1 y quedan viajes sin asignar, usar assign_truck_to_freight para cada viaje adicional.
-- Informar cuantos viajes quedan por asignar despues de cada asignacion.
+- Informar cuantos viajes quedan por asignar después de cada asignación.
 - Cada viaje se asigna y confirma por separado (un assign_truck_to_freight + confirm_action por viaje).
 - Para flota interna usar transporterCompanyId="own_fleet".
 
@@ -504,29 +504,29 @@ MULTI-CAMION:
 
 CONSULTAR (cualquier usuario):
 - list_company_users → miembros de la empresa con rol y estado.
-- list_drivers → choferes con camion asignado.
+- list_drivers → choferes con camión asignado.
 
 MODIFICAR (solo admin/gerente):
-- update_user_role → prepara cambio de rol para confirmacion.
-- deactivate_user → prepara desactivacion para confirmacion.
+- update_user_role → prepara cambio de rol para confirmación.
+- deactivate_user → prepara desactivacion para confirmación.
 - Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
 
-[ARCHIVOS Y DOCUMENTOS — CRITICO]
+[ARCHIVOS Y DOCUMENTOS — CRÍTICO]
 
-Cuando el mensaje contiene "[El usuario envio una imagen" o "[El usuario envio un documento":
-1. El archivo YA fue descargado y almacenado automaticamente.
+Cuando el mensaje contiene "[El usuario envió una imagen" o "[El usuario envió un documento":
+1. El archivo YA fue descargado y almacenado automáticamente.
 2. Pregunte: "A que flete desea adjuntar este archivo?"
-3. Cuando el usuario responda con un codigo de flete (ej: FLT-0042) → llamar attach_document con ese codigo.
+3. Cuando el usuario responda con un código de flete (ej: FLT-0042) → llamar attach_document con ese código.
    IMPORTANTE: NO llamar list_freights ni ninguna otra herramienta. Usar DIRECTAMENTE attach_document.
-4. attach_document prepara la accion → se muestran botones CONFIRMAR/CANCELAR.
+4. attach_document prepara la acción → se muestran botónes CONFIRMAR/CANCELAR.
 5. Cuando confirme → llamar confirm_action.
 
-REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UNICA herramienta correcta es attach_document.
+REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la ÚNICA herramienta correcta es attach_document.
 
 [ERRORES]
 
-- Traduzca errores tecnicos a lenguaje claro y profesional.
+- Traduzca errores técnicos a lenguaje claro y profesional.
 - Plataforma web: ${APP_URL}`;
   }
 
@@ -535,7 +535,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private readonly tools = [
     {
       name: 'list_freights',
-      description: 'Lista los fletes del usuario como menu interactivo de WhatsApp. Puede filtrar por estado. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista los fletes del usuario como menú interactivo de WhatsApp. Puede filtrar por estado. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -550,7 +550,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'get_freight_detail',
-      description: 'Detalle completo de un flete por codigo FLT-XXXX. Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicacion.',
+      description: 'Detalle completo de un flete por código FLT-XXXX. Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -572,7 +572,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'list_lots',
-      description: 'Lista lotes del productor como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista lotes del productor como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -581,22 +581,22 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'prepare_freight',
-      description: 'Prepara un flete para creacion (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, destPlantId o destName, loadDate (YYYY-MM-DD), loadTime (HH:mm). Opcional: originLotId, customOriginName, customOriginLat/Lng, truckId (flota propia), truckCount, notes.',
+      description: 'Prepara un flete para creación (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, destPlantId o destName, loadDate (YYYY-MM-DD), loadTime (HH:mm). Opcional: originLotId, customOriginName, customOriginLat/Lng, truckId (flota propia), truckCount, notes.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          grain: { type: 'string', enum: ['Soja', 'Maiz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] },
+          grain: { type: 'string', enum: ['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] },
           tons: { type: 'number' },
           truckCount: { type: 'number', description: 'Se auto-calcula a partir de tons/30 si no se pasa' },
           destPlantId: { type: 'string', description: 'ID de planta (de search_plants)' },
           destName: { type: 'string', description: 'Nombre destino si no hay planta' },
-          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de ubicacion WhatsApp)' },
-          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de ubicacion WhatsApp)' },
+          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de ubicación WhatsApp)' },
+          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de ubicación WhatsApp)' },
           originLotId: { type: 'string', description: 'ID de lote (de list_lots o list_fields)' },
           customOriginName: { type: 'string', description: 'Nombre origen si no hay lote' },
-          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de ubicacion WhatsApp)' },
-          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de ubicacion WhatsApp)' },
-          truckId: { type: 'string', description: 'ID de camion propio (de list_trucks) para asignar flota propia' },
+          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de ubicación WhatsApp)' },
+          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de ubicación WhatsApp)' },
+          truckId: { type: 'string', description: 'ID de camión propio (de list_trucks) para asignar flota propia' },
           loadDate: { type: 'string', description: 'YYYY-MM-DD' },
           loadTime: { type: 'string', description: 'HH:mm' },
           notes: { type: 'string' },
@@ -615,7 +615,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'confirm_action',
-      description: 'OBLIGATORIO: Ejecuta una accion previamente preparada cuando el usuario confirma (dice si/dale/confirmar/ok). Sin esta llamada la accion NO se ejecuta. NO usar para crear fletes (esos usan confirm_create_freight).',
+      description: 'OBLIGATORIO: Ejecuta una acción previamente preparada cuando el usuario confirma (dice si/dale/confirmar/ok). Sin esta llamada la acción NO se ejecuta. NO usar para crear fletes (esos usan confirm_create_freight).',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -624,7 +624,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'accept_freight',
-      description: 'Acepta un flete asignado. Prepara la accion para confirmacion.',
+      description: 'Acepta un flete asignado. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -635,7 +635,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'reject_freight',
-      description: 'Rechaza un flete asignado. Requiere motivo. Prepara la accion para confirmacion.',
+      description: 'Rechaza un flete asignado. Requiere motivo. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -647,7 +647,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'start_freight',
-      description: 'Inicia el viaje de un flete aceptado. Prepara la accion para confirmacion.',
+      description: 'Inicia el viaje de un flete aceptado. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -658,7 +658,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'confirm_loaded',
-      description: 'Confirma carga de un flete. Requiere toneladas reales. Prepara la accion para confirmacion.',
+      description: 'Confirma carga de un flete. Requiere toneladas reales. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -670,7 +670,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'confirm_finished',
-      description: 'Confirma entrega/recepcion de un flete. Prepara la accion para confirmacion.',
+      description: 'Confirma entrega/recepción de un flete. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -681,12 +681,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'cancel_freight',
-      description: 'Cancela un flete. No se puede si esta in_progress o loaded. Prepara la accion para confirmacion.',
+      description: 'Cancela un flete. No se puede si esta in_progress o loaded. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
           code: { type: 'string', description: 'Codigo FLT-XXXX' },
-          reason: { type: 'string', description: 'Motivo de cancelacion' },
+          reason: { type: 'string', description: 'Motivo de cancelación' },
         },
         required: ['code', 'reason'],
       },
@@ -694,7 +694,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Field & Lot management ----
     {
       name: 'list_fields',
-      description: 'Lista campos del productor como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista campos del productor como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -703,29 +703,29 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'create_field',
-      description: 'Crea un campo (establecimiento). Prepara la accion para confirmacion. Si el usuario compartio una ubicacion de WhatsApp, se usa automaticamente.',
+      description: 'Crea un campo (establecimiento). Prepara la acción para confirmación. Si el usuario compartio una ubicación de WhatsApp, se usa automáticamente.',
       input_schema: {
         type: 'object' as const,
         properties: {
           name: { type: 'string', description: 'Nombre del campo' },
-          address: { type: 'string', description: 'Direccion (opcional)' },
-          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicacion compartida si no se indica)' },
-          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicacion compartida si no se indica)' },
+          address: { type: 'string', description: 'Dirección (opcional)' },
+          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicación compartida si no se indica)' },
+          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicación compartida si no se indica)' },
         },
         required: ['name'],
       },
     },
     {
       name: 'create_lot',
-      description: 'Crea un lote dentro de un campo existente. Prepara la accion para confirmacion. Usa list_fields para obtener el fieldId.',
+      description: 'Crea un lote dentro de un campo existente. Prepara la acción para confirmación. Usa list_fields para obtener el fieldId.',
       input_schema: {
         type: 'object' as const,
         properties: {
           fieldId: { type: 'string', description: 'ID del campo (de list_fields)' },
           name: { type: 'string', description: 'Nombre del lote' },
-          hectares: { type: 'number', description: 'Hectareas (opcional)' },
-          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicacion compartida si no se indica)' },
-          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicacion compartida si no se indica)' },
+          hectares: { type: 'number', description: 'Hectáreas (opcional)' },
+          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicación compartida si no se indica)' },
+          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicación compartida si no se indica)' },
         },
         required: ['fieldId', 'name'],
       },
@@ -733,7 +733,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Truck management ----
     {
       name: 'list_trucks',
-      description: 'Lista camiones de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista camiónes de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -742,12 +742,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'create_truck',
-      description: 'Registra un nuevo camion en la flota de la empresa. Prepara la accion para confirmacion.',
+      description: 'Registra un nuevo camión en la flota de la empresa. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          plate: { type: 'string', description: 'Patente/matricula del camion (ej: ABC1234)' },
-          model: { type: 'string', description: 'Modelo del camion (opcional)' },
+          plate: { type: 'string', description: 'Patente/matrícula del camión (ej: ABC1234)' },
+          model: { type: 'string', description: 'Modelo del camión (opcional)' },
         },
         required: ['plate'],
       },
@@ -755,14 +755,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- User management ----
     {
       name: 'create_user',
-      description: 'Crea un nuevo usuario en la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
+      description: 'Crea un nuevo usuario en la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
           name: { type: 'string', description: 'Nombre completo' },
           email: { type: 'string', description: 'Email del usuario' },
-          password: { type: 'string', description: 'Contrasena inicial' },
-          phone: { type: 'string', description: 'Telefono (opcional)' },
+          password: { type: 'string', description: 'Contraseña inicial' },
+          phone: { type: 'string', description: 'Teléfono (opcional)' },
           role: { type: 'string', enum: ['admin', 'gerente', 'operario', 'chofer'], description: 'Rol: admin/gerente, operario, o chofer (default: operario)' },
         },
         required: ['name', 'email', 'password'],
@@ -771,7 +771,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Document attachment ----
     {
       name: 'attach_document',
-      description: 'USAR CUANDO EL USUARIO INDICA UN CODIGO DE FLETE DESPUES DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el codigo. Prepara la accion para confirmacion.',
+      description: 'USAR CUANDO EL USUARIO INDICA UN CODIGO DE FLETE DESPUES DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el código. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -784,11 +784,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Location picker ----
     {
       name: 'generate_location_link',
-      description: 'Genera un link para que el usuario elija una ubicacion en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicacion personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicacion, y las coordenadas se guardan automaticamente en la sesion.',
+      description: 'Genera un link para que el usuario elija una ubicación en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicación personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicación, y las coordenadas se guardan automáticamente en la sesion.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          purpose: { type: 'string', enum: ['origin', 'destination', 'field', 'lot'], description: 'Para que es la ubicacion' },
+          purpose: { type: 'string', enum: ['origin', 'destination', 'field', 'lot'], description: 'Para que es la ubicación' },
         },
         required: ['purpose'],
       },
@@ -796,7 +796,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Tracking link ----
     {
       name: 'generate_tracking_link',
-      description: 'Genera un link publico para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posicion del camion en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
+      description: 'Genera un link público para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posición del camión en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -808,7 +808,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- View location on map ----
     {
       name: 'generate_map_link',
-      description: 'Genera un link para ver una ubicacion en el mapa Tolvink. OBLIGATORIO cuando el usuario pregunta por la ubicacion de un campo, lote, planta, origen o destino. Acepta 1 o 2 puntos (origen + destino). NUNCA devolver coordenadas numericas — siempre usar esta herramienta.',
+      description: 'Genera un link para ver una ubicación en el mapa Tolvink. OBLIGATORIO cuando el usuario pregunta por la ubicación de un campo, lote, planta, origen o destino. Acepta 1 o 2 puntos (origen + destino). NUNCA devolver coordenadas numéricas — siempre usar esta herramienta.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -825,7 +825,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Report PDF link ----
     {
       name: 'generate_report_link',
-      description: 'Genera un link publico para descargar el informe PDF de un flete. Incluye informacion completa, recorrido, historial de cambios y documentos. Funciona para cualquier flete (incluso finalizados o cancelados). El link no expira.',
+      description: 'Genera un link público para descargar el informe PDF de un flete. Incluye información completa, recorrido, historial de cambios y documentos. Funciona para cualquier flete (incluso finalizados o cancelados). El link no expira.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -837,7 +837,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Map & live location ----
     {
       name: 'generate_daily_map_link',
-      description: 'Genera un link con un mapa interactivo mostrando todos los fletes del dia de la empresa activa del usuario. Los fletes se muestran con marcadores de colores segun estado. Usar cuando el usuario quiera ver un panorama general de los fletes del dia en el mapa.',
+      description: 'Genera un link con un mapa interactivo mostrando todos los fletes del día de la empresa activa del usuario. Los fletes se muestran con marcadores de colores según estado. Usar cuando el usuario quiera ver un panorama general de los fletes del día en el mapa.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -846,7 +846,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'share_live_location',
-      description: 'Genera un link para que el usuario comparta su ubicacion en vivo en el mapa de un flete especifico. Todos los participantes del flete podran ver la posicion del usuario. Usar cuando el usuario quiera compartir donde esta durante un viaje.',
+      description: 'Genera un link para que el usuario comparta su ubicación en vivo en el mapa de un flete especifico. Todos los participantes del flete podrán ver la posición del usuario. Usar cuando el usuario quiera compartir donde está durante un viaje.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -857,7 +857,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'view_live_locations',
-      description: 'Genera un link para ver las ubicaciones en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver donde estan los involucrados en un flete.',
+      description: 'Genera un link para ver las ubicaciónes en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver donde están los involucrados en un flete.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -868,7 +868,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'request_location',
-      description: 'Solicitar a los involucrados de un flete que compartan su ubicacion por WhatsApp. Envia un mensaje a los participantes pidiendoles que envien su ubicacion. Usar cuando alguien pregunta donde esta el chofer o pide ubicacion.',
+      description: 'Solicitar a los involucrados de un flete que compartan su ubicación por WhatsApp. Envia un mensaje a los participantes pidiéndoles que envíen su ubicación. Usar cuando alguien pregunta donde está el chofer o pide ubicación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -880,7 +880,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Transporter assignment (plant + producer with own fleet) ----
     {
       name: 'list_transporters',
-      description: 'Lista transportistas como menu interactivo. Retorna _selectionSent: true — NO reformatear. Para plantas y productores con flota interna.',
+      description: 'Lista transportistas como menú interactivo. Retorna _selectionSent: true — NO reformatear. Para plantas y productores con flota interna.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -889,13 +889,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'assign_transporter',
-      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Usar transporterCompanyId="own_fleet" para flota interna del productor. Prepara la accion para confirmacion.',
+      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Usar transporterCompanyId="own_fleet" para flota interna del productor. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
           code: { type: 'string', description: 'Codigo FLT-XXXX' },
           transporterCompanyId: { type: 'string', description: 'ID de empresa transportista, o "own_fleet" para flota interna del productor' },
-          truckId: { type: 'string', description: 'ID del camion (opcional, de list_trucks)' },
+          truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
         },
         required: ['code', 'transporterCompanyId'],
@@ -903,12 +903,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'assign_truck_to_trip',
-      description: 'Asigna o cambia el camion de un viaje existente. Solo para plantas. Prepara la accion para confirmacion.',
+      description: 'Asigna o cambia el camión de un viaje existente. Solo para plantas. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
           code: { type: 'string', description: 'Codigo FLT-XXXX' },
-          truckId: { type: 'string', description: 'ID del camion (de list_trucks)' },
+          truckId: { type: 'string', description: 'ID del camión (de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
         },
         required: ['code', 'truckId'],
@@ -916,13 +916,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'assign_truck_to_freight',
-      description: 'Asigna un camion adicional a un flete multi-camion que tiene viajes sin asignar. Usar transporterCompanyId="own_fleet" para flota interna. Se llama una vez por cada viaje adicional. Prepara la accion para confirmacion.',
+      description: 'Asigna un camión adicional a un flete multi-camión que tiene viajes sin asignar. Usar transporterCompanyId="own_fleet" para flota interna. Se llama una vez por cada viaje adicional. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
           code: { type: 'string', description: 'Codigo FLT-XXXX' },
           transporterCompanyId: { type: 'string', description: 'ID empresa o "own_fleet" para flota interna' },
-          truckId: { type: 'string', description: 'ID del camion (opcional, de list_trucks)' },
+          truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
           tons: { type: 'number', description: 'Toneladas para este viaje (opcional)' },
         },
@@ -932,7 +932,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     // ---- Company team management ----
     {
       name: 'list_company_users',
-      description: 'Lista usuarios de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista usuarios de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -941,7 +941,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'list_drivers',
-      description: 'Lista choferes de la empresa como menu interactivo. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista choferes de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -950,7 +950,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'update_user_role',
-      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
+      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -962,7 +962,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     },
     {
       name: 'deactivate_user',
-      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. Prepara la accion para confirmacion.',
+      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1130,7 +1130,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
 
     if (!freight) {
-      return JSON.stringify({ error: `No se encontro el flete ${input.code}` });
+      return JSON.stringify({ error: `No se encontró el flete ${input.code}` });
     }
 
     // Access control: user must belong to one of the freight's companies
@@ -1302,16 +1302,16 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       return JSON.stringify({ error: 'Falta el tipo de grano (grain).' });
     }
     if (!input.tons || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
-      return JSON.stringify({ error: 'Falta la cantidad de toneladas (tons) o es invalida.' });
+      return JSON.stringify({ error: 'Falta la cantidad de toneladas (tons) o es inválida.' });
     }
     if (!input.loadDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.loadDate)) {
-      return JSON.stringify({ error: 'Falta la fecha de carga (loadDate) o formato invalido. Usa YYYY-MM-DD.' });
+      return JSON.stringify({ error: 'Falta la fecha de carga (loadDate) o formato inválido. Usa YYYY-MM-DD.' });
     }
     if (!input.loadTime || !/^\d{2}:\d{2}$/.test(input.loadTime)) {
-      return JSON.stringify({ error: 'Falta la hora de carga (loadTime) o formato invalido. Usa HH:MM.' });
+      return JSON.stringify({ error: 'Falta la hora de carga (loadTime) o formato inválido. Usa HH:MM.' });
     }
     if (input.truckCount !== undefined && (isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1)) {
-      return JSON.stringify({ error: 'truckCount debe ser un numero >= 1.' });
+      return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
     }
 
     // Resolve display names
@@ -1388,7 +1388,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automaticamente.',
+      IMPORTANT: 'El flete NO fue creado todavía. Mostra el resumen y pregunta al usuario si confirma. Se enviaran botónes CONFIRMAR/CANCELAR automáticamente.',
     });
   }
 
@@ -1402,7 +1402,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     this.logger.log(`confirm_create_freight — pendingFreight: ${pending ? JSON.stringify(pending).slice(0, 200) : 'NULL'}`);
 
     if (!pending) {
-      return JSON.stringify({ error: 'No hay un flete pendiente de confirmacion. Primero usa prepare_freight.' });
+      return JSON.stringify({ error: 'No hay un flete pendiente de confirmación. Primero usa prepare_freight.' });
     }
 
     const producerCompanyId = this.resolveProducerCompanyId(user);
@@ -1499,7 +1499,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const pending = state.pendingAction;
 
     if (!pending) {
-      return JSON.stringify({ error: 'No hay una accion pendiente de confirmacion.' });
+      return JSON.stringify({ error: 'No hay una acción pendiente de confirmación.' });
     }
 
     const { tool, params } = pending;
@@ -1588,7 +1588,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
             remaining: params.remaining,
             message: params.remaining > 0
               ? `Viaje #${params.nextTripNumber} asignado. Quedan ${params.remaining} viaje(s) sin asignar.`
-              : `Viaje #${params.nextTripNumber} asignado. Todos los camiones del flete estan asignados.`,
+              : `Viaje #${params.nextTripNumber} asignado. Todos los camiónes del flete están asignados.`,
           });
           break;
         }
@@ -1673,14 +1673,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       const SAFE_ERRORS: [RegExp, string][] = [
         [/no encontrad/i, 'El recurso no fue encontrado.'],
         [/no se puede cancelar/i, msg],
-        [/estado.*inv[aá]lido|transici[oó]n/i, 'La operacion no es valida en el estado actual del flete.'],
-        [/ya.*asignad|ya.*acept/i, 'La accion ya fue realizada previamente.'],
-        [/permiso|forbidden|autoriza/i, 'No tiene permisos para realizar esta accion.'],
+        [/estado.*inv[aá]lido|transici[oó]n/i, 'La operación no es valida en el estado actual del flete.'],
+        [/ya.*asignad|ya.*acept/i, 'La acción ya fue realizada previamente.'],
+        [/permiso|forbidden|autoriza/i, 'No tiene permisos para realizar esta acción.'],
         [/chofer no encontrado/i, 'El chofer indicado no fue encontrado en la empresa.'],
         [/empresa.*no.*encontr/i, 'La empresa indicada no fue encontrada.'],
         [/membres[ií]a/i, 'El usuario ya no pertenece a la empresa.'],
       ];
-      const safeMsg = SAFE_ERRORS.find(([re]) => re.test(msg))?.[1] || 'No se pudo ejecutar la accion. Intente nuevamente.';
+      const safeMsg = SAFE_ERRORS.find(([re]) => re.test(msg))?.[1] || 'No se pudo ejecutar la acción. Intente nuevamente.';
       return JSON.stringify({ error: safeMsg });
     }
 
@@ -1828,7 +1828,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const dto = { name: input.name, address: input.address || null, lat: lat || null, lng: lng || null };
-    const summary = `Crear campo "${input.name}"${input.address ? ` en ${input.address}` : ''}${lat ? ' (ubicacion incluida)' : ''}`;
+    const summary = `Crear campo "${input.name}"${input.address ? ` en ${input.address}` : ''}${lat ? ' (ubicación incluida)' : ''}`;
 
     return this.stageAction(session, 'create_field', { producerSynUser, dto }, summary);
   }
@@ -1866,7 +1866,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const trucks = await this.trucksService.list(synUser);
 
     if ((trucks as any[]).length === 0) {
-      return JSON.stringify({ total: 0, message: 'No hay camiones registrados. Puede crear uno con create_truck.' });
+      return JSON.stringify({ total: 0, message: 'No hay camiónes registrados. Puede crear uno con create_truck.' });
     }
 
     const items = (trucks as any[]).map((t: any) => ({
@@ -1877,7 +1877,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return this.storePendingSelection(session, items, {
       headerText: '🚛 Camiones registrados.\nSeleccione uno para ver detalles:',
-      listButtonLabel: 'Ver camiones',
+      listButtonLabel: 'Ver camiónes',
       sectionTitle: 'CAMIONES',
     }, 'truck_info');
   }
@@ -1886,11 +1886,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private async toolCreateTruck(input: any, user: any, session: any): Promise<string> {
     const companyId = user.activeCompanyId || user.companyId;
     if (!this.isCallerAdminForCompany(user, companyId)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden registrar camiones.' });
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden registrar camiónes.' });
     }
     const synUser = this.buildSyntheticUser(user);
     const dto = { plate: input.plate, model: input.model || null };
-    const summary = `Registrar camion ${input.plate}${input.model ? ` (${input.model})` : ''}`;
+    const summary = `Registrar camión ${input.plate}${input.model ? ` (${input.model})` : ''}`;
 
     return this.stageAction(session, 'create_truck', { dto, actionSynUser: synUser }, summary);
   }
@@ -1985,7 +1985,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
             createdAt: new Date().toISOString(),
           },
           _pendingButtons: [
-            { id: 'location_done', title: 'UBICACION LISTA' },
+            { id: 'location_done', title: 'UBICACIÓN LISTA' },
           ],
         },
       },
@@ -1999,14 +1999,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const purposeLabels: Record<string, string> = {
       origin: 'origen del flete',
       destination: 'destino del flete',
-      field: 'ubicacion del campo',
-      lot: 'ubicacion del lote',
+      field: 'ubicación del campo',
+      lot: 'ubicación del lote',
     };
-    const label = purposeLabels[input.purpose] || 'ubicacion';
+    const label = purposeLabels[input.purpose] || 'ubicación';
 
     return JSON.stringify({
       url,
-      message: `Abra el siguiente link para seleccionar el ${label} en el mapa. Una vez confirmada la ubicacion, presione el boton.`,
+      message: `Abra el siguiente link para seleccionar el ${label} en el mapa. Una vez confirmada la ubicación, presione el botón.`,
     });
   }
 
@@ -2036,7 +2036,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     if (['finished', 'canceled'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} ya esta ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
+      return JSON.stringify({ error: `El flete ${code} ya está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
     }
 
     // Reuse existing token or generate new one
@@ -2054,7 +2054,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: `Aca tenes el link de seguimiento en vivo del flete ${code}. Abrilo para ver la ruta y posicion del camion en tiempo real.`,
+      message: `Acá tenés el link de seguimiento en vivo del flete ${code}. Abrilo para ver la ruta y posición del camión en tiempo real.`,
     });
   }
 
@@ -2062,7 +2062,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private toolGenerateMapLink(input: any): string {
     const lat = Number(input.lat);
     const lng = Number(input.lng);
-    if (isNaN(lat) || isNaN(lng)) return JSON.stringify({ error: 'Coordenadas invalidas' });
+    if (isNaN(lat) || isNaN(lng)) return JSON.stringify({ error: 'Coordenadas inválidas' });
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const params = new URLSearchParams();
@@ -2078,7 +2078,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: `Abra el link para ver la ubicacion de ${input.name || 'este punto'} en el mapa Tolvink.`,
+      message: `Abra el link para ver la ubicación de ${input.name || 'este punto'} en el mapa Tolvink.`,
     });
   }
 
@@ -2122,7 +2122,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: `Aca tenes el link para descargar el informe PDF del flete ${code}. Abrilo desde cualquier dispositivo.`,
+      message: `Acá tenés el link para descargar el informe PDF del flete ${code}. Abrilo desde cualquier dispositivo.`,
     });
   }
 
@@ -2134,7 +2134,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     if (!companyId) return JSON.stringify({ error: 'No se pudo determinar la empresa activa.' });
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
     const token = createSignedToken({ uid: user.id, cid: companyId }, secret, 1440); // 24h
 
@@ -2143,7 +2143,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: 'Abra el siguiente link para ver el mapa con todos los fletes del dia. Puede filtrar por estado y tocar cada marcador para ver detalles.',
+      message: 'Abra el siguiente link para ver el mapa con todos los fletes del día. Puede filtrar por estado y tocar cada marcador para ver detalles.',
     });
   }
 
@@ -2163,7 +2163,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
 
     if (['finished', 'canceled'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} esta ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}. Solo se puede compartir ubicacion en fletes activos.` });
+      return JSON.stringify({ error: `El flete ${code} está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}. Solo se puede compartir ubicación en fletes activos.` });
     }
 
     // Access control
@@ -2176,7 +2176,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
     const companyType = this.resolveCompanyType(user);
     const role = companyType.includes('chofer') ? 'chofer'
@@ -2194,7 +2194,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: `Abra el siguiente link para compartir su ubicacion en tiempo real en el flete ${code}. Los demas participantes del flete podran ver su posicion en el mapa.`,
+      message: `Abra el siguiente link para compartir su ubicación en tiempo real en el flete ${code}. Los demás participantes del flete podrán ver su posición en el mapa.`,
     });
   }
 
@@ -2223,7 +2223,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuracion del servidor incompleta.' });
+    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
     const token = createSignedToken(
       { uid: user.id, cid: userCompanyId, fid: freight.id },
@@ -2236,7 +2236,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     return JSON.stringify({
       url,
-      message: `Abra el siguiente link para ver las ubicaciones en tiempo real de los participantes del flete ${code}.`,
+      message: `Abra el siguiente link para ver las ubicaciónes en tiempo real de los participantes del flete ${code}.`,
     });
   }
 
@@ -2274,14 +2274,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     if (!['in_progress', 'loaded', 'accepted'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} no esta activo (estado: ${freight.status})` });
+      return JSON.stringify({ error: `El flete ${code} no está activo (estado: ${freight.status})` });
     }
 
     // Cooldown: max 1 request_location per freight per 5 minutes
     const cooldownKey = `req_loc_${freight.id}`;
     const now = Date.now();
     if ((this._requestLocationCooldowns.get(cooldownKey) || 0) > now) {
-      return JSON.stringify({ error: `Ya se solicito ubicacion para ${code} hace poco. Intente en unos minutos.` });
+      return JSON.stringify({ error: `Ya se solicitó ubicación para ${code} hace poco. Intente en unos minutos.` });
     }
     this._requestLocationCooldowns.set(cooldownKey, now + 5 * 60 * 1000);
 
@@ -2319,11 +2319,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     if (allTargets.size === 0) {
-      return JSON.stringify({ error: 'No hay participantes con WhatsApp a quienes solicitar ubicacion' });
+      return JSON.stringify({ error: 'No hay participantes con WhatsApp a quienes solicitar ubicación' });
     }
 
     const requesterName = user.name?.split(' ')[0] || 'Un participante';
-    const msg = `*Solicitud de ubicacion*\n${requesterName} solicita tu ubicacion para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicacion en este chat (adjuntar \u2192 Ubicacion).`;
+    const msg = `*Solicitud de ubicación*\n${requesterName} solicita tu ubicación para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicación en este chat (adjuntar \u2192 Ubicacion).`;
 
     let sent = 0;
     for (const [, target] of allTargets) {
@@ -2390,7 +2390,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       }
 
       const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} \u2192 ${freight.destName}\n\n`
-        + `Podes enviar tu ubicacion en este chat (adjuntar \u2192 Ubicacion) para que las empresas sigan el viaje.\n\n`
+        + `Podes enviar tu ubicación en este chat (adjuntar \u2192 Ubicacion) para que las empresas sigan el viaje.\n\n`
         + `Seguimiento: ${trackingUrl}`;
 
       await this.wa.sendText(driver.phone, driverMsg);
@@ -2583,7 +2583,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
   private async toolAssignTruckToTrip(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
     if (!companyType.includes('plant')) {
-      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciónes.' });
     }
 
     const result = await this.resolveFreightWithAccess(input.code, user);
@@ -2595,7 +2595,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       select: { id: true },
     });
     if (!assignment) {
-      return JSON.stringify({ error: `${input.code} no tiene asignacion activa.` });
+      return JSON.stringify({ error: `${input.code} no tiene asignación activa.` });
     }
 
     const truck = await this.prisma.truck.findUnique({
@@ -2612,7 +2612,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       driverId: input.driverId || null,
       truckDisplay,
       plantCompanyId,
-    }, `Asignar camion ${truckDisplay} a flete ${freight.code}`);
+    }, `Asignar camión ${truckDisplay} a flete ${freight.code}`);
   }
 
   // ---- assign_truck_to_freight (multi-truck) ----
@@ -2688,7 +2688,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     if (companyIds.length === 0) {
-      return JSON.stringify({ error: 'No se encontro tu empresa.', users: [] });
+      return JSON.stringify({ error: 'No se encontró tu empresa.', users: [] });
     }
 
     const memberships = await this.prisma.userCompany.findMany({
@@ -2796,7 +2796,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
 
     if (!membership) {
-      return JSON.stringify({ error: `No se encontro un usuario "${searchTerm}" en su empresa.` });
+      return JSON.stringify({ error: `No se encontró un usuario "${searchTerm}" en su empresa.` });
     }
 
     if (membership.user.id === user.id) {
@@ -2839,11 +2839,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     });
 
     if (!membership) {
-      return JSON.stringify({ error: `No se encontro un usuario activo "${searchTerm}" en su empresa.` });
+      return JSON.stringify({ error: `No se encontró un usuario activo "${searchTerm}" en su empresa.` });
     }
 
     if (membership.user.id === user.id) {
-      return JSON.stringify({ error: 'No puede desactivarse a si mismo.' });
+      return JSON.stringify({ error: 'No puede desactivarse a sí mismo.' });
     }
 
     return this.stageAction(session, 'deactivate_user', {
@@ -2921,7 +2921,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     // Invalidate web sessions: refresh tokens carry old companyId
     this.prisma.refreshToken.deleteMany({ where: { userId: user.id } })
-      .catch((err: any) => this.logger.warn(`Failed to invalidate refresh tokens: ${err.message}`));
+      .catch((err: any) => this.logger.warn(`Failed to inválidate refresh tokens: ${err.message}`));
 
     // Audit log (fire-and-forget)
     this.prisma.auditLog.create({
@@ -2955,7 +2955,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       status: 'switched',
       companyName,
       companyType,
-      message: `Empresa activa cambiada a "${companyName}" (${companyType}). Todas las operaciones se realizaran con esta empresa.`,
+      message: `Empresa activa cambiada a "${companyName}" (${companyType}). Todas las operaciónes se realizarán con esta empresa.`,
     });
   }
 
@@ -3075,7 +3075,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'La accion NO fue ejecutada todavia. Presente el resumen y consulte al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automaticamente.',
+      IMPORTANT: 'La acción NO fue ejecutada todavía. Presente el resumen y consulte al usuario si confirma. Se enviaran botónes CONFIRMAR/CANCELAR automáticamente.',
     });
   }
 
@@ -3091,7 +3091,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
       },
     });
-    if (!freight) return { error: `No se encontro ${code}` };
+    if (!freight) return { error: `No se encontró ${code}` };
 
     const userCompanyId = user.activeCompanyId || user.companyId;
     const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);

@@ -146,7 +146,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const raw = String(e.message || '').slice(0, 200);
       const isSafe = e.status === 400 || e.response?.statusCode === 400;
       const cleaned = isSafe ? raw.replace(/[^\w\sáéíóúñÁÉÍÓÚÑ.,;:()!?¿¡\-]/g, '').trim() : '';
-      const userMessage = cleaned || 'Ocurrio un error procesando su solicitud. Intente nuevamente.';
+      const userMessage = cleaned || 'Ocurrió un error procesando su solicitud. Intente nuevamente.';
       // H3: Guarantee endFlow even if sendText fails
       try { await this.wa.sendText(phone, userMessage); } catch {}
       try { await this.endFlow(session.id); } catch {}
@@ -215,7 +215,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const tons = parseFloat(text);
 
       if (isNaN(tons) || tons <= 0) {
-        await this.wa.sendText(phone, 'Ingrese un numero valido de toneladas (ej: 30.5):');
+        await this.wa.sendText(phone, 'Ingrese un número válido de toneladas (ej: 30.5):');
         return;
       }
 
@@ -251,7 +251,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         await this.wa.sendText(phone, `✅ Carga confirmada: ${tons} tn.`);
         await this.endFlow(session.id);
       } else {
-        await this.wa.sendText(phone, '❌ Operacion cancelada.');
+        await this.wa.sendText(phone, '❌ Operación cancelada.');
         await this.endFlow(session.id);
       }
       return;
@@ -267,7 +267,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   private async cancelFreightStart(phone: string, session: any) {
     await this.updateStep(session.id, 'awaiting_reason');
     await this.wa.sendText(phone,
-      'Indique el motivo de la cancelacion:\n\n_(Escriba "cancelar" para volver al menu)_',
+      'Indique el motivo de la cancelación:\n\n_(Escriba "cancelar" para volver al menu)_',
     );
   }
 
@@ -289,7 +289,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       return;
     }
 
-    await this.wa.sendText(phone, 'Indique el motivo de la cancelacion como texto:');
+    await this.wa.sendText(phone, 'Indique el motivo de la cancelación como texto:');
   }
 
   // ======================== CREATE FREIGHT FLOW ==========================
@@ -308,13 +308,13 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     // Store producer company ID in flow state for later steps
     await this.updateState(session.id, 'awaiting_grain', { producerCompanyId });
     await this.wa.sendList(phone,
-      FLOW_HINT + 'Inicio de creacion de flete.\nPodra modificar los datos antes de confirmar.\n\nIndique el tipo de grano:',
+      FLOW_HINT + 'Inicio de creación de flete.\nPodrá modificar los datos antes de confirmar.\n\nIndique el tipo de grano:',
       'SELECCIONAR GRANO',
       [{
         title: 'TIPO DE GRANO',
         rows: [
           { id: 'grain:Soja', title: 'SOJA' },
-          { id: 'grain:Maiz', title: 'MAIZ' },
+          { id: 'grain:Maiz', title: 'MAÍZ' },
           { id: 'grain:Trigo', title: 'TRIGO' },
           { id: 'grain:Girasol', title: 'GIRASOL' },
           { id: 'grain:Sorgo', title: 'SORGO' },
@@ -335,7 +335,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const ctx = state.selectionContext;
       const newPage = ctx.page + 1;
       if (newPage > ctx.totalPages) {
-        await this.wa.sendText(phone, FLOW_HINT + 'No hay mas opciones.');
+        await this.wa.sendText(phone, FLOW_HINT + 'No hay más opciones.');
         return;
       }
       const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
@@ -353,7 +353,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         const ctx = state.selectionContext;
         const newPage = resolved === 'next_page' ? ctx.page + 1 : ctx.page - 1;
         if (newPage < 1 || newPage > ctx.totalPages) {
-          await this.wa.sendText(phone, FLOW_HINT + 'No hay mas opciones.');
+          await this.wa.sendText(phone, FLOW_HINT + 'No hay más opciones.');
           return;
         }
         const result = await this.wa.sendSelection(phone, ctx.items, { ...ctx.config, page: newPage });
@@ -397,7 +397,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
 
       if (!grain) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un grano de la lista o escriba el nombre (Soja, Maiz, Trigo, etc.).');
+        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un grano de la lista o escriba el nombre (Soja, Maíz, Trigo, etc.).');
         return;
       }
 
@@ -421,7 +421,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
 
       const tons = parseFloat(payload.body?.trim().replace(',', '.'));
       if (isNaN(tons) || tons <= 0) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un numero valido (ej: 30).');
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un número válido (ej: 30).');
         return;
       }
 
@@ -436,7 +436,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const suggested = Math.max(1, Math.ceil(tons / 30));
       await this.updateState(session.id, 'awaiting_truck_count', { ...state, tons });
 
-      const truckWord = suggested === 1 ? 'camion' : 'camiones';
+      const truckWord = suggested === 1 ? 'camión' : 'camiones';
       await this.wa.sendButtons(phone,
         FLOW_HINT +
         `${state.grain}, ${tons} tn\n\n` +
@@ -457,7 +457,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       if (type === 'button_reply') {
         if (payload.id === 'trucks:other') {
           await this.updateState(session.id, 'awaiting_truck_count_input', state);
-          await this.wa.sendText(phone, FLOW_HINT + 'Indique la cantidad de camiones (escriba el numero)');
+          await this.wa.sendText(phone, FLOW_HINT + 'Indique la cantidad de camiones (escriba el número)');
           return;
         }
         if (payload.id?.startsWith('trucks:')) {
@@ -468,7 +468,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
 
       if (!truckCount || truckCount < 1 || truckCount > 50) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un numero entre 1 y 50.');
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un número entre 1 y 50.');
         return;
       }
 
@@ -484,7 +484,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
       const truckCount = parseInt(payload.body?.trim(), 10);
       if (!truckCount || truckCount < 1 || truckCount > 50) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un numero valido entre 1 y 50.');
+        await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un número válido entre 1 y 50.');
         return;
       }
       await this.afterTruckCount(phone, session, { ...state, truckCount });
@@ -514,7 +514,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       });
 
       if (trucks.length === 0) {
-        await this.wa.sendText(phone, 'No se encontraron camiones registrados. Se continua sin flota propia.');
+        await this.wa.sendText(phone, 'No se encontraron camiones registrados. Se continúa sin flota propia.');
         await this.sendPlantSelection(phone, session, state);
         return;
       }
@@ -530,7 +530,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       });
 
       const selConfig = {
-        headerText: FLOW_HINT + 'Seleccione un camion de su flota:',
+        headerText: FLOW_HINT + 'Seleccione un camión de su flota:',
         listButtonLabel: 'VER CAMIONES',
         sectionTitle: 'CAMIONES DISPONIBLES',
       };
@@ -555,7 +555,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
 
       if (!truckId) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un camion de la lista.');
+        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un camión de la lista.');
         return;
       }
 
@@ -712,8 +712,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         // Continue without location
       } else {
         await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Envie su ubicacion o seleccione Omitir.',
-          [{ id: 'location:skip', title: 'OMITIR UBICACION' }],
+          FLOW_HINT + 'Envíe su ubicación o seleccione Omitir.',
+          [{ id: 'location:skip', title: 'OMITIR UBICACIÓN' }],
         );
         return;
       }
@@ -821,7 +821,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const text = payload.body?.trim();
       const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
       if (!match) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Formato invalido. Indique dd/mm/aaaa (ej: 25/02/2026).');
+        await this.wa.sendText(phone, FLOW_HINT + 'Formato inválido. Indique dd/mm/aaaa (ej: 25/02/2026).');
         return;
       }
       const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
@@ -876,7 +876,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const text = payload.body?.trim();
       const match = text.match(/^(\d{1,2}):(\d{2})$/);
       if (!match) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Formato invalido. Indique HH:mm (ej: 14:30).');
+        await this.wa.sendText(phone, FLOW_HINT + 'Formato inválido. Indique HH:mm (ej: 14:30).');
         return;
       }
       const loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
@@ -907,7 +907,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
             title: 'TIPO DE GRANO',
             rows: [
               { id: 'grain:Soja', title: 'SOJA' },
-              { id: 'grain:Maiz', title: 'MAIZ' },
+              { id: 'grain:Maiz', title: 'MAÍZ' },
               { id: 'grain:Trigo', title: 'TRIGO' },
               { id: 'grain:Girasol', title: 'GIRASOL' },
               { id: 'grain:Sorgo', title: 'SORGO' },
@@ -923,7 +923,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         case 'trucks':
           await this.updateState(session.id, 'awaiting_truck_count', editState);
           const suggested = Math.max(1, Math.ceil((state.tons || 30) / 30));
-          const truckWord = suggested === 1 ? 'camion' : 'camiones';
+          const truckWord = suggested === 1 ? 'camión' : 'camiones';
           await this.wa.sendButtons(phone,
             FLOW_HINT + `Camiones actuales: ${state.truckCount || 1}\n\nIndique la cantidad de camiones:`,
             [
@@ -988,7 +988,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
 
       if (!confirmed) {
-        await this.wa.sendText(phone, 'Creacion de flete cancelada.');
+        await this.wa.sendText(phone, 'Creación de flete cancelada.');
         await this.endFlow(session.id);
         return;
       }
@@ -1040,8 +1040,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const code = (freight as any).code;
       const freightLink = `\n\n${APP_URL}/${code}/ubicacion?s=${shareToken}`;
       const successMsg = state.truckId
-        ? `✅ Flete creado: ${code}\n🚛 Asignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
-        : `✅ Flete creado: ${code}\n📋 Pendiente de asignacion de transportista.` + freightLink;
+        ? `✅ Flete creado: ${code}\n🚛 Asignado a flota propia (${state.truckPlate || 'camión asignado'}).` + freightLink
+        : `✅ Flete creado: ${code}\n📋 Pendiente de asignación de transportista.` + freightLink;
       await this.wa.sendText(phone, successMsg);
       await this.endFlow(session.id);
       return;
@@ -1163,7 +1163,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       title: c.name.toUpperCase().slice(0, 24),
     }));
     const plantConfig = {
-      headerText: FLOW_HINT + `${state.grain}, ${state.tons} tn, ${state.truckCount} camion${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
+      headerText: FLOW_HINT + `${state.grain}, ${state.tons} tn, ${state.truckCount} camión${state.truckCount > 1 ? 'es' : ''}\n\nIndique la empresa destino.`,
       listButtonLabel: 'SELECCIONAR PLANTA',
       sectionTitle: 'PLANTAS DISPONIBLES',
     };
@@ -1230,9 +1230,9 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     await this.wa.sendButtons(phone,
       FLOW_HINT +
       `Origen: ${state.customOriginName}\n\n` +
-      'Comparta la ubicacion del origen (adjuntos > ubicacion).\n\n' +
-      'O seleccione Omitir para continuar sin ubicacion.',
-      [{ id: 'location:skip', title: 'OMITIR UBICACION' }],
+      'Comparta la ubicación del origen (adjuntos > ubicación).\n\n' +
+      'O seleccione Omitir para continuar sin ubicación.',
+      [{ id: 'location:skip', title: 'OMITIR UBICACIÓN' }],
     );
   }
 
@@ -1265,8 +1265,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
     const truckCount = finalState.truckCount || 1;
     const truckLine = finalState.truckPlate
-      ? `${truckCount} camion${truckCount > 1 ? 'es' : ''} - Flota propia (${finalState.truckPlate})`
-      : `${truckCount} camion${truckCount > 1 ? 'es' : ''}`;
+      ? `${truckCount} camión${truckCount > 1 ? 'es' : ''} - Flota propia (${finalState.truckPlate})`
+      : `${truckCount} camión${truckCount > 1 ? 'es' : ''}`;
 
     await this.updateState(session.id, 'awaiting_confirm', finalState);
     await this.wa.sendButtons(phone,
@@ -1276,7 +1276,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       `📍 Origen: ${originName}\n` +
       `📍 Destino: ${destName}\n` +
       `📅 Fecha: ${dateFormatted} ${finalState.loadTime}\n\n` +
-      `¿Confirma la creacion del flete?`,
+      `¿Confirma la creación del flete?`,
       [
         { id: 'flow_confirm:yes', title: 'CONFIRMAR' },
         { id: 'flow_confirm:edit', title: 'EDITAR' },

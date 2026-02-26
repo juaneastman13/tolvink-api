@@ -351,13 +351,13 @@ export class WhatsAppController {
     const session = sessions[0];
     if (!session) {
       this.logger.warn(`save-location: token not found — ${body.token}`);
-      throw new NotFoundException('Token invalido o expirado');
+      throw new NotFoundException('Token inválido o expirado');
     }
 
     // Check token age (max 30 minutes)
     const state = session.flow_state || {};
     if (!state.locationToken?.createdAt) {
-      throw new BadRequestException('Token invalido o expirado');
+      throw new BadRequestException('Token inválido o expirado');
     }
     const tokenCreated = new Date(state.locationToken.createdAt).getTime();
     const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
@@ -422,12 +422,12 @@ export class WhatsAppController {
     const session = sessions[0];
     if (!session) {
       this.logger.warn(`save-location-by-slug: slug not found — ${body.slug}`);
-      throw new NotFoundException('Enlace invalido o expirado');
+      throw new NotFoundException('Enlace inválido o expirado');
     }
 
     const state = session.flow_state || {};
     if (!state.locationToken?.createdAt) {
-      throw new BadRequestException('Enlace invalido o expirado');
+      throw new BadRequestException('Enlace inválido o expirado');
     }
     const tokenCreated = new Date(state.locationToken.createdAt).getTime();
     const tokenAgeMin = (Date.now() - tokenCreated) / 60000;
@@ -468,13 +468,13 @@ export class WhatsAppController {
     if (!token) throw new BadRequestException('Token requerido');
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+    if (!secret) throw new BadRequestException('Configuración del servidor incompleta');
 
     const payload = verifySignedToken(token, secret);
-    if (!payload) throw new BadRequestException('Token invalido o expirado');
+    if (!payload) throw new BadRequestException('Token inválido o expirado');
 
     const { cid } = payload;
-    if (!cid) throw new BadRequestException('Token invalido');
+    if (!cid) throw new BadRequestException('Token inválido');
 
     // Compute "today" in Uruguay timezone (UTC-3)
     const nowUy = new Date(Date.now() - 3 * 60 * 60 * 1000);
@@ -551,17 +551,17 @@ export class WhatsAppController {
     if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
         body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180 ||
         !isFinite(body.lat) || !isFinite(body.lng)) {
-      throw new BadRequestException('Coordenadas invalidas (lat: -90..90, lng: -180..180)');
+      throw new BadRequestException('Coordenadas inválidas (lat: -90..90, lng: -180..180)');
     }
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+    if (!secret) throw new BadRequestException('Configuración del servidor incompleta');
 
     const payload = verifySignedToken(body.t, secret);
-    if (!payload) throw new BadRequestException('Token invalido o expirado');
+    if (!payload) throw new BadRequestException('Token inválido o expirado');
 
     const { uid, fid, role, name } = payload;
-    if (!uid || !fid) throw new BadRequestException('Token invalido');
+    if (!uid || !fid) throw new BadRequestException('Token inválido');
 
     // Verify freight exists and is active
     const freight = await this.prisma.freight.findUnique({
@@ -570,7 +570,7 @@ export class WhatsAppController {
     });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (['finished', 'canceled'].includes(freight.status)) {
-      throw new BadRequestException('El flete no esta activo');
+      throw new BadRequestException('El flete no está activo');
     }
 
     await this.prisma.liveLocation.upsert({
@@ -620,13 +620,13 @@ export class WhatsAppController {
     if (!token) throw new BadRequestException('Token requerido');
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+    if (!secret) throw new BadRequestException('Configuración del servidor incompleta');
 
     const payload = verifySignedToken(token, secret);
-    if (!payload) throw new BadRequestException('Token invalido o expirado');
+    if (!payload) throw new BadRequestException('Token inválido o expirado');
 
     const { fid } = payload;
-    if (!fid) throw new BadRequestException('Token invalido');
+    if (!fid) throw new BadRequestException('Token inválido');
 
     // Get freight data for map context
     const freight = await this.prisma.freight.findUnique({
@@ -693,13 +693,13 @@ export class WhatsAppController {
     if (!body.t) throw new BadRequestException('Token requerido');
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) throw new BadRequestException('Configuracion del servidor incompleta');
+    if (!secret) throw new BadRequestException('Configuración del servidor incompleta');
 
     const payload = verifySignedToken(body.t, secret);
-    if (!payload) throw new BadRequestException('Token invalido o expirado');
+    if (!payload) throw new BadRequestException('Token inválido o expirado');
 
     const { uid, fid } = payload;
-    if (!uid || !fid) throw new BadRequestException('Token invalido');
+    if (!uid || !fid) throw new BadRequestException('Token inválido');
 
     await this.prisma.liveLocation.updateMany({
       where: { freightId: fid, userId: uid },

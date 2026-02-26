@@ -2038,7 +2038,7 @@ export class FreightsService implements OnModuleInit {
     if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
         body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180 ||
         !isFinite(body.lat) || !isFinite(body.lng)) {
-      throw new BadRequestException('Coordenadas invalidas (lat: -90..90, lng: -180..180)');
+      throw new BadRequestException('Coordenadas inválidas (lat: -90..90, lng: -180..180)');
     }
 
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
