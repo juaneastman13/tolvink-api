@@ -16,7 +16,7 @@ const FLOW_TIMEOUT_MINUTES = 10;
 // Header hint shown at the top of every flow message
 const FLOW_HINT = '_cancelar / menu_\n\n';
 
-const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 
 // M4: Per-user flow rate limiting (30 flow messages per 5 minutes)
 const FLOW_RATE_WINDOW_MS = 5 * 60 * 1000;

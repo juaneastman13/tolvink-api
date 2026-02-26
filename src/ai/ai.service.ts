@@ -19,7 +19,7 @@ import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
 const MAX_HISTORY = 30;           // Tighter context for focused responses
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
-const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 const OWN_FLEET_SHORTCUT = 'own_fleet';
 
 // Model configuration — Claude Haiku 4.5
@@ -370,7 +370,7 @@ PROHIBIDO bajo cualquier circunstancia:
 Cuando el usuario pregunte por ubicacion de planta, campo, lote, origen, destino, flete, carga, descarga,
 "ver mapa", "donde queda", o cualquier referencia geografica:
 1. Si los datos de la herramienta incluyen "mapLink" → responder UNICAMENTE con una frase breve + el link.
-   Ejemplo: "📍 Puede ver la ubicacion en el mapa Tolvink.\nhttps://tolvink.vercel.app/ver-mapa?..."
+   Ejemplo: "📍 Puede ver la ubicacion en el mapa Tolvink.\nhttps://tolvink.com/ver-mapa?..."
 2. Si no hay mapLink disponible → responder: "La ubicacion no se encuentra disponible en el sistema."
 3. NUNCA agregar coordenadas, explicacion tecnica, ni datos crudos junto al link.
 
@@ -1980,7 +1980,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     this.logger.log(`generate_location_link — slug=${slug}, sessionId=${session.id}`);
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/campo/${slug}/ubicacion`;
 
     const purposeLabels: Record<string, string> = {
@@ -2036,7 +2036,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       });
     }
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/${freight.code}/ubicacion?s=${token}`;
 
     return JSON.stringify({
@@ -2051,7 +2051,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const lng = Number(input.lng);
     if (isNaN(lat) || isNaN(lng)) return JSON.stringify({ error: 'Coordenadas invalidas' });
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const params = new URLSearchParams();
     params.set('lat', lat.toFixed(6));
     params.set('lng', lng.toFixed(6));
@@ -2104,7 +2104,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       });
     }
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/${freight.code}/informe?s=${token}`;
 
     return JSON.stringify({
@@ -2125,7 +2125,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
 
     const token = createSignedToken({ uid: user.id, cid: companyId }, secret, 1440); // 24h
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/daily-map?t=${token}`;
 
     return JSON.stringify({
@@ -2176,7 +2176,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       120, // 2h
     );
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/live-freight?t=${token}&mode=share`;
 
     return JSON.stringify({
@@ -2218,7 +2218,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       120, // 2h
     );
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/live-freight?t=${token}&mode=view`;
 
     return JSON.stringify({
@@ -2259,7 +2259,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken } });
     }
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion?s=${shareToken}`;
 
     // 1) Send GPS sharing request to each driver with a phone number

@@ -315,7 +315,7 @@ export class WhatsAppController {
       },
     });
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     return {
       token,
       slug,

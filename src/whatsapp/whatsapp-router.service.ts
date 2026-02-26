@@ -35,7 +35,7 @@ const STATUS_EMOJI: Record<string, string> = {
   canceled: '❌',
 };
 
-const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.vercel.app';
+const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 
 @Injectable()
 export class WhatsAppRouterService {
