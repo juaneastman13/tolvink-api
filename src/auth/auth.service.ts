@@ -63,7 +63,7 @@ export class AuthService {
           companyId: user.companyId,
           role: user.role === 'admin' || user.role === 'platform_admin' ? 'gerente' : 'operario',
         },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
       user.memberships = await (this.prisma.userCompany as any).findMany({
         where: { userId: user.id, active: true },
         include: { company: { select: COMPANY_SELECT } },
@@ -121,20 +121,30 @@ export class AuthService {
     const validTypes = ['producer', 'plant', 'transporter'];
     const userTypes = (dto.userTypes || []).filter((t: string) => validTypes.includes(t));
 
-    const user = await (this.prisma.user as any).create({
-      data: {
-        email: dto.email, phone: dto.phone, passwordHash: hash,
-        name: dto.name, role: 'operator', userTypes,
-      },
-      include: {
-        company: { select: COMPANY_SELECT },
-        memberships: {
-          where: { active: true },
-          include: { company: { select: COMPANY_SELECT } },
-          orderBy: { createdAt: 'asc' },
+    let user: any;
+    try {
+      user = await (this.prisma.user as any).create({
+        data: {
+          email: dto.email, phone: dto.phone, passwordHash: hash,
+          name: dto.name, role: 'operator', userTypes,
         },
-      },
-    });
+        include: {
+          company: { select: COMPANY_SELECT },
+          memberships: {
+            where: { active: true },
+            include: { company: { select: COMPANY_SELECT } },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+      });
+    } catch (err: any) {
+      // Handle unique constraint violation (concurrent registration with same email/phone)
+      if (err.code === 'P2002') {
+        const field = err.meta?.target?.includes('email') ? 'Email' : 'Telefono';
+        throw new ConflictException(`${field} ya registrado`);
+      }
+      throw err;
+    }
 
     const token = await this.signToken(user);
     const refreshToken = await this.createRefreshToken(user.id);
@@ -175,7 +185,7 @@ export class AuthService {
     });
 
     // Invalidate ALL existing refresh tokens for this user (security: old sessions)
-    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(() => {});
+    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(e => this.logger.warn(e.message));
 
     // Audit log entry for company switch
     await this.prisma.auditLog.create({
@@ -201,40 +211,45 @@ export class AuthService {
   }
 
   async refresh(dto: RefreshTokenDto) {
-    const stored = await (this.prisma as any).refreshToken.findUnique({
-      where: { token: dto.refreshToken },
-    });
+    // Use transaction to atomically find-and-delete the refresh token (prevents race condition)
+    const { storedUser } = await this.prisma.$transaction(async (tx) => {
+      const stored = await (tx as any).refreshToken.findUnique({
+        where: { token: dto.refreshToken },
+      });
 
-    if (!stored || stored.expiresAt < new Date()) {
-      if (stored) await (this.prisma as any).refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
-      throw new UnauthorizedException('Token de refresco inválido o expirado');
-    }
+      if (!stored || stored.expiresAt < new Date()) {
+        if (stored) await (tx as any).refreshToken.delete({ where: { id: stored.id } });
+        throw new UnauthorizedException('Token de refresco inválido o expirado');
+      }
 
-    // Rotation: delete used token
-    await (this.prisma as any).refreshToken.delete({ where: { id: stored.id } }).catch(() => {});
+      // Rotation: atomically delete used token inside tx
+      await (tx as any).refreshToken.delete({ where: { id: stored.id } });
 
-    const user = await (this.prisma.user as any).findUnique({
-      where: { id: stored.userId },
-      include: {
-        company: { select: COMPANY_SELECT },
-        memberships: {
-          where: { active: true },
-          include: { company: { select: COMPANY_SELECT } },
-          orderBy: { createdAt: 'asc' },
+      const storedUser = await (tx.user as any).findUnique({
+        where: { id: stored.userId },
+        include: {
+          company: { select: COMPANY_SELECT },
+          memberships: {
+            where: { active: true },
+            include: { company: { select: COMPANY_SELECT } },
+            orderBy: { createdAt: 'asc' },
+          },
         },
-      },
+      });
+
+      if (!storedUser || !storedUser.active) throw new UnauthorizedException('Usuario inactivo');
+
+      return { storedUser };
     });
 
-    if (!user || !user.active) throw new UnauthorizedException('Usuario inactivo');
-
-    const accessToken = await this.signToken(user);
-    const newRefreshToken = await this.createRefreshToken(user.id);
-    this.logger.log(`User ${user.id} refreshed token`);
+    const accessToken = await this.signToken(storedUser);
+    const newRefreshToken = await this.createRefreshToken(storedUser.id);
+    this.logger.log(`User ${storedUser.id} refreshed token`);
 
     return {
       access_token: accessToken,
       refresh_token: newRefreshToken,
-      user: this.buildUserResponse(user),
+      user: this.buildUserResponse(storedUser),
     };
   }
 
@@ -252,6 +267,14 @@ export class AuthService {
     });
   }
 
+  async completeOnboarding(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { onboardingCompletedAt: new Date() },
+    });
+    return { ok: true };
+  }
+
   // ======================== PRIVATE ====================================
 
   private async createRefreshToken(userId: string): Promise<string> {
@@ -261,7 +284,7 @@ export class AuthService {
     // Clean expired tokens (fire-and-forget)
     (this.prisma as any).refreshToken.deleteMany({
       where: { userId, expiresAt: { lt: new Date() } },
-    }).catch(() => {});
+    }).catch(e => this.logger.warn(e.message));
     return token;
   }
 
@@ -305,6 +328,7 @@ export class AuthService {
       userTypes: userTypes.length > 0 ? userTypes : (user.userTypes || []),
       companyByType, roleByType,
       isSuperAdmin: user.isSuperAdmin || false,
+      isNew: !user.onboardingCompletedAt,
       company: companyResponse, activeCompanyId,
       companies: memberships.map((m: any) => ({
         id: m.id, companyId: m.companyId, companyName: m.company?.name || '',

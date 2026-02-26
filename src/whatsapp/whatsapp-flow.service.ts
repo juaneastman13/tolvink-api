@@ -1038,7 +1038,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       await this.prisma.freight.update({ where: { id: (freight as any).id }, data: { shareToken } });
 
       const code = (freight as any).code;
-      const freightLink = `\n\n${APP_URL}/${code}/ubicacion`;
+      const freightLink = `\n\n${APP_URL}/${code}/ubicacion?s=${shareToken}`;
       const successMsg = state.truckId
         ? `✅ Flete creado: ${code}\n🚛 Asignado a flota propia (${state.truckPlate || 'camion asignado'}).` + freightLink
         : `✅ Flete creado: ${code}\n📋 Pendiente de asignacion de transportista.` + freightLink;
@@ -1335,7 +1335,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   }
 
   private async endFlow(sessionId: string) {
-    await this.prisma.whatsAppSession.delete({ where: { id: sessionId } }).catch(() => {});
+    await this.prisma.whatsAppSession.delete({ where: { id: sessionId } }).catch(e => this.logger.warn(e.message));
   }
 
   /** Resolve the producer company ID from user data */

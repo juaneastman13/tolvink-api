@@ -365,25 +365,22 @@ export class WhatsAppController {
       throw new BadRequestException('Token expirado (max 30 min)');
     }
 
-    // Re-read full session via Prisma for safe update
-    const fullSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const fullState = (fullSession?.flowState as any) || {};
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: {
-          ...fullState,
-          lastLocation: {
-            lat: body.lat,
-            lng: body.lng,
-            name: body.name || '',
-            address: body.address || '',
-          },
-          locationToken: null, // one-time use
-        },
-      },
-    });
+    // Atomic: consume token + save location in one UPDATE.
+    // The WHERE clause ensures only one concurrent request can succeed.
+    const updated = await this.prisma.$queryRaw<any[]>`
+      UPDATE whatsapp_sessions
+      SET flow_state = flow_state::jsonb || ${JSON.stringify({
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '' },
+        locationToken: null,
+      })}::jsonb,
+      updated_at = NOW()
+      WHERE id = ${session.id}::uuid
+      AND flow_state::jsonb @> ${JSON.stringify({ locationToken: { token: body.token } })}::jsonb
+      RETURNING id
+    `;
+    if (!updated.length) {
+      throw new BadRequestException('Token ya utilizado');
+    }
 
     this.logger.log(`Location saved for session ${session.id}: ${body.lat},${body.lng}`);
 
@@ -438,24 +435,21 @@ export class WhatsAppController {
       throw new BadRequestException('Enlace expirado (max 30 min)');
     }
 
-    const fullSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const fullState = (fullSession?.flowState as any) || {};
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: {
-          ...fullState,
-          lastLocation: {
-            lat: body.lat,
-            lng: body.lng,
-            name: body.name || '',
-            address: body.address || '',
-          },
-          locationToken: null,
-        },
-      },
-    });
+    // Atomic: consume slug + save location in one UPDATE.
+    const updated = await this.prisma.$queryRaw<any[]>`
+      UPDATE whatsapp_sessions
+      SET flow_state = flow_state::jsonb || ${JSON.stringify({
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '' },
+        locationToken: null,
+      })}::jsonb,
+      updated_at = NOW()
+      WHERE id = ${session.id}::uuid
+      AND flow_state::jsonb @> ${JSON.stringify({ locationToken: { slug: body.slug } })}::jsonb
+      RETURNING id
+    `;
+    if (!updated.length) {
+      throw new BadRequestException('Enlace ya utilizado');
+    }
 
     this.logger.log(`Location saved by slug for session ${session.id}: ${body.lat},${body.lng}`);
 
@@ -551,6 +545,13 @@ export class WhatsAppController {
   async upsertLiveLocation(@Body() body: { t: string; lat: number; lng: number; speed?: number; heading?: number }) {
     if (!body.t || body.lat == null || body.lng == null) {
       throw new BadRequestException('t, lat, lng requeridos');
+    }
+
+    // Validate coordinate bounds
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
+        body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180 ||
+        !isFinite(body.lat) || !isFinite(body.lng)) {
+      throw new BadRequestException('Coordenadas invalidas (lat: -90..90, lng: -180..180)');
     }
 
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');

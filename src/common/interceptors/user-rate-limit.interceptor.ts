@@ -4,6 +4,10 @@ import { Observable } from 'rxjs';
 const LIMIT = 2000;
 const WINDOW_MS = 60000;
 
+/**
+ * SCALING NOTE: In-memory store. Limits are per-instance, not global.
+ * For multi-instance deployments, replace with Redis-based rate limiting.
+ */
 @Injectable()
 export class UserRateLimitInterceptor implements NestInterceptor {
   private store = new Map<string, { count: number; resetAt: number }>();

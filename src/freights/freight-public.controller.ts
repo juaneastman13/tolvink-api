@@ -8,6 +8,7 @@ import {
   Controller,
   Get,
   Param,
+  Query,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
@@ -27,9 +28,13 @@ export class FreightPublicController {
     return normalized;
   }
 
-  private async findSharedFreight(code: string, select: Record<string, any>): Promise<any> {
+  private async findSharedFreight(code: string, shareToken: string | undefined, select: Record<string, any>): Promise<any> {
+    // shareToken is required — code-only access is not allowed (codes are predictable FLT-####)
+    if (!shareToken) {
+      throw new BadRequestException('Token de compartir requerido');
+    }
     const freight = await this.prisma.freight.findFirst({
-      where: { code, shareToken: { not: null } },
+      where: { code, shareToken },
       select,
     });
     if (!freight) {
@@ -40,9 +45,9 @@ export class FreightPublicController {
 
   /** Get freight info by code (clean URL) */
   @Get(':code')
-  async getFreightByCode(@Param('code') code: string) {
+  async getFreightByCode(@Param('code') code: string, @Query('s') shareToken?: string) {
     const normalized = this.validateCode(code);
-    const freight = await this.findSharedFreight(normalized, {
+    const freight = await this.findSharedFreight(normalized, shareToken, {
       code: true,
       status: true,
       originName: true,
@@ -73,9 +78,9 @@ export class FreightPublicController {
 
   /** Get last truck position by code (clean URL) */
   @Get(':code/position')
-  async getLastPositionByCode(@Param('code') code: string) {
+  async getLastPositionByCode(@Param('code') code: string, @Query('s') shareToken?: string) {
     const normalized = this.validateCode(code);
-    const freight = await this.findSharedFreight(normalized, {
+    const freight = await this.findSharedFreight(normalized, shareToken, {
       id: true,
       status: true,
     });
@@ -99,9 +104,9 @@ export class FreightPublicController {
 
   /** Get full freight data for PDF report (clean URL) */
   @Get(':code/report')
-  async getReportDataByCode(@Param('code') code: string) {
+  async getReportDataByCode(@Param('code') code: string, @Query('s') shareToken?: string) {
     const normalized = this.validateCode(code);
-    const freight = await this.findSharedFreight(normalized, {
+    const freight = await this.findSharedFreight(normalized, shareToken, {
       id: true,
       code: true,
       status: true,
@@ -132,7 +137,7 @@ export class FreightPublicController {
         select: {
           transportCompanyId: true,
           transportCompany: { select: { name: true } },
-          driver: { select: { name: true, phone: true } },
+          driver: { select: { name: true } },
           driverName: true,
           truck: { select: { plate: true, model: true } },
           plate: true,
@@ -189,7 +194,6 @@ export class FreightPublicController {
       truckPlate: a?.truck?.plate || a?.plate || null,
       truckModel: a?.truck?.model || null,
       driverName: a?.driver?.name || a?.driverName || null,
-      driverPhone: a?.driver?.phone || null,
       isOwnFleet,
       notes: freight.notes,
       originLat: freight.originLat ? Number(freight.originLat) : null,

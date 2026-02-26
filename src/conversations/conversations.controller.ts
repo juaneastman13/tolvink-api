@@ -4,7 +4,7 @@
 // =====================================================================
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -43,6 +43,7 @@ const PARTICIPANTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 @Injectable()
 export class ConversationsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ConversationsService.name);
   private cacheCleanupInterval: ReturnType<typeof setInterval>;
 
   constructor(
@@ -169,17 +170,37 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
     });
     if (existing) return existing;
 
-    const conv = await this.prisma.conversation.create({
-      data: {
-        participants: {
-          create: [
-            { companyId: myPrimaryId, userId: user.sub },
-            { companyId: targetCompanyId, userId: targetUserId },
-          ],
+    // Wrap in try/catch to handle race condition (concurrent creation)
+    let conv: any;
+    try {
+      conv = await this.prisma.conversation.create({
+        data: {
+          participants: {
+            create: [
+              { companyId: myPrimaryId, userId: user.sub },
+              { companyId: targetCompanyId, userId: targetUserId },
+            ],
+          },
         },
-      },
-      include: { participants: true },
-    });
+        include: { participants: true },
+      });
+    } catch (err: any) {
+      // If a concurrent request created the same conversation, return it
+      if (err.code === 'P2002') {
+        const retry = await this.prisma.conversation.findFirst({
+          where: {
+            freightId: null,
+            AND: [
+              { participants: { some: { userId: user.sub } } },
+              { participants: { some: { userId: targetUserId } } },
+            ],
+          },
+          include: { participants: true },
+        });
+        if (retry) return retry;
+      }
+      throw err;
+    }
     this.sse.invalidateParticipantsCache(conv.id);
     return conv;
   }
@@ -230,7 +251,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
       await (this.prisma as any).conversationParticipant.createMany({
         data: toAdd.map(c => ({ conversationId: c.id, companyId: allIds[0], userId: user.sub })),
         skipDuplicates: true,
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
       for (const c of toAdd) {
         this.sse.invalidateParticipantsCache(c.id);
         c.participants.push({ id: 'auto', conversationId: c.id, companyId: allIds[0], userId: user.sub, joinedAt: new Date(), lastReadAt: null } as any);
@@ -323,7 +344,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
     });
 
     // SSE: notify other participants that this user read the conversation
-    this.sse.broadcastRead(conversationId, user.sub).catch(() => {});
+    this.sse.broadcastRead(conversationId, user.sub).catch(e => this.logger.warn(e.message));
 
     return { ok: true };
   }
@@ -386,7 +407,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
         if (isInvolved) {
           await this.prisma.conversationParticipant.create({
             data: { conversationId, companyId: allIds[0], userId: user.sub },
-          }).catch(() => {});
+          }).catch(e => this.logger.warn(e.message));
           this.sse.invalidateParticipantsCache(conversationId);
         } else {
           const assignment = await this.prisma.freightAssignment.findFirst({
@@ -399,7 +420,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
           if (assignment) {
             await this.prisma.conversationParticipant.create({
               data: { conversationId, companyId: allIds[0], userId: user.sub },
-            }).catch(() => {});
+            }).catch(e => this.logger.warn(e.message));
             this.sse.invalidateParticipantsCache(conversationId);
           } else {
             throw new ForbiddenException('No participás en esta conversación');
@@ -415,7 +436,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.conversationParticipant.update({
         where: { id: participant.id },
         data: { lastReadAt: new Date() },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
     }
 
     const take = Math.min(pagination?.take || 50, 100);
@@ -475,7 +496,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
         if (isInvolved || isTransporter) {
           await this.prisma.conversationParticipant.create({
             data: { conversationId, companyId: allIds[0], userId: user.sub },
-          }).catch(() => {});
+          }).catch(e => this.logger.warn(e.message));
           this.sse.invalidateParticipantsCache(conversationId);
         } else {
           throw new ForbiddenException('No participás en esta conversación');
@@ -496,11 +517,11 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
       this.prisma.conversationParticipant.update({
         where: { id: participant.id },
         data: { lastReadAt: new Date() },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
     }
 
     // SSE: notify conversation participants about new message
-    this.sse.broadcastMessage(conversationId, user.sub).catch(() => {});
+    this.sse.broadcastMessage(conversationId, user.sub).catch(e => this.logger.warn(e.message));
 
     return message;
   }

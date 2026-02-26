@@ -27,12 +27,22 @@ async function bootstrap() {
   }
 
   // Validate critical env vars at startup
-  const required = ['DATABASE_URL', 'JWT_SECRET'];
+  const required = ['DATABASE_URL', 'JWT_SECRET', 'WHATSAPP_APP_SECRET'];
   for (const key of required) {
     if (!process.env[key]) {
       throw new Error(`Missing required environment variable: ${key}`);
     }
   }
+
+  // Process-level error handlers — log and exit so Railway restarts
+  process.on('uncaughtException', (err) => {
+    logger.error(`Uncaught exception: ${err.message}`, err.stack);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason: any) => {
+    logger.error(`Unhandled rejection: ${reason?.message || reason}`, reason?.stack);
+    process.exit(1);
+  });
 
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],

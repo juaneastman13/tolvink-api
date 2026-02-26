@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -61,5 +61,13 @@ export class AuthController {
   @ApiOperation({ summary: 'Listar mis empresas' })
   myCompanies(@CurrentUser() user: any) {
     return this.authService.getMyCompanies(user.sub);
+  }
+
+  @Patch('me/onboarding-complete')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Marcar onboarding como completado' })
+  completeOnboarding(@CurrentUser() user: any) {
+    return this.authService.completeOnboarding(user.sub);
   }
 }

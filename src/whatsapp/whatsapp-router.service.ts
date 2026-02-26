@@ -44,8 +44,13 @@ export class WhatsAppRouterService {
   /** In-memory TTL cache for freight counts per company (60s) */
   private freightCountsCache = new Map<string, { data: Record<string, number>; ts: number }>();
   private readonly COUNTS_TTL = 60_000;
-  /** Per-phone processing lock — ensures sequential message handling per user */
+  /**
+   * Per-phone processing lock — ensures sequential message handling per user.
+   * SCALING NOTE: In-memory only. Does NOT synchronize across multiple instances.
+   * If horizontal scaling is needed, replace with Redis-based distributed lock.
+   */
   private phoneLocks = new Map<string, Promise<void>>();
+  private readonly MAX_PHONE_LOCKS = 1000;
   /** Cooldown for "not registered" replies — avoids spamming unregistered phones */
   private unregisteredCooldown = new Map<string, number>();
 
@@ -69,6 +74,11 @@ export class WhatsAppRouterService {
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     // Serialize per phone — prevents concurrent AI/session races for same user
+    // Safety: evict oldest entries if map grows too large (leak protection)
+    if (this.phoneLocks.size > this.MAX_PHONE_LOCKS) {
+      const first = this.phoneLocks.keys().next().value;
+      if (first) this.phoneLocks.delete(first);
+    }
     const prev = this.phoneLocks.get(phone) || Promise.resolve();
     let unlock: () => void;
     const lock = new Promise<void>(r => unlock = r);
@@ -87,7 +97,7 @@ export class WhatsAppRouterService {
       this.logger.log(`handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
 
       // Mark as read
-      this.wa.markRead(waMessageId).catch(() => {});
+      this.wa.markRead(waMessageId).catch(e => this.logger.warn(e.message));
 
       // Find user by phone
       const user = await this.findUserByPhone(phone);
@@ -385,6 +395,14 @@ export class WhatsAppRouterService {
   private async handleLocation(phone: string, user: any, payload: any, cachedSession?: any) {
     const { latitude, longitude, name, address } = payload;
 
+    // Validate coordinate bounds before processing
+    if (typeof latitude !== 'number' || typeof longitude !== 'number' ||
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 ||
+        !isFinite(latitude) || !isFinite(longitude)) {
+      this.logger.warn(`Invalid coordinates from ${phone}: lat=${latitude}, lng=${longitude}`);
+      return;
+    }
+
     // Reuse cached session if it's a valid AI session (no flowType, not expired)
     let session = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
       ? cachedSession
@@ -633,7 +651,7 @@ export class WhatsAppRouterService {
       const freight = await this.prisma.freight.findUnique({
         where: { id: entityId },
         select: { originCompanyId: true, destCompanyId: true, assignments: { select: { transportCompanyId: true, driverId: true } } },
-      }).catch(() => null);
+      }).catch(e => { this.logger.warn(e.message); return null; });
       if (!freight) {
         await this.wa.sendText(phone, 'Flete no encontrado.');
         return;
@@ -1350,7 +1368,7 @@ export class WhatsAppRouterService {
     text += `👤 Transporte: ${transportLine}\n`;
     if (loadDate) text += `📅 Fecha: ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `📝 Obs: ${freight.notes}\n`;
-    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/${freight.code}/ubicacion`;
+    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/${freight.code}/ubicacion?s=${freight.shareToken}`;
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);

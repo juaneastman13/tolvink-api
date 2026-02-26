@@ -251,15 +251,12 @@ export class FreightsService implements OnModuleInit {
 
   // ======================== LIST (multi-tenant) =======================
 
-  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string }) {
-    const page = query.page || 1;
+  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string }) {
     const limit = Math.min(query.limit || 20, 100);
-    const skip = (page - 1) * limit;
 
     const where: any = {};
 
     if (user.role !== 'platform_admin') {
-      // If company filter provided, verify user actually belongs to it
       const allIds = await this.resolveAllCompanyIds(user);
       const filterIds = query.company && allIds.includes(query.company)
         ? [query.company]
@@ -276,7 +273,6 @@ export class FreightsService implements OnModuleInit {
             },
           },
         },
-        // Chofer: can also see freights assigned directly to them
         {
           assignments: {
             some: {
@@ -292,12 +288,20 @@ export class FreightsService implements OnModuleInit {
       where.status = query.status;
     }
 
+    // Cursor-based pagination (preferred) or offset-based (legacy)
+    const paginationArgs: any = { take: limit, orderBy: { createdAt: 'desc' } };
+    if (query.cursor) {
+      paginationArgs.skip = 1; // skip the cursor item itself
+      paginationArgs.cursor = { id: query.cursor };
+    } else {
+      const page = query.page || 1;
+      paginationArgs.skip = (page - 1) * limit;
+    }
+
     const [freights, total] = await Promise.all([
       this.prisma.freight.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
+        ...paginationArgs,
         include: {
           items: true,
           originLot: { select: { id: true, name: true } },
@@ -321,7 +325,9 @@ export class FreightsService implements OnModuleInit {
       this.prisma.freight.count({ where }),
     ]);
 
-    return { data: freights, total, page, limit, pages: Math.ceil(total / limit) };
+    const page = query.page || 1;
+    const nextCursor = freights.length === limit ? freights[freights.length - 1]?.id : undefined;
+    return { data: freights, total, page, limit, pages: Math.ceil(total / limit), nextCursor };
   }
 
   // ======================== FIND ONE =================================
@@ -358,19 +364,10 @@ export class FreightsService implements OnModuleInit {
   // ======================== ASSIGN ===================================
 
   async assign(freightId: string, dto: AssignFreightDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { conversation: { select: { id: true } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) {
       throw new ForbiddenException('Solo la planta puede asignar transportista');
     }
-
-    this.stateMachine.validateTransition(freight.status, FreightStatus.assigned, 'plant');
 
     const transport = await this.prisma.company.findFirst({
       where: { id: dto.transportCompanyId, active: true },
@@ -381,9 +378,19 @@ export class FreightsService implements OnModuleInit {
       ? (transport.types as string[]) : [transport.type];
     if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
-    let result;
+    let result: { updated: any; freight: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
+        // Read freight INSIDE transaction to prevent TOCTOU race
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { conversation: { select: { id: true } } },
+        });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+
+        this.stateMachine.validateTransition(freight.status, FreightStatus.assigned, 'plant');
+
         await tx.freightAssignment.updateMany({
           where: { freightId, status: { in: ['active', 'accepted'] } },
           data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
@@ -410,7 +417,6 @@ export class FreightsService implements OnModuleInit {
           if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
           assignData.driverId = driverMembership.user.id;
           assignData.driverName = driverMembership.user.name;
-          // Auto queue position: next in driver's queue
           const maxPos: any = await (tx.freightAssignment as any).aggregate({
             _max: { queuePosition: true },
             where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
@@ -452,7 +458,7 @@ export class FreightsService implements OnModuleInit {
           },
         });
 
-        return updated;
+        return { updated, freight };
       }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
@@ -464,7 +470,7 @@ export class FreightsService implements OnModuleInit {
     this.notifications.notifyCompany(
       dto.transportCompanyId, NotificationType.freight_assigned,
       'Te asignaron un flete',
-      `${freight.code} → ${freight.destName || 'destino'}`,
+      `${result.freight.code} → ${result.freight.destName || 'destino'}`,
       freightId, user.sub,
     ).catch(e => this.logger.error('Async side-effect failed', e.message));
 
@@ -473,15 +479,15 @@ export class FreightsService implements OnModuleInit {
       this.notifications.notify(
         dto.driverId, NotificationType.freight_assigned,
         'Te asignaron un flete',
-        `${freight.code} → ${freight.destName || 'destino'}`,
+        `${result.freight.code} → ${result.freight.destName || 'destino'}`,
         freightId,
       ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-    return result;
+    return result.updated;
   }
 
   // ======================== RESPOND (accept/reject) ===================
@@ -559,55 +565,54 @@ export class FreightsService implements OnModuleInit {
       return result.updated;
     }
 
-    // For accept path, also read inside transaction below
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: 'active' } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
-    const assignment = freight.assignments[0];
-    if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
-      throw new ForbiddenException('Tu empresa no esta asignada a este flete');
-    }
-
-    this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
-
-    const assignmentUpdate: any = { status: AssignmentStatus.accepted };
-
-    if (dto.truckId) {
-      if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
-      const truck = await this.prisma.truck.findFirst({
-        where: { id: dto.truckId, companyId: user.companyId, active: true },
-      });
-      if (!truck) throw new BadRequestException('Camion no encontrado o no pertenece a tu empresa');
-
-      assignmentUpdate.truckId = truck.id;
-      assignmentUpdate.plate = truck.plate;
-      if (truck.assignedUserId && !dto.driverId) {
-        assignmentUpdate.driverId = truck.assignedUserId;
-      }
-    }
-
-    if (dto.driverId) {
-      if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
-      const driverMembership = await this.prisma.userCompany.findFirst({
-        where: { userId: dto.driverId, companyId: user.companyId, role: 'chofer', active: true },
-        include: { user: { select: { id: true, name: true } } },
-      });
-      if (!driverMembership) throw new BadRequestException('Chofer no encontrado en tu empresa');
-      assignmentUpdate.driverId = driverMembership.user.id;
-      assignmentUpdate.driverName = driverMembership.user.name;
-      // Auto queue position: next in driver's queue
-      const maxPos: any = await (this.prisma.freightAssignment as any).aggregate({
-        _max: { queuePosition: true },
-        where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-      });
-      assignmentUpdate.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
-    }
-
+    // Accept path — read freight INSIDE transaction to prevent TOCTOU race
     const acceptResult = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: 'active' } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+
+      const assignment = freight.assignments[0];
+      if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
+        throw new ForbiddenException('Tu empresa no esta asignada a este flete');
+      }
+
+      this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
+
+      const assignmentUpdate: any = { status: AssignmentStatus.accepted };
+
+      if (dto.truckId) {
+        if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
+        const truck = await tx.truck.findFirst({
+          where: { id: dto.truckId, companyId: user.companyId, active: true },
+        });
+        if (!truck) throw new BadRequestException('Camion no encontrado o no pertenece a tu empresa');
+
+        assignmentUpdate.truckId = truck.id;
+        assignmentUpdate.plate = truck.plate;
+        if (truck.assignedUserId && !dto.driverId) {
+          assignmentUpdate.driverId = truck.assignedUserId;
+        }
+      }
+
+      if (dto.driverId) {
+        if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
+        const driverMembership = await tx.userCompany.findFirst({
+          where: { userId: dto.driverId, companyId: user.companyId, role: 'chofer', active: true },
+          include: { user: { select: { id: true, name: true } } },
+        });
+        if (!driverMembership) throw new BadRequestException('Chofer no encontrado en tu empresa');
+        assignmentUpdate.driverId = driverMembership.user.id;
+        assignmentUpdate.driverName = driverMembership.user.name;
+        const maxPos: any = await (tx.freightAssignment as any).aggregate({
+          _max: { queuePosition: true },
+          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+        });
+        assignmentUpdate.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+      }
+
       await tx.freightAssignment.update({
         where: { id: assignment.id },
         data: assignmentUpdate,
@@ -623,23 +628,23 @@ export class FreightsService implements OnModuleInit {
           entityType: 'freight',
           entityId: freightId,
           action: 'accepted',
-          fromValue: 'assigned',
+          fromValue: freight.status,
           toValue: 'accepted',
           userId: user.sub,
           metadata: dto.truckId ? { truckId: dto.truckId } : undefined,
         },
       });
 
-      return updated;
+      return { updated, freight };
     });
 
     // Notify origin + dest companies about acceptance
-    const notifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
+    const notifyIds = [acceptResult.freight.originCompanyId, acceptResult.freight.destCompanyId].filter(Boolean) as string[];
     for (const cid of notifyIds) {
       this.notifications.notifyCompany(
         cid, NotificationType.freight_accepted,
         'Flete aceptado',
-        `${freight.code} fue aceptado por el transportista`,
+        `${acceptResult.freight.code} fue aceptado por el transportista`,
         freightId, user.sub,
       ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
@@ -649,15 +654,15 @@ export class FreightsService implements OnModuleInit {
       this.notifications.notify(
         dto.driverId, NotificationType.freight_assigned,
         'Te asignaron un flete',
-        `${freight.code} → ${freight.destName || 'destino'}`,
+        `${acceptResult.freight.code} → ${acceptResult.freight.destName || 'destino'}`,
         freightId,
       ).catch(e => this.logger.error('Async side-effect failed', e.message));
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: acceptResult.freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-    return acceptResult;
+    return acceptResult.updated;
   }
 
   // ======================== START =====================================
@@ -723,93 +728,80 @@ export class FreightsService implements OnModuleInit {
   async confirmLoaded(freightId: string, user: any, loadedTons?: number) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
-
     let ct = await this.resolveCompanyType(user);
-    const isOwnFleet = freight.assignments?.some(
-      (a) => a.transportCompanyId === freight.originCompanyId,
-    );
-    if (ct === 'producer' && isOwnFleet && freight.status === FreightStatus.in_progress) {
-      ct = 'transporter';
-    }
 
-    if (ct === 'transporter') {
-      if (freight.status !== FreightStatus.in_progress) {
-        throw new BadRequestException(
-          `Solo se puede confirmar carga en estado "in_progress". Estado actual: "${freight.status}"`,
-        );
-      }
-      if (freight.transporterLoadedConfirmedAt) {
-        throw new BadRequestException('El transportista ya confirmo la carga');
-      }
-
-      this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
-
+    if (ct === 'transporter' || ct === 'producer') {
       const loadedResult = await this.prisma.$transaction(async (tx) => {
-        const updated = await tx.freight.update({
+        // Read freight INSIDE transaction to prevent TOCTOU race
+        const freight = await tx.freight.findUnique({
           where: { id: freightId },
-          data: {
-            status: FreightStatus.loaded,
-            loadedAt: new Date(),
-            transporterLoadedConfirmedAt: new Date(),
-            ...(isOwnFleet ? { producerLoadedConfirmedAt: new Date() } : {}),
-          },
+          include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
         });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
-        if (loadedTons != null) {
-          await tx.freightAssignment.updateMany({
-            where: { freightId, status: { in: ['active', 'accepted'] } },
-            data: { loadedTons },
-          });
+        const isOwnFleet = freight.assignments?.some(
+          (a) => a.transportCompanyId === freight.originCompanyId,
+        );
+        let effectiveCt = ct;
+        if (ct === 'producer' && isOwnFleet && freight.status === FreightStatus.in_progress) {
+          effectiveCt = 'transporter';
         }
 
-        await tx.auditLog.create({
-          data: {
-            entityType: 'freight',
-            entityId: freightId,
-            action: 'confirm_loaded',
-            fromValue: 'in_progress',
-            toValue: 'loaded',
-            userId: user.sub,
-            metadata: { confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
-          },
-        });
+        if (effectiveCt === 'transporter') {
+          if (freight.status !== FreightStatus.in_progress) {
+            throw new BadRequestException(
+              `Solo se puede confirmar carga en estado "in_progress". Estado actual: "${freight.status}"`,
+            );
+          }
+          if (freight.transporterLoadedConfirmedAt) {
+            throw new BadRequestException('El transportista ya confirmo la carga');
+          }
 
-        return updated;
-      });
+          this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
 
-      // Notify origin company (producer) to confirm load
-      if (freight.originCompanyId) {
-        this.notifications.notifyCompany(
-          freight.originCompanyId, NotificationType.freight_loaded,
-          'Carga confirmada',
-          `${freight.code}: el transportista confirmó la carga`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
-      }
+          const updated = await tx.freight.update({
+            where: { id: freightId },
+            data: {
+              status: FreightStatus.loaded,
+              loadedAt: new Date(),
+              transporterLoadedConfirmedAt: new Date(),
+              ...(isOwnFleet ? { producerLoadedConfirmedAt: new Date() } : {}),
+            },
+          });
 
-      // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+          if (loadedTons != null) {
+            await tx.freightAssignment.updateMany({
+              where: { freightId, status: { in: ['active', 'accepted'] } },
+              data: { loadedTons },
+            });
+          }
 
-      return loadedResult;
-    }
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight',
+              entityId: freightId,
+              action: 'confirm_loaded',
+              fromValue: 'in_progress',
+              toValue: 'loaded',
+              userId: user.sub,
+              metadata: { confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
+            },
+          });
 
-    if (ct === 'producer') {
-      if (freight.status !== FreightStatus.loaded) {
-        throw new BadRequestException(
-          `El productor solo puede confirmar carga en estado "loaded". Estado actual: "${freight.status}"`,
-        );
-      }
-      if (freight.producerLoadedConfirmedAt) {
-        throw new BadRequestException('El productor ya confirmo la carga');
-      }
+          return { updated, freight, path: 'transporter' as const };
+        }
 
-      const prodLoadResult = await this.prisma.$transaction(async (tx) => {
+        // Producer path
+        if (freight.status !== FreightStatus.loaded) {
+          throw new BadRequestException(
+            `El productor solo puede confirmar carga en estado "loaded". Estado actual: "${freight.status}"`,
+          );
+        }
+        if (freight.producerLoadedConfirmedAt) {
+          throw new BadRequestException('El productor ya confirmo la carga');
+        }
+
         const updated = await tx.freight.update({
           where: { id: freightId },
           data: { producerLoadedConfirmedAt: new Date() },
@@ -827,23 +819,32 @@ export class FreightsService implements OnModuleInit {
           },
         });
 
-        return updated;
+        return { updated, freight, path: 'producer' as const };
       });
 
-      // Notify dest company
-      if (freight.destCompanyId) {
-        this.notifications.notifyCompany(
-          freight.destCompanyId, NotificationType.freight_confirmed,
-          'Carga confirmada',
-          `${freight.code}: el productor confirmó la carga`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      if (loadedResult.path === 'transporter') {
+        if (loadedResult.freight.originCompanyId) {
+          this.notifications.notifyCompany(
+            loadedResult.freight.originCompanyId, NotificationType.freight_loaded,
+            'Carga confirmada',
+            `${loadedResult.freight.code}: el transportista confirmó la carga`,
+            freightId, user.sub,
+          ).catch(e => this.logger.error('Async side-effect failed', e.message));
+        }
+      } else {
+        if (loadedResult.freight.destCompanyId) {
+          this.notifications.notifyCompany(
+            loadedResult.freight.destCompanyId, NotificationType.freight_confirmed,
+            'Carga confirmada',
+            `${loadedResult.freight.code}: el productor confirmó la carga`,
+            freightId, user.sub,
+          ).catch(e => this.logger.error('Async side-effect failed', e.message));
+        }
       }
 
-      // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: loadedResult.freight.code, status: loadedResult.updated.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
-      return prodLoadResult;
+      return loadedResult.updated;
     }
 
     throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
@@ -977,19 +978,21 @@ export class FreightsService implements OnModuleInit {
   // ======================== FINISH ====================================
 
   async finish(freightId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-
-    if (freight.status === FreightStatus.in_progress) {
-      throw new BadRequestException(
-        'No se puede finalizar directamente. Primero debe confirmarse la carga (estado loaded).',
-      );
-    }
-
     const finishCt = await this.resolveCompanyType(user);
-    this.stateMachine.validateTransition(freight.status, FreightStatus.finished, finishCt);
 
-    const finishResult = await this.prisma.$transaction(async (tx) => {
+    const { updated: finishResult, freight } = await this.prisma.$transaction(async (tx) => {
+      // Read freight INSIDE transaction to prevent TOCTOU race
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      if (freight.status === FreightStatus.in_progress) {
+        throw new BadRequestException(
+          'No se puede finalizar directamente. Primero debe confirmarse la carga (estado loaded).',
+        );
+      }
+
+      this.stateMachine.validateTransition(freight.status, FreightStatus.finished, finishCt);
+
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.finished, finishedAt: new Date() },
@@ -1006,7 +1009,7 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return updated;
+      return { updated, freight };
     });
 
     // Notify all parties
@@ -1107,10 +1110,15 @@ export class FreightsService implements OnModuleInit {
       throw new ForbiddenException('Solo la planta puede autorizar');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const { updated, freight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+        include: {
+          assignments: {
+            where: { status: { in: ['active', 'accepted'] } },
+            select: { transportCompanyId: true },
+          },
+        },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (freight.status !== FreightStatus.assigned) {
@@ -1133,8 +1141,31 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return updated;
+      return { updated, freight };
     });
+
+    // Notify stakeholders (transport companies) about the authorization
+    for (const a of freight.assignments) {
+      this.notifications.notifyCompany(
+        a.transportCompanyId,
+        NotificationType.freight_accepted,
+        `Flete ${freight.code} autorizado`,
+        `El flete ha sido autorizado por la planta`,
+        freightId,
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+    }
+    // Also notify origin company (producer)
+    this.notifications.notifyCompany(
+      freight.originCompanyId,
+      NotificationType.freight_accepted,
+      `Flete ${freight.code} autorizado`,
+      `El flete ha sido autorizado por la planta`,
+      freightId,
+    ).catch(e => this.logger.error('Async side-effect failed', e.message));
+
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+
+    return updated;
   }
 
   // ======================== UPDATE FREIGHT ==============================
@@ -1146,49 +1177,52 @@ export class FreightsService implements OnModuleInit {
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
 
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (freight.status !== FreightStatus.pending_assignment) {
-      throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
-    }
-    if (freight.requestedById !== user.sub) {
-      // Also allow users from the origin or dest company (multi-company aware)
-      const allIds = await this.resolveAllCompanyIds(user);
-      if (!allIds.includes(freight.originCompanyId) && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
-        throw new ForbiddenException('Solo el solicitante o su empresa pueden editar');
+    // Resolve company IDs outside tx (safe — doesn't change concurrently for same user)
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (freight.status !== FreightStatus.pending_assignment) {
+        throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
       }
-    }
+      if (freight.requestedById !== user.sub) {
+        if (!allIds.includes(freight.originCompanyId) && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
+          throw new ForbiddenException('Solo el solicitante o su empresa pueden editar');
+        }
+      }
 
-    const data: any = {};
-    if (dto.loadDate) {
-      data.loadDate = new Date(dto.loadDate);
-      data.scheduledAt = new Date(
-        `${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`,
-      );
-    }
-    if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
-    if (dto.notes !== undefined) data.notes = dto.notes;
+      const data: any = {};
+      if (dto.loadDate) {
+        data.loadDate = new Date(dto.loadDate);
+        data.scheduledAt = new Date(
+          `${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`,
+        );
+      }
+      if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
+      if (dto.notes !== undefined) data.notes = dto.notes;
 
-    return this.prisma.freight.update({
-      where: { id: freightId },
-      data,
-      include: {
-        items: true,
-        originLot: { select: { id: true, name: true } },
-        destPlant: { select: { id: true, name: true } },
-        originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-        destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-        requestedBy: { select: { id: true, name: true } },
-        conversation: { select: { id: true } },
-        assignments: {
-          where: { status: { in: ['active', 'accepted'] } },
-          include: {
-            transportCompany: { select: { id: true, name: true } },
-            driver: { select: { id: true, name: true, phone: true } },
-            truck: { select: { id: true, plate: true, model: true } },
+      return tx.freight.update({
+        where: { id: freightId },
+        data,
+        include: {
+          items: true,
+          originLot: { select: { id: true, name: true } },
+          destPlant: { select: { id: true, name: true } },
+          originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+          destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+          requestedBy: { select: { id: true, name: true } },
+          conversation: { select: { id: true } },
+          assignments: {
+            where: { status: { in: ['active', 'accepted'] } },
+            include: {
+              transportCompany: { select: { id: true, name: true } },
+              driver: { select: { id: true, name: true, phone: true } },
+              truck: { select: { id: true, plate: true, model: true } },
+            },
           },
         },
-      },
+      });
     });
   }
 
@@ -1317,7 +1351,7 @@ export class FreightsService implements OnModuleInit {
   // ======================== MULTI-TRUCK (v6.0) ==========================
 
   private async deriveFreightStatus(tx: any, freightId: string): Promise<FreightStatus> {
-    const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true } });
+    const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true, status: true } });
     const truckCount = freight?.truckCount || 1;
 
     const assignments = await (tx.freightAssignment as any).findMany({
@@ -1340,26 +1374,36 @@ export class FreightsService implements OnModuleInit {
       4: FreightStatus.finished,
     };
     const minRank = Math.min(...assignments.map((a: any) => statusOrder[a.tripStatus] ?? 0));
-    return statusFromRank[minRank] ?? FreightStatus.assigned;
+    const derived = statusFromRank[minRank] ?? FreightStatus.assigned;
+
+    // Monotonic guard: never regress freight status below current
+    const freightStatusOrder: Record<string, number> = {
+      draft: 0, pending_assignment: 1, assigned: 2, accepted: 3,
+      in_progress: 4, loaded: 5, finished: 6, canceled: 7,
+    };
+    const currentRank = freightStatusOrder[freight.status] ?? 0;
+    const derivedRank = freightStatusOrder[derived] ?? 0;
+    return derivedRank >= currentRank ? derived : (freight.status as FreightStatus);
   }
 
   async assignMulti(freightId: string, dto: AssignMultiTruckDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      include: { conversation: { select: { id: true } } },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede asignar transportistas');
 
-    if (!['pending_assignment', 'assigned'].includes(freight.status)) {
-      throw new BadRequestException('Solo se puede asignar en estado pending_assignment o assigned');
-    }
-
-    let result;
+    let result: { updated: any; freight: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
+        // Read freight INSIDE transaction to prevent TOCTOU race
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { conversation: { select: { id: true } } },
+        });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+
+        if (!['pending_assignment', 'assigned'].includes(freight.status)) {
+          throw new BadRequestException('Solo se puede asignar en estado pending_assignment o assigned');
+        }
+
         const existingCount = await tx.freightAssignment.count({
           where: { freightId, status: { in: ['active', 'accepted'] } },
         });
@@ -1446,7 +1490,7 @@ export class FreightsService implements OnModuleInit {
           },
         });
 
-        return updated;
+        return { updated, freight };
       }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
@@ -1461,13 +1505,13 @@ export class FreightsService implements OnModuleInit {
         this.notifications.notifyCompany(
           truck.transportCompanyId, NotificationType.freight_assigned,
           'Te asignaron camiones',
-          `${freight.code} → ${(freight as any).destName || 'destino'}`,
+          `${result.freight.code} → ${result.freight.destName || 'destino'}`,
           freightId, user.sub,
         ).catch(e => this.logger.error('Async side-effect failed', e.message));
       }
     }
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
-    return result;
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    return result.updated;
   }
 
   async assignTruck(freightId: string, dto: TruckAssignmentDto, user: any) {
@@ -1520,87 +1564,73 @@ export class FreightsService implements OnModuleInit {
   }
 
   async updateAssignment(freightId: string, assignmentId: string, dto: any, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede editar asignaciones');
 
-    const assignment: any = await (this.prisma.freightAssignment as any).findFirst({
-      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
-    });
-    if (!assignment) throw new NotFoundException('Asignación no encontrada');
-
-    // Only allow editing trips that haven't started yet
-    if (assignment.tripStatus && !['pending', 'accepted'].includes(assignment.tripStatus)) {
-      throw new BadRequestException('Solo se pueden editar viajes que no hayan iniciado');
-    }
-
-    const updateData: any = {};
-
-    if (dto.transportCompanyId && dto.transportCompanyId !== assignment.transportCompanyId) {
-      const company = await this.prisma.company.findUnique({ where: { id: dto.transportCompanyId } });
-      if (!company) throw new NotFoundException('Empresa transportista no encontrada');
-      updateData.transportCompanyId = dto.transportCompanyId;
-      // Reset truck/driver when changing company
-      updateData.truckId = null;
-      updateData.plate = null;
-      updateData.driverId = null;
-      updateData.driverName = null;
-    }
-
-    if (dto.truckId) {
-      const companyId = dto.transportCompanyId || assignment.transportCompanyId;
-      const truck = await this.prisma.truck.findFirst({
-        where: { id: dto.truckId, companyId, active: true },
-        include: { assignedUser: { select: { id: true, name: true } } },
-      });
-      if (!truck) throw new NotFoundException('Camión no encontrado');
-      updateData.truckId = truck.id;
-      updateData.plate = truck.plate;
-      // If truck has assigned driver, use it as default
-      if (!dto.driverId && (truck as any).assignedUser) {
-        updateData.driverId = (truck as any).assignedUser.id;
-        updateData.driverName = (truck as any).assignedUser.name;
-      }
-    } else if (dto.truckId === null) {
-      updateData.truckId = null;
-      updateData.plate = null;
-    }
-
-    if (dto.driverId) {
-      const companyId = dto.transportCompanyId || assignment.transportCompanyId;
-      const dm = await (this.prisma as any).userCompany.findFirst({
-        where: { userId: dto.driverId, companyId, role: 'chofer', active: true },
-        include: { user: { select: { id: true, name: true } } },
-      });
-      if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa transportista');
-      updateData.driverId = dm.user.id;
-      updateData.driverName = dm.user.name;
-    } else if (dto.driverId === null) {
-      updateData.driverId = null;
-      updateData.driverName = null;
-    }
-
-    if (dto.tons !== undefined) {
-      updateData.tons = dto.tons;
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      throw new BadRequestException('No hay cambios para aplicar');
-    }
-
     const { updated, freight: freshFreight } = await this.prisma.$transaction(async (tx) => {
-      // Re-read inside tx to prevent TOCTOU (tripStatus could have changed)
-      const freshAssignment: any = await (tx.freightAssignment as any).findFirst({
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      const assignment: any = await (tx.freightAssignment as any).findFirst({
         where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
       });
-      if (!freshAssignment) throw new NotFoundException('Asignación no encontrada o ya modificada');
-      if (freshAssignment.tripStatus && !['pending', 'accepted'].includes(freshAssignment.tripStatus)) {
+      if (!assignment) throw new NotFoundException('Asignación no encontrada');
+
+      if (assignment.tripStatus && !['pending', 'accepted'].includes(assignment.tripStatus)) {
         throw new BadRequestException('Solo se pueden editar viajes que no hayan iniciado');
       }
 
-      const freshFreight = await tx.freight.findUnique({ where: { id: freightId } });
+      const updateData: any = {};
+
+      if (dto.transportCompanyId && dto.transportCompanyId !== assignment.transportCompanyId) {
+        const company = await tx.company.findUnique({ where: { id: dto.transportCompanyId } });
+        if (!company) throw new NotFoundException('Empresa transportista no encontrada');
+        updateData.transportCompanyId = dto.transportCompanyId;
+        updateData.truckId = null;
+        updateData.plate = null;
+        updateData.driverId = null;
+        updateData.driverName = null;
+      }
+
+      if (dto.truckId) {
+        const companyId = dto.transportCompanyId || assignment.transportCompanyId;
+        const truck = await tx.truck.findFirst({
+          where: { id: dto.truckId, companyId, active: true },
+          include: { assignedUser: { select: { id: true, name: true } } },
+        });
+        if (!truck) throw new NotFoundException('Camión no encontrado');
+        updateData.truckId = truck.id;
+        updateData.plate = truck.plate;
+        if (!dto.driverId && (truck as any).assignedUser) {
+          updateData.driverId = (truck as any).assignedUser.id;
+          updateData.driverName = (truck as any).assignedUser.name;
+        }
+      } else if (dto.truckId === null) {
+        updateData.truckId = null;
+        updateData.plate = null;
+      }
+
+      if (dto.driverId) {
+        const companyId = dto.transportCompanyId || assignment.transportCompanyId;
+        const dm = await (tx as any).userCompany.findFirst({
+          where: { userId: dto.driverId, companyId, role: 'chofer', active: true },
+          include: { user: { select: { id: true, name: true } } },
+        });
+        if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa transportista');
+        updateData.driverId = dm.user.id;
+        updateData.driverName = dm.user.name;
+      } else if (dto.driverId === null) {
+        updateData.driverId = null;
+        updateData.driverName = null;
+      }
+
+      if (dto.tons !== undefined) {
+        updateData.tons = dto.tons;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        throw new BadRequestException('No hay cambios para aplicar');
+      }
 
       const result = await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
@@ -1618,7 +1648,7 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return { updated: result, freight: freshFreight || freight };
+      return { updated: result, freight };
     });
 
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freshFreight.code, status: freshFreight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -1626,10 +1656,6 @@ export class FreightsService implements OnModuleInit {
   }
 
   async respondTrip(freightId: string, assignmentId: string, dto: RespondTripDto, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
-
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
         where: { id: assignmentId, freightId, driverId: user.sub },
@@ -1641,16 +1667,20 @@ export class FreightsService implements OnModuleInit {
       if (!isTransporter && !isPlant) throw new ForbiddenException('Solo el transportista o la planta pueden responder');
     }
 
-    // Find assignment: 'active' (external transport) or 'accepted' (own-fleet pending authorization)
-    const assignment: any = await (this.prisma.freightAssignment as any).findFirst({
-      where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
-    });
-    if (!assignment) throw new NotFoundException('Asignación no encontrada o no activa');
-
     if (dto.action === 'rejected') {
       if (!dto.reason?.trim()) throw new BadRequestException('Motivo obligatorio para rechazar');
 
-      const result = await this.prisma.$transaction(async (tx) => {
+      const { result, freightCode } = await this.prisma.$transaction(async (tx) => {
+        // Read freight + assignment INSIDE transaction to prevent TOCTOU race
+        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        if (!freight) throw new NotFoundException('Flete no encontrado');
+        if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
+
+        const assignment: any = await (tx.freightAssignment as any).findFirst({
+          where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+        });
+        if (!assignment) throw new NotFoundException('Asignación no encontrada o no activa');
+
         await (tx.freightAssignment as any).update({
           where: { id: assignmentId },
           data: { status: AssignmentStatus.rejected, reason: dto.reason, tripStatus: 'canceled' },
@@ -1675,44 +1705,53 @@ export class FreightsService implements OnModuleInit {
           },
         });
 
-        return updated;
+        return { result: updated, freightCode: freight.code };
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freightCode, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
-    // Accept
-    this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'accepted' as any);
+    // Accept — all reads inside transaction
+    const { result, freightCode } = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
 
-    const acceptData: any = { status: AssignmentStatus.accepted, tripStatus: 'accepted' };
-
-    if (dto.truckId) {
-      const truck = await this.prisma.truck.findFirst({
-        where: { id: dto.truckId, companyId: assignment.transportCompanyId, active: true },
+      const assignment: any = await (tx.freightAssignment as any).findFirst({
+        where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
       });
-      if (!truck) throw new BadRequestException('Camión no encontrado');
-      acceptData.truckId = truck.id;
-      acceptData.plate = truck.plate;
-      if (truck.assignedUserId && !dto.driverId) acceptData.driverId = truck.assignedUserId;
-    }
+      if (!assignment) throw new NotFoundException('Asignación no encontrada o no activa');
 
-    if (dto.driverId) {
-      const dm = await this.prisma.userCompany.findFirst({
-        where: { userId: dto.driverId, companyId: assignment.transportCompanyId, role: 'chofer', active: true },
-        include: { user: { select: { id: true, name: true } } },
-      });
-      if (!dm) throw new BadRequestException('Chofer no encontrado');
-      acceptData.driverId = dm.user.id;
-      acceptData.driverName = dm.user.name;
-      const maxPos: any = await (this.prisma.freightAssignment as any).aggregate({
-        _max: { queuePosition: true },
-        where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-      });
-      acceptData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
-    }
+      this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'accepted' as any);
 
-    const result = await this.prisma.$transaction(async (tx) => {
+      const acceptData: any = { status: AssignmentStatus.accepted, tripStatus: 'accepted' };
+
+      if (dto.truckId) {
+        const truck = await tx.truck.findFirst({
+          where: { id: dto.truckId, companyId: assignment.transportCompanyId, active: true },
+        });
+        if (!truck) throw new BadRequestException('Camión no encontrado');
+        acceptData.truckId = truck.id;
+        acceptData.plate = truck.plate;
+        if (truck.assignedUserId && !dto.driverId) acceptData.driverId = truck.assignedUserId;
+      }
+
+      if (dto.driverId) {
+        const dm = await tx.userCompany.findFirst({
+          where: { userId: dto.driverId, companyId: assignment.transportCompanyId, role: 'chofer', active: true },
+          include: { user: { select: { id: true, name: true } } },
+        });
+        if (!dm) throw new BadRequestException('Chofer no encontrado');
+        acceptData.driverId = dm.user.id;
+        acceptData.driverName = dm.user.name;
+        const maxPos: any = await (tx.freightAssignment as any).aggregate({
+          _max: { queuePosition: true },
+          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
+        });
+        acceptData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+      }
+
       await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: acceptData });
       const newStatus = await this.deriveFreightStatus(tx, freightId);
       const updated = await tx.freight.update({
@@ -1732,10 +1771,10 @@ export class FreightsService implements OnModuleInit {
         },
       });
 
-      return updated;
+      return { result: updated, freightCode: freight.code };
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freightCode, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -1995,6 +2034,13 @@ export class FreightsService implements OnModuleInit {
     body: { lat: number; lng: number; speed?: number; heading?: number },
     user: any,
   ) {
+    // Validate coordinate bounds
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
+        body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180 ||
+        !isFinite(body.lat) || !isFinite(body.lng)) {
+      throw new BadRequestException('Coordenadas invalidas (lat: -90..90, lng: -180..180)');
+    }
+
     const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (freight.status !== FreightStatus.in_progress) {
@@ -2039,57 +2085,61 @@ export class FreightsService implements OnModuleInit {
     body: { name: string; url: string; type?: string; step?: string },
     user: any,
   ) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      select: {
-        id: true, originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
-      },
-    });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
+    // Resolve company IDs outside tx (doesn't change concurrently)
+    const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
-    // Access control: user must belong to one of the freight's companies or be the assigned driver
-    if (user.role !== 'platform_admin') {
-      const allIds = await this.resolveAllCompanyIds(user);
-      const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
-        ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
-      const isDriver = freight.assignments.some(a => a.driverId === user.sub);
-      const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
-      if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        select: {
+          id: true, originCompanyId: true, destCompanyId: true,
+          assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
+        },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    return this.prisma.freightDocument.create({
-      data: {
-        freightId,
-        name: body.name || 'foto',
-        url: body.url,
-        type: body.type || 'photo',
-        step: (body.step as any) || null,
-        uploadedById: user.sub,
-      },
+      if (user.role !== 'platform_admin') {
+        const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
+          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+        const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
+        if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
+      }
+
+      return tx.freightDocument.create({
+        data: {
+          freightId,
+          name: body.name || 'foto',
+          url: body.url,
+          type: body.type || 'photo',
+          step: (body.step as any) || null,
+          uploadedById: user.sub,
+        },
+      });
     });
   }
 
   // ======================== DELETE DOCUMENT ==============================
 
   async deleteDocument(freightId: string, docId: string, user: any) {
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (freight.status === 'finished') {
-      throw new ForbiddenException('No se pueden eliminar archivos de un flete finalizado');
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (freight.status === 'finished') {
+        throw new ForbiddenException('No se pueden eliminar archivos de un flete finalizado');
+      }
 
-    const doc = await this.prisma.freightDocument.findFirst({
-      where: { id: docId, freightId },
+      const doc = await tx.freightDocument.findFirst({
+        where: { id: docId, freightId },
+      });
+      if (!doc) throw new NotFoundException('Documento no encontrado');
+
+      if (doc.uploadedById !== user.sub && user.role !== 'platform_admin') {
+        throw new ForbiddenException('Solo quien subió el documento puede eliminarlo');
+      }
+
+      await tx.freightDocument.delete({ where: { id: docId } });
+      return { ok: true };
     });
-    if (!doc) throw new NotFoundException('Documento no encontrado');
-
-    // Only uploader or platform_admin can delete
-    if (doc.uploadedById !== user.sub && user.role !== 'platform_admin') {
-      throw new ForbiddenException('Solo quien subió el documento puede eliminarlo');
-    }
-
-    await this.prisma.freightDocument.delete({ where: { id: docId } });
-    return { ok: true };
   }
 }

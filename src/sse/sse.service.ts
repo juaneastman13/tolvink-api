@@ -10,6 +10,7 @@ interface SseClient {
 }
 
 const MAX_CLIENTS_PER_USER = 3;
+const MAX_CLIENTS_GLOBAL = 500;
 const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 @Injectable()
@@ -70,6 +71,13 @@ export class SseService {
   }
 
   addClient(userId: string, companyIds: string[], res: Response) {
+    // Reject if global limit reached
+    if (this.allClients.size >= MAX_CLIENTS_GLOBAL) {
+      this.logger.warn(`SSE global limit reached (${MAX_CLIENTS_GLOBAL}), rejecting user=${userId}`);
+      res.status(503).end();
+      return;
+    }
+
     // Evict oldest if user exceeds max
     const userSet = this.byUser.get(userId);
     if (userSet && userSet.size >= MAX_CLIENTS_PER_USER) {

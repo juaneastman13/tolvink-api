@@ -262,7 +262,7 @@ export class NotificationService {
           )
           .catch(async (err: any) => {
             if (err.statusCode === 404 || err.statusCode === 410) {
-              await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+              await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(e => this.logger.warn(e.message));
               this.logger.log(`Removed expired subscription for user ${userId}`);
             } else {
               this.logger.error(`Push failed for user ${userId}: ${err.message}`);

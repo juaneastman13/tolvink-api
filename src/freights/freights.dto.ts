@@ -268,6 +268,81 @@ export class AddDocumentDto {
   step?: string;
 }
 
+export class ConfirmLoadedDto {
+  @ApiProperty({ required: false, description: 'Toneladas cargadas' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100000)
+  @Type(() => Number)
+  loadedTons?: number;
+}
+
+export class AddTrackingDto {
+  @ApiProperty({ description: 'Latitud (-90 a 90)' })
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  @Type(() => Number)
+  lat: number;
+
+  @ApiProperty({ description: 'Longitud (-180 a 180)' })
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  @Type(() => Number)
+  lng: number;
+
+  @ApiProperty({ required: false, description: 'Velocidad km/h' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(500)
+  @Type(() => Number)
+  speed?: number;
+
+  @ApiProperty({ required: false, description: 'Rumbo en grados (0-360)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(360)
+  @Type(() => Number)
+  heading?: number;
+}
+
+export class UpdateFreightDto {
+  @ApiProperty({ required: false, description: 'Fecha de carga (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsDateString()
+  loadDate?: string;
+
+  @ApiProperty({ required: false, description: 'Hora de carga (HH:MM)' })
+  @IsOptional()
+  @Matches(/^\d{2}:\d{2}$/, { message: 'loadTime debe ser HH:MM' })
+  loadTime?: string;
+
+  @ApiProperty({ required: false, description: 'Notas', maxLength: 2000 })
+  @IsOptional()
+  @MaxLength(2000)
+  notes?: string;
+}
+
+export class ReorderQueueDto {
+  @ApiProperty({ description: 'IDs de fletes ordenados' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @IsUUID('4', { each: true })
+  orderedFreightIds: string[];
+}
+
+export class CancelAssignmentDto {
+  @ApiProperty({ required: false, description: 'Motivo de cancelación', maxLength: 500 })
+  @IsOptional()
+  @MaxLength(500)
+  reason?: string;
+}
+
 export class RespondTripDto {
   @ApiProperty({ enum: ['accepted', 'rejected'] })
   @IsEnum(['accepted', 'rejected'])

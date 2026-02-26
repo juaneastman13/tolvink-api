@@ -5,11 +5,12 @@
 // =====================================================================
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, MaxLength, IsUUID, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -38,7 +39,9 @@ export class CreateTruckDto {
 
 @Injectable()
 export class TrucksService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(TrucksService.name);
+
+  constructor(private prisma: PrismaService, private wa: WhatsAppService) {}
 
   async create(dto: CreateTruckDto, user: any) {
     if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
@@ -90,7 +93,7 @@ export class TrucksService {
         });
         const hasPlantAccess = await (this.prisma as any).plantAccess?.findFirst?.({
           where: { plantCompanyId: user.companyId, producerCompanyId: companyId, active: true },
-        }).catch(() => null);
+        }).catch(e => { this.logger.warn(e.message); return null; });
         if (!hasRelation && !hasPlantAccess) {
           // Also allow if companyId is one of the user's own companies
           const userCompanies = await this.prisma.userCompany.findMany({
@@ -157,6 +160,14 @@ export class TrucksService {
         role: 'chofer',
       },
     });
+
+    // Fire-and-forget: send WhatsApp welcome to driver
+    if (driver.phone) {
+      const welcomeMsg = `Hola ${driver.name?.split(' ')[0] || ''}! Te registraron como chofer en *Tolvink*.\n\nEscribime por acá para ver tus viajes asignados, iniciar fletes y compartir tu ubicación en tiempo real.`;
+      this.wa.sendText(driver.phone, welcomeMsg).catch(err =>
+        this.logger.warn(`WhatsApp welcome failed for driver ${driver.phone}: ${err.message}`),
+      );
+    }
 
     return { id: driver.id, name: driver.name, phone: driver.phone, email: driver.email };
   }

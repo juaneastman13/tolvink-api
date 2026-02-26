@@ -1581,6 +1581,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         }
 
         case 'update_user_role': {
+          // Validate role value before writing
+          const validUcRoles = ['operario', 'gerente', 'chofer'];
+          if (!validUcRoles.includes(params.newRole)) {
+            throw new Error(`Rol inválido: ${params.newRole}. Valores válidos: ${validUcRoles.join(', ')}`);
+          }
           // Re-validate membership still exists and belongs to the expected company
           const membership = await this.prisma.userCompany.findFirst({
             where: { id: params.membershipId, companyId: params.companyId, userId: params.targetUserId, active: true },
@@ -1649,7 +1654,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: { flowState: { ...preExecState, pendingAction: pending } },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
       // H2: Sanitize — map known error patterns to user-friendly messages
       const msg = String(e.message || '');
       const SAFE_ERRORS: [RegExp, string][] = [
@@ -2032,7 +2037,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const url = `${frontendUrl}/${freight.code}/ubicacion`;
+    const url = `${frontendUrl}/${freight.code}/ubicacion?s=${token}`;
 
     return JSON.stringify({
       url,
@@ -2100,7 +2105,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const url = `${frontendUrl}/${freight.code}/informe`;
+    const url = `${frontendUrl}/${freight.code}/informe?s=${token}`;
 
     return JSON.stringify({
       url,
@@ -2168,7 +2173,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const token = createSignedToken(
       { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario' },
       secret,
-      480, // 8h
+      120, // 2h
     );
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
@@ -2210,7 +2215,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     const token = createSignedToken(
       { uid: user.id, cid: userCompanyId, fid: freight.id },
       secret,
-      480, // 8h
+      120, // 2h
     );
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
@@ -2255,7 +2260,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.vercel.app';
-    const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion`;
+    const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion?s=${shareToken}`;
 
     // 1) Send GPS sharing request to each driver with a phone number
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
@@ -2268,7 +2273,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       if (secret) {
         const token = createSignedToken(
           { uid: driver.id, cid: a.transportCompanyId, fid: freight.id, role: 'chofer', name: driver.name || 'Chofer' },
-          secret, 480,
+          secret, 120,
         );
         liveShareUrl = `${frontendUrl}/live-freight?t=${token}&mode=share`;
       }
@@ -2298,6 +2303,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
         ],
       },
       select: { phone: true, id: true, companyId: true },
+      take: 100, // Safety limit: prevent unbounded queries for very large companies
     });
 
     // Exclude drivers and the user who triggered the start (they already got confirmation)
@@ -2313,7 +2319,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       if (secret && s.companyId) {
         const viewToken = createSignedToken(
           { uid: s.id, cid: s.companyId, fid: freight.id },
-          secret, 480,
+          secret, 120,
         );
         liveViewUrl = `${frontendUrl}/live-freight?t=${viewToken}&mode=view`;
       }
@@ -2801,6 +2807,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un codigo de flete, la UN
       where: { id: user.id },
       data: { activeCompanyId: input.companyId, companyId: input.companyId },
     });
+
+    // Invalidate web sessions: refresh tokens carry old companyId
+    this.prisma.refreshToken.deleteMany({ where: { userId: user.id } })
+      .catch((err: any) => this.logger.warn(`Failed to invalidate refresh tokens: ${err.message}`));
 
     // Audit log (fire-and-forget)
     this.prisma.auditLog.create({

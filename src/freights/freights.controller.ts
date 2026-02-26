@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -94,8 +94,8 @@ export class FreightsController {
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer')
   @ApiOperation({ summary: 'Confirmar carga' })
-  confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @Body() body: any, @CurrentUser() user: any) {
-    return this.service.confirmLoaded(id, user, body?.loadedTons);
+  confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmLoadedDto, @CurrentUser() user: any) {
+    return this.service.confirmLoaded(id, user, dto.loadedTons);
   }
 
   @Post(':id/confirm-finished')
@@ -166,10 +166,10 @@ export class FreightsController {
   cancelAssignment(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('aId', ParseUUIDPipe) aId: string,
-    @Body() body: { reason?: string },
+    @Body() dto: CancelAssignmentDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.cancelAssignment(id, aId, body.reason || '', user);
+    return this.service.cancelAssignment(id, aId, dto.reason || '', user);
   }
 
   @Patch(':id/assignments/:aId')
@@ -217,10 +217,10 @@ export class FreightsController {
   confirmTripLoaded(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('aId', ParseUUIDPipe) aId: string,
-    @Body() body: any,
+    @Body() dto: ConfirmLoadedDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.confirmTripLoaded(id, aId, user, body?.loadedTons);
+    return this.service.confirmTripLoaded(id, aId, user, dto.loadedTons);
   }
 
   @Post(':id/assignments/:aId/confirm-finished')
@@ -239,16 +239,16 @@ export class FreightsController {
   @UseGuards(FreightAccessGuard)
   @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Editar flete pendiente (fecha, hora, notas)' })
-  updateFreight(@Param('id', ParseUUIDPipe) id: string, @Body() body: { loadDate?: string; loadTime?: string; notes?: string }, @CurrentUser() user: any) {
-    return this.service.updateFreight(id, body, user);
+  updateFreight(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFreightDto, @CurrentUser() user: any) {
+    return this.service.updateFreight(id, dto, user);
   }
 
   @Post(':id/tracking')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer')
   @ApiOperation({ summary: 'Enviar punto de tracking GPS' })
-  addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() body: { lat: number; lng: number; speed?: number; heading?: number }, @CurrentUser() user: any) {
-    return this.service.addTrackingPoint(id, body, user);
+  addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AddTrackingDto, @CurrentUser() user: any) {
+    return this.service.addTrackingPoint(id, dto, user);
   }
 
   @Get('drivers/:driverId/queue')
@@ -263,10 +263,10 @@ export class FreightsController {
   @ApiOperation({ summary: 'Reordenar cola de un chofer (solo planta gerente)' })
   reorderDriverQueue(
     @Param('driverId', ParseUUIDPipe) driverId: string,
-    @Body() body: { orderedFreightIds: string[] },
+    @Body() dto: ReorderQueueDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.reorderDriverQueue(driverId, body.orderedFreightIds, user);
+    return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
   }
 
   @Get(':id/tracking')

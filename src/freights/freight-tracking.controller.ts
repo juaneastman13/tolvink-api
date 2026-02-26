@@ -110,7 +110,7 @@ export class FreightTrackingController {
           select: {
             transportCompanyId: true,
             transportCompany: { select: { name: true } },
-            driver: { select: { name: true, phone: true } },
+            driver: { select: { name: true } },
             driverName: true,
             truck: { select: { plate: true, model: true } },
             plate: true,
@@ -167,7 +167,6 @@ export class FreightTrackingController {
       truckPlate: a?.truck?.plate || a?.plate || null,
       truckModel: a?.truck?.model || null,
       driverName: a?.driver?.name || a?.driverName || null,
-      driverPhone: a?.driver?.phone || null,
       isOwnFleet,
       notes: freight.notes,
       originLat: freight.originLat ? Number(freight.originLat) : null,

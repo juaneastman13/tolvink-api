@@ -70,8 +70,18 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       const tokResult = await this.prisma.refreshToken.deleteMany({
         where: { expiresAt: { lt: now } },
       });
-      if (sessResult.count > 0 || tokResult.count > 0) {
-        this.logger.log(`Cleanup: ${sessResult.count} expired sessions, ${tokResult.count} expired tokens deleted`);
+      // Delete expired LiveLocation records
+      const liveResult = await this.prisma.liveLocation.deleteMany({
+        where: { expiresAt: { lt: now } },
+      });
+      // Archive old FreightTracking records (>90 days)
+      const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const trackResult = await this.prisma.freightTracking.deleteMany({
+        where: { createdAt: { lt: cutoff } },
+      });
+      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count;
+      if (totalCleaned > 0) {
+        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking records deleted`);
       }
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);
@@ -348,54 +358,81 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const normalized = this.normalizePhone(phone);
     payload.to = normalized;
 
-    try {
-      const res = await fetch(`${META_API}/${this.phoneNumberId}/messages`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10_000),
-      });
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS = [1000, 3000, 9000];
+    let lastError: Error | null = null;
 
-      if (!res.ok) {
-        const errorBody = await res.text();
-        this.logger.error(`Meta API error ${res.status}: ${errorBody.slice(0, 300)}`);
-        throw new Error(`Meta API ${res.status}: ${errorBody}`);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const res = await fetch(`${META_API}/${this.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10_000),
+        });
+
+        if (!res.ok) {
+          const errorBody = await res.text();
+          const status = res.status;
+
+          // Don't retry client errors (4xx) except 429 (rate limit)
+          if (status >= 400 && status < 500 && status !== 429) {
+            this.logger.error(`Meta API ${status}: ${errorBody.slice(0, 300)}`);
+            break;
+          }
+
+          // Retry on 429 or 5xx
+          lastError = new Error(`Meta API ${status}: ${errorBody.slice(0, 200)}`);
+          if (attempt < MAX_RETRIES - 1) {
+            const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+            const delay = retryAfter > 0 ? retryAfter * 1000 : RETRY_DELAYS[attempt];
+            this.logger.warn(`Meta API ${status}, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          break;
+        }
+
+        const data = await res.json();
+        const waMessageId = data?.messages?.[0]?.id || null;
+
+        this.prisma.whatsAppMessageLog.create({
+          data: {
+            waMessageId,
+            phone: normalized,
+            direction: 'outbound',
+            type: payload.type || 'text',
+            content: { type: payload.type },
+            status: 'sent',
+          },
+        }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
+
+        return waMessageId;
+      } catch (e) {
+        lastError = e;
+        if (attempt < MAX_RETRIES - 1) {
+          this.logger.warn(`WhatsApp send attempt ${attempt + 1} failed: ${e.message}, retrying...`);
+          await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+        }
       }
-
-      const data = await res.json();
-      const waMessageId = data?.messages?.[0]?.id || null;
-
-      // Log outbound message (fire-and-forget)
-      this.prisma.whatsAppMessageLog.create({
-        data: {
-          waMessageId,
-          phone: normalized,
-          direction: 'outbound',
-          type: payload.type || 'text',
-          content: { type: payload.type },
-          status: 'sent',
-        },
-      }).catch(e => this.logger.error(`WA log write failed: ${e.message}`));
-
-      return waMessageId;
-    } catch (e) {
-      this.logger.error(`WhatsApp send to ${normalized} failed: ${e.message}`);
-
-      this.prisma.whatsAppMessageLog.create({
-        data: {
-          phone: normalized,
-          direction: 'outbound',
-          type: payload.type || 'text',
-          content: { type: payload.type },
-          status: 'failed',
-        },
-      }).catch(() => {});
-
-      return null;
     }
+
+    this.logger.error(`WhatsApp send to ${normalized} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
+
+    this.prisma.whatsAppMessageLog.create({
+      data: {
+        phone: normalized,
+        direction: 'outbound',
+        type: payload.type || 'text',
+        content: { type: payload.type },
+        status: 'failed',
+      },
+    }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
+
+    return null;
   }
 
   /** Normalize phone to E.164 digits (no +), Uruguay default +598 */

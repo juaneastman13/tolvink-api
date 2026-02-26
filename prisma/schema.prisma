@@ -92,8 +92,8 @@ enum DocumentStep {
 model Company {
   id        String      @id @default(uuid())
   name      String      @db.VarChar(255)
-  type      CompanyType // Legacy: use types[] for multi-type support
-  types     Json        @default("[]") @map("company_types")
+  type      CompanyType // Legacy single-type field — kept for backward compat
+  types     Json        @default("[]") @map("company_types") // TODO: migrate to typed enum array, deprecate `type`
   address   String?
   phone     String?     @db.VarChar(50)
   email     String?     @db.VarChar(255)
@@ -134,11 +134,12 @@ model User {
   companyId    String?  @map("company_id")
   phone        String?  @unique @db.VarChar(50)
   userTypes    Json     @default("[]") @map("user_types")
-  companyByType Json    @default("{}") @map("company_by_type")
-  roleByType   Json    @default("{}") @map("role_by_type")
+  companyByType Json    @default("{}") @map("company_by_type") // TODO: type as Record<CompanyType, string> — currently untyped Json
+  roleByType   Json    @default("{}") @map("role_by_type")   // TODO: type as Record<CompanyType, UserRole>
   isSuperAdmin Boolean  @default(false) @map("is_super_admin")
   active       Boolean  @default(true)
   lastLogin    DateTime? @map("last_login")
+  onboardingCompletedAt DateTime? @map("onboarding_completed_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -381,6 +382,7 @@ model Freight {
   @@index([destCompanyId])
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
+  @@index([scheduledAt])
   @@map("freights")
 }
 

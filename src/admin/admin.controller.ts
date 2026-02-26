@@ -9,7 +9,7 @@ import {
   UseGuards, ParseUUIDPipe, Delete,
 } from '@nestjs/common';
 import {
-  Injectable, BadRequestException, NotFoundException, ForbiddenException,
+  Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
@@ -19,6 +19,7 @@ import {
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -93,9 +94,9 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
   userTypes?: string[];
 
-  @ApiProperty({ required: false, enum: ['operator', 'admin', 'chofer'] })
+  @ApiProperty({ required: false, enum: ['operator', 'admin'] })
   @IsOptional()
-  @IsIn(['operator', 'admin', 'chofer'], { message: 'Rol debe ser operator, admin o chofer' })
+  @IsIn(['operator', 'admin'], { message: 'Rol debe ser operator o admin' })
   role?: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsUUID()
@@ -160,7 +161,7 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() name?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() phone?: string;
-  @ApiProperty({ required: false, enum: ['operator', 'admin', 'chofer'] }) @IsOptional() @IsIn(['operator', 'admin', 'chofer'], { message: 'Rol debe ser operator, admin o chofer' }) role?: string;
+  @ApiProperty({ required: false, enum: ['operator', 'admin'] }) @IsOptional() @IsIn(['operator', 'admin'], { message: 'Rol debe ser operator o admin' }) role?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
@@ -172,9 +173,12 @@ export class UpdateUserDto {
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     public prisma: PrismaService,
     private companyRes: CompanyResolutionService,
+    private wa: WhatsAppService,
   ) {}
 
   // --- Permission helpers ---
@@ -463,7 +467,7 @@ export class AdminService {
     if (dto.companyId) {
       await (this.prisma as any).userCompany.create({
         data: { userId: user.id, companyId: dto.companyId, role: membershipRole },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
     }
 
     // Create additional memberships from companyByType
@@ -474,9 +478,18 @@ export class AdminService {
           const role = rbt[type] === 'admin' ? 'gerente' : rbt[type] === 'chofer' ? 'chofer' : 'operario';
           await (this.prisma as any).userCompany.create({
             data: { userId: user.id, companyId: coId, role },
-          }).catch(() => {});
+          }).catch(e => this.logger.warn(e.message));
         }
       }
+    }
+
+    // Fire-and-forget: send WhatsApp welcome if user has phone
+    if (user.phone) {
+      const companyName = user.company?.name || 'tu empresa';
+      const welcomeMsg = `Hola ${user.name?.split(' ')[0] || ''}! Tu cuenta en *Tolvink* fue creada para ${companyName}.\n\nPodés escribirme por acá para gestionar tus fletes, consultar estados y más.`;
+      this.wa.sendText(user.phone, welcomeMsg).catch(err =>
+        this.logger.warn(`WhatsApp welcome failed for ${user.phone}: ${err.message}`),
+      );
     }
 
     return user;
@@ -531,7 +544,7 @@ export class AdminService {
         where: { userId_companyId: { userId, companyId: dto.companyId } },
         create: { userId, companyId: dto.companyId, role: membershipRole },
         update: { active: true, role: membershipRole },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn(e.message));
     }
 
     // Sync additional memberships from companyByType
@@ -544,7 +557,7 @@ export class AdminService {
             where: { userId_companyId: { userId, companyId: coId } },
             create: { userId, companyId: coId, role },
             update: { active: true, role },
-          }).catch(() => {});
+          }).catch(e => this.logger.warn(e.message));
         }
       }
     }

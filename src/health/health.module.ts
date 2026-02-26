@@ -1,8 +1,9 @@
-import { Module, Controller, Get } from '@nestjs/common';
+import { Module, Controller, Get, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 import { SseService } from '../sse/sse.service';
+import { Response } from 'express';
 
 @ApiTags('Health')
 @SkipThrottle()
@@ -16,32 +17,38 @@ class HealthController {
   ) {}
 
   @Get()
-  async check() {
-    try {
-      const poolInfo: any[] = await this.prisma.$queryRaw`
-        SELECT count(*)::int as active_connections
-        FROM pg_stat_activity
-        WHERE datname = current_database() AND state = 'active'
-      `;
+  async check(@Res() res: Response) {
+    const dbOk = await this.prisma.ping();
 
-      const mem = process.memoryUsage();
+    const mem = process.memoryUsage();
+    const body: any = {
+      status: dbOk ? 'ok' : 'error',
+      db: dbOk ? 'connected' : 'disconnected',
+      memory: {
+        heapMB: Math.round(mem.heapUsed / 1024 / 1024),
+        rssMB: Math.round(mem.rss / 1024 / 1024),
+      },
+      sse: { clients: this.sse.getClientCount() },
+      uptime: Math.round(process.uptime()),
+      startedAt: this.startedAt.toISOString(),
+      timestamp: new Date().toISOString(),
+    };
 
-      return {
-        status: 'ok',
-        db: 'connected',
-        pool: { active: poolInfo[0]?.active_connections || 0 },
-        memory: {
-          heapMB: Math.round(mem.heapUsed / 1024 / 1024),
-          rssMB: Math.round(mem.rss / 1024 / 1024),
-        },
-        sse: { clients: this.sse.getClientCount() },
-        uptime: Math.round(process.uptime()),
-        startedAt: this.startedAt.toISOString(),
-        timestamp: new Date().toISOString(),
-      };
-    } catch (e) {
-      return { status: 'error', db: 'disconnected', timestamp: new Date().toISOString() };
+    if (dbOk) {
+      try {
+        const poolInfo: any[] = await this.prisma.$queryRaw`
+          SELECT count(*)::int as active_connections
+          FROM pg_stat_activity
+          WHERE datname = current_database() AND state = 'active'
+        `;
+        body.pool = { active: poolInfo[0]?.active_connections || 0 };
+      } catch {
+        // Pool info is optional — don't fail health check for it
+      }
     }
+
+    // Return 503 when DB is disconnected so Railway restarts the container
+    res.status(dbOk ? 200 : 503).json(body);
   }
 
   @Get('ping')
