@@ -140,6 +140,8 @@ model User {
   active       Boolean  @default(true)
   lastLogin    DateTime? @map("last_login")
   onboardingCompletedAt DateTime? @map("onboarding_completed_at")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -159,6 +161,7 @@ model User {
   refreshTokens      RefreshToken[]
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
   whatsappSessions   WhatsAppSession[]
+  passwordResetCodes PasswordResetCode[]
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -717,4 +720,22 @@ model WhatsAppMessageLog {
   @@index([phone])
   @@index([waMessageId])
   @@map("whatsapp_message_logs")
+}
+
+// ======================== PASSWORD RESET CODES ========================
+
+model PasswordResetCode {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  codeHash  String   @map("code_hash") @db.VarChar(255)
+  expiresAt DateTime @map("expires_at")
+  attempts  Int      @default(0)
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_codes")
 }

@@ -1,8 +1,8 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf, Length } from 'class-validator';
 
 export class LoginDto {
   @ValidateIf(o => !o.phone)
-  @IsEmail({}, { message: 'Email invalido' })
+  @IsEmail({}, { message: 'Email inválido' })
   email?: string;
 
   @ValidateIf(o => !o.email)
@@ -26,21 +26,21 @@ export class RegisterDto {
   @MinLength(2, { message: 'Nombre muy corto' })
   name: string;
 
-  @IsEmail({}, { message: 'Email invalido' })
+  @IsEmail({}, { message: 'Email inválido' })
   email: string;
 
-  @IsNotEmpty({ message: 'Telefono requerido' })
+  @IsNotEmpty({ message: 'Teléfono requerido' })
   @IsString()
-  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 digitos)' })
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
   phone: string;
 
   @IsNotEmpty({ message: 'Contraseña requerida' })
   @IsString()
-  @MinLength(4, { message: 'La contraseña debe tener al menos 4 caracteres' })
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
   password: string;
 
   @IsArray({ message: 'userTypes debe ser un array' })
-  @ArrayMinSize(1, { message: 'Selecciona al menos un tipo' })
+  @ArrayMinSize(1, { message: 'Seleccioná al menos un tipo' })
   @IsString({ each: true })
   userTypes: string[];
 }
@@ -49,4 +49,45 @@ export class RefreshTokenDto {
   @IsNotEmpty({ message: 'refreshToken requerido' })
   @IsString()
   refreshToken: string;
+}
+
+export class RequestCodeDto {
+  @IsNotEmpty({ message: 'Teléfono requerido' })
+  @IsString()
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  phone: string;
+}
+
+export class VerifyCodeDto {
+  @IsNotEmpty({ message: 'Teléfono requerido' })
+  @IsString()
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  phone: string;
+
+  @IsNotEmpty({ message: 'Código requerido' })
+  @IsString()
+  @Length(6, 6, { message: 'El código debe tener 6 dígitos' })
+  code: string;
+}
+
+export class ResetPasswordDto {
+  @IsNotEmpty({ message: 'Token requerido' })
+  @IsString()
+  resetToken: string;
+
+  @IsNotEmpty({ message: 'Contraseña requerida' })
+  @IsString()
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  newPassword: string;
+}
+
+export class ChangePasswordDto {
+  @IsNotEmpty({ message: 'Contraseña actual requerida' })
+  @IsString()
+  currentPassword: string;
+
+  @IsNotEmpty({ message: 'Nueva contraseña requerida' })
+  @IsString()
+  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  newPassword: string;
 }

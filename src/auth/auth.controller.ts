@@ -2,7 +2,7 @@ import { Controller, Post, Patch, Body, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto } from './auth.dto';
+import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -20,7 +20,7 @@ export class AuthController {
 
   @Post('login')
   @Throttle({ default: { ttl: 60000, limit: 5 } })
-  @ApiOperation({ summary: 'Login con email o telefono' })
+  @ApiOperation({ summary: 'Login con email o teléfono + contraseña' })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
@@ -30,6 +30,27 @@ export class AuthController {
   @ApiOperation({ summary: 'Registrar usuario' })
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  @Post('request-code')
+  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  @ApiOperation({ summary: 'Solicitar código de verificación por WhatsApp' })
+  requestCode(@Body() dto: RequestCodeDto) {
+    return this.authService.requestCode(dto);
+  }
+
+  @Post('verify-code')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Verificar código de WhatsApp' })
+  verifyCode(@Body() dto: VerifyCodeDto) {
+    return this.authService.verifyCode(dto);
+  }
+
+  @Post('reset-password')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Establecer nueva contraseña con token de reset' })
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @Post('refresh')
@@ -53,6 +74,15 @@ export class AuthController {
   @ApiOperation({ summary: 'Cambiar empresa activa' })
   switchCompany(@Body() dto: SwitchCompanyDto, @CurrentUser() user: any) {
     return this.authService.switchCompany(user.sub, dto);
+  }
+
+  @Patch('password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  @ApiOperation({ summary: 'Cambiar contraseña (autenticado)' })
+  changePassword(@Body() dto: ChangePasswordDto, @CurrentUser() user: any) {
+    return this.authService.changePassword(user.sub, dto);
   }
 
   @Get('me/companies')
