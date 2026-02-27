@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf, Length } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf } from 'class-validator';
 
 export class LoginDto {
   @ValidateIf(o => !o.phone)
@@ -76,7 +76,7 @@ export class VerifyCodeDto {
 
   @IsNotEmpty({ message: 'Código requerido' })
   @IsString()
-  @Length(6, 6, { message: 'El código debe tener 6 dígitos' })
+  @Matches(/^\d{6}$/, { message: 'El código debe tener 6 dígitos numéricos' })
   code: string;
 }
 

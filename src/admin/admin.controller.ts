@@ -14,7 +14,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
   IsNotEmpty, IsOptional, IsString, IsEmail, IsUUID,
-  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn,
+  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
@@ -167,6 +167,12 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
   @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
   @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
+}
+
+export class UpdateSelfDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MinLength(2, { message: 'Nombre muy corto' }) @MaxLength(255) name?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsEmail({}, { message: 'Email inválido' }) email?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' }) phone?: string;
 }
 
 // ======================== SERVICE ====================================
@@ -861,7 +867,7 @@ export class AdminController {
   // --- Self edit (any user) ---
   @Patch('me')
   @ApiOperation({ summary: 'Editar mi perfil' })
-  updateMe(@Body() dto: { name?: string; email?: string; phone?: string }, @CurrentUser() u: any) {
+  updateMe(@Body() dto: UpdateSelfDto, @CurrentUser() u: any) {
     return this.svc.updateSelf(u.sub, dto);
   }
 

@@ -77,14 +77,12 @@ export class AuthService {
       user.lockedUntil = null;
     }
 
-    // User has no password set — return special error for first-time setup
+    // User has no password set — same generic message to prevent enumeration
     if (!user.passwordHash) {
-      const maskedPhone = this.maskPhone(user.phone);
       throw new UnauthorizedException({
         statusCode: 401,
-        message: 'Necesitás configurar tu contraseña',
+        message: 'Credenciales inválidas',
         code: 'NO_PASSWORD',
-        maskedPhone,
       });
     }
 
@@ -400,8 +398,11 @@ export class AuthService {
     // Revoke all refresh tokens (force re-login on other devices)
     await (this.prisma as any).refreshToken.deleteMany({ where: { userId } });
 
+    // Issue new refresh token for the current session
+    const newRefreshToken = await this.createRefreshToken(userId);
+
     this.logger.log(`User ${userId} changed password`);
-    return { ok: true, message: 'Contraseña actualizada correctamente' };
+    return { ok: true, message: 'Contraseña actualizada correctamente', refresh_token: newRefreshToken };
   }
 
   // ======================== EXISTING METHODS =============================
