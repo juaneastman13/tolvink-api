@@ -64,11 +64,17 @@ export class AuthService {
     }
 
     // Check lockout
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-      throw new UnauthorizedException(
-        `Cuenta bloqueada temporalmente. Intentá de nuevo en ${minutesLeft} minuto${minutesLeft !== 1 ? 's' : ''}.`,
-      );
+    if (user.lockedUntil) {
+      if (user.lockedUntil > new Date()) {
+        const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+        throw new UnauthorizedException(
+          `Cuenta bloqueada temporalmente. Intentá de nuevo en ${minutesLeft} minuto${minutesLeft !== 1 ? 's' : ''}.`,
+        );
+      }
+      // Lockout expired — reset counter so user gets full 5 attempts again
+      await this.prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
+      user.failedLoginAttempts = 0;
+      user.lockedUntil = null;
     }
 
     // User has no password set — return special error for first-time setup
@@ -206,7 +212,8 @@ export class AuthService {
 
     const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
     if (!user || !user.phone) {
-      throw new BadRequestException('No se encontró una cuenta activa con ese dato o no tiene teléfono registrado.');
+      // Generic response — do not reveal whether account exists
+      return { ok: true, maskedPhone: '09*****XX' };
     }
 
     return { ok: true, maskedPhone: this.maskPhone(user.phone) };
@@ -264,6 +271,7 @@ export class AuthService {
     );
     if (!sent) {
       this.logger.error(`requestCode: WhatsApp send failed for user ${user.id}`);
+      throw new BadRequestException('No se pudo enviar el código por WhatsApp. Intentá de nuevo.');
     }
 
     return { ok: true, message: 'Código enviado por WhatsApp.' };
@@ -388,6 +396,9 @@ export class AuthService {
       where: { id: userId },
       data: { passwordHash: hash },
     });
+
+    // Revoke all refresh tokens (force re-login on other devices)
+    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } });
 
     this.logger.log(`User ${userId} changed password`);
     return { ok: true, message: 'Contraseña actualizada correctamente' };
