@@ -486,6 +486,7 @@ model FreightTracking {
   @@index([freightId])
   @@index([createdAt])
   @@index([freightId, createdAt])
+  @@index([freightId, userId, createdAt])
   @@map("freight_tracking")
 }
 

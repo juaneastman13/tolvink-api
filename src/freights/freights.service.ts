@@ -2052,8 +2052,8 @@ export class FreightsService implements OnModuleInit {
         freightId,
         lat: body.lat,
         lng: body.lng,
-        speed: body.speed || null,
-        heading: body.heading || null,
+        speed: body.speed ?? null,
+        heading: body.heading ?? null,
         userId: user.sub,
       },
     });
