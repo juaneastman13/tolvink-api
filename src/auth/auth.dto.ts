@@ -51,7 +51,17 @@ export class RefreshTokenDto {
   refreshToken: string;
 }
 
+export class IdentifyForResetDto {
+  @IsNotEmpty({ message: 'Email o teléfono requerido' })
+  @IsString()
+  identifier: string;
+}
+
 export class RequestCodeDto {
+  @IsNotEmpty({ message: 'Identificador requerido' })
+  @IsString()
+  identifier: string;
+
   @IsNotEmpty({ message: 'Teléfono requerido' })
   @IsString()
   @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })

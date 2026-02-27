@@ -5,7 +5,7 @@ import { randomBytes, randomInt } from 'crypto';
 const bcrypt = require('bcryptjs');
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
-import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
+import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -196,13 +196,38 @@ export class AuthService {
 
   // ======================== PASSWORD RESET VIA WHATSAPP ==================
 
-  async requestCode(dto: RequestCodeDto) {
-    const genericResponse = { ok: true, message: 'Si el número está registrado, recibirás un código por WhatsApp.' };
+  /** Step 1: Identify user by email/phone → return masked phone */
+  async identifyForReset(dto: IdentifyForResetDto) {
+    const identifier = dto.identifier.trim().toLowerCase();
+    const isPhone = /^09[1-9]\d{6}$/.test(identifier.replace(/[\s\-()]/g, ''));
+    const where = isPhone
+      ? { phone: identifier.replace(/[\s\-()]/g, ''), active: true }
+      : { email: identifier, active: true };
 
-    const user = await this.prisma.user.findFirst({ where: { phone: dto.phone, active: true } });
+    const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
+    if (!user || !user.phone) {
+      throw new BadRequestException('No se encontró una cuenta activa con ese dato o no tiene teléfono registrado.');
+    }
+
+    return { ok: true, maskedPhone: this.maskPhone(user.phone) };
+  }
+
+  /** Step 2: Confirm phone matches → send WhatsApp code */
+  async requestCode(dto: RequestCodeDto) {
+    const identifier = dto.identifier.trim().toLowerCase();
+    const isPhone = /^09[1-9]\d{6}$/.test(identifier.replace(/[\s\-()]/g, ''));
+    const where = isPhone
+      ? { phone: identifier.replace(/[\s\-()]/g, ''), active: true }
+      : { email: identifier, active: true };
+
+    const user = await this.prisma.user.findFirst({ where });
     if (!user) {
-      this.logger.debug(`requestCode: no active user for phone ${dto.phone}`);
-      return genericResponse;
+      throw new BadRequestException('No se encontró la cuenta.');
+    }
+
+    // Verify the confirmed phone matches the registered phone
+    if (user.phone !== dto.phone) {
+      throw new BadRequestException('El teléfono no coincide con el registrado.');
     }
 
     // Rate limit: max codes per hour
@@ -211,8 +236,7 @@ export class AuthService {
       where: { userId: user.id, createdAt: { gt: oneHourAgo } },
     });
     if (recentCodes >= MAX_CODES_PER_HOUR) {
-      this.logger.warn(`requestCode: rate limit for user ${user.id}`);
-      return genericResponse;
+      throw new BadRequestException('Demasiados intentos. Esperá un rato antes de pedir otro código.');
     }
 
     // Invalidate previous unused codes
@@ -242,7 +266,7 @@ export class AuthService {
       this.logger.error(`requestCode: WhatsApp send failed for user ${user.id}`);
     }
 
-    return genericResponse;
+    return { ok: true, message: 'Código enviado por WhatsApp.' };
   }
 
   async verifyCode(dto: VerifyCodeDto) {

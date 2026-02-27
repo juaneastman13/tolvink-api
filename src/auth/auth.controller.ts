@@ -2,7 +2,7 @@ import { Controller, Post, Patch, Body, Get, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
+import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -32,9 +32,16 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
+  @Post('identify-for-reset')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Identificar usuario para reset — devuelve teléfono enmascarado' })
+  identifyForReset(@Body() dto: IdentifyForResetDto) {
+    return this.authService.identifyForReset(dto);
+  }
+
   @Post('request-code')
   @Throttle({ default: { ttl: 60000, limit: 3 } })
-  @ApiOperation({ summary: 'Solicitar código de verificación por WhatsApp' })
+  @ApiOperation({ summary: 'Solicitar código de verificación por WhatsApp (requiere confirmar teléfono)' })
   requestCode(@Body() dto: RequestCodeDto) {
     return this.authService.requestCode(dto);
   }
