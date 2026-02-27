@@ -58,16 +58,17 @@ export class WhatsAppController {
   @Post('webhook')
   @HttpCode(200)
   async receive(@Req() req: Request, @Res() res: Response) {
-    // Always respond 200 immediately (Meta requires fast response)
-    res.status(200).send('EVENT_RECEIVED');
-
-    // Verify HMAC-SHA256 signature
+    // Verify HMAC-SHA256 signature BEFORE responding (prevents forged webhooks)
     if (this.appSecret) {
       if (!this.verifyMetaSignature(req)) {
         this.logger.warn('Webhook signature verification failed');
+        res.status(401).send('INVALID_SIGNATURE');
         return;
       }
     }
+
+    // Respond 200 immediately after signature is verified (Meta requires fast response)
+    res.status(200).send('EVENT_RECEIVED');
 
     try {
       const body = req.body;
@@ -105,7 +106,7 @@ export class WhatsAppController {
       }
       if (waMessageId) {
         this.processedMessages.set(waMessageId, Date.now());
-        // Cleanup old entries every 100 messages, hard cap at 5000
+        // Cleanup expired entries; evict oldest if still over cap (LRU, never full clear)
         if (this.processedMessages.size > 100) {
           const now = Date.now();
           for (const [id, ts] of this.processedMessages) {
@@ -113,8 +114,12 @@ export class WhatsAppController {
           }
         }
         if (this.processedMessages.size > 5000) {
-          this.logger.warn(`Dedup map overflow (${this.processedMessages.size}), clearing`);
-          this.processedMessages.clear();
+          this.logger.warn(`Dedup map overflow (${this.processedMessages.size}), evicting oldest`);
+          const iter = this.processedMessages.keys();
+          while (this.processedMessages.size > 4000) {
+            const oldest = iter.next().value;
+            if (oldest) this.processedMessages.delete(oldest); else break;
+          }
         }
       }
 

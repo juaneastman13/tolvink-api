@@ -574,16 +574,18 @@ model AuditLog {
   fromValue  String?  @map("from_value") @db.VarChar(50)
   toValue    String?  @map("to_value") @db.VarChar(50)
   userId     String   @map("user_id")
+  freightId  String?  @map("freight_id")
   reason     String?  @db.VarChar(255)
   metadata   Json?
   createdAt  DateTime @default(now()) @map("created_at")
 
   user    User     @relation(fields: [userId], references: [id])
-  freight Freight? @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  freight Freight? @relation(fields: [freightId], references: [id], onDelete: Cascade)
 
   @@index([entityType, entityId])
   @@index([userId])
   @@index([createdAt])
+  @@index([freightId])
   @@map("audit_logs")
 }
 

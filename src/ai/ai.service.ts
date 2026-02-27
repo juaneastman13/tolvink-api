@@ -224,10 +224,22 @@ export class AiService implements OnModuleDestroy {
       const pendingButtons = latestState._pendingButtons || undefined;
       const { _pendingButtons, ...cleanState } = latestState;
 
+      // Trim old tool_result content to prevent flowState bloat (cap: 500 chars each)
+      const trimmedMessages = currentMessages.slice(-MAX_HISTORY).map((msg, idx, arr) => {
+        // Only trim tool_result messages that are not in the last 6 messages
+        if (idx < arr.length - 6 && msg.role === 'user' && Array.isArray(msg.content)) {
+          return { ...msg, content: msg.content.map(block =>
+            block.type === 'tool_result' && typeof block.content === 'string' && block.content.length > 500
+              ? { ...block, content: block.content.slice(0, 500) + '...[trimmed]' }
+              : block
+          )};
+        }
+        return msg;
+      });
       const updateData: any = {
         flowState: {
           ...cleanState,
-          aiMessages: currentMessages.slice(-MAX_HISTORY),
+          aiMessages: trimmedMessages,
           lastMessageAt: new Date().toISOString(),
         },
         expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),

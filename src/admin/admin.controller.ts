@@ -514,6 +514,15 @@ export class AdminService {
       if (dto.role === 'platform_admin') {
         throw new ForbiddenException('No podés asignar rol de administrador principal');
       }
+      // Prevent cross-tenant escalation: strip companyByType, roleByType, companyId
+      dto.companyByType = undefined;
+      dto.roleByType = undefined;
+      if (dto.companyId !== undefined) {
+        const callerCoIds = await this.getUserCompanyIds(await this.resolveFullUser(callerUser));
+        if (!callerCoIds.includes(dto.companyId)) {
+          throw new ForbiddenException('No podés mover usuarios a una empresa ajena');
+        }
+      }
     }
 
     const data: any = {};
@@ -835,6 +844,8 @@ export class AdminController {
     // Company admins can only create users for their own company
     if (!this.svc.isPlatformAdmin(u)) {
       dto.companyId = u.companyId;
+      dto.companyByType = undefined;
+      dto.roleByType = undefined;
       if (dto.role === 'platform_admin') throw new ForbiddenException('No podés asignar este rol');
     }
     return this.svc.createUser(dto);

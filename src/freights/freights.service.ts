@@ -194,6 +194,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: f.id,
+          freightId: f.id,
           action: 'created',
           toValue: 'pending_assignment',
           userId: user.sub,
@@ -346,9 +347,9 @@ export class FreightsService implements OnModuleInit {
         assignments: {
           orderBy: { createdAt: 'desc' },
           include: {
-            transportCompany: { select: { id: true, name: true, phone: true } },
+            transportCompany: { select: { id: true, name: true } },
             assignedBy: { select: { id: true, name: true } },
-            driver: { select: { id: true, name: true, phone: true } },
+            driver: { select: { id: true, name: true } },
             truck: { select: { id: true, plate: true, model: true } },
           },
         },
@@ -627,6 +628,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'accepted',
           fromValue: freight.status,
           toValue: 'accepted',
@@ -696,6 +698,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'started',
           fromValue: freight.status,
           toValue: 'in_progress',
@@ -1002,6 +1005,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'finished',
           fromValue: freight.status,
           toValue: 'finished',
@@ -1069,6 +1073,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'canceled',
           fromValue: freight.status,
           toValue: 'canceled',
@@ -1134,6 +1139,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'authorized',
           fromValue: 'assigned',
           toValue: 'accepted',
@@ -1548,6 +1554,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'assignment_canceled',
           fromValue: freight.status,
           toValue: newStatus,
@@ -1642,6 +1649,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'assignment_updated',
           userId: user.sub,
           metadata: { assignmentId, changes: updateData },
@@ -1763,6 +1771,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'trip_accepted',
           fromValue: assignment.tripStatus,
           toValue: 'accepted',
@@ -1812,6 +1821,7 @@ export class FreightsService implements OnModuleInit {
         data: {
           entityType: 'freight',
           entityId: freightId,
+          freightId: freightId,
           action: 'trip_started',
           fromValue: assignment.tripStatus,
           toValue: 'in_progress',
@@ -1880,7 +1890,7 @@ export class FreightsService implements OnModuleInit {
 
           await tx.auditLog.create({
             data: {
-              entityType: 'freight', entityId: freightId, action: 'trip_confirm_loaded',
+              entityType: 'freight', entityId: freightId, freightId: freightId, action: 'trip_confirm_loaded',
               fromValue: assignment.tripStatus, toValue: 'loaded', userId: user.sub,
               metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', ...(loadedTons != null ? { loadedTons } : {}) },
             },
@@ -1895,7 +1905,7 @@ export class FreightsService implements OnModuleInit {
           await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: { producerLoadedConfirmedAt: new Date() } });
           await tx.auditLog.create({
             data: {
-              entityType: 'freight', entityId: freightId, action: 'trip_confirm_loaded',
+              entityType: 'freight', entityId: freightId, freightId: freightId, action: 'trip_confirm_loaded',
               fromValue: 'loaded', toValue: 'loaded', userId: user.sub,
               metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'producer' },
             },
@@ -1958,7 +1968,7 @@ export class FreightsService implements OnModuleInit {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight', entityId: freightId, freightId: freightId,
             action: bothConfirmed ? 'trip_finished' : 'trip_confirm_finished',
             fromValue: 'loaded', toValue: bothConfirmed ? 'finished' : 'loaded', userId: user.sub,
             metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed },
@@ -1985,7 +1995,7 @@ export class FreightsService implements OnModuleInit {
 
         await tx.auditLog.create({
           data: {
-            entityType: 'freight', entityId: freightId,
+            entityType: 'freight', entityId: freightId, freightId: freightId,
             action: transporterAlsoConfirmed ? 'trip_finished' : 'trip_confirm_finished',
             fromValue: 'loaded', toValue: transporterAlsoConfirmed ? 'finished' : 'loaded', userId: user.sub,
             metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed },

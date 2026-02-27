@@ -52,7 +52,7 @@ export class WhatsAppRouterService {
    * If horizontal scaling is needed, replace with Redis-based distributed lock.
    */
   private phoneLocks = new Map<string, Promise<void>>();
-  private readonly MAX_PHONE_LOCKS = 1000;
+  private readonly MAX_PHONE_LOCKS = 10000;
   /** Cooldown for "not registered" replies — avoids spamming unregistered phones */
   private unregisteredCooldown = new Map<string, number>();
 
