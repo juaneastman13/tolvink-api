@@ -163,6 +163,9 @@ export class AuthService {
     // Validate userTypes values
     const validTypes = ['producer', 'plant', 'transporter'];
     const userTypes = (dto.userTypes || []).filter((t: string) => validTypes.includes(t));
+    if (userTypes.length === 0) {
+      throw new BadRequestException('Seleccioná al menos un tipo válido (producer, plant, transporter)');
+    }
 
     let user: any;
     try {

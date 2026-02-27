@@ -32,6 +32,11 @@ export class SseController {
       throw new UnauthorizedException('Invalid token');
     }
 
+    // Reject special-purpose tokens (e.g. password-reset)
+    if (user.purpose) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
     // Resolve all company IDs for this user
     const companyIds = await this.companyRes.resolveAllCompanyIds(user);
 
