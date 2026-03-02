@@ -167,7 +167,7 @@ export class AiService implements OnModuleDestroy {
           // Execute tool calls — parallel for read-only tools, sequential otherwise
           const READ_ONLY_TOOLS = new Set([
             'list_freights', 'get_freight_detail', 'search_plants', 'list_lots', 'list_fields',
-            'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers',
+            'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers', 'summarize_freights',
             'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
           ]);
 
@@ -354,6 +354,15 @@ LISTAS Y SELECCIÓN:
 - Para listados de entidades (fletes, campos, etc.) usar las herramientas con menú interactivo.
 - Cuando el usuario pide información organizada en lista, resúmenes o datos detallados, SÍ generar listas en texto con la extensión necesaria.
 - NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
+
+RESÚMENES Y ANÁLISIS DE FLETES:
+- Cuando el usuario pide un RESUMEN, REPORTE, ANÁLISIS, ESTADÍSTICA, "agrupados por", "cuántos fletes", "estado general", o cualquier consulta analítica → usar summarize_freights (NO list_freights).
+- summarize_freights retorna datos completos en texto para generar resúmenes organizados.
+- list_freights es SOLO para seleccionar un flete individual (menú interactivo).
+- Si el usuario pide "fletes por transportista", "resumen por estado", "fletes agrupados" → summarize_freights con groupBy.
+- Con los datos de summarize_freights, generar un resumen claro en texto organizado por grupo.
+- Incluir totales por grupo (cantidad de fletes, toneladas totales).
+- NO preguntar si desea filtrar — ejecutar directamente lo que el usuario pidió.
 
 COHERENCIA EVOLUTIVA:
 - Si se generan mensajes nuevos no ejemplificados, respetar exactamente esta estructura.
@@ -1006,6 +1015,26 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
         required: [],
       },
     },
+    {
+      name: 'summarize_freights',
+      description: 'Resumen analítico de fletes con datos completos para agrupar, contar o analizar. NO muestra menú interactivo — retorna datos en texto para que el asistente genere un resumen organizado. Usar cuando el usuario pide: resumen, reporte, agrupados por, cuántos fletes, estadísticas, análisis. Para seleccionar un flete individual, usar list_freights en su lugar.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded', 'finished', 'canceled'],
+            description: 'Filtrar por estado (opcional)',
+          },
+          groupBy: {
+            type: 'string',
+            enum: ['transporter', 'status', 'grain', 'destination', 'origin'],
+            description: 'Agrupar resultados por este criterio (opcional)',
+          },
+        },
+        required: [],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -1056,6 +1085,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
         case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
         case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
         case 'switch_company': return await this.toolSwitchCompany(input, user, session);
+        case 'summarize_freights': return await this.toolSummarizeFreights(synUser, input);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -1105,6 +1135,83 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       listButtonLabel: 'Ver fletes',
       sectionTitle: 'FLETES',
     }, 'freight_selection');
+  }
+
+  // ---- summarize_freights ----
+  private async toolSummarizeFreights(synUser: any, input: any): Promise<string> {
+    const result = await this.freights.findAll(synUser, {
+      status: input.status,
+      limit: 100,
+      page: 1,
+    } as any);
+
+    if (result.data.length === 0) {
+      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan' });
+    }
+
+    const STATUS_LABELS: Record<string, string> = {
+      pending_assignment: 'Pend. asignación', assigned: 'Asignado', accepted: 'Aceptado',
+      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
+      cancelled: 'Cancelado', rejected: 'Rechazado',
+    };
+
+    // Build flat freight records
+    const freights = result.data.map((f: any) => {
+      const assignment = f.assignments?.[0];
+      return {
+        code: f.code,
+        status: STATUS_LABELS[f.status] || f.status,
+        statusRaw: f.status,
+        grain: f.items?.[0]?.grain || 'N/A',
+        tons: f.items?.[0]?.tons || 0,
+        origin: (f as any).originName || f.originCompany?.name || 'N/A',
+        destination: (f as any).destName || f.destCompany?.name || 'N/A',
+        transporter: assignment?.transportCompany?.name || 'Sin asignar',
+        driver: assignment?.driver?.name || null,
+        truck: assignment?.truck?.plate || null,
+        date: f.loadDate ? new Date(f.loadDate).toISOString().split('T')[0] : null,
+      };
+    });
+
+    // Group if requested
+    const groupBy = input.groupBy;
+    if (groupBy) {
+      const keyMap: Record<string, string> = {
+        transporter: 'transporter', status: 'status', grain: 'grain',
+        destination: 'destination', origin: 'origin',
+      };
+      const key = keyMap[groupBy] || 'status';
+      const groups: Record<string, any[]> = {};
+      for (const f of freights) {
+        const gk = f[key] || 'Sin dato';
+        if (!groups[gk]) groups[gk] = [];
+        groups[gk].push(f);
+      }
+
+      const summary = Object.entries(groups).map(([group, items]) => ({
+        group,
+        count: items.length,
+        totalTons: Math.round(items.reduce((s, f) => s + (f.tons || 0), 0) * 10) / 10,
+        freights: items.map(f => ({
+          code: f.code, status: f.status, grain: f.grain, tons: f.tons,
+          origin: f.origin, destination: f.destination,
+          ...(groupBy !== 'transporter' ? { transporter: f.transporter } : {}),
+          driver: f.driver, truck: f.truck, date: f.date,
+        })),
+      }));
+
+      return JSON.stringify({
+        total: result.total,
+        groupedBy: groupBy,
+        groups: summary,
+      });
+    }
+
+    // No grouping — return flat list
+    return JSON.stringify({
+      total: result.total,
+      freights,
+    });
   }
 
   // ---- Helper: store _pendingSelection for interactive list ----
