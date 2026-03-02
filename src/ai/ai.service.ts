@@ -1430,15 +1430,26 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       if (!canEditDest) {
         return JSON.stringify({ error: `Planta destino solo se puede modificar en estados activos. Estado actual: "${freight.status}".` });
       }
+      // search_plants returns Company IDs; backend accepts both Plant IDs and Company IDs
+      let destLabel: string;
       const plant = await this.prisma.plant.findUnique({
         where: { id: input.destPlantId },
         select: { id: true, name: true, company: { select: { name: true } } },
       });
-      if (!plant) {
-        return JSON.stringify({ error: `No se encontró la planta con ID ${input.destPlantId}. Use search_plants primero.` });
+      if (plant) {
+        destLabel = `${plant.company?.name || ''} - ${plant.name}`;
+      } else {
+        const company = await this.prisma.company.findUnique({
+          where: { id: input.destPlantId },
+          select: { id: true, name: true },
+        });
+        if (!company) {
+          return JSON.stringify({ error: `No se encontró la planta con ID ${input.destPlantId}. Use search_plants primero.` });
+        }
+        destLabel = company.name;
       }
       dto.destPlantId = input.destPlantId;
-      changes.push(`Planta destino: ${plant.company?.name || ''} - ${plant.name}`);
+      changes.push(`Planta destino: ${destLabel}`);
     }
 
     // --- truckId: solo con flota propia ---
