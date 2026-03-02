@@ -157,6 +157,25 @@ export class WhatsAppRouterService {
               return;
             }
           }
+          // Save original message so it can be replayed after company confirmation
+          const GREETING_RE_MC = /^(hola|hi|hey|buenas?|buen\s*d[ií]a|buenos?\s*d[ií]as?|buenas?\s*tardes?|buenas?\s*noches?|qu[eé]\s*tal|c[oó]mo\s*(est[aá]s?|and[aá]s?|va)|saludos?|menu|inicio)[\s?!.,]*$/i;
+          const textBody = type === 'text' ? (payload.body || '').trim() : '';
+          const isOperational = textBody && !GREETING_RE_MC.test(textBody);
+          if (isOperational && cachedSession) {
+            await this.prisma.whatsAppSession.update({
+              where: { id: cachedSession.id },
+              data: { flowState: { ...sState, _pendingMessage: textBody } },
+            });
+          } else if (isOperational) {
+            await this.prisma.whatsAppSession.create({
+              data: {
+                userId: user.id, phone: this.wa.normalizePhone(phone),
+                flowType: null, flowStep: '0',
+                flowState: { _pendingMessage: textBody },
+                expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+              },
+            });
+          }
           await this.sendCompanySelectionList(phone, user);
           return;
         }
@@ -934,11 +953,29 @@ export class WhatsAppRouterService {
       });
     }
 
-    // Re-load user with updated company + show menu
+    // Re-load user with updated company
     const updatedUser = await this.findUserByPhone(phone);
     const companyName = membership.company?.name || 'Empresa';
     await this.wa.sendText(phone, `🏢 Operando como: ${companyName}.`);
-    if (updatedUser) await this.showMainMenu(phone, updatedUser);
+
+    // Check for pending message saved before company selection
+    const freshSess = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const pendingMsg = (freshSess?.flowState as any)?._pendingMessage;
+    if (pendingMsg && updatedUser) {
+      // Clear the pending message
+      const { _pendingMessage, ...cleanFS } = (freshSess!.flowState as any) || {};
+      await this.prisma.whatsAppSession.update({
+        where: { id: freshSess!.id },
+        data: { flowState: cleanFS },
+      });
+      // Replay the original message through AI
+      await this.handleAiChat(phone, updatedUser, pendingMsg, freshSess);
+    } else if (updatedUser) {
+      await this.showMainMenu(phone, updatedUser);
+    }
   }
 
   // ======================== SELECTION DISPATCH ========================

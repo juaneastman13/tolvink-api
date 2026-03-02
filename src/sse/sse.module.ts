@@ -3,7 +3,6 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from './sse.service';
 import { SseController } from './sse.controller';
-import { PrismaService } from '../database/prisma.service';
 
 @Global()
 @Module({
@@ -16,7 +15,7 @@ import { PrismaService } from '../database/prisma.service';
     }),
   ],
   controllers: [SseController],
-  providers: [SseService, PrismaService],
+  providers: [SseService],
   exports: [SseService],
 })
 export class SseModule implements OnModuleInit, OnModuleDestroy {
