@@ -19,7 +19,7 @@ export class FreightsService {
     private sse: SseService,
   ) {}
 
-  /** Generate a unique freight code: F + year(2) + letters(3) + digits(4) → e.g. F26ABC1234 */
+  /** Generate a unique freight code: F + year(2) + "-" + letters(3) + "." + digits(4) → e.g. F26-LCP.1822 */
   private generateFreightCode(): string {
     const year = String(new Date().getFullYear()).slice(-2);
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -27,7 +27,7 @@ export class FreightsService {
       letters[Math.floor(Math.random() * 26)],
     ).join('');
     const numberPart = String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
-    return `F${year}${letterPart}${numberPart}`;
+    return `F${year}-${letterPart}.${numberPart}`;
   }
 
   // Delegate to shared CompanyResolutionService

@@ -255,7 +255,7 @@ export class WhatsAppRouterService {
     }
 
     // Fast path: freight code lookup (no AI needed)
-    if (/^(FLT-\d{4,}|F\d{2}[A-Z]{3}\d{4})$/i.test(t)) {
+    if (/^(FLT-\d{4,}|F\d{2}-[A-Z]{3}\.\d{4})$/i.test(t)) {
       await this.showFreightByCode(phone, user, t.toUpperCase());
       return;
     }

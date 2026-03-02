@@ -22,7 +22,7 @@ export class FreightPublicController {
 
   private validateCode(code: string): string {
     const normalized = code.toUpperCase();
-    if (!/^(FLT-\d{4,}|F\d{2}[A-Z]{3}\d{4})$/.test(normalized)) {
+    if (!/^(FLT-\d{4,}|F\d{2}-[A-Z]{3}\.\d{4})$/.test(normalized)) {
       throw new BadRequestException('Código de flete inválido');
     }
     return normalized;
