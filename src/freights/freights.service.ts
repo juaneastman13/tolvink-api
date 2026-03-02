@@ -1412,7 +1412,7 @@ export class FreightsService implements OnModuleInit {
       // No direct changes but maybe a pending change was created
       const result = await tx.freight.findUnique({ where: { id: freightId }, include: this.FREIGHT_INCLUDE });
       return { ...result, pendingChangeCreated };
-    });
+    }, { timeout: 15000 });
     } catch (err) {
       // Rethrow known HTTP exceptions
       if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ForbiddenException) throw err;
