@@ -109,9 +109,9 @@ export class FreightsController {
   @Post(':id/finish')
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'plant')
-  @ApiOperation({ summary: 'Finalizar viaje (legacy — requiere estado loaded)' })
+  @ApiOperation({ summary: 'Finalizar viaje — redirige a confirm-finished (cross-confirmation)' })
   finish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.finish(id, user);
+    return this.service.confirmFinished(id, user);
   }
 
   @Post(':id/cancel')

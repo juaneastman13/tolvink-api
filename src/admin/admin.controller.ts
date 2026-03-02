@@ -88,7 +88,7 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString()
   phone?: string;
 
-  @ApiProperty() @IsNotEmpty() @MinLength(4)
+  @ApiProperty() @IsNotEmpty() @MinLength(8)
   password: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsArray()

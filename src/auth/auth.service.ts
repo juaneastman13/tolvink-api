@@ -438,11 +438,12 @@ export class AuthService {
       },
     });
 
-    // Parallel: sign token + create refresh token + cleanup old tokens + audit log
+    // Cleanup old tokens BEFORE creating new one to avoid race condition
+    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(e => this.logger.warn(e.message));
+
     const [token, refreshToken] = await Promise.all([
       this.signToken(user),
       this.createRefreshToken(user.id),
-      (this.prisma as any).refreshToken.deleteMany({ where: { userId, token: { not: undefined } } }).catch(e => this.logger.warn(e.message)),
       this.prisma.auditLog.create({
         data: {
           entityType: 'user',

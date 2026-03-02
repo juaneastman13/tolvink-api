@@ -122,6 +122,13 @@ export class TrucksService {
     });
     if (!truck) throw new NotFoundException('Camión no encontrado');
 
+    const activeAssignments = await this.prisma.freightAssignment.count({
+      where: { truckId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
+    });
+    if (activeAssignments > 0) {
+      throw new BadRequestException(`El camión tiene ${activeAssignments} asignación(es) activa(s). Cancele o finalice los viajes antes de desactivarlo.`);
+    }
+
     return this.prisma.truck.update({
       where: { id: truckId },
       data: { active: false },
@@ -191,6 +198,13 @@ export class TrucksService {
       where: { userId: driverId, companyId: user.companyId, role: 'chofer' },
     });
     if (!membership) throw new NotFoundException('Chofer no encontrado');
+
+    const activeAssignments = await this.prisma.freightAssignment.count({
+      where: { driverId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
+    });
+    if (activeAssignments > 0) {
+      throw new BadRequestException(`El chofer tiene ${activeAssignments} viaje(s) activo(s). Cancele o finalice los viajes antes de desactivarlo.`);
+    }
 
     await this.prisma.userCompany.update({
       where: { id: membership.id },

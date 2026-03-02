@@ -252,7 +252,7 @@ export class FreightsService implements OnModuleInit {
 
   // ======================== LIST (multi-tenant) =======================
 
-  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string }) {
+  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string; dateFrom?: string; dateTo?: string; grain?: string }) {
     const limit = Math.min(query.limit || 20, 100);
 
     const where: any = {};
@@ -287,6 +287,14 @@ export class FreightsService implements OnModuleInit {
 
     if (query.status) {
       where.status = query.status;
+    }
+    if (query.dateFrom || query.dateTo) {
+      where.loadDate = {};
+      if (query.dateFrom) where.loadDate.gte = new Date(query.dateFrom);
+      if (query.dateTo) where.loadDate.lte = new Date(query.dateTo + 'T23:59:59');
+    }
+    if (query.grain) {
+      where.items = { some: { grain: { contains: query.grain, mode: 'insensitive' } } };
     }
 
     // Cursor-based pagination (preferred) or offset-based (legacy)
@@ -1216,7 +1224,7 @@ export class FreightsService implements OnModuleInit {
         include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
-      if (['finished', 'cancelled'].includes(freight.status)) {
+      if (['finished', 'canceled'].includes(freight.status)) {
         throw new BadRequestException('No se puede editar un flete finalizado o cancelado');
       }
       if (freight.requestedById !== user.sub) {
@@ -1663,17 +1671,28 @@ export class FreightsService implements OnModuleInit {
   // ======================== MULTI-TRUCK (v6.0) ==========================
 
   private async deriveFreightStatus(tx: any, freightId: string): Promise<FreightStatus> {
-    const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true, status: true } });
+    const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true, status: true, assignedTruckCount: true } });
     const truckCount = freight?.truckCount || 1;
+
+    // Monotonic guard helper: never regress freight status below current
+    const freightStatusOrder: Record<string, number> = {
+      draft: 0, pending_assignment: 1, assigned: 2, accepted: 3,
+      in_progress: 4, loaded: 5, finished: 6, canceled: 7,
+    };
+    const applyMonotonicGuard = (derived: FreightStatus): FreightStatus => {
+      const currentRank = freightStatusOrder[freight.status] ?? 0;
+      const derivedRank = freightStatusOrder[derived] ?? 0;
+      return derivedRank >= currentRank ? derived : (freight.status as FreightStatus);
+    };
 
     const assignments = await (tx.freightAssignment as any).findMany({
       where: { freightId, status: { in: ['active', 'accepted'] } },
       select: { tripStatus: true },
     });
-    if (assignments.length === 0) return FreightStatus.pending_assignment;
+    if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment);
 
-    // If not all truck slots are filled, stay at pending_assignment
-    if (assignments.length < truckCount) return FreightStatus.pending_assignment;
+    // If not all truck slots are filled, stay at pending_assignment (but respect monotonic guard)
+    if (assignments.length < truckCount) return applyMonotonicGuard(FreightStatus.pending_assignment);
 
     // All slots filled — derive status from the MINIMUM tripStatus across all assignments
     // Status hierarchy: pending < accepted < in_progress < loaded < finished
@@ -1688,14 +1707,7 @@ export class FreightsService implements OnModuleInit {
     const minRank = Math.min(...assignments.map((a: any) => statusOrder[a.tripStatus] ?? 0));
     const derived = statusFromRank[minRank] ?? FreightStatus.assigned;
 
-    // Monotonic guard: never regress freight status below current
-    const freightStatusOrder: Record<string, number> = {
-      draft: 0, pending_assignment: 1, assigned: 2, accepted: 3,
-      in_progress: 4, loaded: 5, finished: 6, canceled: 7,
-    };
-    const currentRank = freightStatusOrder[freight.status] ?? 0;
-    const derivedRank = freightStatusOrder[derived] ?? 0;
-    return derivedRank >= currentRank ? derived : (freight.status as FreightStatus);
+    return applyMonotonicGuard(derived);
   }
 
   async assignMulti(freightId: string, dto: AssignMultiTruckDto, user: any) {
@@ -1708,7 +1720,7 @@ export class FreightsService implements OnModuleInit {
         // Read freight INSIDE transaction to prevent TOCTOU race
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
-          include: { conversation: { select: { id: true } } },
+          include: { conversation: { select: { id: true } }, items: { select: { tons: true } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
 
@@ -1716,15 +1728,29 @@ export class FreightsService implements OnModuleInit {
           throw new BadRequestException('Solo se puede asignar en estado pending_assignment o assigned');
         }
 
-        const existingCount = await tx.freightAssignment.count({
+        const existingAssignments = await (tx.freightAssignment as any).findMany({
           where: { freightId, status: { in: ['active', 'accepted'] } },
+          select: { tons: true },
         });
+        const existingCount = existingAssignments.length;
 
         // Validate truckCount limit
         if (freight.isMultiTruck && freight.truckCount && existingCount + dto.trucks.length > freight.truckCount) {
           throw new BadRequestException(
             `El flete permite ${freight.truckCount} camiones, ya tiene ${existingCount} asignados. Solo puede agregar ${freight.truckCount - existingCount} mas.`,
           );
+        }
+
+        // Validate total tonnage does not exceed freight total
+        const freightTotalTons = (freight as any).items?.reduce((sum: number, i: any) => sum + (Number(i.tons) || 0), 0) || 0;
+        if (freightTotalTons > 0) {
+          const existingTons = existingAssignments.reduce((sum: number, a: any) => sum + (Number(a.tons) || 0), 0);
+          const newTons = dto.trucks.reduce((sum: number, t: any) => sum + (Number(t.tons) || 0), 0);
+          if (newTons > 0 && existingTons + newTons > freightTotalTons) {
+            throw new BadRequestException(
+              `El tonelaje total asignado (${existingTons + newTons}) excede el total del flete (${freightTotalTons}).`,
+            );
+          }
         }
 
         let tripNumber = existingCount;
