@@ -300,7 +300,7 @@ export class FreightsService {
     }
 
     // Cursor-based pagination (preferred) or offset-based (legacy)
-    const paginationArgs: any = { take: limit, orderBy: { createdAt: 'desc' } };
+    const paginationArgs: any = { take: limit, orderBy: [{ destName: 'asc' }, { originName: 'asc' }, { createdAt: 'desc' }] };
     if (query.cursor) {
       paginationArgs.skip = 1; // skip the cursor item itself
       paginationArgs.cursor = { id: query.cursor };

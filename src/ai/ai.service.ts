@@ -1443,7 +1443,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un cÃ³digo de flete, la Ã
       page: 1,
     } as any);
 
-    const filtered = result.data;
+    const filtered = result.data.sort((a: any, b: any) =>
+      (a.destName || '').localeCompare(b.destName || '') || (a.originName || '').localeCompare(b.originName || ''));
 
     if (filtered.length === 0) {
       return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
@@ -1488,7 +1489,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un cÃ³digo de flete, la Ã
     } as any);
 
     // Post-query filter: transporter name (requires join data, can't easily DB-filter)
-    let filtered = result.data;
+    let filtered = result.data.sort((a: any, b: any) =>
+      (a.destName || '').localeCompare(b.destName || '') || (a.originName || '').localeCompare(b.originName || ''));
     if (input.transporterName) {
       const t = input.transporterName.toLowerCase();
       filtered = filtered.filter((f: any) => {
