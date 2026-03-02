@@ -380,11 +380,11 @@ PRIORIDAD EN CADA RESPUESTA:
 
 1. SOLO afirme datos provenientes de resultados de herramientas. NUNCA invente.
 2. Si una herramienta devuelve error o vacio, infórmelo. No improvise datos.
-3. NUNCA invente códigos FLT-XXXX, nombres de plantas, toneladas, fechas, patentes.
+3. NUNCA invente códigos de flete (ej: F26ABC1234), nombres de plantas, toneladas, fechas, patentes.
 4. NUNCA confirme que una acción se ejecutó si la herramienta no lo hizo.
 5. Si no dispone de la información, responda: "No se dispone de esa información."
 6. Ante incertidumbre, consulte antes de actuar.
-7. NUNCA exponga UUIDs internos. Solo códigos FLT-XXXX.
+7. NUNCA exponga UUIDs internos. Solo códigos de flete (ej: F26ABC1234).
 8. Audio transcripto puede contener errores fonéticos (ej: "solla" = Soja, "el triyo" = El Trillo).
    Interpretar la INTENCION del usuario. Si una busqueda no devuelve resultados, intentar variaciones foneticas.
 [UBICACIÓNES — REGLA OBLIGATORIA Y PRIORITARIA]
@@ -602,7 +602,7 @@ FILTROS AVANZADOS:
 Cuando el mensaje contiene "[El usuario envió una imagen" o "[El usuario envió un documento":
 1. El archivo YA fue descargado y almacenado automáticamente.
 2. Pregunte: "A que flete desea adjuntar este archivo?"
-3. Cuando el usuario responda con un código de flete (ej: FLT-0042) → llamar attach_document con ese código.
+3. Cuando el usuario responda con un código de flete (ej: F26ABC1234) → llamar attach_document con ese código.
    IMPORTANTE: NO llamar list_freights ni ninguna otra herramienta. Usar DIRECTAMENTE attach_document.
 4. attach_document prepara la acción → se muestran botones CONFIRMAR/CANCELAR.
 5. Cuando confirme → llamar confirm_action.
@@ -638,11 +638,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     },
     {
       name: 'get_freight_detail',
-      description: 'Detalle completo de un flete por código FLT-XXXX. Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicación.',
+      description: 'Detalle completo de un flete por código (ej: F26ABC1234). Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicación.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: FLT-0001' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -716,7 +716,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -727,7 +727,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           reason: { type: 'string', description: 'Motivo del rechazo' },
         },
         required: ['code', 'reason'],
@@ -739,7 +739,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -750,7 +750,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           tons: { type: 'number', description: 'Toneladas cargadas' },
         },
         required: ['code', 'tons'],
@@ -762,7 +762,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -773,7 +773,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           reason: { type: 'string', description: 'Motivo de cancelación' },
         },
         required: ['code', 'reason'],
@@ -863,7 +863,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           step: { type: 'string', enum: ['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'], description: 'Etapa del documento (opcional)' },
         },
         required: ['code'],
@@ -888,7 +888,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -917,7 +917,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -938,7 +938,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -949,7 +949,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -960,7 +960,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -981,7 +981,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           transporterCompanyId: { type: 'string', description: 'ID de empresa transportista, o "own_fleet" para flota interna del productor' },
           truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
@@ -995,7 +995,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           truckId: { type: 'string', description: 'ID del camión (de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
         },
@@ -1008,7 +1008,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo FLT-XXXX' },
+          code: { type: 'string', description: 'Codigo del flete, ej: F26ABC1234' },
           transporterCompanyId: { type: 'string', description: 'ID empresa o "own_fleet" para flota interna' },
           truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
@@ -1100,7 +1100,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           loadDate: { type: 'string', description: 'Nueva fecha de carga (YYYY-MM-DD). Opcional.' },
           loadTime: { type: 'string', description: 'Nueva hora de carga (HH:mm). Opcional.' },
           notes: { type: 'string', description: 'Nuevas notas. Opcional.' },
@@ -1118,7 +1118,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete original (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete original, ej: F26ABC1234' },
           loadDate: { type: 'string', description: 'Fecha de carga para el nuevo flete (YYYY-MM-DD)' },
           loadTime: { type: 'string', description: 'Hora de carga (HH:mm). Si no se indica, se copia del original.' },
         },
@@ -1131,7 +1131,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -1142,7 +1142,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -1201,7 +1201,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
         },
         required: ['code'],
       },
@@ -1212,7 +1212,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           changeId: { type: 'string', description: 'ID del cambio pendiente. Si no se indica, se usa el primer cambio pendiente del flete.' },
         },
         required: ['code'],
@@ -1224,7 +1224,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           changeId: { type: 'string', description: 'ID del cambio pendiente. Si no se indica, se usa el primer cambio pendiente del flete.' },
           reason: { type: 'string', description: 'Motivo del rechazo. Opcional.' },
         },
@@ -1237,7 +1237,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
           action: { type: 'string', enum: ['accepted', 'rejected'], description: 'Aceptar o rechazar' },
           reason: { type: 'string', description: 'Motivo del rechazo. Requerido si action=rejected.' },
@@ -1251,7 +1251,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
         },
         required: ['code'],
@@ -1263,7 +1263,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
           loadedTons: { type: 'number', description: 'Toneladas reales cargadas. Opcional.' },
         },
@@ -1276,7 +1276,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
         },
         required: ['code'],
@@ -1288,7 +1288,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
           reason: { type: 'string', description: 'Motivo de la cancelación.' },
         },
@@ -1301,7 +1301,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          code: { type: 'string', description: 'Código del flete, ej: F26ABC1234' },
           assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
           transporterCompanyId: { type: 'string', description: 'Nuevo transportista (de list_transporters). Opcional.' },
           truckId: { type: 'string', description: 'Nuevo camión (de list_trucks). Opcional.' },
@@ -4006,8 +4006,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     });
 
     // 2. Enforce max length for WhatsApp-friendly responses
-    //    Exception: freight lists (contain FLT-) are allowed to be longer
-    if (clean.length > MAX_RESPONSE_CHARS && !clean.includes('FLT-')) {
+    //    Exception: freight lists (contain freight codes) are allowed to be longer
+    if (clean.length > MAX_RESPONSE_CHARS && !/F\d{2}[A-Z]{3}\d{4}|FLT-\d{4,}/i.test(clean)) {
       // Find a natural break point (newline or sentence end)
       const lineBreak = clean.lastIndexOf('\n', MAX_RESPONSE_CHARS);
       if (lineBreak > MAX_RESPONSE_CHARS * 0.5) {

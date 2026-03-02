@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException, OnModuleInit } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
@@ -8,7 +8,7 @@ import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreight
 import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/client';
 
 @Injectable()
-export class FreightsService implements OnModuleInit {
+export class FreightsService {
   private readonly logger = new Logger(FreightsService.name);
 
   constructor(
@@ -19,21 +19,15 @@ export class FreightsService implements OnModuleInit {
     private sse: SseService,
   ) {}
 
-  async onModuleInit() {
-    // Create the freight_code_seq sequence once at startup (not on every create())
-    try {
-      await this.prisma.$executeRaw`
-        DO $$ BEGIN
-          IF NOT EXISTS (SELECT 1 FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'freight_code_seq') THEN
-            CREATE SEQUENCE freight_code_seq;
-            PERFORM setval('freight_code_seq', COALESCE((SELECT MAX(CAST(SUBSTRING(code FROM 5) AS INTEGER)) FROM freights WHERE code LIKE 'FLT-%'), 0));
-          END IF;
-        END $$;
-      `;
-      this.logger.log('freight_code_seq sequence ensured');
-    } catch (e) {
-      this.logger.error(`Failed to ensure freight_code_seq: ${e.message}`);
-    }
+  /** Generate a unique freight code: F + year(2) + letters(3) + digits(4) → e.g. F26ABC1234 */
+  private generateFreightCode(): string {
+    const year = String(new Date().getFullYear()).slice(-2);
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const letterPart = Array.from({ length: 3 }, () =>
+      letters[Math.floor(Math.random() * 26)],
+    ).join('');
+    const numberPart = String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
+    return `F${year}${letterPart}${numberPart}`;
   }
 
   // Delegate to shared CompanyResolutionService
@@ -145,10 +139,18 @@ export class FreightsService implements OnModuleInit {
     }
 
     const freight = await this.prisma.$transaction(async (tx) => {
-      // Generate code using PostgreSQL sequence (created in onModuleInit)
-      const seqResult = await tx.$queryRaw<[{ nextval: bigint }]>`SELECT nextval('freight_code_seq')`;
-      const nextNum = Number(seqResult[0].nextval);
-      const code = `FLT-${String(nextNum).padStart(4, '0')}`;
+      // Generate unique random freight code (F + year + 3 letters + 4 digits)
+      let code: string;
+      let attempts = 0;
+      do {
+        code = this.generateFreightCode();
+        const existing = await tx.freight.findUnique({ where: { code } });
+        if (!existing) break;
+        attempts++;
+      } while (attempts < 10);
+      if (attempts >= 10) {
+        throw new InternalServerErrorException('No se pudo generar un código único de flete');
+      }
 
       const f = await tx.freight.create({
         data: {

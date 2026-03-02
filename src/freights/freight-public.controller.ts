@@ -22,14 +22,14 @@ export class FreightPublicController {
 
   private validateCode(code: string): string {
     const normalized = code.toUpperCase();
-    if (!/^FLT-\d{4,}$/.test(normalized)) {
+    if (!/^(FLT-\d{4,}|F\d{2}[A-Z]{3}\d{4})$/.test(normalized)) {
       throw new BadRequestException('Código de flete inválido');
     }
     return normalized;
   }
 
   private async findSharedFreight(code: string, shareToken: string | undefined, select: Record<string, any>): Promise<any> {
-    // shareToken is required — code-only access is not allowed (codes are predictable FLT-####)
+    // shareToken is required — code-only access is not allowed
     if (!shareToken) {
       throw new BadRequestException('Token de compartir requerido');
     }
