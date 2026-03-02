@@ -411,17 +411,19 @@ export class AuthService {
   // ======================== EXISTING METHODS =============================
 
   async switchCompany(userId: string, dto: SwitchCompanyDto) {
-    const currentUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { activeCompanyId: true, companyId: true },
-    });
-    const oldCompanyId = currentUser?.activeCompanyId || currentUser?.companyId || null;
-
-    const membership = await (this.prisma.userCompany as any).findFirst({
-      where: { userId, companyId: dto.companyId, active: true },
-      include: { company: { select: COMPANY_SELECT } },
-    });
+    // Parallel: verify membership + get current company (for audit)
+    const [membership, currentUser] = await Promise.all([
+      (this.prisma.userCompany as any).findFirst({
+        where: { userId, companyId: dto.companyId, active: true },
+        include: { company: { select: COMPANY_SELECT } },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { activeCompanyId: true, companyId: true },
+      }),
+    ]);
     if (!membership) throw new BadRequestException('No pertenecés a esta empresa');
+    const oldCompanyId = currentUser?.activeCompanyId || currentUser?.companyId || null;
 
     const user = await (this.prisma.user as any).update({
       where: { id: userId },
@@ -436,21 +438,22 @@ export class AuthService {
       },
     });
 
-    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(e => this.logger.warn(e.message));
-
-    await this.prisma.auditLog.create({
-      data: {
-        entityType: 'user',
-        entityId: userId,
-        action: 'switch_company',
-        fromValue: oldCompanyId || undefined,
-        toValue: dto.companyId,
-        userId,
-      },
-    }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
-
-    const token = await this.signToken(user);
-    const refreshToken = await this.createRefreshToken(user.id);
+    // Parallel: sign token + create refresh token + cleanup old tokens + audit log
+    const [token, refreshToken] = await Promise.all([
+      this.signToken(user),
+      this.createRefreshToken(user.id),
+      (this.prisma as any).refreshToken.deleteMany({ where: { userId, token: { not: undefined } } }).catch(e => this.logger.warn(e.message)),
+      this.prisma.auditLog.create({
+        data: {
+          entityType: 'user',
+          entityId: userId,
+          action: 'switch_company',
+          fromValue: oldCompanyId || undefined,
+          toValue: dto.companyId,
+          userId,
+        },
+      }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`)),
+    ]);
     this.logger.log(`User ${userId} switched to company ${dto.companyId}`);
 
     return {
