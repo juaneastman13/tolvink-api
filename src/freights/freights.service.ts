@@ -1202,7 +1202,7 @@ export class FreightsService implements OnModuleInit {
 
   async updateFreight(
     freightId: string,
-    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number },
+    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; driverId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number },
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
@@ -1284,6 +1284,21 @@ export class FreightsService implements OnModuleInit {
           include: { assignedUser: { select: { id: true, name: true, phone: true } } },
         });
         if (truck) {
+          // Resolve driver: explicit driverId > truck's assignedUser > null
+          let assignDriverId: string | null = null;
+          let assignDriverName: string | null = null;
+          if (dto.driverId) {
+            // "Yo soy el chofer" sends user.id, otherwise a driver's id
+            const driver = await tx.user.findFirst({
+              where: { id: dto.driverId, active: true },
+              select: { id: true, name: true },
+            });
+            if (driver) { assignDriverId = driver.id; assignDriverName = driver.name; }
+          } else if (truck.assignedUser) {
+            assignDriverId = truck.assignedUser.id;
+            assignDriverName = truck.assignedUser.name;
+          }
+
           // Cancel any existing assignments
           if (freight.assignments.length > 0) {
             await tx.freightAssignment.updateMany({
@@ -1300,8 +1315,8 @@ export class FreightsService implements OnModuleInit {
               assignedById: user.sub,
               truckId: truck.id,
               plate: truck.plate,
-              driverId: truck.assignedUser?.id || null,
-              driverName: truck.assignedUser?.name || null,
+              driverId: assignDriverId,
+              driverName: assignDriverName,
             } as any,
           });
           data.status = FreightStatus.assigned;

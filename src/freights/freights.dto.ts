@@ -341,6 +341,11 @@ export class UpdateFreightDto {
   @IsUUID()
   truckId?: string;
 
+  @ApiProperty({ required: false, description: 'ID de chofer (flota propia)' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
   @ApiProperty({ required: false, description: 'Nombre de sucursal destino' })
   @IsOptional()
   @MaxLength(255)
