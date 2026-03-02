@@ -557,7 +557,10 @@ CONSULTAS:
 - get_dashboard → resumen ejecutivo de la empresa (fletes por estado, toneladas del mes, completados vs cancelados).
 
 MODIFICACIONES:
-- update_freight → modificar un flete: fecha/hora/notas (solo pending_assignment), flota propia (pending_assignment/assigned/accepted), planta destino (cualquier estado activo), camión y chofer (con flota propia). Algunos cambios pueden requerir aprobación.
+- update_freight → modificar un flete. IMPORTANTE: la herramienta valida internamente qué campos se pueden cambiar según el estado. SIEMPRE llamar la herramienta y dejar que ella decida. NO rechazar el pedido por tu cuenta.
+  - Campos: fecha/hora/notas, flota propia (useOwnFleet), planta destino (destPlantId), camión (truckId), chofer (driverId).
+  - Planta destino SÍ se puede cambiar en TODOS los estados activos, incluyendo in_progress y loaded.
+  - Algunos cambios pueden requerir aprobación de la otra empresa.
   - Para cambiar planta: usar search_plants primero para obtener el ID.
   - Para asignar camión: usar list_trucks primero.
   - Para asignar chofer: usar list_drivers primero, o indicar "yo soy el chofer".
