@@ -168,6 +168,7 @@ export class AiService implements OnModuleDestroy {
           const READ_ONLY_TOOLS = new Set([
             'list_freights', 'get_freight_detail', 'search_plants', 'list_lots', 'list_fields',
             'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers', 'summarize_freights',
+            'list_documents', 'freight_history', 'get_dashboard',
             'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
           ]);
 
@@ -455,8 +456,9 @@ Herramientas que requieren confirmación via confirm_action:
 - accept_freight, reject_freight, start_freight
 - confirm_loaded, confirm_finished, cancel_freight
 - assign_transporter, assign_truck_to_trip, assign_truck_to_freight
-- update_user_role, deactivate_user
+- update_user_role, deactivate_user, reactivate_user
 - create_field, create_lot, create_truck, create_user
+- update_freight, duplicate_freight, update_field, update_lot
 - attach_document
 
 Excepción — patrón propio (NO usan confirm_action):
@@ -542,8 +544,28 @@ CONSULTAR (cualquier usuario):
 MODIFICAR (solo admin/gerente):
 - update_user_role → prepara cambio de rol para confirmación.
 - deactivate_user → prepara desactivacion para confirmación.
+- reactivate_user → reactiva un usuario previamente desactivado.
 - Cuando confirme → llamar confirm_action.
 - NUNCA modifique accesos si el usuario no es admin/gerente.
+
+[HERRAMIENTAS ANALÍTICAS Y DE GESTIÓN]
+
+CONSULTAS:
+- summarize_freights → resumen analítico con filtros (fecha, grano, transportista) y agrupamiento. Usar para cualquier pedido de resumen, reporte, análisis o estadística.
+- list_documents → documentos adjuntos de un flete (fotos, carta de porte).
+- freight_history → historial completo de un flete (quién hizo qué y cuándo).
+- get_dashboard → resumen ejecutivo de la empresa (fletes por estado, toneladas del mes, completados vs cancelados).
+
+MODIFICACIONES:
+- update_freight → modificar fecha, hora o notas de un flete. Solo en estado pending_assignment.
+- duplicate_freight → crear copia de un flete con nueva fecha. Solo productores.
+- update_field → modificar dirección o ubicación de un campo.
+- update_lot → modificar hectáreas o ubicación de un lote.
+
+FILTROS AVANZADOS:
+- list_freights y summarize_freights aceptan: dateFrom, dateTo (YYYY-MM-DD), grain (nombre del grano).
+- summarize_freights además acepta: transporterName (nombre parcial del transportista).
+- Usar estos filtros cuando el usuario mencione fechas, períodos, tipos de grano o transportistas específicos.
 
 [ARCHIVOS Y DOCUMENTOS — CRÍTICO]
 
@@ -568,7 +590,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
   private readonly tools = [
     {
       name: 'list_freights',
-      description: 'Lista los fletes del usuario como menú interactivo de WhatsApp. Puede filtrar por estado. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Lista los fletes del usuario como menú interactivo de WhatsApp. Puede filtrar por estado, fecha y grano. Retorna _selectionSent: true — NO reformatear. Para resúmenes/análisis usar summarize_freights.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -577,6 +599,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
             enum: ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded', 'finished', 'canceled'],
             description: 'Filtrar por estado (opcional)',
           },
+          dateFrom: { type: 'string', description: 'Fecha desde (YYYY-MM-DD). Opcional.' },
+          dateTo: { type: 'string', description: 'Fecha hasta (YYYY-MM-DD). Opcional.' },
+          grain: { type: 'string', description: 'Filtrar por grano (ej: Soja, Trigo). Opcional.' },
         },
         required: [],
       },
@@ -1031,8 +1056,109 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
             enum: ['transporter', 'status', 'grain', 'destination', 'origin'],
             description: 'Agrupar resultados por este criterio (opcional)',
           },
+          dateFrom: { type: 'string', description: 'Fecha desde (YYYY-MM-DD). Opcional.' },
+          dateTo: { type: 'string', description: 'Fecha hasta (YYYY-MM-DD). Opcional.' },
+          grain: { type: 'string', description: 'Filtrar por grano (ej: Soja, Trigo). Opcional.' },
+          transporterName: { type: 'string', description: 'Filtrar por nombre de transportista (parcial). Opcional.' },
         },
         required: [],
+      },
+    },
+    {
+      name: 'update_freight',
+      description: 'Modifica un flete existente (solo en estado pending_assignment). Puede cambiar fecha, hora y notas. Prepara la acción para confirmación.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+          loadDate: { type: 'string', description: 'Nueva fecha de carga (YYYY-MM-DD). Opcional.' },
+          loadTime: { type: 'string', description: 'Nueva hora de carga (HH:mm). Opcional.' },
+          notes: { type: 'string', description: 'Nuevas notas. Opcional.' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'duplicate_freight',
+      description: 'Duplica un flete existente con una nueva fecha de carga. Copia grano, toneladas, origen, destino y notas. Solo productores. Prepara la acción para confirmación.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Código del flete original (FLT-XXXX)' },
+          loadDate: { type: 'string', description: 'Fecha de carga para el nuevo flete (YYYY-MM-DD)' },
+          loadTime: { type: 'string', description: 'Hora de carga (HH:mm). Si no se indica, se copia del original.' },
+        },
+        required: ['code', 'loadDate'],
+      },
+    },
+    {
+      name: 'list_documents',
+      description: 'Lista los documentos adjuntos de un flete (fotos, carta de porte, etc). Retorna datos en texto, NO menú interactivo.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'freight_history',
+      description: 'Muestra el historial completo de un flete: quién hizo qué y cuándo (creación, asignaciones, cambios de estado, cancelaciones). Retorna datos en texto.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          code: { type: 'string', description: 'Código del flete (FLT-XXXX)' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'get_dashboard',
+      description: 'Resumen ejecutivo de la empresa: fletes por estado, toneladas del mes, completados vs cancelados. Usar cuando el usuario pide "cómo estamos", "resumen general", "dashboard", "estado de la empresa".',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'update_field',
+      description: 'Modifica un campo existente (dirección y ubicación). Prepara la acción para confirmación.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          fieldName: { type: 'string', description: 'Nombre del campo a modificar' },
+          address: { type: 'string', description: 'Nueva dirección. Opcional.' },
+          lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
+          lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
+        },
+        required: ['fieldName'],
+      },
+    },
+    {
+      name: 'update_lot',
+      description: 'Modifica un lote existente (hectáreas y ubicación). Prepara la acción para confirmación.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          lotName: { type: 'string', description: 'Nombre del lote a modificar' },
+          hectares: { type: 'number', description: 'Nuevas hectáreas. Opcional.' },
+          lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
+          lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
+        },
+        required: ['lotName'],
+      },
+    },
+    {
+      name: 'reactivate_user',
+      description: 'Reactiva un usuario previamente desactivado de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          userIdentifier: { type: 'string', description: 'Nombre o email del usuario a reactivar' },
+        },
+        required: ['userIdentifier'],
       },
     },
   ];
@@ -1086,6 +1212,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
         case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
         case 'switch_company': return await this.toolSwitchCompany(input, user, session);
         case 'summarize_freights': return await this.toolSummarizeFreights(synUser, input);
+        case 'update_freight': return await this.toolUpdateFreight(input, user, session);
+        case 'duplicate_freight': return await this.toolDuplicateFreight(input, user, synUser, session);
+        case 'list_documents': return await this.toolListDocuments(input, user);
+        case 'freight_history': return await this.toolFreightHistory(input, user);
+        case 'get_dashboard': return await this.toolGetDashboard(user);
+        case 'update_field': return await this.toolUpdateField(input, user, session);
+        case 'update_lot': return await this.toolUpdateLot(input, user, session);
+        case 'reactivate_user': return await this.toolReactivateUser(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -1106,8 +1240,23 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       page: 1,
     } as any);
 
-    if (result.data.length === 0) {
-      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan' });
+    // Post-query filters: date range and grain
+    let filtered = result.data;
+    if (input.dateFrom) {
+      const from = new Date(input.dateFrom);
+      filtered = filtered.filter((f: any) => f.loadDate && new Date(f.loadDate) >= from);
+    }
+    if (input.dateTo) {
+      const to = new Date(input.dateTo + 'T23:59:59');
+      filtered = filtered.filter((f: any) => f.loadDate && new Date(f.loadDate) <= to);
+    }
+    if (input.grain) {
+      const g = input.grain.toLowerCase();
+      filtered = filtered.filter((f: any) => (f.items?.[0]?.grain || '').toLowerCase().includes(g));
+    }
+
+    if (filtered.length === 0) {
+      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
     }
 
     const STATUS_SHORT: Record<string, string> = {
@@ -1116,7 +1265,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       cancelled: 'Cancelado', rejected: 'Rechazado',
     };
 
-    const items = result.data.map((f: any) => {
+    const items = filtered.map((f: any) => {
       const grain = f.items?.[0]?.grain || 'N/A';
       const tons = f.items?.[0]?.tons || 0;
       const origin = f.originName || f.originCompany?.name || '?';
@@ -1131,7 +1280,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
     const statusLabel = input.status ? ` (${STATUS_SHORT[input.status] || input.status})` : '';
     return this.storePendingSelection(session, items, {
-      headerText: `📦 ${result.total} flete${result.total !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
+      headerText: `📦 ${filtered.length} flete${filtered.length !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
       listButtonLabel: 'Ver fletes',
       sectionTitle: 'FLETES',
     }, 'freight_selection');
@@ -1145,8 +1294,30 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       page: 1,
     } as any);
 
-    if (result.data.length === 0) {
-      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan' });
+    // Post-query filters: date range, grain, transporter name
+    let filtered = result.data;
+    if (input.dateFrom) {
+      const from = new Date(input.dateFrom);
+      filtered = filtered.filter((f: any) => f.loadDate && new Date(f.loadDate) >= from);
+    }
+    if (input.dateTo) {
+      const to = new Date(input.dateTo + 'T23:59:59');
+      filtered = filtered.filter((f: any) => f.loadDate && new Date(f.loadDate) <= to);
+    }
+    if (input.grain) {
+      const g = input.grain.toLowerCase();
+      filtered = filtered.filter((f: any) => (f.items?.[0]?.grain || '').toLowerCase().includes(g));
+    }
+    if (input.transporterName) {
+      const t = input.transporterName.toLowerCase();
+      filtered = filtered.filter((f: any) => {
+        const tName = f.assignments?.[0]?.transportCompany?.name || '';
+        return tName.toLowerCase().includes(t);
+      });
+    }
+
+    if (filtered.length === 0) {
+      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
     }
 
     const STATUS_LABELS: Record<string, string> = {
@@ -1156,7 +1327,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     };
 
     // Build flat freight records
-    const freights = result.data.map((f: any) => {
+    const freights = filtered.map((f: any) => {
       const assignment = f.assignments?.[0];
       return {
         code: f.code,
@@ -1201,7 +1372,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       }));
 
       return JSON.stringify({
-        total: result.total,
+        total: freights.length,
         groupedBy: groupBy,
         groups: summary,
       });
@@ -1209,9 +1380,343 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
     // No grouping — return flat list
     return JSON.stringify({
-      total: result.total,
+      total: freights.length,
       freights,
     });
+  }
+
+  // ---- update_freight ----
+  private async toolUpdateFreight(input: any, user: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+
+    if (freight.status !== 'pending_assignment') {
+      return JSON.stringify({ error: `El flete ${freight.code} no se puede modificar en estado "${freight.status}". Solo se permite en "pending_assignment".` });
+    }
+
+    const changes: string[] = [];
+    const dto: any = {};
+    if (input.loadDate) { dto.loadDate = input.loadDate; changes.push(`Fecha: ${input.loadDate}`); }
+    if (input.loadTime) { dto.loadTime = input.loadTime; changes.push(`Hora: ${input.loadTime}`); }
+    if (input.notes !== undefined) { dto.notes = input.notes; changes.push(`Notas: ${input.notes}`); }
+
+    if (changes.length === 0) {
+      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: loadDate, loadTime, notes.' });
+    }
+
+    return this.stageAction(session, 'update_freight', {
+      freightId: freight.id, code: freight.code, dto,
+    }, `Modificar flete ${freight.code}\n${changes.join('\n')}`);
+  }
+
+  // ---- duplicate_freight ----
+  private async toolDuplicateFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const freight = await this.prisma.freight.findFirst({
+      where: { code: input.code.toUpperCase() },
+      include: {
+        items: true,
+        originCompany: { select: { id: true, name: true } },
+        destCompany: { select: { id: true, name: true } },
+        originLot: { select: { id: true, name: true } },
+        destPlant: { select: { id: true, name: true } },
+      },
+    });
+    if (!freight) return JSON.stringify({ error: `No se encontró el flete ${input.code}` });
+
+    const item = freight.items?.[0];
+    if (!item) return JSON.stringify({ error: 'El flete no tiene items para duplicar.' });
+
+    const originName = (freight as any).originName || freight.originCompany?.name || 'Origen';
+    const destName = (freight as any).destName || freight.destCompany?.name || 'Destino';
+
+    const summary = [
+      `Duplicar flete ${freight.code} con nueva fecha`,
+      `Grano: ${(item as any).grain} | Tons: ${(item as any).tons}`,
+      `Origen: ${originName}`,
+      `Destino: ${destName}`,
+      `Fecha: ${input.loadDate}${input.loadTime ? ` ${input.loadTime}` : ((freight as any).loadTime ? ` ${(freight as any).loadTime}` : '')}`,
+    ].join('\n');
+
+    return this.stageAction(session, 'duplicate_freight', {
+      originalFreight: {
+        grain: (item as any).grain,
+        tons: (item as any).tons,
+        originLotId: (freight as any).originLotId || null,
+        customOriginName: (freight as any).originName || null,
+        originLat: (freight as any).originLat ? Number((freight as any).originLat) : null,
+        originLng: (freight as any).originLng ? Number((freight as any).originLng) : null,
+        destPlantId: (freight as any).destPlantId || null,
+        destCompanyId: freight.destCompany?.id || null,
+        customDestName: (freight as any).destName || null,
+        destLat: (freight as any).destLat ? Number((freight as any).destLat) : null,
+        destLng: (freight as any).destLng ? Number((freight as any).destLng) : null,
+        notes: (freight as any).notes || null,
+        truckCount: (freight as any).truckCount || 1,
+      },
+      loadDate: input.loadDate,
+      loadTime: input.loadTime || (freight as any).loadTime || null,
+      originalCode: freight.code,
+    }, summary);
+  }
+
+  // ---- list_documents ----
+  private async toolListDocuments(input: any, user: any): Promise<string> {
+    const freight = await this.prisma.freight.findFirst({
+      where: { code: input.code.toUpperCase() },
+      include: {
+        documents: { orderBy: { createdAt: 'desc' }, select: { id: true, name: true, type: true, step: true, url: true, createdAt: true } },
+      },
+    });
+    if (!freight) return JSON.stringify({ error: `No se encontró el flete ${input.code}` });
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    if (!allUserCompanies.some((c: string) => [(freight as any).originCompanyId, (freight as any).destCompanyId].includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${input.code}` });
+    }
+
+    const docs = freight.documents || [];
+    if (docs.length === 0) {
+      return JSON.stringify({ total: 0, message: `El flete ${input.code} no tiene documentos adjuntos.` });
+    }
+
+    const STEP_LABELS: Record<string, string> = {
+      request: 'Solicitud', assignment: 'Asignación', load_confirmation: 'Carga',
+      delivery_confirmation: 'Entrega', cancellation: 'Cancelación',
+    };
+
+    const items = docs.map((d: any) => ({
+      name: d.name,
+      type: d.type,
+      step: STEP_LABELS[d.step] || d.step || 'General',
+      date: new Date(d.createdAt).toISOString().split('T')[0],
+      url: d.url,
+    }));
+
+    return JSON.stringify({ total: items.length, code: input.code, documents: items });
+  }
+
+  // ---- freight_history ----
+  private async toolFreightHistory(input: any, user: any): Promise<string> {
+    const freight = await this.prisma.freight.findFirst({
+      where: { code: input.code.toUpperCase() },
+      select: { id: true, code: true, originCompanyId: true, destCompanyId: true },
+    });
+    if (!freight) return JSON.stringify({ error: `No se encontró el flete ${input.code}` });
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    if (!allUserCompanies.some((c: string) => [freight.originCompanyId, freight.destCompanyId].includes(c))) {
+      return JSON.stringify({ error: `No tiene acceso al flete ${input.code}` });
+    }
+
+    const logs = await this.freights.getAuditLog(freight.id);
+
+    if (!logs || (logs as any[]).length === 0) {
+      return JSON.stringify({ total: 0, message: `No hay registros de actividad para ${freight.code}.` });
+    }
+
+    const ACTION_LABELS: Record<string, string> = {
+      created: 'Creado', status_changed: 'Cambio de estado', assigned: 'Asignado',
+      cancelled: 'Cancelado', updated: 'Modificado', document_added: 'Documento adjuntado',
+      driver_assigned: 'Chofer asignado', truck_assigned: 'Camión asignado',
+    };
+
+    const events = (logs as any[]).map((log: any) => ({
+      action: ACTION_LABELS[log.action] || log.action,
+      from: log.fromValue || null,
+      to: log.toValue || null,
+      reason: log.reason || null,
+      user: log.user?.name || 'Sistema',
+      company: log.user?.company?.name || null,
+      date: new Date(log.createdAt).toISOString().replace('T', ' ').slice(0, 16),
+    }));
+
+    return JSON.stringify({ total: events.length, code: freight.code, events });
+  }
+
+  // ---- get_dashboard ----
+  private async toolGetDashboard(user: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
+
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allCompanies = [companyId, ...memberCompanyIds].filter(Boolean);
+
+    const where: any = {
+      OR: [
+        { originCompanyId: { in: allCompanies } },
+        { destCompanyId: { in: allCompanies } },
+        { assignments: { some: { transportCompanyId: { in: allCompanies }, status: { in: ['active', 'accepted'] } } } },
+      ],
+    };
+
+    // Current month boundaries
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+    const [byStatus, monthFreights] = await Promise.all([
+      // All freights grouped by status
+      this.prisma.freight.groupBy({ by: ['status'], where, _count: true }),
+      // This month's freights with items for tonnage
+      this.prisma.freight.findMany({
+        where: { ...where, createdAt: { gte: monthStart, lte: monthEnd } },
+        select: { id: true, status: true, items: { select: { tons: true } } },
+      }),
+    ]);
+
+    const STATUS_LABELS: Record<string, string> = {
+      pending_assignment: 'Pend. asignación', assigned: 'Asignado', accepted: 'Aceptado',
+      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
+      cancelled: 'Cancelado', rejected: 'Rechazado',
+    };
+
+    const statusSummary = byStatus.map((s: any) => ({
+      status: STATUS_LABELS[s.status] || s.status,
+      count: s._count,
+    }));
+
+    const totalActive = byStatus
+      .filter((s: any) => !['finished', 'cancelled', 'rejected'].includes(s.status))
+      .reduce((sum: number, s: any) => sum + s._count, 0);
+
+    const monthTons = monthFreights.reduce((sum: number, f: any) =>
+      sum + (f.items || []).reduce((s: number, i: any) => s + (Number(i.tons) || 0), 0), 0);
+    const monthCompleted = monthFreights.filter((f: any) => f.status === 'finished').length;
+    const monthCancelled = monthFreights.filter((f: any) => f.status === 'cancelled').length;
+
+    return JSON.stringify({
+      activeFreights: totalActive,
+      byStatus: statusSummary,
+      month: {
+        name: now.toLocaleString('es', { month: 'long', year: 'numeric' }),
+        totalFreights: monthFreights.length,
+        totalTons: Math.round(monthTons * 10) / 10,
+        completed: monthCompleted,
+        cancelled: monthCancelled,
+      },
+    });
+  }
+
+  // ---- update_field ----
+  private async toolUpdateField(input: any, user: any, session: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa productora.' });
+
+    const field = await this.prisma.field.findFirst({
+      where: {
+        companyId: producerCompanyId,
+        active: true,
+        name: { contains: input.fieldName, mode: 'insensitive' },
+      },
+    });
+    if (!field) return JSON.stringify({ error: `No se encontró el campo "${input.fieldName}".` });
+
+    // Use lastLocation from WhatsApp if no lat/lng provided
+    let lat = input.lat, lng = input.lng;
+    if (!lat || !lng) {
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const st = (freshSession?.flowState as any) || {};
+      if (st.lastLocation) {
+        lat = lat || st.lastLocation.lat;
+        lng = lng || st.lastLocation.lng;
+      }
+    }
+
+    const changes: string[] = [];
+    const dto: any = {};
+    if (input.address) { dto.address = input.address; changes.push(`Dirección: ${input.address}`); }
+    if (lat) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
+    if (lng) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
+
+    if (changes.length === 0) {
+      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: address, lat, lng.' });
+    }
+
+    return this.stageAction(session, 'update_field', {
+      fieldId: field.id, fieldName: field.name, dto, producerCompanyId,
+    }, `Modificar campo "${field.name}"\n${changes.join('\n')}`);
+  }
+
+  // ---- update_lot ----
+  private async toolUpdateLot(input: any, user: any, session: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa productora.' });
+
+    const lot = await this.prisma.lot.findFirst({
+      where: {
+        companyId: producerCompanyId,
+        active: true,
+        name: { contains: input.lotName, mode: 'insensitive' },
+      },
+      include: { field: { select: { id: true, name: true } } },
+    });
+    if (!lot) return JSON.stringify({ error: `No se encontró el lote "${input.lotName}".` });
+
+    // Use lastLocation from WhatsApp if no lat/lng provided
+    let lat = input.lat, lng = input.lng;
+    if (!lat || !lng) {
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const st = (freshSession?.flowState as any) || {};
+      if (st.lastLocation) {
+        lat = lat || st.lastLocation.lat;
+        lng = lng || st.lastLocation.lng;
+      }
+    }
+
+    const changes: string[] = [];
+    const dto: any = {};
+    if (input.hectares) { dto.hectares = input.hectares; changes.push(`Hectáreas: ${input.hectares}`); }
+    if (lat) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
+    if (lng) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
+
+    if (changes.length === 0) {
+      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: hectares, lat, lng.' });
+    }
+
+    return this.stageAction(session, 'update_lot', {
+      fieldId: lot.field.id, lotId: lot.id, lotName: lot.name, fieldName: lot.field.name, dto, producerCompanyId,
+    }, `Modificar lote "${lot.name}" (campo "${lot.field.name}")\n${changes.join('\n')}`);
+  }
+
+  // ---- reactivate_user ----
+  private async toolReactivateUser(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden reactivar usuarios.' });
+    }
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
+
+    const searchTerm = input.userIdentifier.trim();
+    const membership = await this.prisma.userCompany.findFirst({
+      where: {
+        companyId,
+        active: false,
+        user: {
+          OR: [
+            { name: { contains: searchTerm, mode: 'insensitive' } },
+            { email: { equals: searchTerm, mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+
+    if (!membership) {
+      return JSON.stringify({ error: `No se encontró un usuario inactivo "${searchTerm}" en su empresa.` });
+    }
+
+    return this.stageAction(session, 'reactivate_user', {
+      membershipId: membership.id,
+      targetUserId: membership.user.id,
+      userName: membership.user.name,
+    }, `Reactivar usuario "${membership.user.name}" en su empresa`);
   }
 
   // ---- Helper: store _pendingSelection for interactive list ----
@@ -1786,6 +2291,62 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
           }, synUser);
           this.logger.log(`attach_document created doc: ${(doc as any).id}`);
           result = JSON.stringify({ status: 'attached', code: params.code, document: params.document.name, docId: (doc as any).id });
+          break;
+        }
+
+        case 'update_freight': {
+          await this.freights.updateFreight(params.freightId, params.dto, synUser);
+          result = JSON.stringify({ status: 'updated', code: params.code, message: `Flete ${params.code} modificado exitosamente.` });
+          break;
+        }
+
+        case 'duplicate_freight': {
+          const orig = params.originalFreight;
+          const producerCompanyId = this.resolveProducerCompanyId(user);
+          const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
+          const createDto: any = {
+            items: [{ grain: orig.grain, tons: orig.tons }],
+            loadDate: params.loadDate,
+            loadTime: params.loadTime,
+            truckCount: orig.truckCount || 1,
+            notes: orig.notes,
+          };
+          if (orig.destPlantId) createDto.destPlantId = orig.destPlantId;
+          else if (orig.destCompanyId) createDto.destPlantId = orig.destCompanyId;
+          else if (orig.customDestName) createDto.customDestName = orig.customDestName;
+          if (orig.originLotId) createDto.originLotId = orig.originLotId;
+          else if (orig.customOriginName) createDto.customOriginName = orig.customOriginName;
+          if (orig.originLat && orig.originLng) { createDto.overrideOriginLat = orig.originLat; createDto.overrideOriginLng = orig.originLng; }
+          if (orig.destLat && orig.destLng) { createDto.overrideDestLat = orig.destLat; createDto.overrideDestLng = orig.destLng; }
+          const newFreight = await this.freights.create(createDto, producerSynUser);
+          result = JSON.stringify({ status: 'duplicated', originalCode: params.originalCode, newCode: (newFreight as any).code, link: `${APP_URL}/freights/${(newFreight as any).id}` });
+          break;
+        }
+
+        case 'update_field': {
+          const fieldSynUser = { ...synUser, companyId: params.producerCompanyId, companyType: 'producer', userType: 'producer' };
+          await this.fieldsService.updateField(fieldSynUser, params.fieldId, params.dto);
+          result = JSON.stringify({ status: 'updated', fieldName: params.fieldName, message: `Campo "${params.fieldName}" modificado exitosamente.` });
+          break;
+        }
+
+        case 'update_lot': {
+          const lotSynUser = { ...synUser, companyId: params.producerCompanyId, companyType: 'producer', userType: 'producer' };
+          await this.fieldsService.updateLot(lotSynUser, params.fieldId, params.lotId, params.dto);
+          result = JSON.stringify({ status: 'updated', lotName: params.lotName, fieldName: params.fieldName, message: `Lote "${params.lotName}" modificado exitosamente.` });
+          break;
+        }
+
+        case 'reactivate_user': {
+          await this.prisma.userCompany.update({
+            where: { id: params.membershipId },
+            data: { active: true },
+          });
+          await this.prisma.user.update({
+            where: { id: params.targetUserId },
+            data: { active: true },
+          });
+          result = JSON.stringify({ status: 'reactivated', userName: params.userName, message: `Usuario "${params.userName}" reactivado exitosamente.` });
           break;
         }
 
