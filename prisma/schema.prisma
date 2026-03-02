@@ -706,6 +706,7 @@ model WhatsAppSession {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([phone])
+  @@index([phone, expiresAt])
   @@index([userId])
   @@index([userId, expiresAt])
   @@map("whatsapp_sessions")

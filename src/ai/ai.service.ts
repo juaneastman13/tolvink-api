@@ -2081,6 +2081,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     const accessRecords = await this.prisma.plantProducerAccess.findMany({
       where: { producerCompanyId, active: true },
       select: { plantCompanyId: true },
+      take: 500,
     });
 
     const plantCompanyIds = [...new Set(accessRecords.map(ar => ar.plantCompanyId))];
@@ -3395,13 +3396,15 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion?s=${shareToken}`;
 
-    // 1) Send GPS sharing request to each driver with a phone number
+    // 1) Build all messages first, then send in parallel
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    const sends: Promise<any>[] = [];
+
+    // Driver messages (GPS sharing request)
     for (const a of freight.assignments) {
       const driver = a.driver;
       if (!driver?.phone) continue;
 
-      // Build live-share link for this driver
       let liveShareUrl = '';
       if (secret) {
         const token = createSignedToken(
@@ -3415,10 +3418,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
         + `Puede enviar su ubicaci√≥n en este chat (adjuntar \u2192 Ubicacion) para que las empresas sigan el viaje.\n\n`
         + `Seguimiento: ${trackingUrl}`;
 
-      await this.wa.sendText(driver.phone, driverMsg);
+      sends.push(this.wa.sendText(driver.phone, driverMsg));
     }
 
-    // 2) Send tracking link to stakeholder companies (origin, dest, transport)
+    // 2) Stakeholder messages (tracking link)
     const companyIds = new Set<string>();
     if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
     if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
@@ -3436,10 +3439,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
         ],
       },
       select: { phone: true, id: true, companyId: true },
-      take: 100, // Safety limit: prevent unbounded queries for very large companies
+      take: 100,
     });
 
-    // Exclude drivers and the user who triggered the start (they already got confirmation)
     const driverIds = new Set(freight.assignments.map(a => a.driverId).filter(Boolean));
     const triggerUserId = triggerUser.id;
 
@@ -3447,7 +3449,6 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       if (driverIds.has(s.id) || s.id === triggerUserId) continue;
       if (!s.phone) continue;
 
-      // Build live-freight view link for this stakeholder
       let liveViewUrl = '';
       if (secret && s.companyId) {
         const viewToken = createSignedToken(
@@ -3460,8 +3461,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       const trackMsg = `*Flete ${freight.code} en camino*\n${freight.originName} ‚Üí ${freight.destName}\n\n`
         + `Seguimiento en vivo: ${liveViewUrl || trackingUrl}`;
 
-      await this.wa.sendText(s.phone, trackMsg);
+      sends.push(this.wa.sendText(s.phone, trackMsg));
     }
+
+    // Send all messages in parallel
+    await Promise.allSettled(sends);
   }
 
   // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================
@@ -3486,6 +3490,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     const accessRecords = await this.prisma.plantProducerAccess.findMany({
       where: { OR: [{ producerCompanyId: ownCompanyId }, { plantCompanyId: ownCompanyId }], active: true },
       select: { producerCompanyId: true, plantCompanyId: true },
+      take: 500,
     });
     const relatedCompanyIds = [...new Set(accessRecords.map(a =>
       a.producerCompanyId === ownCompanyId ? a.plantCompanyId : a.producerCompanyId,
@@ -4342,8 +4347,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       ...freight.assignments.map((a: any) => a.transportCompanyId),
     ].filter(Boolean);
     const isDriver = freight.assignments.some((a: any) => a.driverId === user.id);
-    if (!isDriver && !allUserCompanies.some((c: string) => freightCompanies.includes(c))) {
+    const isCompanyUser = allUserCompanies.some((c: string) => freightCompanies.includes(c));
+    if (!isDriver && !isCompanyUser) {
       return { error: `No tiene acceso al flete ${code}` };
+    }
+    // Drivers without company access only see their own assignment
+    if (isDriver && !isCompanyUser) {
+      freight.assignments = freight.assignments.filter((a: any) => a.driverId === user.id);
     }
     return { freight };
   }

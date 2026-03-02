@@ -219,6 +219,12 @@ export class WhatsAppRouterService {
     // Edge case: empty or whitespace-only message
     if (!t) return;
 
+    // Safety: cap extremely long messages before processing
+    if (t.length > 10_000) {
+      await this.wa.sendText(phone, 'Mensaje demasiado largo. Máximo 10.000 caracteres.');
+      return;
+    }
+
     // ---- Check for active selection context (numbered text reply) ----
     // Reuse cached session if available and matches (no flowType, not expired)
     const selSession = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
@@ -438,8 +444,9 @@ export class WhatsAppRouterService {
     });
 
     // GPS tracking: save position to FreightTracking for any active freight the user is involved in
-    this.saveLocationToActiveFreights(user, latitude, longitude).catch((err) => {
+    this.saveLocationToActiveFreights(user, latitude, longitude).catch(async (err) => {
       this.logger.error(`GPS tracking save failed: ${err.message}`);
+      await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch(() => {});
     });
 
     // Forward as text to AI so Claude knows the user shared a location
@@ -492,12 +499,10 @@ export class WhatsAppRouterService {
       take: 10,
     });
 
-    for (const f of activeFreights) {
-      await this.prisma.freightTracking.create({
-        data: { freightId: f.id, userId: user.id, lat, lng },
-      }).catch((err) => this.logger.warn(`GPS write failed for freight ${f.id}: ${err.message}`));
-    }
     if (activeFreights.length > 0) {
+      await this.prisma.freightTracking.createMany({
+        data: activeFreights.map(f => ({ freightId: f.id, userId: user.id, lat, lng })),
+      }).catch((err) => this.logger.warn(`Batch GPS write failed for user ${user.id}: ${err.message}`));
       this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);
     }
   }

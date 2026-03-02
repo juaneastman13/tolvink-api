@@ -101,6 +101,13 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     phone: string,
     user: any,
   ) {
+    // Check if session has expired
+    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      await this.endFlow(session.id);
+      await this.wa.sendText(phone, 'La sesión expiró. Escriba "menu" para comenzar de nuevo.');
+      return;
+    }
+
     const flowType = session.flowType;
     const flowStep = session.flowStep;
     const state = (session.flowState as any) || {};
