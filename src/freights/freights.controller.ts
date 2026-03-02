@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -238,9 +238,35 @@ export class FreightsController {
   @Patch(':id')
   @UseGuards(FreightAccessGuard)
   @Roles('producer', 'plant')
-  @ApiOperation({ summary: 'Editar flete pendiente (fecha, hora, notas)' })
+  @ApiOperation({ summary: 'Editar flete (campos según estado, algunos requieren aprobación)' })
   updateFreight(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFreightDto, @CurrentUser() user: any) {
     return this.service.updateFreight(id, dto, user);
+  }
+
+  @Post(':id/pending-changes/:changeId/approve')
+  @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant')
+  @ApiOperation({ summary: 'Aprobar cambio pendiente de un flete' })
+  approvePendingChange(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('changeId', ParseUUIDPipe) changeId: string,
+    @Body() dto: ResolvePendingChangeDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.approvePendingChange(id, changeId, user);
+  }
+
+  @Post(':id/pending-changes/:changeId/reject')
+  @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant')
+  @ApiOperation({ summary: 'Rechazar cambio pendiente de un flete' })
+  rejectPendingChange(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('changeId', ParseUUIDPipe) changeId: string,
+    @Body() dto: ResolvePendingChangeDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.rejectPendingChange(id, changeId, user);
   }
 
   @Post(':id/tracking')

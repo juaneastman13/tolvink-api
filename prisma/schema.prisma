@@ -75,6 +75,7 @@ enum NotificationType {
   freight_confirmed
   freight_finished
   freight_canceled
+  freight_updated
   message_received
   conversation_started
 }
@@ -162,6 +163,8 @@ model User {
   producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
   whatsappSessions   WhatsAppSession[]
   passwordResetCodes PasswordResetCode[]
+  requestedChanges   FreightPendingChange[] @relation("PendingChangeRequester")
+  resolvedChanges    FreightPendingChange[] @relation("PendingChangeResolver")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -376,6 +379,7 @@ model Freight {
   auditLogs       AuditLog[]
   trackingPoints  FreightTracking[]
   liveLocations   LiveLocation[]
+  pendingChanges  FreightPendingChange[]
 
   @@index([loadDate])
   @@index([code])
@@ -738,4 +742,28 @@ model PasswordResetCode {
   @@index([userId])
   @@index([expiresAt])
   @@map("password_reset_codes")
+}
+
+// ======================== FREIGHT PENDING CHANGES =======================
+
+model FreightPendingChange {
+  id                String    @id @default(uuid())
+  freightId         String    @map("freight_id")
+  changeType        String    @db.VarChar(50)
+  fromValue         Json
+  toValue           Json
+  requestedById     String    @map("requested_by_id")
+  approverCompanyId String    @map("approver_company_id")
+  status            String    @default("pending") @db.VarChar(20)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  resolvedAt        DateTime? @map("resolved_at")
+  resolvedById      String?   @map("resolved_by_id")
+
+  freight     Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  requestedBy User    @relation("PendingChangeRequester", fields: [requestedById], references: [id])
+  resolvedBy  User?   @relation("PendingChangeResolver", fields: [resolvedById], references: [id])
+
+  @@index([freightId, status])
+  @@index([approverCompanyId, status])
+  @@map("freight_pending_changes")
 }

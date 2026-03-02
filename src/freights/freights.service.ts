@@ -312,7 +312,7 @@ export class FreightsService implements OnModuleInit {
           requestedBy: { select: { id: true, name: true } },
           conversation: { select: { id: true } },
           assignments: {
-            where: { status: { in: ['active', 'accepted'] } },
+            where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
             orderBy: { createdAt: 'asc' },
             include: {
               transportCompany: { select: { id: true, name: true } },
@@ -321,6 +321,7 @@ export class FreightsService implements OnModuleInit {
             },
           },
           documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true } },
+          pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
         },
       }),
       this.prisma.freight.count({ where }),
@@ -355,6 +356,7 @@ export class FreightsService implements OnModuleInit {
         },
         documents: { orderBy: { createdAt: 'desc' }, take: 20 },
         conversation: { select: { id: true } },
+        pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
       },
     });
 
@@ -1120,7 +1122,7 @@ export class FreightsService implements OnModuleInit {
         where: { id: freightId },
         include: {
           assignments: {
-            where: { status: { in: ['active', 'accepted'] } },
+            where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
             select: { transportCompanyId: true },
           },
         },
@@ -1176,21 +1178,45 @@ export class FreightsService implements OnModuleInit {
 
   // ======================== UPDATE FREIGHT ==============================
 
+  private readonly FREIGHT_INCLUDE = {
+    items: true,
+    originLot: { select: { id: true, name: true } },
+    destPlant: { select: { id: true, name: true } },
+    originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+    destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+    requestedBy: { select: { id: true, name: true } },
+    conversation: { select: { id: true } },
+    assignments: {
+      where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
+      include: {
+        transportCompany: { select: { id: true, name: true } },
+        driver: { select: { id: true, name: true, phone: true } },
+        truck: { select: { id: true, plate: true, model: true } },
+      },
+    },
+    pendingChanges: {
+      where: { status: 'pending' },
+      select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } },
+    },
+  };
+
   async updateFreight(
     freightId: string,
-    dto: { loadDate?: string; loadTime?: string; notes?: string },
+    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string },
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
 
-    // Resolve company IDs outside tx (safe — doesn't change concurrently for same user)
     const allIds = await this.resolveAllCompanyIds(user);
 
     return this.prisma.$transaction(async (tx) => {
-      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+      });
       if (!freight) throw new NotFoundException('Flete no encontrado');
-      if (freight.status !== FreightStatus.pending_assignment) {
-        throw new BadRequestException('Solo se puede editar un flete pendiente de asignacion');
+      if (['finished', 'cancelled'].includes(freight.status)) {
+        throw new BadRequestException('No se puede editar un flete finalizado o cancelado');
       }
       if (freight.requestedById !== user.sub) {
         if (!allIds.includes(freight.originCompanyId) && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
@@ -1199,36 +1225,248 @@ export class FreightsService implements OnModuleInit {
       }
 
       const data: any = {};
-      if (dto.loadDate) {
-        data.loadDate = new Date(dto.loadDate);
-        data.scheduledAt = new Date(
-          `${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`,
-        );
-      }
-      if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
-      if (dto.notes !== undefined) data.notes = dto.notes;
+      let pendingChangeCreated = false;
 
-      return tx.freight.update({
-        where: { id: freightId },
-        data,
-        include: {
-          items: true,
-          originLot: { select: { id: true, name: true } },
-          destPlant: { select: { id: true, name: true } },
-          originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-          destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
-          requestedBy: { select: { id: true, name: true } },
-          conversation: { select: { id: true } },
-          assignments: {
-            where: { status: { in: ['active', 'accepted'] } },
-            include: {
-              transportCompany: { select: { id: true, name: true } },
-              driver: { select: { id: true, name: true, phone: true } },
-              truck: { select: { id: true, plate: true, model: true } },
+      // --- loadDate / loadTime / notes: only in pending_assignment ---
+      if (dto.loadDate || dto.loadTime !== undefined || dto.notes !== undefined) {
+        if (freight.status !== FreightStatus.pending_assignment) {
+          if (dto.loadDate || dto.loadTime !== undefined) {
+            throw new BadRequestException('Fecha y hora solo se pueden editar en estado pendiente de asignación');
+          }
+        }
+        if (dto.loadDate) {
+          data.loadDate = new Date(dto.loadDate);
+          data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`);
+        }
+        if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
+        if (dto.notes !== undefined) data.notes = dto.notes;
+      }
+
+      // --- useOwnFleet ---
+      if (dto.useOwnFleet !== undefined && dto.useOwnFleet !== freight.useOwnFleet) {
+        const hasActiveAssignments = freight.assignments.length > 0;
+        if (!hasActiveAssignments) {
+          data.useOwnFleet = dto.useOwnFleet;
+        } else {
+          // Invalidate existing pending changes of same type
+          await tx.freightPendingChange.updateMany({
+            where: { freightId, changeType: 'useOwnFleet', status: 'pending' },
+            data: { status: 'rejected', resolvedAt: new Date() },
+          });
+          await tx.freightPendingChange.create({
+            data: {
+              freightId,
+              changeType: 'useOwnFleet',
+              fromValue: { useOwnFleet: freight.useOwnFleet },
+              toValue: { useOwnFleet: dto.useOwnFleet },
+              requestedById: user.sub,
+              approverCompanyId: freight.destCompanyId || freight.originCompanyId,
             },
-          },
-        },
+          });
+          pendingChangeCreated = true;
+          // Notify approver company
+          const approverCompanyId = freight.destCompanyId || freight.originCompanyId;
+          this.notifications.notifyCompany(
+            approverCompanyId,
+            NotificationType.freight_updated,
+            'Cambio pendiente de aprobación',
+            `Se solicitó cambiar flota propia en el flete ${freight.code}`,
+            freight.id,
+            user.sub,
+          ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
+        }
+      }
+
+      // --- destPlantId ---
+      if (dto.destPlantId && dto.destPlantId !== freight.destPlantId) {
+        // Resolve new plant
+        const newPlant = await tx.plant.findFirst({
+          where: { id: dto.destPlantId, active: true },
+          include: { company: { select: { id: true, name: true } } },
+        });
+        if (!newPlant) throw new BadRequestException('Planta destino no encontrada');
+
+        const hasActiveAssignments = freight.assignments.length > 0;
+        const isStarted = ['in_progress', 'loaded'].includes(freight.status);
+        const needsApproval = hasActiveAssignments && !isStarted;
+
+        if (!needsApproval) {
+          // Direct update
+          data.destPlantId = newPlant.id;
+          data.destCompanyId = newPlant.companyId;
+          data.destName = newPlant.name;
+          data.destLat = newPlant.lat;
+          data.destLng = newPlant.lng;
+        } else {
+          // Determine approver: if user is origin → plant approves, if user is dest → producer approves
+          const userCompanyId = user.activeCompanyId || user.companyId;
+          const isOriginUser = allIds.includes(freight.originCompanyId);
+          const approverCompanyId = isOriginUser
+            ? (freight.destCompanyId || freight.originCompanyId)
+            : freight.originCompanyId;
+
+          // Invalidate existing pending changes of same type
+          await tx.freightPendingChange.updateMany({
+            where: { freightId, changeType: 'destPlant', status: 'pending' },
+            data: { status: 'rejected', resolvedAt: new Date() },
+          });
+          await tx.freightPendingChange.create({
+            data: {
+              freightId,
+              changeType: 'destPlant',
+              fromValue: { destPlantId: freight.destPlantId, destCompanyId: freight.destCompanyId, destName: freight.destName },
+              toValue: { destPlantId: newPlant.id, destCompanyId: newPlant.companyId, destName: newPlant.name, destLat: newPlant.lat ? Number(newPlant.lat) : null, destLng: newPlant.lng ? Number(newPlant.lng) : null },
+              requestedById: user.sub,
+              approverCompanyId,
+            },
+          });
+          pendingChangeCreated = true;
+          this.notifications.notifyCompany(
+            approverCompanyId,
+            NotificationType.freight_updated,
+            'Cambio pendiente de aprobación',
+            `Se solicitó cambiar planta destino del flete ${freight.code} a ${newPlant.name}`,
+            freight.id,
+            user.sub,
+          ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
+        }
+      }
+
+      // Only update freight if there are direct changes
+      if (Object.keys(data).length > 0) {
+        const updated = await tx.freight.update({
+          where: { id: freightId },
+          data,
+          include: this.FREIGHT_INCLUDE,
+        });
+        // Audit log
+        await tx.auditLog.create({
+          data: { entityType: 'freight', entityId: freightId, action: 'updated', userId: user.sub, freightId, metadata: data },
+        }).catch(() => {});
+        this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
+        return { ...updated, pendingChangeCreated };
+      }
+
+      // No direct changes but maybe a pending change was created
+      const result = await tx.freight.findUnique({ where: { id: freightId }, include: this.FREIGHT_INCLUDE });
+      return { ...result, pendingChangeCreated };
+    });
+  }
+
+  // ======================== PENDING CHANGES ==============================
+
+  async approvePendingChange(freightId: string, changeId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    return this.prisma.$transaction(async (tx) => {
+      const change = await tx.freightPendingChange.findFirst({
+        where: { id: changeId, freightId, status: 'pending' },
       });
+      if (!change) throw new NotFoundException('Cambio pendiente no encontrado');
+      if (!allIds.includes(change.approverCompanyId)) {
+        throw new ForbiddenException('No tiene permisos para aprobar este cambio');
+      }
+
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      const toValue = change.toValue as any;
+      const data: any = {};
+
+      if (change.changeType === 'useOwnFleet') {
+        data.useOwnFleet = toValue.useOwnFleet;
+        // Cancel conflicting assignments
+        if (freight.assignments.length > 0) {
+          await tx.freightAssignment.updateMany({
+            where: { freightId, status: { in: ['active', 'accepted'] } },
+            data: { status: 'canceled' as any, reason: 'Cambio de flota aprobado' },
+          });
+          // Reset freight status to pending_assignment if it was assigned/accepted
+          if (['assigned', 'accepted'].includes(freight.status)) {
+            data.status = FreightStatus.pending_assignment;
+            data.assignedTruckCount = 0;
+          }
+        }
+      } else if (change.changeType === 'destPlant') {
+        data.destPlantId = toValue.destPlantId;
+        data.destCompanyId = toValue.destCompanyId;
+        data.destName = toValue.destName;
+        if (toValue.destLat != null) data.destLat = toValue.destLat;
+        if (toValue.destLng != null) data.destLng = toValue.destLng;
+      }
+
+      // Apply changes
+      const updated = await tx.freight.update({ where: { id: freightId }, data, include: this.FREIGHT_INCLUDE });
+
+      // Mark change as approved
+      await tx.freightPendingChange.update({
+        where: { id: changeId },
+        data: { status: 'approved', resolvedAt: new Date(), resolvedById: user.sub },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, action: 'change_approved', userId: user.sub, freightId, metadata: { changeType: change.changeType, toValue } },
+      }).catch(() => {});
+
+      // Notify requester
+      this.notifications.notifyCompany(
+        allIds.includes(freight.originCompanyId) ? freight.originCompanyId : (freight.destCompanyId || freight.originCompanyId),
+        NotificationType.freight_updated,
+        'Cambio aprobado',
+        `El cambio de ${change.changeType === 'useOwnFleet' ? 'flota propia' : 'planta destino'} en el flete ${freight.code} fue aprobado`,
+        freight.id,
+        user.sub,
+      ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
+
+      this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
+      return updated;
+    });
+  }
+
+  async rejectPendingChange(freightId: string, changeId: string, user: any, reason?: string) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    return this.prisma.$transaction(async (tx) => {
+      const change = await tx.freightPendingChange.findFirst({
+        where: { id: changeId, freightId, status: 'pending' },
+      });
+      if (!change) throw new NotFoundException('Cambio pendiente no encontrado');
+      if (!allIds.includes(change.approverCompanyId)) {
+        throw new ForbiddenException('No tiene permisos para rechazar este cambio');
+      }
+
+      await tx.freightPendingChange.update({
+        where: { id: changeId },
+        data: { status: 'rejected', resolvedAt: new Date(), resolvedById: user.sub },
+      });
+
+      // Audit log
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, action: 'change_rejected', userId: user.sub, freightId, metadata: { changeType: change.changeType, reason } },
+      }).catch(() => {});
+
+      const freight = await tx.freight.findUnique({ where: { id: freightId }, select: { code: true, originCompanyId: true, destCompanyId: true } });
+
+      // Notify requester
+      if (freight) {
+        const requesterCompanyId = change.approverCompanyId === freight.originCompanyId
+          ? (freight.destCompanyId || freight.originCompanyId)
+          : freight.originCompanyId;
+        this.notifications.notifyCompany(
+          requesterCompanyId,
+          NotificationType.freight_updated,
+          'Cambio rechazado',
+          `El cambio de ${change.changeType === 'useOwnFleet' ? 'flota propia' : 'planta destino'} en el flete ${freight.code} fue rechazado${reason ? `: ${reason}` : ''}`,
+          freightId,
+          user.sub,
+        ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
+      }
+
+      return { ok: true };
     });
   }
 

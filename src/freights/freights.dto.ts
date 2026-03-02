@@ -325,6 +325,23 @@ export class UpdateFreightDto {
   @IsOptional()
   @MaxLength(2000)
   notes?: string;
+
+  @ApiProperty({ required: false, description: 'Flota propia (true/false)' })
+  @IsOptional()
+  @IsBoolean()
+  useOwnFleet?: boolean;
+
+  @ApiProperty({ required: false, description: 'ID de planta destino' })
+  @IsOptional()
+  @IsUUID()
+  destPlantId?: string;
+}
+
+export class ResolvePendingChangeDto {
+  @ApiProperty({ required: false, description: 'Motivo', maxLength: 255 })
+  @IsOptional()
+  @MaxLength(255)
+  reason?: string;
 }
 
 export class ReorderQueueDto {
