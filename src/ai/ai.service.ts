@@ -22,12 +22,13 @@ const AI_SESSION_TIMEOUT_MIN = 30;
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 const OWN_FLEET_SHORTCUT = 'own_fleet';
 
-// Model configuration — Claude Haiku 4.5
+// Model configuration — Claude Sonnet 4.6
 // NOTE: Anthropic API supports temperature, top_p, top_k.
 // It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
-// temperature 0.3  → precise, factual responses; not 0 to preserve natural language.
+// temperature 0.4  → better interpretation of ambiguous messages while keeping operational precision.
 // max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
-const MODEL_TEMPERATURE = 0.3;
+const MODEL_ID = 'claude-sonnet-4-6-20250514';
+const MODEL_TEMPERATURE = 0.4;
 const MODEL_MAX_TOKENS = 1200;
 const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
 const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
@@ -62,7 +63,7 @@ export class AiService implements OnModuleDestroy {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
       this.client = new Anthropic({ apiKey });
-      this.logger.log('Claude AI assistant enabled (haiku)');
+      this.logger.log(`Claude AI assistant enabled (${MODEL_ID})`);
     } else {
       this.logger.warn('ANTHROPIC_API_KEY not set — AI assistant disabled');
     }
@@ -148,11 +149,13 @@ export class AiService implements OnModuleDestroy {
 
         this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         response = await this.client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
+          model: MODEL_ID,
           max_tokens: MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
-          system: systemPrompt,
-          tools: this.tools as any,
+          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+          tools: this.tools.map((t, i, arr) =>
+            i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t,
+          ) as any,
           messages: currentMessages,
         });
         this.logger.log(`Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
