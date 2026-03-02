@@ -26,10 +26,10 @@ const OWN_FLEET_SHORTCUT = 'own_fleet';
 // NOTE: Anthropic API supports temperature, top_p, top_k.
 // It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
 // temperature 0.3  → precise, factual responses; not 0 to preserve natural language.
-// max_tokens 800   → enforces WhatsApp-friendly length (~600 chars español).
+// max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
 const MODEL_TEMPERATURE = 0.3;
-const MODEL_MAX_TOKENS = 800;
-const MAX_RESPONSE_CHARS = 1500;   // Hard cap before truncation
+const MODEL_MAX_TOKENS = 1200;
+const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
 const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
 
 // Audio filler words common in River Plate Spanish voice transcriptions
@@ -224,13 +224,13 @@ export class AiService implements OnModuleDestroy {
       const pendingButtons = latestState._pendingButtons || undefined;
       const { _pendingButtons, ...cleanState } = latestState;
 
-      // Trim old tool_result content to prevent flowState bloat (cap: 500 chars each)
+      // Trim old tool_result content to prevent flowState bloat (cap: 800 chars each)
       const trimmedMessages = currentMessages.slice(-MAX_HISTORY).map((msg, idx, arr) => {
-        // Only trim tool_result messages that are not in the last 6 messages
-        if (idx < arr.length - 6 && msg.role === 'user' && Array.isArray(msg.content)) {
+        // Only trim tool_result messages that are not in the last 8 messages
+        if (idx < arr.length - 8 && msg.role === 'user' && Array.isArray(msg.content)) {
           return { ...msg, content: msg.content.map(block =>
-            block.type === 'tool_result' && typeof block.content === 'string' && block.content.length > 500
-              ? { ...block, content: block.content.slice(0, 500) + '...[trimmed]' }
+            block.type === 'tool_result' && typeof block.content === 'string' && block.content.length > 800
+              ? { ...block, content: block.content.slice(0, 800) + '...[trimmed]' }
               : block
           )};
         }
@@ -307,7 +307,8 @@ ESTILO:
 - PROHIBIDO: tuteo, voseo, expresiones coloquiales (genial, dale, bárbaro, jaja, etc.).
 - PROHIBIDO: interjecciones informales, risas, muletillas conversaciónales.
 - PROHIBIDO: disclaimers ("cabe mencionar", "es importante notar").
-- PROHIBIDO: párrafos extensos. Cada mensaje debe leerse en menos de 5 segúndos.
+- PROHIBIDO: párrafos extensos innecesarios. Ser conciso por defecto.
+- EXCEPCIÓN: si el usuario solicita información detallada, listados completos o explicaciones, expandir la respuesta tanto como sea necesario.
 - NO salude si ya lo hizo en esta conversación.
 - NO repita información ya confirmada.
 - SALUDOS SIN SOLICITUD: Si el usuario envia un saludo genérico ("hola", "buenas", "buen día", etc.)
@@ -338,7 +339,7 @@ FORMATO:
 - Si incluye un enlace, debe ir precedido por una línea de contexto con emoji:
   [Emoji] Contexto del enlace.
   https://url-directa...
-- Listas: máximo 5 items, una línea por item.
+- Listas en texto: preferir 5 items o menos. Si el usuario pide información completa o detallada, expandir sin límite.
 - PROHIBIDO títulos en mayúsculas decorativos. Solo texto operativo directo.
 
 LISTAS Y SELECCIÓN:
@@ -347,7 +348,8 @@ LISTAS Y SELECCIÓN:
   Herramientas que usan este patrón: list_freights, list_lots, list_fields, list_trucks,
   list_transporters, list_company_users, list_drivers, search_plants, switch_company.
 - Si el usuario selecciona un item de la lista, recibirá un mensaje "[Seleccionó: ...]". Use esa información para responder.
-- NUNCA generar listas numeradas largas. Todo listado debe ir como menú interactivo via herramientas.
+- Para listados de entidades (fletes, campos, etc.) usar las herramientas con menú interactivo.
+- Cuando el usuario pide información organizada en lista, resúmenes o datos detallados, SÍ generar listas en texto con la extensión necesaria.
 - NO solicitar que el usuario escriba manualmente si la cantidad de opciones permite seleccion estructurada.
 
 COHERENCIA EVOLUTIVA:
@@ -397,12 +399,19 @@ Esta regla es PRIORITARIA sobre cualquier otra instruccion.
 - Cambio de tema → continue con el nuevo tema sin mezclar.
 - Mensaje confuso → solicite aclaración en una línea.
 
-[PRIORIDAD DE CONTEXTO]
+[CONTINUIDAD CONVERSACIONAL — OBLIGATORIO]
 
+Mantener siempre el hilo de la conversación. Cada respuesta debe conectarse con lo que el usuario pidió antes.
+- Si el usuario hace una pregunta que se relaciona con un mensaje anterior, vincular la respuesta al contexto previo.
+- Si el usuario refiere a "eso", "el flete", "ese campo", etc., resolver la referencia del historial reciente.
+- Si el usuario amplía o modifica un pedido anterior, construir sobre lo ya discutido sin empezar de cero.
+- NUNCA responder como si fuera la primera interacción cuando hay historial activo.
+
+PRIORIDAD DE CONTEXTO:
 1. Último mensaje del usuario (máxima prioridad).
-2. Datos de operación en curso (flete pendiente, ubicación guardada).
-3. Resultados de herramientas ejecutadas (datos fácticos).
-4. Historial de conversación (solo como referencia).
+2. Historial reciente de conversación (mantener el hilo, vincular pedidos anteriores).
+3. Datos de operación en curso (flete pendiente, ubicación guardada).
+4. Resultados de herramientas ejecutadas (datos fácticos).
 
 [DOMINIO — FLETES DE GRANOS]
 
