@@ -27,7 +27,7 @@ const OWN_FLEET_SHORTCUT = 'own_fleet';
 // It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
 // temperature 0.4  → better interpretation of ambiguous messages while keeping operational precision.
 // max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
-const MODEL_ID = 'claude-sonnet-4-6-20250514';
+const MODEL_ID = 'claude-sonnet-4-6';
 const MODEL_TEMPERATURE = 0.4;
 const MODEL_MAX_TOKENS = 1200;
 const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
