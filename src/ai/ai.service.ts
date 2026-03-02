@@ -557,7 +557,10 @@ CONSULTAS:
 - get_dashboard → resumen ejecutivo de la empresa (fletes por estado, toneladas del mes, completados vs cancelados).
 
 MODIFICACIONES:
-- update_freight → modificar fecha, hora o notas de un flete. Solo en estado pending_assignment.
+- update_freight → modificar un flete: fecha/hora/notas (solo pending_assignment), flota propia (pending_assignment/assigned/accepted), planta destino (cualquier estado activo), camión y chofer (con flota propia). Algunos cambios pueden requerir aprobación.
+  - Para cambiar planta: usar search_plants primero para obtener el ID.
+  - Para asignar camión: usar list_trucks primero.
+  - Para asignar chofer: usar list_drivers primero, o indicar "yo soy el chofer".
 - duplicate_freight → crear copia de un flete con nueva fecha. Solo productores.
 - update_field → modificar dirección o ubicación de un campo.
 - update_lot → modificar hectáreas o ubicación de un lote.
@@ -1066,7 +1069,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     },
     {
       name: 'update_freight',
-      description: 'Modifica un flete existente (solo en estado pending_assignment). Puede cambiar fecha, hora y notas. Prepara la acción para confirmación.',
+      description: 'Modifica un flete existente. Puede cambiar fecha, hora, notas, flota propia, planta destino, camión y chofer. Algunos cambios pueden requerir aprobación. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1074,6 +1077,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
           loadDate: { type: 'string', description: 'Nueva fecha de carga (YYYY-MM-DD). Opcional.' },
           loadTime: { type: 'string', description: 'Nueva hora de carga (HH:mm). Opcional.' },
           notes: { type: 'string', description: 'Nuevas notas. Opcional.' },
+          useOwnFleet: { type: 'boolean', description: 'Usar flota propia (true/false). Opcional.' },
+          destPlantId: { type: 'string', description: 'ID de nueva planta destino (de search_plants). Opcional.' },
+          truckId: { type: 'string', description: 'ID de camión propio a asignar (de list_trucks). Opcional.' },
+          driverId: { type: 'string', description: 'ID del chofer (de list_drivers). Opcional. Usar "self" para "yo soy el chofer".' },
         },
         required: ['code'],
       },
@@ -1391,18 +1398,87 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     if (result.error) return JSON.stringify({ error: result.error });
     const freight = result.freight;
 
-    if (freight.status !== 'pending_assignment') {
-      return JSON.stringify({ error: `El flete ${freight.code} no se puede modificar en estado "${freight.status}". Solo se permite en "pending_assignment".` });
-    }
-
     const changes: string[] = [];
     const dto: any = {};
-    if (input.loadDate) { dto.loadDate = input.loadDate; changes.push(`Fecha: ${input.loadDate}`); }
-    if (input.loadTime) { dto.loadTime = input.loadTime; changes.push(`Hora: ${input.loadTime}`); }
-    if (input.notes !== undefined) { dto.notes = input.notes; changes.push(`Notas: ${input.notes}`); }
+
+    // --- loadDate / loadTime / notes: solo en pending_assignment ---
+    if (input.loadDate || input.loadTime || input.notes !== undefined) {
+      if (freight.status !== 'pending_assignment') {
+        return JSON.stringify({ error: `Fecha, hora y notas solo se pueden modificar en estado "pending_assignment". Estado actual: "${freight.status}".` });
+      }
+      if (input.loadDate) { dto.loadDate = input.loadDate; changes.push(`Fecha: ${input.loadDate}`); }
+      if (input.loadTime) { dto.loadTime = input.loadTime; changes.push(`Hora: ${input.loadTime}`); }
+      if (input.notes !== undefined) { dto.notes = input.notes; changes.push(`Notas: ${input.notes}`); }
+    }
+
+    // --- useOwnFleet: en pending_assignment, assigned, accepted ---
+    if (input.useOwnFleet !== undefined) {
+      const canEditFleet = ['pending_assignment', 'assigned', 'accepted'].includes(freight.status);
+      if (!canEditFleet) {
+        return JSON.stringify({ error: `Flota propia solo se puede modificar en estados: pending_assignment, assigned, accepted. Estado actual: "${freight.status}".` });
+      }
+      dto.useOwnFleet = input.useOwnFleet;
+      changes.push(`Flota propia: ${input.useOwnFleet ? 'Sí' : 'No'}`);
+    }
+
+    // --- destPlantId: en todos los estados activos ---
+    if (input.destPlantId) {
+      const canEditDest = ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded'].includes(freight.status);
+      if (!canEditDest) {
+        return JSON.stringify({ error: `Planta destino solo se puede modificar en estados activos. Estado actual: "${freight.status}".` });
+      }
+      const plant = await this.prisma.plant.findUnique({
+        where: { id: input.destPlantId },
+        select: { id: true, name: true, company: { select: { name: true } } },
+      });
+      if (!plant) {
+        return JSON.stringify({ error: `No se encontró la planta con ID ${input.destPlantId}. Use search_plants primero.` });
+      }
+      dto.destPlantId = input.destPlantId;
+      changes.push(`Planta destino: ${plant.company?.name || ''} - ${plant.name}`);
+    }
+
+    // --- truckId: solo con flota propia ---
+    if (input.truckId) {
+      const effectiveOwnFleet = dto.useOwnFleet !== undefined ? dto.useOwnFleet : freight.useOwnFleet;
+      if (!effectiveOwnFleet) {
+        return JSON.stringify({ error: 'Solo se puede asignar camión cuando el flete usa flota propia.' });
+      }
+      const truck = await this.prisma.truck.findUnique({
+        where: { id: input.truckId },
+        select: { plate: true, model: true },
+      });
+      if (!truck) {
+        return JSON.stringify({ error: 'No se encontró el camión. Use list_trucks primero.' });
+      }
+      dto.truckId = input.truckId;
+      changes.push(`Camión: ${truck.plate}${truck.model ? ` (${truck.model})` : ''}`);
+    }
+
+    // --- driverId: solo con flota propia ---
+    if (input.driverId) {
+      const effectiveOwnFleet = dto.useOwnFleet !== undefined ? dto.useOwnFleet : freight.useOwnFleet;
+      if (!effectiveOwnFleet) {
+        return JSON.stringify({ error: 'Solo se puede asignar chofer cuando el flete usa flota propia.' });
+      }
+      if (input.driverId === 'self') {
+        dto.driverId = user.sub || user.id;
+        changes.push('Chofer: Yo mismo');
+      } else {
+        const driver = await this.prisma.user.findUnique({
+          where: { id: input.driverId },
+          select: { name: true },
+        });
+        if (!driver) {
+          return JSON.stringify({ error: 'No se encontró el chofer. Use list_drivers primero.' });
+        }
+        dto.driverId = input.driverId;
+        changes.push(`Chofer: ${driver.name}`);
+      }
+    }
 
     if (changes.length === 0) {
-      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: loadDate, loadTime, notes.' });
+      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: loadDate, loadTime, notes, useOwnFleet, destPlantId, truckId, driverId.' });
     }
 
     return this.stageAction(session, 'update_freight', {
@@ -2295,8 +2371,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
         }
 
         case 'update_freight': {
-          await this.freights.updateFreight(params.freightId, params.dto, synUser);
-          result = JSON.stringify({ status: 'updated', code: params.code, message: `Flete ${params.code} modificado exitosamente.` });
+          const updateResult = await this.freights.updateFreight(params.freightId, params.dto, synUser);
+          if ((updateResult as any).pendingChangeCreated) {
+            result = JSON.stringify({ status: 'pending_approval', code: params.code, message: `Flete ${params.code}: algunos cambios requieren aprobación. Se notificó a la empresa correspondiente.` });
+          } else {
+            result = JSON.stringify({ status: 'updated', code: params.code, message: `Flete ${params.code} modificado exitosamente.` });
+          }
           break;
         }
 
