@@ -40,10 +40,14 @@ export class CatalogController {
     private companyRes: CompanyResolutionService,
   ) {}
 
-  /** Check if user's ACTIVE company is a producer type (uses JWT companyType/companyTypes) */
-  private isActiveProducer(user: any): boolean {
-    const types: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
-    return types.includes('producer');
+  /** Check if user has ANY producer company (via all memberships) */
+  private async hasProducerCompany(userId: string): Promise<boolean> {
+    return this.companyRes.hasCompanyType({ sub: userId }, 'producer');
+  }
+
+  /** Check if user is a manager (gerente/admin) */
+  private isManager(user: any): boolean {
+    return ['admin', 'platform_admin', 'gerente'].includes(user.role);
   }
 
   @Get('plants')
@@ -56,18 +60,23 @@ export class CatalogController {
     const key = `plants:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const isProducer = this.isActiveProducer(user);
+      const isProducer = await this.hasProducerCompany(user.sub);
 
       if (isProducer) {
         // Resolve all producer company IDs for this user (multi-company support)
         const producerCompanyIds = await this.companyRes.resolveAllProducerCompanyIds(user);
         if (producerCompanyIds.length === 0) return [];
 
+        // Managers see ALL access for their companies; non-managers only their own
+        const userFilter = this.isManager(user)
+          ? {}
+          : { OR: [{ producerUserId: null }, { producerUserId: user.sub }] as any[] };
+
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
           where: {
             producerCompanyId: { in: producerCompanyIds },
             active: true,
-            OR: [{ producerUserId: null }, { producerUserId: user.sub }],
+            ...userFilter,
           },
           select: { plantCompanyId: true },
         });
@@ -125,17 +134,21 @@ export class CatalogController {
     const key = `branches:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const isProducer = this.isActiveProducer(user);
+      const isProducer = await this.hasProducerCompany(user.sub);
 
       if (isProducer) {
         const producerCompanyIds = await this.companyRes.resolveAllProducerCompanyIds(user);
         if (producerCompanyIds.length === 0) return [];
 
+        const userFilter = this.isManager(user)
+          ? {}
+          : { OR: [{ producerUserId: null }, { producerUserId: user.sub }] as any[] };
+
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
           where: {
             producerCompanyId: { in: producerCompanyIds },
             active: true,
-            OR: [{ producerUserId: null }, { producerUserId: user.sub }],
+            ...userFilter,
           },
           select: { plantCompanyId: true, allowedBranchIds: true },
         });
@@ -174,8 +187,7 @@ export class CatalogController {
       }
 
       // Plant users: own branches via membership
-      const activePlantTypes: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
-      const isPlant = activePlantTypes.includes('plant');
+      const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
       if (isPlant) {
         const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
         return this.prisma.branch.findMany({
@@ -240,8 +252,7 @@ export class CatalogController {
     const key = `transport:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const tTypes: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
-      const isPlant = tTypes.includes('plant');
+      const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
 
       if (isPlant) {
         const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
