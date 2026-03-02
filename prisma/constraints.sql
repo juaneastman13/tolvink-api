@@ -29,6 +29,7 @@ ALTER TABLE freight_assignments
   );
 
 -- Freight code format
+ALTER TABLE freights DROP CONSTRAINT IF EXISTS chk_freight_code_format;
 ALTER TABLE freights
   ADD CONSTRAINT chk_freight_code_format
   CHECK (code ~ '^(FLT-[0-9]{4,6}|F[0-9]{2}-[A-Z]{3}\.[0-9]{4})$');
