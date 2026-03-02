@@ -6,11 +6,12 @@
 import { Controller, Get, Param, NotFoundException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
+import { FreightsService } from './freights.service';
 
 @Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('track')
 export class FreightTrackingController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private freightsService: FreightsService) {}
 
   /** Get freight info by public share token (no auth) */
   @Get(':token')
@@ -72,6 +73,21 @@ export class FreightTrackingController {
       orderBy: { createdAt: 'desc' },
       select: { lat: true, lng: true, speed: true, heading: true, createdAt: true },
     });
+  }
+
+  /** Get participant positions by public share token (no auth) */
+  @Get(':token/participants')
+  async getParticipantsByToken(@Param('token') token: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { shareToken: token },
+      select: { id: true },
+    });
+
+    if (!freight) {
+      throw new NotFoundException('Link de seguimiento no válido');
+    }
+
+    return this.freightsService.getParticipantPositions(freight.id);
   }
 
   /** Get full freight data for PDF report generation (no auth) */

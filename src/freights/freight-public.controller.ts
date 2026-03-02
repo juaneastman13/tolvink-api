@@ -14,11 +14,12 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
+import { FreightsService } from './freights.service';
 
 @Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('f')
 export class FreightPublicController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private freightsService: FreightsService) {}
 
   private validateCode(code: string): string {
     const normalized = code.toUpperCase();
@@ -100,6 +101,16 @@ export class FreightPublicController {
         createdAt: true,
       },
     });
+  }
+
+  /** Get participant positions by code (clean URL) */
+  @Get(':code/participants')
+  async getParticipantsByCode(@Param('code') code: string, @Query('s') shareToken?: string) {
+    const normalized = this.validateCode(code);
+    const freight = await this.findSharedFreight(normalized, shareToken, {
+      id: true,
+    });
+    return this.freightsService.getParticipantPositions(freight.id);
   }
 
   /** Get full freight data for PDF report (clean URL) */
