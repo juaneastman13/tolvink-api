@@ -335,6 +335,26 @@ export class UpdateFreightDto {
   @IsOptional()
   @IsUUID()
   destPlantId?: string;
+
+  @ApiProperty({ required: false, description: 'ID de camión (flota propia)' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre de sucursal destino' })
+  @IsOptional()
+  @MaxLength(255)
+  customDestName?: string;
+
+  @ApiProperty({ required: false, description: 'Latitud de sucursal destino' })
+  @IsOptional()
+  @IsNumber()
+  customDestLat?: number;
+
+  @ApiProperty({ required: false, description: 'Longitud de sucursal destino' })
+  @IsOptional()
+  @IsNumber()
+  customDestLng?: number;
 }
 
 export class ResolvePendingChangeDto {

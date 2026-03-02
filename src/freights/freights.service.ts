@@ -679,7 +679,7 @@ export class FreightsService implements OnModuleInit {
     const { updated: startResult, freight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
@@ -740,7 +740,7 @@ export class FreightsService implements OnModuleInit {
         // Read freight INSIDE transaction to prevent TOCTOU race
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
-          include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+          include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
@@ -1046,7 +1046,7 @@ export class FreightsService implements OnModuleInit {
       // Read freight INSIDE transaction to prevent TOCTOU race
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
 
@@ -1202,7 +1202,7 @@ export class FreightsService implements OnModuleInit {
 
   async updateFreight(
     freightId: string,
-    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string },
+    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number },
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
@@ -1212,7 +1212,7 @@ export class FreightsService implements OnModuleInit {
     return this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (['finished', 'cancelled'].includes(freight.status)) {
@@ -1277,29 +1277,74 @@ export class FreightsService implements OnModuleInit {
         }
       }
 
-      // --- destPlantId ---
-      if (dto.destPlantId && dto.destPlantId !== freight.destPlantId) {
-        // Resolve new plant
-        const newPlant = await tx.plant.findFirst({
+      // --- truckId (assign own fleet truck when switching to useOwnFleet) ---
+      if (dto.truckId && dto.useOwnFleet === true && data.useOwnFleet === true) {
+        const truck = await tx.truck.findFirst({
+          where: { id: dto.truckId, companyId: freight.originCompanyId, active: true },
+          include: { assignedUser: { select: { id: true, name: true, phone: true } } },
+        });
+        if (truck) {
+          // Cancel any existing assignments
+          if (freight.assignments.length > 0) {
+            await tx.freightAssignment.updateMany({
+              where: { freightId, status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
+              data: { status: AssignmentStatus.canceled, reason: 'Cambio a flota propia' },
+            });
+          }
+          // Create new assignment with own fleet truck
+          await tx.freightAssignment.create({
+            data: {
+              freightId,
+              transportCompanyId: freight.originCompanyId,
+              status: AssignmentStatus.accepted,
+              assignedById: user.sub,
+              truckId: truck.id,
+              plate: truck.plate,
+              driverId: truck.assignedUser?.id || null,
+              driverName: truck.assignedUser?.name || null,
+            } as any,
+          });
+          data.status = FreightStatus.assigned;
+          data.assignedTruckCount = 1;
+        }
+      }
+
+      // --- destPlantId (may be a Plant ID or Company ID from catalog) ---
+      if (dto.destPlantId && dto.destPlantId !== freight.destPlantId && dto.destPlantId !== freight.destCompanyId) {
+        // Try Plant table first, then Company table (producers select companies as destinations)
+        let resolvedDest: { plantId: string | null; companyId: string; name: string; lat: any; lng: any };
+        const plant = await tx.plant.findFirst({
           where: { id: dto.destPlantId, active: true },
           include: { company: { select: { id: true, name: true } } },
         });
-        if (!newPlant) throw new BadRequestException('Planta destino no encontrada');
+        if (plant) {
+          resolvedDest = { plantId: plant.id, companyId: plant.companyId, name: plant.name, lat: plant.lat, lng: plant.lng };
+        } else {
+          const company = await tx.company.findFirst({
+            where: { id: dto.destPlantId, active: true },
+          });
+          if (!company) throw new BadRequestException('Planta destino no encontrada');
+          resolvedDest = { plantId: null, companyId: company.id, name: company.name, lat: company.lat, lng: company.lng };
+        }
 
         const hasActiveAssignments = freight.assignments.length > 0;
         const isStarted = ['in_progress', 'loaded'].includes(freight.status);
         const needsApproval = hasActiveAssignments && !isStarted;
 
+        // Branch overrides (customDest* from branch selection)
+        const finalName = dto.customDestName || resolvedDest.name;
+        const finalLat = dto.customDestLat ?? resolvedDest.lat;
+        const finalLng = dto.customDestLng ?? resolvedDest.lng;
+
         if (!needsApproval) {
           // Direct update
-          data.destPlantId = newPlant.id;
-          data.destCompanyId = newPlant.companyId;
-          data.destName = newPlant.name;
-          data.destLat = newPlant.lat;
-          data.destLng = newPlant.lng;
+          data.destPlantId = resolvedDest.plantId;
+          data.destCompanyId = resolvedDest.companyId;
+          data.destName = finalName;
+          data.destLat = finalLat;
+          data.destLng = finalLng;
         } else {
           // Determine approver: if user is origin → plant approves, if user is dest → producer approves
-          const userCompanyId = user.activeCompanyId || user.companyId;
           const isOriginUser = allIds.includes(freight.originCompanyId);
           const approverCompanyId = isOriginUser
             ? (freight.destCompanyId || freight.originCompanyId)
@@ -1315,7 +1360,7 @@ export class FreightsService implements OnModuleInit {
               freightId,
               changeType: 'destPlant',
               fromValue: { destPlantId: freight.destPlantId, destCompanyId: freight.destCompanyId, destName: freight.destName },
-              toValue: { destPlantId: newPlant.id, destCompanyId: newPlant.companyId, destName: newPlant.name, destLat: newPlant.lat ? Number(newPlant.lat) : null, destLng: newPlant.lng ? Number(newPlant.lng) : null },
+              toValue: { destPlantId: resolvedDest.plantId, destCompanyId: resolvedDest.companyId, destName: finalName, destLat: finalLat ? Number(finalLat) : null, destLng: finalLng ? Number(finalLng) : null },
               requestedById: user.sub,
               approverCompanyId,
             },
@@ -1325,7 +1370,7 @@ export class FreightsService implements OnModuleInit {
             approverCompanyId,
             NotificationType.freight_updated,
             'Cambio pendiente de aprobación',
-            `Se solicitó cambiar planta destino del flete ${freight.code} a ${newPlant.name}`,
+            `Se solicitó cambiar planta destino del flete ${freight.code} a ${finalName}`,
             freight.id,
             user.sub,
           ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
@@ -1369,7 +1414,7 @@ export class FreightsService implements OnModuleInit {
 
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
 
