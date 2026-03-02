@@ -1209,7 +1209,8 @@ export class FreightsService implements OnModuleInit {
 
     const allIds = await this.resolveAllCompanyIds(user);
 
-    return this.prisma.$transaction(async (tx) => {
+    try {
+    return await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
         include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
@@ -1277,8 +1278,9 @@ export class FreightsService implements OnModuleInit {
         }
       }
 
-      // --- truckId (assign own fleet truck when switching to useOwnFleet) ---
-      if (dto.truckId && dto.useOwnFleet === true && data.useOwnFleet === true) {
+      // --- truckId (assign own fleet truck) ---
+      const effectiveOwnFleet = data.useOwnFleet !== undefined ? data.useOwnFleet : freight.useOwnFleet;
+      if (dto.truckId && effectiveOwnFleet) {
         const truck = await tx.truck.findFirst({
           where: { id: dto.truckId, companyId: freight.originCompanyId, active: true },
           include: { assignedUser: { select: { id: true, name: true, phone: true } } },
@@ -1411,6 +1413,12 @@ export class FreightsService implements OnModuleInit {
       const result = await tx.freight.findUnique({ where: { id: freightId }, include: this.FREIGHT_INCLUDE });
       return { ...result, pendingChangeCreated };
     });
+    } catch (err) {
+      // Rethrow known HTTP exceptions
+      if (err instanceof BadRequestException || err instanceof NotFoundException || err instanceof ForbiddenException) throw err;
+      this.logger.error(`updateFreight FAILED freight=${freightId} dto=${JSON.stringify(dto)} error=${err.message}`, err.stack);
+      throw new InternalServerErrorException('Error al actualizar el flete');
+    }
   }
 
   // ======================== PENDING CHANGES ==============================
