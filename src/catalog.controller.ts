@@ -40,9 +40,10 @@ export class CatalogController {
     private companyRes: CompanyResolutionService,
   ) {}
 
-  /** Check if user is a producer type */
-  private async isProducer(userId: string): Promise<boolean> {
-    return this.companyRes.hasCompanyType({ sub: userId }, 'producer');
+  /** Check if user's ACTIVE company is a producer type (uses JWT companyType/companyTypes) */
+  private isActiveProducer(user: any): boolean {
+    const types: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
+    return types.includes('producer');
   }
 
   @Get('plants')
@@ -55,7 +56,7 @@ export class CatalogController {
     const key = `plants:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const isProducer = await this.isProducer(user.sub);
+      const isProducer = this.isActiveProducer(user);
 
       if (isProducer) {
         // Resolve all producer company IDs for this user (multi-company support)
@@ -111,7 +112,7 @@ export class CatalogController {
     const key = `branches:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const isProducer = await this.isProducer(user.sub);
+      const isProducer = this.isActiveProducer(user);
 
       if (isProducer) {
         const producerCompanyIds = await this.companyRes.resolveAllProducerCompanyIds(user);
@@ -160,7 +161,8 @@ export class CatalogController {
       }
 
       // Plant users: own branches via membership
-      const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+      const activePlantTypes: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
+      const isPlant = activePlantTypes.includes('plant');
       if (isPlant) {
         const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
         return this.prisma.branch.findMany({
@@ -225,7 +227,8 @@ export class CatalogController {
     const key = `transport:${user.companyId}:${s}:${t}`;
 
     return cached(key, async () => {
-      const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+      const tTypes: string[] = user.companyTypes || (user.companyType ? [user.companyType] : []);
+      const isPlant = tTypes.includes('plant');
 
       if (isPlant) {
         const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
