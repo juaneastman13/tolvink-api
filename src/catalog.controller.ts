@@ -92,13 +92,26 @@ export class CatalogController {
         }));
       }
 
-      return this.prisma.plant.findMany({
+      // Non-producer (plant/other): return plant-type companies as destinations
+      // (matching the Company-based format producers see)
+      const allCos = await this.prisma.company.findMany({
         where: { active: true },
-        select: { id: true, name: true, address: true, lat: true, lng: true, companyId: true },
+        select: { id: true, name: true, address: true, lat: true, lng: true, type: true, types: true },
         orderBy: { name: 'asc' },
-        take: t,
-        skip: s,
       });
+      const plantCos = allCos.filter(c => {
+        const cTypes = Array.isArray(c.types) && (c.types as string[]).length > 0
+          ? (c.types as string[]) : [c.type];
+        return cTypes.includes('plant');
+      });
+      return plantCos.slice(s, s + t).map(c => ({
+        id: c.id,
+        name: c.name,
+        address: c.address,
+        lat: c.lat,
+        lng: c.lng,
+        companyId: c.id,
+      }));
     });
   }
 
