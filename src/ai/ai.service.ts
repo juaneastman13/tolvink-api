@@ -486,10 +486,28 @@ No es necesario mencionarlos en el texto. Solo presente el resumen y pregunte.
 FLOTA PROPIA:
 - list_trucks para consultar camiones. Incluir truckId en prepare_freight.
 
-UBICACIÓNES:
-- Ubicacion de WhatsApp compartida → se guarda automáticamente en sesion.
-- Para ubicación precisa → generate_location_link.
-- Una vez confirmada en el mapa, se utiliza automáticamente.
+UBICACIÓN OBLIGATORIA:
+La ubicación es OBLIGATORIA para:
+- Crear campo (create_field)
+- Crear lote (create_lot)
+- Origen personalizado en flete (customOriginName sin originLotId)
+- Destino personalizado en flete (destName sin destPlantId)
+
+Cuando necesite ubicación, SIEMPRE:
+1. Llamar generate_location_link con el purpose correspondiente.
+2. En la respuesta, incluir el enlace generado.
+3. Indicar que también puede compartir ubicación nativa de WhatsApp.
+4. Aclarar que sin ubicación NO es posible continuar.
+
+Mensaje estándar al pedir ubicación:
+"Ahora necesito la ubicación exacta.
+Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:
+[enlace generado]
+Sin ubicación no es posible continuar."
+
+NO aceptar: direcciones en texto, descripciones manuales, coordenadas escritas.
+SOLO válido: ubicación nativa de WhatsApp o selección desde el enlace.
+NO llamar create_field, create_lot ni prepare_freight con origen/destino custom SIN coordenadas.
 
 CAMPOS Y LOTES:
 - list_fields para existentes. create_field / create_lot para nuevos.
@@ -2202,6 +2220,19 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
     }
 
+    // Custom destination requires location
+    if (!input.destPlantId && input.destName && (!input.customDestLat || !input.customDestLng)) {
+      return JSON.stringify({
+        error: 'Para destino personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "destination".',
+      });
+    }
+    // Custom origin requires location
+    if (!input.originLotId && input.customOriginName && (!input.customOriginLat || !input.customOriginLng)) {
+      return JSON.stringify({
+        error: 'Para origen personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "origin".',
+      });
+    }
+
     // Resolve display names
     let destDisplayName = input.destName || 'Sin destino';
     if (input.destPlantId) {
@@ -2852,8 +2883,15 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       }
     }
 
-    const dto = { name: input.name, address: input.address || null, lat: lat || null, lng: lng || null };
-    const summary = `Crear campo "${input.name}"${input.address ? ` en ${input.address}` : ''}${lat ? ' (ubicación incluida)' : ''}`;
+    // Location is mandatory for field creation
+    if (!lat || !lng) {
+      return JSON.stringify({
+        error: 'La ubicación es obligatoria para crear un campo. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
+      });
+    }
+
+    const dto = { name: input.name, address: input.address || null, lat, lng };
+    const summary = `Crear campo "${input.name}"${input.address ? ` en ${input.address}` : ''} (ubicación incluida)`;
 
     return this.stageAction(session, 'create_field', { producerSynUser, dto }, summary);
   }
@@ -2875,9 +2913,16 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       }
     }
 
+    // Location is mandatory for lot creation
+    if (!lat || !lng) {
+      return JSON.stringify({
+        error: 'La ubicación es obligatoria para crear un lote. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
+      });
+    }
+
     // Resolve field name for summary
     const field = await this.prisma.field.findUnique({ where: { id: input.fieldId }, select: { name: true } });
-    const dto = { name: input.name, hectares: input.hectares || null, lat: lat || null, lng: lng || null };
+    const dto = { name: input.name, hectares: input.hectares || null, lat, lng };
     const summary = `Crear lote "${input.name}" en campo "${field?.name || 'desconocido'}"${input.hectares ? ` (${input.hectares} ha)` : ''}`;
 
     return this.stageAction(session, 'create_lot', { producerSynUser, fieldId: input.fieldId, dto }, summary);

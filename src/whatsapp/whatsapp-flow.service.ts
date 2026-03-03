@@ -657,40 +657,48 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
       const customDestName = payload.body.trim();
-      // Fetch lots for producer
-      const lots = await this.prisma.lot.findMany({
-        where: { companyId: state.producerCompanyId, active: true },
-        include: { field: { select: { id: true, name: true } } },
-        take: 30,
-      });
+      const destState = { ...state, customDestName };
+      // Location is mandatory for custom destination
+      await this.sendDestLocationPrompt(phone, session, destState);
+      return;
+    }
 
-      if (lots.length === 0) {
-        await this.updateState(session.id, 'awaiting_origin_name', { ...state, customDestName });
-        await this.wa.sendText(phone, FLOW_HINT + 'Indique el nombre del campo o lugar de origen.');
+    // ---- Step: Custom Dest Location (mandatory) ----
+    if (step === 'awaiting_dest_location') {
+      let lat: number | null = null;
+      let lng: number | null = null;
+
+      if (type === 'location') {
+        lat = payload.latitude;
+        lng = payload.longitude;
+      } else if (type === 'button_reply' && payload.id === 'location_done') {
+        // Picker saved → check lastLocation in fresh session
+        const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+        const freshState = (freshSess?.flowState as any) || {};
+        if (freshState.lastLocation) {
+          lat = freshState.lastLocation.lat;
+          lng = freshState.lastLocation.lng;
+        } else {
+          await this.wa.sendText(phone, FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace.');
+          return;
+        }
+      } else {
+        await this.wa.sendText(phone, FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.');
         return;
       }
 
-      const lotItems: SelectionItem[] = lots.map((l: any) => ({
-        id: `lot:${l.id}`,
-        title: l.name.toUpperCase().slice(0, 24),
-        description: l.field?.name?.slice(0, 72) || '',
-      }));
-      const lotConfig = {
-        headerText: FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
-        listButtonLabel: 'SELECCIONAR LOTE',
-        sectionTitle: 'LOTES REGISTRADOS',
-        footer: { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
-      };
-      const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
-      const lotState: any = { ...state, customDestName };
-      if (lotResult.totalPages > 1) {
-        lotState.selectionContext = {
-          items: lotItems, shownItems: lotResult.shownItems,
-          page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
-          footer: lotConfig.footer, purpose: 'lot_select', config: lotConfig,
-        };
+      const locState = { ...state, customDestLat: lat, customDestLng: lng };
+      delete locState.locationToken;
+      delete locState.lastLocation;
+
+      if (state.editing) {
+        delete locState.editing;
+        await this.showConfirmation(phone, session, locState);
+        return;
       }
-      await this.updateState(session.id, 'awaiting_lot', lotState);
+
+      // Continue to lot/origin selection (logic previously in awaiting_dest_name)
+      await this.afterDestLocationConfirmed(phone, session, locState);
       return;
     }
 
@@ -707,7 +715,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       return;
     }
 
-    // ---- Step: Origin Location ----
+    // ---- Step: Origin Location (mandatory) ----
     if (step === 'awaiting_origin_location') {
       let lat: number | null = null;
       let lng: number | null = null;
@@ -715,21 +723,25 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       if (type === 'location') {
         lat = payload.latitude;
         lng = payload.longitude;
-      } else if (type === 'button_reply' && payload.id === 'location:skip') {
-        // Continue without location
+      } else if (type === 'button_reply' && payload.id === 'location_done') {
+        // Picker saved → check lastLocation in fresh session
+        const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+        const freshState = (freshSess?.flowState as any) || {};
+        if (freshState.lastLocation) {
+          lat = freshState.lastLocation.lat;
+          lng = freshState.lastLocation.lng;
+        } else {
+          await this.wa.sendText(phone, FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace.');
+          return;
+        }
       } else {
-        await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Envíe su ubicación o seleccione Omitir.',
-          [{ id: 'location:skip', title: 'OMITIR UBICACIÓN' }],
-        );
+        await this.wa.sendText(phone, FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.');
         return;
       }
 
-      const locState = { ...state };
-      if (lat !== null && lng !== null) {
-        locState.originLat = lat;
-        locState.originLng = lng;
-      }
+      const locState = { ...state, originLat: lat, originLng: lng };
+      delete locState.locationToken;
+      delete locState.lastLocation;
 
       if (state.editing) {
         delete locState.editing;
@@ -1022,14 +1034,16 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         dto.truckId = state.truckId;
       }
 
-      // Destination: plant ID or custom name
+      // Destination: plant ID or custom name + coordinates
       if (state.destPlantId) {
         dto.destPlantId = state.destPlantId;
       } else if (state.customDestName) {
         dto.customDestName = state.customDestName;
+        if (state.customDestLat) dto.overrideDestLat = state.customDestLat;
+        if (state.customDestLng) dto.overrideDestLng = state.customDestLng;
       }
 
-      // Origin: lot ID or custom origin name (with coords from location or dummy)
+      // Origin: lot ID or custom origin name + coordinates
       if (state.originLotId) {
         dto.originLotId = state.originLotId;
       } else {
@@ -1231,16 +1245,92 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     );
   }
 
-  /** Prompt the user to share their origin location or skip */
+  /** Generate a location picker token and URL for use in flow steps */
+  private async generateLocationTokenForFlow(
+    sessionId: string, state: any, purpose: string,
+  ): Promise<string> {
+    const crypto = require('crypto');
+    const token = crypto.randomUUID();
+    const slug = `${purpose}-${crypto.randomBytes(2).toString('hex')}`;
+    const url = `${APP_URL}/campo/${slug}/ubicacion`;
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: {
+        flowState: {
+          ...state,
+          locationToken: { token, slug, purpose, createdAt: new Date().toISOString() },
+        },
+      },
+    });
+    return url;
+  }
+
+  /** Prompt the user to share their origin location (mandatory) */
   private async sendOriginLocationPrompt(phone: string, session: any, state: any) {
+    const url = await this.generateLocationTokenForFlow(session.id, state, 'origin');
     await this.updateState(session.id, 'awaiting_origin_location', state);
     await this.wa.sendButtons(phone,
       FLOW_HINT +
       `Origen: ${state.customOriginName}\n\n` +
-      'Comparta la ubicación del origen (adjuntos > ubicación).\n\n' +
-      'O seleccione Omitir para continuar sin ubicación.',
-      [{ id: 'location:skip', title: 'OMITIR UBICACIÓN' }],
+      'Ahora necesito la ubicación exacta.\n' +
+      'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
+      `${url}\n\n` +
+      'Sin ubicación no es posible continuar.',
+      [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
     );
+  }
+
+  /** Prompt the user to share their destination location (mandatory) */
+  private async sendDestLocationPrompt(phone: string, session: any, state: any) {
+    const url = await this.generateLocationTokenForFlow(session.id, state, 'destination');
+    await this.updateState(session.id, 'awaiting_dest_location', state);
+    await this.wa.sendButtons(phone,
+      FLOW_HINT +
+      `Destino: ${state.customDestName}\n\n` +
+      'Ahora necesito la ubicación exacta.\n' +
+      'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
+      `${url}\n\n` +
+      'Sin ubicación no es posible continuar.',
+      [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
+    );
+  }
+
+  /** After custom dest location is confirmed, continue to lot/origin selection */
+  private async afterDestLocationConfirmed(phone: string, session: any, state: any) {
+    const lots = await this.prisma.lot.findMany({
+      where: { companyId: state.producerCompanyId, active: true },
+      include: { field: { select: { id: true, name: true } } },
+      take: 30,
+    });
+
+    if (lots.length === 0) {
+      await this.updateState(session.id, 'awaiting_origin_name', state);
+      await this.wa.sendText(phone, FLOW_HINT + 'Indique el nombre del campo o lugar de origen.');
+      return;
+    }
+
+    const lotItems: SelectionItem[] = lots.map((l: any) => ({
+      id: `lot:${l.id}`,
+      title: l.name.toUpperCase().slice(0, 24),
+      description: l.field?.name?.slice(0, 72) || '',
+    }));
+    const lotConfig = {
+      headerText: FLOW_HINT + 'Indicar desde qué lote / campo se carga.',
+      listButtonLabel: 'SELECCIONAR LOTE',
+      sectionTitle: 'LOTES REGISTRADOS',
+      footer: { id: 'lot:custom', title: 'OTRO ORIGEN', description: 'Ingresar manualmente' },
+    };
+    const lotResult = await this.wa.sendSelection(phone, lotItems, lotConfig);
+    const lotState: any = { ...state };
+    if (lotResult.totalPages > 1) {
+      lotState.selectionContext = {
+        items: lotItems, shownItems: lotResult.shownItems,
+        page: lotResult.page, totalPages: lotResult.totalPages, pageSize: 20,
+        footer: lotConfig.footer, purpose: 'lot_select', config: lotConfig,
+      };
+    }
+    await this.updateState(session.id, 'awaiting_lot', lotState);
   }
 
   /** Resolve destination name from Plant or Company */
@@ -1263,11 +1353,14 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     if (finalState.destPlantId) {
       destName = await this.resolveDestName(finalState.destPlantId);
     }
+    if (finalState.customDestLat && !finalState.destPlantId) destName += ' (con ubicación)';
+
     let originName = finalState.customOriginName || 'Origen';
     if (finalState.originLotId) {
       const lot = await this.prisma.lot.findUnique({ where: { id: finalState.originLotId }, select: { name: true } });
       originName = lot?.name || originName;
     }
+    if (finalState.originLat && !finalState.originLotId) originName += ' (con ubicación)';
 
     const dateFormatted = finalState.loadDate.split('-').reverse().join('/');
     const truckCount = finalState.truckCount || 1;

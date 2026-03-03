@@ -555,9 +555,21 @@ export class WhatsAppRouterService {
 
     const state = (session.flowState as any) || {};
     const loc = state.lastLocation;
-    const desc = loc?.address || loc?.name || (loc ? `${loc.lat}, ${loc.lng}` : 'sin detalle');
-    const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc?.lat}, lng: ${loc?.lng})]`;
+    if (!loc) return;
 
+    // If in active flow → continue flow with synthetic location payload
+    if (session.flowType) {
+      await this.flow.continueFlow(
+        session, 'location',
+        { latitude: loc.lat, longitude: loc.lng, name: loc.name || '', address: loc.address || '' },
+        session.phone, user,
+      );
+      return;
+    }
+
+    // AI path: existing behavior
+    const desc = loc.address || loc.name || `${loc.lat}, ${loc.lng}`;
+    const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc.lat}, lng: ${loc.lng})]`;
     await this.handleAiChat(session.phone, user, textForAi);
   }
 
