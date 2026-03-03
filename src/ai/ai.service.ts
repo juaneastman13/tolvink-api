@@ -2220,14 +2220,26 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
     }
 
+    // Fallback to lastLocation from WhatsApp for custom origin/dest
+    if (!input.customDestLat || !input.customDestLng || !input.customOriginLat || !input.customOriginLng) {
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const st = (freshSession?.flowState as any) || {};
+      if (st.lastLocation) {
+        if (input.customDestLat == null) input.customDestLat = st.lastLocation.lat;
+        if (input.customDestLng == null) input.customDestLng = st.lastLocation.lng;
+        if (input.customOriginLat == null) input.customOriginLat = st.lastLocation.lat;
+        if (input.customOriginLng == null) input.customOriginLng = st.lastLocation.lng;
+      }
+    }
+
     // Custom destination requires location
-    if (!input.destPlantId && input.destName && (!input.customDestLat || !input.customDestLng)) {
+    if (!input.destPlantId && input.destName && (input.customDestLat == null || input.customDestLng == null)) {
       return JSON.stringify({
         error: 'Para destino personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "destination".',
       });
     }
     // Custom origin requires location
-    if (!input.originLotId && input.customOriginName && (!input.customOriginLat || !input.customOriginLng)) {
+    if (!input.originLotId && input.customOriginName && (input.customOriginLat == null || input.customOriginLng == null)) {
       return JSON.stringify({
         error: 'Para origen personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "origin".',
       });
@@ -2874,17 +2886,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
     // Use lastLocation from WhatsApp if no lat/lng provided
     let lat = input.lat, lng = input.lng;
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        lat = lat || st.lastLocation.lat;
-        lng = lng || st.lastLocation.lng;
+        if (lat == null) lat = st.lastLocation.lat;
+        if (lng == null) lng = st.lastLocation.lng;
       }
     }
 
     // Location is mandatory for field creation
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       return JSON.stringify({
         error: 'La ubicación es obligatoria para crear un campo. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
       });
@@ -2904,17 +2916,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
     // Use lastLocation from WhatsApp if no lat/lng provided
     let lat = input.lat, lng = input.lng;
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        lat = lat || st.lastLocation.lat;
-        lng = lng || st.lastLocation.lng;
+        if (lat == null) lat = st.lastLocation.lat;
+        if (lng == null) lng = st.lastLocation.lng;
       }
     }
 
     // Location is mandatory for lot creation
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       return JSON.stringify({
         error: 'La ubicación es obligatoria para crear un lote. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
       });

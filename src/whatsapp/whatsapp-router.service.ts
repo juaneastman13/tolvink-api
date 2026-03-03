@@ -557,12 +557,11 @@ export class WhatsAppRouterService {
     const loc = state.lastLocation;
     if (!loc) return;
 
-    // If in active flow → continue flow with synthetic location payload
+    // If in active flow → location is already saved in flowState.lastLocation
+    // Don't auto-advance; user presses "UBICACIÓN LISTA" button to continue
     if (session.flowType) {
-      await this.flow.continueFlow(
-        session, 'location',
-        { latitude: loc.lat, longitude: loc.lng, name: loc.name || '', address: loc.address || '' },
-        session.phone, user,
+      await this.wa.sendText(session.phone,
+        '📍 Ubicación registrada. Presione el botón "UBICACIÓN LISTA" para continuar.',
       );
       return;
     }

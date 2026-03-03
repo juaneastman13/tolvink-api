@@ -679,11 +679,19 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lat = freshState.lastLocation.lat;
           lng = freshState.lastLocation.lng;
         } else {
-          await this.wa.sendText(phone, FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace.');
+          await this.wa.sendButtons(phone,
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace:\n' +
+            (state.locationToken?.slug ? `${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : ''),
+            [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
+          );
           return;
         }
       } else {
-        await this.wa.sendText(phone, FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.');
+        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : '';
+        await this.wa.sendButtons(phone,
+          FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.' + pickerUrl,
+          [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
+        );
         return;
       }
 
@@ -731,11 +739,19 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lat = freshState.lastLocation.lat;
           lng = freshState.lastLocation.lng;
         } else {
-          await this.wa.sendText(phone, FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace.');
+          await this.wa.sendButtons(phone,
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace:\n' +
+            (state.locationToken?.slug ? `${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : ''),
+            [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
+          );
           return;
         }
       } else {
-        await this.wa.sendText(phone, FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.');
+        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : '';
+        await this.wa.sendButtons(phone,
+          FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.' + pickerUrl,
+          [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
+        );
         return;
       }
 
@@ -1245,37 +1261,26 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     );
   }
 
-  /** Generate a location picker token and URL for use in flow steps */
-  private async generateLocationTokenForFlow(
-    sessionId: string, state: any, purpose: string,
-  ): Promise<string> {
+  /** Generate a location picker token and URL (pure, no DB write) */
+  private generateLocationToken(purpose: string): { token: string; slug: string; url: string; data: any } {
     const crypto = require('crypto');
     const token = crypto.randomUUID();
-    const slug = `${purpose}-${crypto.randomBytes(2).toString('hex')}`;
+    const slug = `${purpose}-${crypto.randomBytes(4).toString('hex')}`;
     const url = `${APP_URL}/campo/${slug}/ubicacion`;
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: {
-        flowState: {
-          ...state,
-          locationToken: { token, slug, purpose, createdAt: new Date().toISOString() },
-        },
-      },
-    });
-    return url;
+    return { token, slug, url, data: { token, slug, purpose, createdAt: new Date().toISOString() } };
   }
 
   /** Prompt the user to share their origin location (mandatory) */
   private async sendOriginLocationPrompt(phone: string, session: any, state: any) {
-    const url = await this.generateLocationTokenForFlow(session.id, state, 'origin');
-    await this.updateState(session.id, 'awaiting_origin_location', state);
+    const loc = this.generateLocationToken('origin');
+    const stateWithToken = { ...state, locationToken: loc.data };
+    await this.updateState(session.id, 'awaiting_origin_location', stateWithToken);
     await this.wa.sendButtons(phone,
       FLOW_HINT +
       `Origen: ${state.customOriginName}\n\n` +
       'Ahora necesito la ubicación exacta.\n' +
       'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
-      `${url}\n\n` +
+      `${loc.url}\n\n` +
       'Sin ubicación no es posible continuar.',
       [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
     );
@@ -1283,14 +1288,15 @@ export class WhatsAppFlowService implements OnModuleDestroy {
 
   /** Prompt the user to share their destination location (mandatory) */
   private async sendDestLocationPrompt(phone: string, session: any, state: any) {
-    const url = await this.generateLocationTokenForFlow(session.id, state, 'destination');
-    await this.updateState(session.id, 'awaiting_dest_location', state);
+    const loc = this.generateLocationToken('destination');
+    const stateWithToken = { ...state, locationToken: loc.data };
+    await this.updateState(session.id, 'awaiting_dest_location', stateWithToken);
     await this.wa.sendButtons(phone,
       FLOW_HINT +
       `Destino: ${state.customDestName}\n\n` +
       'Ahora necesito la ubicación exacta.\n' +
       'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
-      `${url}\n\n` +
+      `${loc.url}\n\n` +
       'Sin ubicación no es posible continuar.',
       [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
     );
