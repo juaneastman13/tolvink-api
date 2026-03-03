@@ -238,7 +238,22 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
           take: 1,
           include: { sender: { select: { id: true, name: true } } },
         },
-        freight: { select: { id: true, code: true, status: true } },
+        freight: {
+          select: {
+            id: true, code: true, status: true,
+            originName: true, destName: true,
+            originCompany: { select: { id: true, name: true, type: true } },
+            destCompany: { select: { id: true, name: true, type: true } },
+            field: { select: { id: true, name: true } },
+            originLot: { select: { id: true, name: true } },
+            items: { select: { grain: true, tons: true }, take: 1 },
+            assignments: {
+              select: { transportCompany: { select: { id: true, name: true } } },
+              where: { status: { in: ['active', 'accepted'] } },
+              take: 1,
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip: skipNum,

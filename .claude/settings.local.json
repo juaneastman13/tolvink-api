@@ -7,7 +7,13 @@
       "Bash(npm run build:*)",
       "Bash(python3 -c 'import sys,json; print\\(json.load\\(sys.stdin\\).get\\(\"\"access_token\"\",\"\"\"\"\\)\\)' \")",
       "Bash(npx prisma db push:*)",
-      "Bash(npx prisma generate:*)"
+      "Bash(npx prisma generate:*)",
+      "WebFetch(domain:developers.facebook.com)",
+      "WebFetch(domain:www.socialintents.com)",
+      "WebFetch(domain:railway.com)",
+      "Bash(npx ts-node:*)",
+      "Bash(node -e:*)",
+      "WebFetch(domain:ayuda.clientify.com)"
     ]
   }
 }
