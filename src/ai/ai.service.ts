@@ -621,11 +621,12 @@ FILTROS AVANZADOS:
 
 Cuando el mensaje contiene "[El usuario envió una imagen" o "[El usuario envió un documento":
 1. El archivo YA fue descargado y almacenado automáticamente.
-2. Pregunte: "A que flete desea adjuntar este archivo?"
-3. Cuando el usuario responda con un código de flete (ej: F26-LCP.1822) → llamar attach_document con ese código.
+2. Si en la conversación reciente se estaba consultando un flete específico, usar attach_document con ESE flete directamente. NO preguntar "a qué flete" si el contexto es claro.
+3. Solo preguntar "¿A qué flete desea adjuntar este archivo?" si NO hay un flete claro en el contexto reciente.
+4. Cuando el usuario responda con un código de flete (ej: F26-LCP.1822) → llamar attach_document con ese código.
    IMPORTANTE: NO llamar list_freights ni ninguna otra herramienta. Usar DIRECTAMENTE attach_document.
-4. attach_document prepara la acción → se muestran botones CONFIRMAR/CANCELAR.
-5. Cuando confirme → llamar confirm_action.
+5. attach_document prepara la acción → se muestran botones CONFIRMAR/CANCELAR.
+6. Cuando confirme → llamar confirm_action.
 
 REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la ÚNICA herramienta correcta es attach_document.
 
@@ -2438,22 +2439,28 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
   // ---- confirm_action (generic dispatcher) ----
   private async toolConfirmAction(user: any, synUser: any, session: any): Promise<string> {
-    // Atomic consume: clear pendingAction and return old flowState in one query.
+    // Atomic consume: capture old state via CTE, then clear pendingAction.
     // Only one concurrent request can succeed (WHERE checks pendingAction exists).
-    // Atomic consume: read old state + clear pendingAction in one query
     const rows = await this.prisma.$queryRaw<any[]>`
-      UPDATE "whatsapp_sessions"
-      SET "flow_state" = "flow_state" #- '{pendingAction}' #- '{_pendingButtons}'
-      WHERE "id" = ${session.id}
-        AND "flow_state" ? 'pendingAction'
-      RETURNING "flow_state" AS "old_state"
+      WITH old AS (
+        SELECT "id", "flow_state"
+        FROM "whatsapp_sessions"
+        WHERE "id" = ${session.id}
+          AND "flow_state" ? 'pendingAction'
+        FOR UPDATE
+      )
+      UPDATE "whatsapp_sessions" s
+      SET "flow_state" = s."flow_state" #- '{pendingAction}' #- '{_pendingButtons}'
+      FROM old
+      WHERE s."id" = old."id"
+      RETURNING old."flow_state" AS "old_state"
     `;
 
     if (!rows.length) {
       return JSON.stringify({ error: 'No hay una acción pendiente de confirmación.' });
     }
 
-    // Read pendingAction from the DB row returned by the atomic query (not stale session)
+    // Read pendingAction from the pre-update state captured by the CTE
     const oldState = rows[0].old_state || {};
     const pending = oldState.pendingAction;
 
@@ -2461,7 +2468,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       return JSON.stringify({ error: 'No hay una acción pendiente de confirmación.' });
     }
 
-    const preExecState = oldState;
+    const preExecState = { ...oldState };
     delete preExecState.pendingAction;
     delete preExecState._pendingButtons;
     const { tool, params } = pending;
