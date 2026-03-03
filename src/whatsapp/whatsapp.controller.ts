@@ -379,7 +379,7 @@ export class WhatsAppController {
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()
-      WHERE id = ${session.id}::uuid
+      WHERE id::text = ${session.id}
       AND flow_state::jsonb @> ${JSON.stringify({ locationToken: { token: body.token } })}::jsonb
       RETURNING id
     `;
@@ -448,7 +448,7 @@ export class WhatsAppController {
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()
-      WHERE id = ${session.id}::uuid
+      WHERE id::text = ${session.id}
       AND flow_state::jsonb @> ${JSON.stringify({ locationToken: { slug: body.slug } })}::jsonb
       RETURNING id
     `;
