@@ -44,6 +44,29 @@ export class FreightsService {
     if (!assignment) throw new ForbiddenException('No sos el chofer asignado a este flete');
   }
 
+  /** Notify all freight participants (producer, plant, transporter(s)). Deduplicates by companyId. */
+  private notifyAllParticipants(
+    freight: { id: string; originCompanyId: string; destCompanyId?: string | null },
+    assignments: Array<{ transportCompanyId: string }> | null,
+    type: NotificationType,
+    title: string,
+    body: string,
+    excludeUserId?: string,
+  ) {
+    const companyIds = new Set<string>();
+    if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
+    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
+    if (assignments) {
+      for (const a of assignments) {
+        if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
+      }
+    }
+    for (const cid of companyIds) {
+      this.notifications.notifyCompany(cid, type, title, body, freight.id, excludeUserId)
+        .catch(e => this.logger.error('Async side-effect failed', e.message));
+    }
+  }
+
   async create(dto: CreateFreightDto, user: any) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden crear fletes');
 
@@ -235,16 +258,14 @@ export class FreightsService {
       return f;
     });
 
-    // Notify dest company about new freight
-    if (destCompanyId) {
-      const grain = dto.items?.[0]?.grain || 'producto';
-      this.notifications.notifyCompany(
-        destCompanyId, NotificationType.freight_created,
-        'Nuevo flete solicitado',
-        `${grain} desde ${lot?.name || originName}`,
-        freight.id, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants about new freight
+    const grain = dto.items?.[0]?.grain || 'producto';
+    this.notifyAllParticipants(
+      freight, null, NotificationType.freight_created,
+      'Nuevo flete solicitado',
+      `${grain} desde ${lot?.name || originName}`,
+      user.sub,
+    );
 
     // SSE: notify all involved parties
     this.sse.broadcastFreightUpdate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -479,23 +500,14 @@ export class FreightsService {
       throw new BadRequestException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    // Notify transporter about assignment
-    this.notifications.notifyCompany(
-      dto.transportCompanyId, NotificationType.freight_assigned,
-      'Te asignaron un flete',
+    // Notify all participants about assignment
+    this.notifyAllParticipants(
+      result.freight, [{ transportCompanyId: dto.transportCompanyId }],
+      NotificationType.freight_assigned,
+      'Transportista asignado',
       `${result.freight.code} → ${result.freight.destName || 'destino'}`,
-      freightId, user.sub,
-    ).catch(e => this.logger.error('Async side-effect failed', e.message));
-
-    // Notify producer about assignment
-    if (result.freight.originCompanyId) {
-      this.notifications.notifyCompany(
-        result.freight.originCompanyId, NotificationType.freight_assigned,
-        'Se asignó transportista a tu flete',
-        `${result.freight.code} → ${result.freight.destName || 'destino'}`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+      user.sub,
+    );
 
     // Notify driver personally if assigned
     if (dto.driverId) {
@@ -572,15 +584,13 @@ export class FreightsService {
         return { updated, freight };
       });
 
-      // Notify origin company about rejection
-      if (result.freight.originCompanyId) {
-        this.notifications.notifyCompany(
-          result.freight.originCompanyId, NotificationType.freight_rejected,
-          'Flete rechazado',
-          `${result.freight.code}: ${dto.reason}`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
-      }
+      // Notify all participants about rejection
+      this.notifyAllParticipants(
+        result.freight, null, NotificationType.freight_rejected,
+        'Flete rechazado',
+        `${result.freight.code}: ${dto.reason}`,
+        user.sub,
+      );
 
       // SSE
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'pending_assignment' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -663,15 +673,14 @@ export class FreightsService {
     });
 
     // Notify origin + dest companies about acceptance
-    const notifyIds = [acceptResult.freight.originCompanyId, acceptResult.freight.destCompanyId].filter(Boolean) as string[];
-    for (const cid of notifyIds) {
-      this.notifications.notifyCompany(
-        cid, NotificationType.freight_accepted,
-        'Flete aceptado',
-        `${acceptResult.freight.code} fue aceptado por el transportista`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants about acceptance
+    this.notifyAllParticipants(
+      acceptResult.freight, (acceptResult.freight as any).assignments || [],
+      NotificationType.freight_accepted,
+      'Flete aceptado',
+      `${acceptResult.freight.code} fue aceptado por el transportista`,
+      user.sub,
+    );
 
     // Notify driver personally if assigned
     if (dto.driverId) {
@@ -732,15 +741,14 @@ export class FreightsService {
     });
 
     // Notify origin + dest companies
-    const startNotifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
-    for (const cid of startNotifyIds) {
-      this.notifications.notifyCompany(
-        cid, NotificationType.freight_started,
-        'Flete en camino',
-        `${freight.code} inició el viaje`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants about start
+    this.notifyAllParticipants(
+      freight, (freight as any).assignments || [],
+      NotificationType.freight_started,
+      'Flete en camino',
+      `${freight.code} inició el viaje`,
+      user.sub,
+    );
 
     // SSE
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -847,25 +855,15 @@ export class FreightsService {
         return { updated, freight, path: 'producer' as const };
       });
 
-      if (loadedResult.path === 'transporter') {
-        if (loadedResult.freight.originCompanyId) {
-          this.notifications.notifyCompany(
-            loadedResult.freight.originCompanyId, NotificationType.freight_loaded,
-            'Carga confirmada',
-            `${loadedResult.freight.code}: el transportista confirmó la carga`,
-            freightId, user.sub,
-          ).catch(e => this.logger.error('Async side-effect failed', e.message));
-        }
-      } else {
-        if (loadedResult.freight.destCompanyId) {
-          this.notifications.notifyCompany(
-            loadedResult.freight.destCompanyId, NotificationType.freight_confirmed,
-            'Carga confirmada',
-            `${loadedResult.freight.code}: el productor confirmó la carga`,
-            freightId, user.sub,
-          ).catch(e => this.logger.error('Async side-effect failed', e.message));
-        }
-      }
+      const loadedType = loadedResult.path === 'transporter' ? NotificationType.freight_loaded : NotificationType.freight_confirmed;
+      const loadedBy = loadedResult.path === 'transporter' ? 'el transportista' : 'el productor';
+      this.notifyAllParticipants(
+        loadedResult.freight, (loadedResult.freight as any).assignments || [],
+        loadedType,
+        'Carga confirmada',
+        `${loadedResult.freight.code}: ${loadedBy} confirmó la carga`,
+        user.sub,
+      );
 
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: loadedResult.freight.code, status: loadedResult.updated.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
@@ -885,7 +883,10 @@ export class FreightsService {
     if (ct === 'transporter') {
       const tFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
-        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+        });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
         if (freight.status !== FreightStatus.loaded) {
@@ -920,16 +921,15 @@ export class FreightsService {
         return { updated, freight, plantAlsoConfirmed };
       });
 
-      // Notify dest company (plant)
-      if (tFinishResult.freight.destCompanyId) {
-        const nType = tFinishResult.plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
-        this.notifications.notifyCompany(
-          tFinishResult.freight.destCompanyId, nType,
-          tFinishResult.plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
-          `${tFinishResult.freight.code}: el transportista confirmó la entrega`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
-      }
+      // Notify all participants
+      const tFinishType = tFinishResult.plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      this.notifyAllParticipants(
+        tFinishResult.freight, (tFinishResult.freight as any).assignments || [],
+        tFinishType,
+        tFinishResult.plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
+        `${tFinishResult.freight.code}: el transportista confirmó la entrega`,
+        user.sub,
+      );
 
       // SSE
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: tFinishResult.freight.code, status: tFinishResult.plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -940,7 +940,10 @@ export class FreightsService {
     if (ct === 'plant') {
       const pFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
-        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+        });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
         if (freight.status !== FreightStatus.loaded) {
@@ -975,21 +978,15 @@ export class FreightsService {
         return { updated, freight, transporterAlsoConfirmed };
       });
 
-      // Notify origin company + transporter
-      const finishNotifyIds = [pFinishResult.freight.originCompanyId].filter(Boolean) as string[];
-      const activeAssignment = await this.prisma.freightAssignment.findFirst({
-        where: { freightId, status: { in: ['active', 'accepted'] } },
-      });
-      if (activeAssignment?.transportCompanyId) finishNotifyIds.push(activeAssignment.transportCompanyId);
-      const nType = pFinishResult.transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
-      for (const cid of finishNotifyIds) {
-        this.notifications.notifyCompany(
-          cid, nType,
-          pFinishResult.transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
-          `${pFinishResult.freight.code}: la planta confirmó la recepción`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
-      }
+      // Notify all participants
+      const pFinishType = pFinishResult.transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      this.notifyAllParticipants(
+        pFinishResult.freight, (pFinishResult.freight as any).assignments || [],
+        pFinishType,
+        pFinishResult.transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
+        `${pFinishResult.freight.code}: la planta confirmó la recepción`,
+        user.sub,
+      );
 
       // SSE
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: pFinishResult.freight.code, status: pFinishResult.transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -1007,7 +1004,10 @@ export class FreightsService {
 
     const { updated: finishResult, freight } = await this.prisma.$transaction(async (tx) => {
       // Read freight INSIDE transaction to prevent TOCTOU race
-      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+      });
       if (!freight) throw new NotFoundException('Flete no encontrado');
 
       if (freight.status === FreightStatus.in_progress) {
@@ -1039,15 +1039,14 @@ export class FreightsService {
     });
 
     // Notify all parties
-    const fNotifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
-    for (const cid of fNotifyIds) {
-      this.notifications.notifyCompany(
-        cid, NotificationType.freight_finished,
-        'Flete finalizado',
-        `${freight.code} fue marcado como finalizado`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants
+    this.notifyAllParticipants(
+      freight, (freight as any).assignments || [],
+      NotificationType.freight_finished,
+      'Flete finalizado',
+      `${freight.code} fue marcado como finalizado`,
+      user.sub,
+    );
 
     // SSE
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -1107,21 +1106,14 @@ export class FreightsService {
       return { updated, freight };
     });
 
-    // Notify all parties about cancellation
-    const cancelNotifyIds = new Set<string>();
-    if (cancelResult.freight.originCompanyId) cancelNotifyIds.add(cancelResult.freight.originCompanyId);
-    if (cancelResult.freight.destCompanyId) cancelNotifyIds.add(cancelResult.freight.destCompanyId);
-    for (const a of (cancelResult.freight as any).assignments || []) {
-      if (a.transportCompanyId) cancelNotifyIds.add(a.transportCompanyId);
-    }
-    for (const cid of cancelNotifyIds) {
-      this.notifications.notifyCompany(
-        cid, NotificationType.freight_canceled,
-        'Flete cancelado',
-        `${cancelResult.freight.code}: ${dto.reason}`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants about cancellation
+    this.notifyAllParticipants(
+      cancelResult.freight, (cancelResult.freight as any).assignments || [],
+      NotificationType.freight_canceled,
+      'Flete cancelado',
+      `${cancelResult.freight.code}: ${dto.reason}`,
+      user.sub,
+    );
 
     // SSE
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: cancelResult.freight.code, status: 'canceled' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -1172,24 +1164,14 @@ export class FreightsService {
       return { updated, freight };
     });
 
-    // Notify stakeholders (transport companies) about the authorization
-    for (const a of freight.assignments) {
-      this.notifications.notifyCompany(
-        a.transportCompanyId,
-        NotificationType.freight_accepted,
-        `Flete ${freight.code} autorizado`,
-        `El flete ha sido autorizado por la planta`,
-        freightId,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
-    // Also notify origin company (producer)
-    this.notifications.notifyCompany(
-      freight.originCompanyId,
+    // Notify all participants about authorization
+    this.notifyAllParticipants(
+      freight, freight.assignments,
       NotificationType.freight_accepted,
       `Flete ${freight.code} autorizado`,
       `El flete ha sido autorizado por la planta`,
-      freightId,
-    ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      user.sub,
+    );
 
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
 
@@ -1733,6 +1715,7 @@ export class FreightsService {
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
           include: { conversation: { select: { id: true } }, items: { select: { tons: true } } },
+          // originCompanyId and destCompanyId are always loaded (top-level fields)
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
 
@@ -1848,18 +1831,15 @@ export class FreightsService {
       throw new BadRequestException('Error al asignar camiones. Intente nuevamente.');
     }
 
-    const notifiedCompanies = new Set<string>();
-    for (const truck of dto.trucks) {
-      if (!notifiedCompanies.has(truck.transportCompanyId)) {
-        notifiedCompanies.add(truck.transportCompanyId);
-        this.notifications.notifyCompany(
-          truck.transportCompanyId, NotificationType.freight_assigned,
-          'Te asignaron camiones',
-          `${result.freight.code} → ${result.freight.destName || 'destino'}`,
-          freightId, user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
-      }
-    }
+    // Notify all participants about multi-truck assignment
+    const assignmentsList = dto.trucks.map(t => ({ transportCompanyId: t.transportCompanyId }));
+    this.notifyAllParticipants(
+      result.freight, assignmentsList,
+      NotificationType.freight_assigned,
+      'Camiones asignados',
+      `${result.freight.code} → ${result.freight.destName || 'destino'}`,
+      user.sub,
+    );
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result.updated;
   }
@@ -2140,7 +2120,10 @@ export class FreightsService {
     }
 
     const { result, freight, assignment } = await this.prisma.$transaction(async (tx) => {
-      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+      });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint start');
 
@@ -2177,15 +2160,14 @@ export class FreightsService {
       return { result: updated, freight, assignment };
     });
 
-    const notifyIds = [freight.originCompanyId, freight.destCompanyId].filter(Boolean) as string[];
-    for (const cid of notifyIds) {
-      this.notifications.notifyCompany(
-        cid, NotificationType.freight_started,
-        'Camión en camino',
-        `${freight.code} — Camión #${assignment.tripNumber} inició viaje`,
-        freightId, user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
-    }
+    // Notify all participants about trip start
+    this.notifyAllParticipants(
+      freight, (freight as any).assignments || [],
+      NotificationType.freight_started,
+      'Camión en camino',
+      `${freight.code} — Camión #${assignment.tripNumber} inició viaje`,
+      user.sub,
+    );
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
