@@ -297,7 +297,7 @@ export class WhatsAppController {
     if (!body.sessionId) throw new BadRequestException('sessionId required');
 
     // Validate internal caller: must provide internal API key (separate from webhook secret)
-    const key = this.internalKey || this.appSecret;
+    const key = this.internalKey;
     if (!key || body.internalKey !== key) {
       throw new BadRequestException('Unauthorized');
     }
@@ -353,7 +353,7 @@ export class WhatsAppController {
     const sessions = await this.prisma.$queryRaw<any[]>`
       SELECT id, flow_state FROM whatsapp_sessions
       WHERE flow_state::jsonb @> ${JSON.stringify({ locationToken: { token: body.token } })}::jsonb
-      AND expires_at > ${new Date(Date.now() - 60 * 60 * 1000)}
+      AND expires_at > NOW()
       LIMIT 1
     `;
 
@@ -424,7 +424,7 @@ export class WhatsAppController {
     const sessions = await this.prisma.$queryRaw<any[]>`
       SELECT id, flow_state FROM whatsapp_sessions
       WHERE flow_state::jsonb @> ${JSON.stringify({ locationToken: { slug: body.slug } })}::jsonb
-      AND expires_at > ${new Date(Date.now() - 60 * 60 * 1000)}
+      AND expires_at > NOW()
       LIMIT 1
     `;
 

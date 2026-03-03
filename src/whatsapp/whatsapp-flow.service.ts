@@ -1081,8 +1081,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         dto.destPlantId = state.destPlantId;
       } else if (state.customDestName) {
         dto.customDestName = state.customDestName;
-        if (state.customDestLat) dto.overrideDestLat = state.customDestLat;
-        if (state.customDestLng) dto.overrideDestLng = state.customDestLng;
+        if (state.customDestLat != null) dto.overrideDestLat = state.customDestLat;
+        if (state.customDestLng != null) dto.overrideDestLng = state.customDestLng;
       }
 
       // Origin: lot ID or custom origin name + coordinates
@@ -1090,8 +1090,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         dto.originLotId = state.originLotId;
       } else {
         dto.customOriginName = state.customOriginName || 'Origen WhatsApp';
-        dto.overrideOriginLat = state.originLat || null;
-        dto.overrideOriginLng = state.originLng || null;
+        dto.overrideOriginLat = state.originLat ?? null;
+        dto.overrideOriginLng = state.originLng ?? null;
       }
 
       const freight = await this.freights.create(dto as any, synUser);

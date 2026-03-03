@@ -320,8 +320,13 @@ export class FreightsService {
     }
     if (query.dateFrom || query.dateTo) {
       where.loadDate = {};
-      if (query.dateFrom) where.loadDate.gte = new Date(query.dateFrom);
-      if (query.dateTo) where.loadDate.lte = new Date(query.dateTo + 'T23:59:59');
+      if (query.dateFrom && !isNaN(new Date(query.dateFrom).getTime())) {
+        where.loadDate.gte = new Date(query.dateFrom);
+      }
+      if (query.dateTo && !isNaN(new Date(query.dateTo + 'T23:59:59').getTime())) {
+        where.loadDate.lte = new Date(query.dateTo + 'T23:59:59');
+      }
+      if (Object.keys(where.loadDate).length === 0) delete where.loadDate;
     }
     if (query.grain) {
       where.items = { some: { grain: { contains: query.grain, mode: 'insensitive' } } };
@@ -1647,11 +1652,12 @@ export class FreightsService {
         where: { userId: driverId, active: true },
         select: { companyId: true },
       });
-      if (driverMembership) {
-        const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
-        if (!callerCompanies.includes(driverMembership.companyId)) {
-          throw new ForbiddenException('No tiene acceso a la cola de este chofer');
-        }
+      if (!driverMembership) {
+        throw new NotFoundException('Chofer no encontrado');
+      }
+      const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
+      if (!callerCompanies.includes(driverMembership.companyId)) {
+        throw new ForbiddenException('No tiene acceso a la cola de este chofer');
       }
     }
 

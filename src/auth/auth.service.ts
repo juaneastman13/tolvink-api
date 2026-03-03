@@ -230,12 +230,12 @@ export class AuthService {
 
     const user = await this.prisma.user.findFirst({ where });
     if (!user) {
-      throw new BadRequestException('No se encontró la cuenta.');
+      throw new BadRequestException('No se pudo verificar la información. Revisá los datos e intentá de nuevo.');
     }
 
     // Verify the confirmed phone matches the registered phone
     if (user.phone !== dto.phone) {
-      throw new BadRequestException('El teléfono no coincide con el registrado.');
+      throw new BadRequestException('No se pudo verificar la información. Revisá los datos e intentá de nuevo.');
     }
 
     // Rate limit: max codes per hour

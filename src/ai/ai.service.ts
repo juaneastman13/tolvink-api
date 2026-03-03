@@ -1675,15 +1675,16 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
         dto.driverId = user.sub || user.id;
         changes.push('Chofer: Yo mismo');
       } else {
-        const driver = await this.prisma.user.findUnique({
-          where: { id: input.driverId },
-          select: { name: true },
+        const userCompanyIdForDriver = user.activeCompanyId || user.companyId;
+        const driver = await this.prisma.userCompany.findFirst({
+          where: { userId: input.driverId, companyId: userCompanyIdForDriver, active: true },
+          include: { user: { select: { name: true } } },
         });
         if (!driver) {
-          return JSON.stringify({ error: 'No se encontr√≥ el chofer. Use list_drivers primero.' });
+          return JSON.stringify({ error: 'No se encontr√≥ el chofer en su empresa. Use list_drivers primero.' });
         }
         dto.driverId = input.driverId;
-        changes.push(`Chofer: ${driver.name}`);
+        changes.push(`Chofer: ${driver.user.name}`);
       }
     }
 
@@ -2061,17 +2062,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     const assignment = freight.assignments[0];
     const originName = (freight as any).originName || freight.originCompany?.name || 'N/A';
     const destName = (freight as any).destName || freight.destCompany?.name || 'N/A';
-    const oLat = (freight as any).originLat ? Number((freight as any).originLat) : null;
-    const oLng = (freight as any).originLng ? Number((freight as any).originLng) : null;
-    const dLat = (freight as any).destLat ? Number((freight as any).destLat) : null;
-    const dLng = (freight as any).destLng ? Number((freight as any).destLng) : null;
+    const oLat = (freight as any).originLat != null ? Number((freight as any).originLat) : null;
+    const oLng = (freight as any).originLng != null ? Number((freight as any).originLng) : null;
+    const dLat = (freight as any).destLat != null ? Number((freight as any).destLat) : null;
+    const dLng = (freight as any).destLng != null ? Number((freight as any).destLng) : null;
 
     // Build map link if coordinates available
     let mapLink: string | null = null;
-    if (oLat && oLng) {
+    if (oLat != null && oLng != null) {
       const p = new URLSearchParams();
       p.set('lat', oLat.toFixed(6)); p.set('lng', oLng.toFixed(6)); p.set('n', originName.slice(0, 60));
-      if (dLat && dLng) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
+      if (dLat != null && dLng != null) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
       mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
     }
 
@@ -2185,10 +2186,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
     // Include lot data with mapLink instead of raw coords
     const lotsData = lots.map((l: any) => {
-      const lLat = l.lat ? Number(l.lat) : (l.field?.lat ? Number(l.field.lat) : null);
-      const lLng = l.lng ? Number(l.lng) : (l.field?.lng ? Number(l.field.lng) : null);
+      const lLat = l.lat != null ? Number(l.lat) : (l.field?.lat != null ? Number(l.field.lat) : null);
+      const lLng = l.lng != null ? Number(l.lng) : (l.field?.lng != null ? Number(l.field.lng) : null);
       let mapLink: string | null = null;
-      if (lLat && lLng) {
+      if (lLat != null && lLng != null) {
         const p = new URLSearchParams();
         p.set('lat', lLat.toFixed(6)); p.set('lng', lLng.toFixed(6)); p.set('n', (l.name || 'Lote').slice(0, 60));
         mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
@@ -2393,7 +2394,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       if (!pending.originLotId) {
         dto.customOriginName = pending.customOriginName || 'Origen WhatsApp';
       }
-      if (pending.customOriginLat && pending.customOriginLng) {
+      if (pending.customOriginLat != null && pending.customOriginLng != null) {
         dto.overrideOriginLat = pending.customOriginLat;
         dto.overrideOriginLng = pending.customOriginLng;
       } else if (!dto.overrideOriginLat) {
@@ -2402,7 +2403,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     }
 
     // Destination coordinates from WhatsApp location
-    if (pending.customDestLat && pending.customDestLng) {
+    if (pending.customDestLat != null && pending.customDestLng != null) {
       dto.overrideDestLat = pending.customDestLat;
       dto.overrideDestLng = pending.customDestLng;
     }
@@ -2437,23 +2438,30 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   private async toolConfirmAction(user: any, synUser: any, session: any): Promise<string> {
     // Atomic consume: clear pendingAction and return old flowState in one query.
     // Only one concurrent request can succeed (WHERE checks pendingAction exists).
+    // Atomic consume: read old state + clear pendingAction in one query
     const rows = await this.prisma.$queryRaw<any[]>`
       UPDATE "whatsapp_sessions"
       SET "flow_state" = "flow_state" #- '{pendingAction}' #- '{_pendingButtons}'
       WHERE "id" = ${session.id}
         AND "flow_state" ? 'pendingAction'
-      RETURNING "flow_state" #- '{pendingAction}' #- '{_pendingButtons}' AS "cleaned_state"
+      RETURNING "flow_state" AS "old_state"
     `;
 
-    // Read the pending action from the session snapshot (loaded before this atomic clear)
-    const state = (session.flowState as any) || {};
-    const pending = state.pendingAction;
-
-    if (!rows.length || !pending) {
+    if (!rows.length) {
       return JSON.stringify({ error: 'No hay una acci√≥n pendiente de confirmaci√≥n.' });
     }
 
-    const preExecState = rows[0].cleaned_state || {};
+    // Read pendingAction from the DB row returned by the atomic query (not stale session)
+    const oldState = rows[0].old_state || {};
+    const pending = oldState.pendingAction;
+
+    if (!pending) {
+      return JSON.stringify({ error: 'No hay una acci√≥n pendiente de confirmaci√≥n.' });
+    }
+
+    const preExecState = oldState;
+    delete preExecState.pendingAction;
+    delete preExecState._pendingButtons;
     const { tool, params } = pending;
     this.logger.log(`confirm_action ‚Äî dispatching: ${tool}`);
 
@@ -2629,8 +2637,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
           else if (orig.customDestName) createDto.customDestName = orig.customDestName;
           if (orig.originLotId) createDto.originLotId = orig.originLotId;
           else if (orig.customOriginName) createDto.customOriginName = orig.customOriginName;
-          if (orig.originLat && orig.originLng) { createDto.overrideOriginLat = orig.originLat; createDto.overrideOriginLng = orig.originLng; }
-          if (orig.destLat && orig.destLng) { createDto.overrideDestLat = orig.destLat; createDto.overrideDestLng = orig.destLng; }
+          if (orig.originLat != null && orig.originLng != null) { createDto.overrideOriginLat = orig.originLat; createDto.overrideOriginLng = orig.originLng; }
+          if (orig.destLat != null && orig.destLng != null) { createDto.overrideDestLat = orig.destLat; createDto.overrideDestLng = orig.destLng; }
           const newFreight = await this.freights.create(createDto, producerSynUser);
           result = JSON.stringify({ status: 'duplicated', originalCode: params.originalCode, newCode: (newFreight as any).code, link: `${APP_URL}/freights/${(newFreight as any).id}` });
           break;
@@ -2867,10 +2875,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
     // Include full field data so AI can answer follow-up questions (mapLink instead of raw coords)
     const fieldsData = fields.map((f: any) => {
-      const fLat = f.lat ? Number(f.lat) : null;
-      const fLng = f.lng ? Number(f.lng) : null;
+      const fLat = f.lat != null ? Number(f.lat) : null;
+      const fLng = f.lng != null ? Number(f.lng) : null;
       let mapLink: string | null = null;
-      if (fLat && fLng) {
+      if (fLat != null && fLng != null) {
         const p = new URLSearchParams();
         p.set('lat', fLat.toFixed(6)); p.set('lng', fLng.toFixed(6)); p.set('n', (f.name || 'Campo').slice(0, 60));
         mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
@@ -3017,9 +3025,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       password: 'placeholder', // required by DTO ‚Äî actual hash passed separately
       phone: input.phone || null,
       role: prismaRole,
-      companyId: producerCompanyId,
+      companyId: targetCompanyId,
       userTypes: [primaryType],
-      companyByType: { [primaryType]: producerCompanyId },
+      companyByType: { [primaryType]: targetCompanyId },
       roleByType: { [primaryType]: inputRole },
     };
 
@@ -3692,11 +3700,20 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       return JSON.stringify({ error: `${input.code} no tiene asignaci√≥n activa.` });
     }
 
-    const truck = await this.prisma.truck.findUnique({
-      where: { id: input.truckId },
+    // Verify truck exists and belongs to the transporter's company
+    const assignmentFull = await this.prisma.freightAssignment.findFirst({
+      where: { freightId: freight.id, status: { in: ['active', 'accepted'] } },
+      select: { transportCompanyId: true },
+    });
+    const truckOwnerCompany = assignmentFull?.transportCompanyId || user.activeCompanyId || user.companyId;
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: input.truckId, companyId: truckOwnerCompany, active: true },
       select: { plate: true, model: true },
     });
-    const truckDisplay = truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : input.truckId;
+    if (!truck) {
+      return JSON.stringify({ error: 'No se encontr√≥ el cami√≥n o no pertenece a la empresa transportista.' });
+    }
+    const truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
     const plantCompanyId = this.resolvePlantCompanyId(user);
 
     return this.stageAction(session, 'assign_truck_to_trip', {
@@ -3769,17 +3786,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ---- list_company_users ----
   private async toolListCompanyUsers(user: any, session: any): Promise<string> {
+    // Scope to active company only ‚Äî don't leak PII from other companies
     const companyIds: string[] = [];
     if (user.activeCompanyId) companyIds.push(user.activeCompanyId);
     else if (user.companyId) companyIds.push(user.companyId);
-
-    if (user.memberships?.length > 0) {
-      for (const m of user.memberships) {
-        if (m.companyId && !companyIds.includes(m.companyId)) {
-          companyIds.push(m.companyId);
-        }
-      }
-    }
 
     if (companyIds.length === 0) {
       return JSON.stringify({ error: 'No se encontr√≥ tu empresa.', users: [] });
@@ -4181,6 +4191,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ---- authorize_freight ----
   private async toolAuthorizeFreight(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden autorizar fletes.' });
+    }
     const result = await this.resolveFreightWithAccess(input.code, user);
     if (result.error) return JSON.stringify({ error: result.error });
     const freight = result.freight;
@@ -4338,6 +4352,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ---- cancel_assignment ----
   private async toolCancelAssignment(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden cancelar asignaciones.' });
+    }
     const res = await this.resolveAssignment(input.code, input.assignmentId, user);
     if (res.error) return JSON.stringify({ error: res.error });
     const { freight, assignment } = res;
@@ -4349,6 +4367,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ---- update_assignment ----
   private async toolUpdateAssignment(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
+    }
     const res = await this.resolveAssignment(input.code, input.assignmentId, user);
     if (res.error) return JSON.stringify({ error: res.error });
     const { freight, assignment } = res;
@@ -4372,9 +4394,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   // ---- create_driver ----
   private async toolCreateDriver(input: any, user: any, session: any): Promise<string> {
     if (!input.name?.trim()) return JSON.stringify({ error: 'El nombre del chofer es obligatorio.' });
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente pueden registrar choferes.' });
+    }
     const summary = `Registrar chofer: ${input.name}${input.phone ? ` (${input.phone})` : ''}`;
     return this.stageAction(session, 'create_driver', {
-      name: input.name.trim(), phone: input.phone?.trim(), companyId: user.activeCompanyId || user.companyId,
+      name: input.name.trim(), phone: input.phone?.trim(), companyId,
     }, summary);
   }
 
@@ -4478,7 +4504,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       return companyByType.plant;
     }
     if (user.company?.type === 'plant') return user.companyId;
-    return user.activeCompanyId || user.companyId || null;
+    // No fallback ‚Äî only plant companies allowed
+    return null;
   }
 
   /** Check if caller is admin/gerente ‚Äî scoped to specific company when provided */

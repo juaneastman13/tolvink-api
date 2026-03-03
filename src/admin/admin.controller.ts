@@ -449,25 +449,33 @@ export class AdminService {
 
     const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
 
-    const user = await this.prisma.user.create({
-      data: {
-        name: dto.name,
-        email: dto.email,
-        phone: dto.phone || null,
-        passwordHash: hash,
-        role: (dto.role as any) || 'operator',
-        userTypes: dto.userTypes || [],
-        companyId: dto.companyId || null,
-        activeCompanyId: dto.companyId || null,
-        companyByType: dto.companyByType || {},
-        roleByType: dto.roleByType || {},
-      },
-      select: {
-        id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
-        company: { select: { id: true, name: true, type: true } },
-      },
-    });
+    let user: any;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          name: dto.name,
+          email: dto.email,
+          phone: dto.phone || null,
+          passwordHash: hash,
+          role: (dto.role as any) || 'operator',
+          userTypes: dto.userTypes || [],
+          companyId: dto.companyId || null,
+          activeCompanyId: dto.companyId || null,
+          companyByType: dto.companyByType || {},
+          roleByType: dto.roleByType || {},
+        },
+        select: {
+          id: true, name: true, email: true, phone: true, role: true,
+          userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
+          company: { select: { id: true, name: true, type: true } },
+        },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        throw new BadRequestException('Ya existe un usuario con ese email o teléfono');
+      }
+      throw err;
+    }
 
     // Create UserCompany membership
     if (dto.companyId) {
@@ -531,8 +539,9 @@ export class AdminService {
       }
     }
 
-    // Uniqueness checks for email and phone
+    // Normalize email before uniqueness check
     if (dto.email) {
+      dto.email = dto.email.toLowerCase().trim();
       const dup = await this.prisma.user.findFirst({ where: { email: dto.email, id: { not: userId } } });
       if (dup) throw new BadRequestException('Ya existe un usuario con ese email');
     }

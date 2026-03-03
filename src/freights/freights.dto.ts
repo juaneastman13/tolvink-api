@@ -253,7 +253,7 @@ export class AddDocumentDto {
 
   @ApiProperty({ maxLength: 500 })
   @IsNotEmpty()
-  @IsUrl()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
   @MaxLength(500)
   url: string;
 
