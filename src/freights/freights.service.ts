@@ -44,7 +44,12 @@ export class FreightsService {
     if (!assignment) throw new ForbiddenException('No sos el chofer asignado a este flete');
   }
 
-  /** Notify all freight participants (producer, plant, transporter(s)). Deduplicates by companyId. */
+  /**
+   * Notify all freight participants (producer, plant, transporter(s)).
+   * Deduplicates by companyId.
+   * actionCompanyIds — companies that receive action buttons (Aceptar, Confirmar, etc.);
+   * everyone else gets informational "Ver detalle" only.
+   */
   private notifyAllParticipants(
     freight: { id: string; originCompanyId: string; destCompanyId?: string | null },
     assignments: Array<{ transportCompanyId: string }> | null,
@@ -52,6 +57,7 @@ export class FreightsService {
     title: string,
     body: string,
     excludeUserId?: string,
+    actionCompanyIds?: Set<string>,
   ) {
     const companyIds = new Set<string>();
     if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
@@ -62,7 +68,8 @@ export class FreightsService {
       }
     }
     for (const cid of companyIds) {
-      this.notifications.notifyCompany(cid, type, title, body, freight.id, excludeUserId)
+      const isAction = actionCompanyIds?.has(cid) ?? false;
+      this.notifications.notifyCompany(cid, type, title, body, freight.id, excludeUserId, isAction)
         .catch(e => this.logger.error('Async side-effect failed', e.message));
     }
   }
@@ -500,13 +507,14 @@ export class FreightsService {
       throw new BadRequestException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    // Notify all participants about assignment
+    // Notify all participants about assignment (transporter gets Aceptar/Rechazar buttons)
     this.notifyAllParticipants(
       result.freight, [{ transportCompanyId: dto.transportCompanyId }],
       NotificationType.freight_assigned,
       'Transportista asignado',
       `${result.freight.code} → ${result.freight.destName || 'destino'}`,
       user.sub,
+      new Set([dto.transportCompanyId]),
     );
 
     // Notify driver personally if assigned
@@ -857,12 +865,17 @@ export class FreightsService {
 
       const loadedType = loadedResult.path === 'transporter' ? NotificationType.freight_loaded : NotificationType.freight_confirmed;
       const loadedBy = loadedResult.path === 'transporter' ? 'el transportista' : 'el productor';
+      // When transporter confirms → producer gets "Confirmar carga" button
+      const loadedActionIds = loadedResult.path === 'transporter' && loadedResult.freight.originCompanyId
+        ? new Set([loadedResult.freight.originCompanyId])
+        : undefined;
       this.notifyAllParticipants(
         loadedResult.freight, (loadedResult.freight as any).assignments || [],
         loadedType,
         'Carga confirmada',
         `${loadedResult.freight.code}: ${loadedBy} confirmó la carga`,
         user.sub,
+        loadedActionIds,
       );
 
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: loadedResult.freight.code, status: loadedResult.updated.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
@@ -921,14 +934,18 @@ export class FreightsService {
         return { updated, freight, plantAlsoConfirmed };
       });
 
-      // Notify all participants
+      // Notify all participants (plant gets "Confirmar entrega" if not both confirmed)
       const tFinishType = tFinishResult.plantAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      const tFinishActionIds = !tFinishResult.plantAlsoConfirmed && tFinishResult.freight.destCompanyId
+        ? new Set([tFinishResult.freight.destCompanyId])
+        : undefined;
       this.notifyAllParticipants(
         tFinishResult.freight, (tFinishResult.freight as any).assignments || [],
         tFinishType,
         tFinishResult.plantAlsoConfirmed ? 'Flete finalizado' : 'Entrega confirmada',
         `${tFinishResult.freight.code}: el transportista confirmó la entrega`,
         user.sub,
+        tFinishActionIds,
       );
 
       // SSE
@@ -978,14 +995,18 @@ export class FreightsService {
         return { updated, freight, transporterAlsoConfirmed };
       });
 
-      // Notify all participants
+      // Notify all participants (transporter gets "Confirmar entrega" if not both confirmed)
       const pFinishType = pFinishResult.transporterAlsoConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed;
+      const pFinishActionIds = !pFinishResult.transporterAlsoConfirmed
+        ? new Set<string>(((pFinishResult.freight as any).assignments || []).map((a: any) => a.transportCompanyId).filter(Boolean))
+        : undefined;
       this.notifyAllParticipants(
         pFinishResult.freight, (pFinishResult.freight as any).assignments || [],
         pFinishType,
         pFinishResult.transporterAlsoConfirmed ? 'Flete finalizado' : 'Recepción confirmada',
         `${pFinishResult.freight.code}: la planta confirmó la recepción`,
         user.sub,
+        pFinishActionIds,
       );
 
       // SSE
@@ -1831,14 +1852,16 @@ export class FreightsService {
       throw new BadRequestException('Error al asignar camiones. Intente nuevamente.');
     }
 
-    // Notify all participants about multi-truck assignment
+    // Notify all participants about multi-truck assignment (transporters get Aceptar/Rechazar)
     const assignmentsList = dto.trucks.map(t => ({ transportCompanyId: t.transportCompanyId }));
+    const multiActionIds = new Set(dto.trucks.map(t => t.transportCompanyId));
     this.notifyAllParticipants(
       result.freight, assignmentsList,
       NotificationType.freight_assigned,
       'Camiones asignados',
       `${result.freight.code} → ${result.freight.destName || 'destino'}`,
       user.sub,
+      multiActionIds,
     );
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result.updated;

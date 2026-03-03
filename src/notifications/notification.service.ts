@@ -82,6 +82,7 @@ export class NotificationService {
     body: string,
     entityId?: string,
     excludeUserId?: string,
+    actionRecipient = false,
   ) {
     const users = await this.prisma.user.findMany({
       where: {
@@ -112,7 +113,7 @@ export class NotificationService {
       this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
         .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
       const phone = userMap.get(uid) || null;
-      this.sendWhatsAppDirect(uid, phone, type, title, body, entityId)
+      this.sendWhatsAppDirect(uid, phone, type, title, body, entityId, actionRecipient)
         .catch((e) => this.logger.error(`WhatsApp send failed for user ${uid}: ${e.message}`));
       this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
     }
@@ -167,6 +168,7 @@ export class NotificationService {
     title: string,
     body: string,
     entityId?: string,
+    actionRecipient = false,
   ) {
     if (!this.wa) {
       this.logger.debug(`WhatsApp notification skipped for user ${userId}: service not available`);
@@ -192,7 +194,7 @@ export class NotificationService {
     }
 
     // Build message with action buttons based on notification type
-    const buttons = this.getWhatsAppButtons(type, entityId);
+    const buttons = this.getWhatsAppButtons(type, entityId, actionRecipient);
 
     const text = `*${title}*\n${body}`;
 
@@ -203,38 +205,45 @@ export class NotificationService {
     }
   }
 
-  private getWhatsAppButtons(type: NotificationType, entityId?: string): Array<{ id: string; title: string }> {
+  /**
+   * Get WhatsApp buttons for a notification.
+   * actionRecipient=true → include action buttons (Aceptar, Confirmar, etc.)
+   * actionRecipient=false → only "Ver detalle" (informational)
+   */
+  private getWhatsAppButtons(type: NotificationType, entityId?: string, actionRecipient = false): Array<{ id: string; title: string }> {
     if (!entityId) return [];
 
+    // Action buttons only for the targeted recipient
+    if (actionRecipient) {
+      switch (type) {
+        case 'freight_assigned':
+          return [
+            { id: `accept:${entityId}`, title: 'Aceptar' },
+            { id: `reject:${entityId}`, title: 'Rechazar' },
+            { id: `detail:${entityId}`, title: 'Ver detalle' },
+          ];
+        case 'freight_loaded':
+          return [
+            { id: `confirm_loaded:${entityId}`, title: 'Confirmar carga' },
+            { id: `detail:${entityId}`, title: 'Ver detalle' },
+          ];
+        case 'freight_confirmed':
+          return [
+            { id: `confirm_finished:${entityId}`, title: 'Confirmar entrega' },
+            { id: `detail:${entityId}`, title: 'Ver detalle' },
+          ];
+      }
+    }
+
+    // Informational: "Ver detalle" only (or nothing for rejections/cancellations)
     switch (type) {
-      case 'freight_assigned':
-        return [
-          { id: `accept:${entityId}`, title: 'Aceptar' },
-          { id: `reject:${entityId}`, title: 'Rechazar' },
-          { id: `detail:${entityId}`, title: 'Ver detalle' },
-        ];
-      case 'freight_loaded':
-        return [
-          { id: `confirm_loaded:${entityId}`, title: 'Confirmar carga' },
-          { id: `detail:${entityId}`, title: 'Ver detalle' },
-        ];
-      case 'freight_confirmed':
-        return [
-          { id: `confirm_finished:${entityId}`, title: 'Confirmar entrega' },
-          { id: `detail:${entityId}`, title: 'Ver detalle' },
-        ];
-      case 'freight_created':
-      case 'freight_accepted':
-      case 'freight_started':
-      case 'freight_finished':
-        return [
-          { id: `detail:${entityId}`, title: 'Ver detalle' },
-        ];
       case 'freight_rejected':
       case 'freight_canceled':
         return [];
       default:
-        return [];
+        return [
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
     }
   }
 
