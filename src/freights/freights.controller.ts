@@ -116,6 +116,7 @@ export class FreightsController {
 
   @Post(':id/cancel')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Cancelar flete (motivo obligatorio)' })
   cancel(
     @Param('id', ParseUUIDPipe) id: string,

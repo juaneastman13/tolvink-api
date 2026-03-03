@@ -130,7 +130,8 @@ export class AiService implements OnModuleDestroy {
     // Pending document: inject context so AI knows to use attach_document
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
-      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${doc.name}" (${doc.type}). Si el usuario indica un código de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+      const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
+      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${safeName}" (${doc.type}). Si el usuario indica un código de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
     }
 
     // Add user message
@@ -2817,13 +2818,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
   // ---- confirm_loaded ----
   private async toolConfirmLoaded(input: any, user: any, synUser: any, session: any): Promise<string> {
+    if (input.tons == null || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
+      return JSON.stringify({ error: 'Toneladas cargadas (tons) requeridas y deben ser un número positivo.' });
+    }
+
     const result = await this.resolveFreightWithAccess(input.code, user);
     if (result.error) return JSON.stringify({ error: result.error });
     const freight = result.freight;
 
     return this.stageAction(session, 'confirm_loaded', {
-      freightId: freight.id, code: freight.code, tons: input.tons,
-    }, `Confirmar carga del flete ${freight.code} · ${input.tons} tn`);
+      freightId: freight.id, code: freight.code, tons: Number(input.tons),
+    }, `Confirmar carga del flete ${freight.code} · ${Number(input.tons)} tn`);
   }
 
   // ---- confirm_finished ----
@@ -2950,10 +2955,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       });
     }
 
-    // Resolve field name for summary
-    const field = await this.prisma.field.findUnique({ where: { id: input.fieldId }, select: { name: true } });
+    // Verify field belongs to the producer's company
+    const field = await this.prisma.field.findFirst({
+      where: { id: input.fieldId, companyId: producerCompanyId, active: true },
+      select: { name: true },
+    });
+    if (!field) {
+      return JSON.stringify({ error: 'No se encontró el campo o no pertenece a su empresa.' });
+    }
+
     const dto = { name: input.name, hectares: input.hectares || null, lat, lng };
-    const summary = `Crear lote "${input.name}" en campo "${field?.name || 'desconocido'}"${input.hectares ? ` (${input.hectares} ha)` : ''}`;
+    const summary = `Crear lote "${input.name}" en campo "${field.name}"${input.hectares ? ` (${input.hectares} ha)` : ''}`;
 
     return this.stageAction(session, 'create_lot', { producerSynUser, fieldId: input.fieldId, dto }, summary);
   }
@@ -3728,6 +3740,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
   // ---- assign_truck_to_freight (multi-truck) ----
   private async toolAssignTruckToFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
+    // Only plants or producers with own fleet can assign additional trucks
+    const companyType = this.resolveCompanyType(user);
+    const isPlant = companyType.includes('plant');
+    const isProducerOwnFleet = companyType.includes('producer') && input.transporterCompanyId === OWN_FLEET_SHORTCUT;
+    if (!isPlant && !isProducerOwnFleet) {
+      return JSON.stringify({ error: 'Solo plantas o productores con flota propia pueden asignar camiones adicionales.' });
+    }
+
     const result = await this.resolveFreightWithAccess(input.code, user);
     if (result.error) return JSON.stringify({ error: result.error });
     const freight = result.freight;
@@ -3755,8 +3775,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     const isOwnFleet = transporter.hasInternalFleet && transporterCompanyId === userCompanyId;
     const displayName = isOwnFleet ? `${transporter.name} (Flota interna)` : transporter.name;
 
-    // Resolve plantCompanyId for the assignment call
-    const companyType = this.resolveCompanyType(user);
+    // Resolve plantCompanyId for the assignment call (reuse companyType from above)
     let plantCompanyId: string;
     if (companyType.includes('plant')) {
       plantCompanyId = this.resolvePlantCompanyId(user);

@@ -216,6 +216,7 @@ export class AssignMultiTruckDto {
   @ApiProperty({ type: [TruckAssignmentDto], description: 'Lista de camiones a asignar' })
   @IsArray()
   @ArrayMinSize(1, { message: 'Debe incluir al menos un camión' })
+  @ArrayMaxSize(50, { message: 'Máximo 50 camiones por asignación' })
   @ValidateNested({ each: true })
   @Type(() => TruckAssignmentDto)
   trucks: TruckAssignmentDto[];
@@ -354,11 +355,15 @@ export class UpdateFreightDto {
   @ApiProperty({ required: false, description: 'Latitud de sucursal destino' })
   @IsOptional()
   @IsNumber()
+  @Min(-90) @Max(90)
+  @Type(() => Number)
   customDestLat?: number;
 
   @ApiProperty({ required: false, description: 'Longitud de sucursal destino' })
   @IsOptional()
   @IsNumber()
+  @Min(-180) @Max(180)
+  @Type(() => Number)
   customDestLng?: number;
 }
 

@@ -175,7 +175,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     phone: string, session: any, type: string, payload: any, user: any, state: any,
   ) {
     if (session.flowStep === 'awaiting_reason' && type === 'text') {
-      const reason = payload.body?.trim();
+      const reason = (payload.body || '').trim().replace(/[\x00-\x1f]/g, '').slice(0, 255);
       if (!reason || reason.length < 3) {
         await this.wa.sendText(phone, 'El motivo debe tener al menos 3 caracteres. Intente nuevamente:');
         return;
@@ -282,7 +282,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     phone: string, session: any, type: string, payload: any, user: any, state: any,
   ) {
     if (session.flowStep === 'awaiting_reason' && type === 'text') {
-      const reason = payload.body?.trim();
+      const reason = (payload.body || '').trim().replace(/[\x00-\x1f]/g, '').slice(0, 255);
       if (!reason || reason.length < 3) {
         await this.wa.sendText(phone, 'El motivo debe tener al menos 3 caracteres. Intente nuevamente:');
         return;

@@ -1339,12 +1339,12 @@ export class FreightsService {
           let assignDriverId: string | null = null;
           let assignDriverName: string | null = null;
           if (dto.driverId) {
-            // "Yo soy el chofer" sends user.id, otherwise a driver's id
-            const driver = await tx.user.findFirst({
-              where: { id: dto.driverId, active: true },
-              select: { id: true, name: true },
+            // Validate driver belongs to the origin company (own fleet)
+            const driverMembership = await tx.userCompany.findFirst({
+              where: { userId: dto.driverId, companyId: freight.originCompanyId, active: true },
+              include: { user: { select: { id: true, name: true } } },
             });
-            if (driver) { assignDriverId = driver.id; assignDriverName = driver.name; }
+            if (driverMembership) { assignDriverId = driverMembership.user.id; assignDriverName = driverMembership.user.name; }
           } else if (truck.assignedUser) {
             assignDriverId = truck.assignedUser.id;
             assignDriverName = truck.assignedUser.name;
