@@ -1,8 +1,8 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
+import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from '../sse/sse.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import * as webpush from 'web-push';
 import { NotificationType } from '@prisma/client';
 
@@ -10,13 +10,12 @@ import { NotificationType } from '@prisma/client';
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
   private pushEnabled = false;
-  private _waService: any = undefined; // lazy-loaded to avoid circular dependency
 
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
-    private moduleRef: ModuleRef,
     @Inject(forwardRef(() => SseService)) private sse: SseService,
+    @Inject(forwardRef(() => WhatsAppService)) @Optional() private wa: WhatsAppService | null,
   ) {
     const publicKey = this.config.get<string>('VAPID_PUBLIC_KEY');
     const privateKey = this.config.get<string>('VAPID_PRIVATE_KEY');
@@ -149,20 +148,6 @@ export class NotificationService {
 
   // ======================== WHATSAPP =====================================
 
-  /** Lazily resolve WhatsAppService to avoid circular dependency */
-  private getWhatsAppService(): any {
-    if (this._waService === undefined) {
-      try {
-        // Dynamic import to avoid circular module dependency
-        const { WhatsAppService } = require('../whatsapp/whatsapp.service');
-        this._waService = this.moduleRef.get(WhatsAppService, { strict: false });
-      } catch {
-        this._waService = null;
-      }
-    }
-    return this._waService;
-  }
-
   private async sendWhatsApp(
     userId: string,
     type: NotificationType,
@@ -183,8 +168,14 @@ export class NotificationService {
     body: string,
     entityId?: string,
   ) {
-    const wa = this.getWhatsAppService();
-    if (!wa || !wa.isEnabled()) return;
+    if (!this.wa) {
+      this.logger.debug(`WhatsApp notification skipped for user ${userId}: service not available`);
+      return;
+    }
+    if (!this.wa.isEnabled()) {
+      this.logger.debug(`WhatsApp notification skipped for user ${userId}: not enabled`);
+      return;
+    }
 
     // Use pre-fetched phone or fall back to DB query
     let userPhone = phone;
@@ -195,7 +186,10 @@ export class NotificationService {
       });
       userPhone = user?.phone || null;
     }
-    if (!userPhone) return;
+    if (!userPhone) {
+      this.logger.debug(`WhatsApp notification skipped for user ${userId}: no phone`);
+      return;
+    }
 
     // Build message with action buttons based on notification type
     const buttons = this.getWhatsAppButtons(type, entityId);
@@ -203,9 +197,9 @@ export class NotificationService {
     const text = `*${title}*\n${body}`;
 
     if (buttons.length > 0 && entityId) {
-      await wa.sendButtons(userPhone, text, buttons);
+      await this.wa.sendButtons(userPhone, text, buttons);
     } else {
-      await wa.sendText(userPhone, text);
+      await this.wa.sendText(userPhone, text);
     }
   }
 

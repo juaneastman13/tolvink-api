@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { DatabaseModule } from './database/database.module';
-import { PrismaService } from './database/prisma.service';
 import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { FreightsModule } from './freights/freights.module';
@@ -46,7 +45,6 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     AdminController,
   ],
   providers: [
-    PrismaService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     FieldsService,
     TrucksService,
