@@ -497,17 +497,18 @@ La ubicación es OBLIGATORIA para:
 Cuando necesite ubicación, SIEMPRE:
 1. Llamar generate_location_link con el purpose correspondiente.
 2. En la respuesta, incluir el enlace generado.
-3. Indicar que también puede compartir ubicación nativa de WhatsApp.
-4. Aclarar que sin ubicación NO es posible continuar.
+3. Aclarar que sin ubicación NO es posible continuar.
+4. NUNCA mencionar "compartir ubicación desde WhatsApp" ni "ubicación nativa de WhatsApp".
+   La ÚNICA vía válida es el enlace generado por generate_location_link.
 
 Mensaje estándar al pedir ubicación:
 "Ahora necesito la ubicación exacta.
-Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:
+Marque el punto en el siguiente enlace:
 [enlace generado]
 Sin ubicación no es posible continuar."
 
-NO aceptar: direcciones en texto, descripciones manuales, coordenadas escritas.
-SOLO válido: ubicación nativa de WhatsApp o selección desde el enlace.
+NO aceptar: direcciones en texto, descripciones manuales, coordenadas escritas, ubicaciones de WhatsApp.
+SOLO válido: selección desde el enlace de Tolvink.
 NO llamar create_field, create_lot ni prepare_freight con origen/destino custom SIN coordenadas.
 
 CAMPOS Y LOTES:
@@ -697,12 +698,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
           truckCount: { type: 'number', description: 'Se auto-calcula a partir de tons/30 si no se pasa' },
           destPlantId: { type: 'string', description: 'ID de planta (de search_plants)' },
           destName: { type: 'string', description: 'Nombre destino si no hay planta' },
-          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de ubicación WhatsApp)' },
-          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de ubicación WhatsApp)' },
+          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de generate_location_link)' },
+          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de generate_location_link)' },
           originLotId: { type: 'string', description: 'ID de lote (de list_lots o list_fields)' },
           customOriginName: { type: 'string', description: 'Nombre origen si no hay lote' },
-          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de ubicación WhatsApp)' },
-          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de ubicación WhatsApp)' },
+          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de generate_location_link)' },
+          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de generate_location_link)' },
           truckId: { type: 'string', description: 'ID de camión propio (de list_trucks) para asignar flota propia' },
           loadDate: { type: 'string', description: 'YYYY-MM-DD' },
           loadTime: { type: 'string', description: 'HH:mm' },
@@ -810,7 +811,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     },
     {
       name: 'create_field',
-      description: 'Crea un campo (establecimiento). Prepara la acción para confirmación. Si el usuario compartio una ubicación de WhatsApp, se usa automáticamente.',
+      description: 'Crea un campo (establecimiento). Prepara la acción para confirmación. Si el usuario marcó ubicación con generate_location_link, se usa automáticamente.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -2245,13 +2246,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     // Custom destination requires location
     if (!input.destPlantId && input.destName && (input.customDestLat == null || input.customDestLng == null)) {
       return JSON.stringify({
-        error: 'Para destino personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "destination".',
+        error: 'Para destino personalizado, la ubicación es obligatoria. Use generate_location_link con purpose "destination" para generar el enlace.',
       });
     }
     // Custom origin requires location
     if (!input.originLotId && input.customOriginName && (input.customOriginLat == null || input.customOriginLng == null)) {
       return JSON.stringify({
-        error: 'Para origen personalizado, la ubicación es obligatoria. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link con purpose "origin".',
+        error: 'Para origen personalizado, la ubicación es obligatoria. Use generate_location_link con purpose "origin" para generar el enlace.',
       });
     }
 
@@ -2921,7 +2922,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     // Location is mandatory for field creation
     if (lat == null || lng == null) {
       return JSON.stringify({
-        error: 'La ubicación es obligatoria para crear un campo. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
+        error: 'La ubicación es obligatoria para crear un campo. Use generate_location_link con purpose "field" para generar el enlace.',
       });
     }
 
@@ -2951,7 +2952,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     // Location is mandatory for lot creation
     if (lat == null || lng == null) {
       return JSON.stringify({
-        error: 'La ubicación es obligatoria para crear un lote. Solicite al usuario que comparta su ubicación de WhatsApp o use generate_location_link para generar el enlace del mapa.',
+        error: 'La ubicación es obligatoria para crear un lote. Use generate_location_link con purpose "lot" para generar el enlace.',
       });
     }
 
@@ -3106,7 +3107,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     this.logger.log(`generate_location_link — slug=${slug}, sessionId=${session.id}`);
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/campo/${slug}/ubicacion`;
+    const url = `${frontendUrl}/ubicacion/${slug}`;
 
     const purposeLabels: Record<string, string> = {
       origin: 'origen del flete',
@@ -3118,7 +3119,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
 
     return JSON.stringify({
       url,
-      message: `Abra el siguiente link para seleccionar el ${label} en el mapa. Una vez confirmada la ubicación, presione el botón.`,
+      message: `Abra el siguiente enlace para marcar el ${label} en el mapa. Una vez confirmada la ubicación, presione el botón "UBICACIÓN LISTA".`,
     });
   }
 

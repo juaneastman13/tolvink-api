@@ -684,16 +684,16 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lng = freshState.lastLocation.lng;
         } else {
           await this.wa.sendButtons(phone,
-            FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace:\n' +
-            (state.locationToken?.slug ? `${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : ''),
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' +
+            (state.locationToken?.slug ? `${APP_URL}/ubicacion/${state.locationToken.slug}` : ''),
             [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
           );
           return;
         }
       } else {
-        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : '';
+        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/ubicacion/${state.locationToken.slug}` : '';
         await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.' + pickerUrl,
+          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.' + pickerUrl,
           [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
         );
         return;
@@ -744,16 +744,16 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lng = freshState.lastLocation.lng;
         } else {
           await this.wa.sendButtons(phone,
-            FLOW_HINT + 'Aún no se ha registrado la ubicación. Comparta su ubicación desde WhatsApp o marque el punto en el enlace:\n' +
-            (state.locationToken?.slug ? `${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : ''),
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' +
+            (state.locationToken?.slug ? `${APP_URL}/ubicacion/${state.locationToken.slug}` : ''),
             [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
           );
           return;
         }
       } else {
-        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/campo/${state.locationToken.slug}/ubicacion` : '';
+        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/ubicacion/${state.locationToken.slug}` : '';
         await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Debe compartir su ubicación desde WhatsApp o usar el enlace provisto. No se aceptan direcciones en texto.' + pickerUrl,
+          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.' + pickerUrl,
           [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
         );
         return;
@@ -1292,7 +1292,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     const crypto = require('crypto');
     const token = crypto.randomUUID();
     const slug = `${purpose}-${crypto.randomBytes(4).toString('hex')}`;
-    const url = `${APP_URL}/campo/${slug}/ubicacion`;
+    const url = `${APP_URL}/ubicacion/${slug}`;
     return { token, slug, url, data: { token, slug, purpose, createdAt: new Date().toISOString() } };
   }
 
@@ -1305,7 +1305,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       FLOW_HINT +
       `Origen: ${state.customOriginName}\n\n` +
       'Ahora necesito la ubicación exacta.\n' +
-      'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
+      'Marque el punto en el siguiente enlace:\n' +
       `${loc.url}\n\n` +
       'Sin ubicación no es posible continuar.',
       [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
@@ -1321,7 +1321,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       FLOW_HINT +
       `Destino: ${state.customDestName}\n\n` +
       'Ahora necesito la ubicación exacta.\n' +
-      'Puede compartir su ubicación desde WhatsApp o marcar el punto en el siguiente enlace:\n' +
+      'Marque el punto en el siguiente enlace:\n' +
       `${loc.url}\n\n` +
       'Sin ubicación no es posible continuar.',
       [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
