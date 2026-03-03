@@ -30,10 +30,12 @@ export class CreateCompanyDto {
   name: string;
 
   @ApiProperty({ enum: ['producer', 'plant', 'transporter'] }) @IsNotEmpty()
+  @IsIn(['producer', 'plant', 'transporter'])
   type: string;
 
   @ApiProperty({ required: false, type: [String], description: 'Multi-type support: array of CompanyType values' })
   @IsOptional() @IsArray() @IsString({ each: true })
+  @IsIn(['producer', 'plant', 'transporter'], { each: true })
   types?: string[];
 
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(255)
@@ -173,6 +175,7 @@ export class UpdateSelfDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MinLength(2, { message: 'Nombre muy corto' }) @MaxLength(255) name?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsEmail({}, { message: 'Email inválido' }) email?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' }) phone?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() currentPassword?: string;
 }
 
 // ======================== SERVICE ====================================
@@ -316,6 +319,14 @@ export class AdminService {
     }
     const company = await this.prisma.company.findUnique({ where: { id } });
     if (!company) throw new NotFoundException('Empresa no encontrada');
+
+    // Non-platform admins cannot change sensitive company fields
+    if (!this.isPlatformAdmin(user)) {
+      delete dto.type;
+      delete dto.types;
+      delete dto.rut;
+      delete dto.hasInternalFleet;
+    }
 
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
@@ -600,7 +611,7 @@ export class AdminService {
   }
 
   // Self-edit: any user can edit their own name/email/phone
-  async updateSelf(userId: string, dto: { name?: string; email?: string; phone?: string }) {
+  async updateSelf(userId: string, dto: { name?: string; email?: string; phone?: string; currentPassword?: string }) {
     if (dto.name !== undefined) {
       dto.name = dto.name.trim();
       if (!dto.name) throw new BadRequestException('Nombre no puede estar vacío');
@@ -614,6 +625,20 @@ export class AdminService {
       const dup = await this.prisma.user.findFirst({ where: { phone: dto.phone, id: { not: userId } } });
       if (dup) throw new BadRequestException('Ya existe un usuario con ese teléfono');
     }
+
+    // Require current password for email/phone changes (only if user has a password set)
+    if (dto.email || dto.phone) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+      if (user?.passwordHash) {
+        if (!dto.currentPassword) {
+          throw new BadRequestException('Se requiere la contraseña actual para cambiar email o teléfono');
+        }
+        const bcrypt = require('bcryptjs');
+        const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+        if (!valid) throw new BadRequestException('Contraseña incorrecta');
+      }
+    }
+
     const data: any = {};
     if (dto.name) data.name = dto.name;
     if (dto.email) data.email = dto.email;
@@ -869,11 +894,15 @@ export class AdminController {
 
   @Post('users')
   @ApiOperation({ summary: 'Crear usuario' })
-  createUser(@Body() dto: CreateUserDto, @CurrentUser() u: any) {
+  async createUser(@Body() dto: CreateUserDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     // Company admins can only create users for their own company
     if (!this.svc.isPlatformAdmin(u)) {
-      dto.companyId = u.companyId;
+      const freshUser = await this.svc.prisma.user.findUnique({
+        where: { id: u.sub },
+        select: { companyId: true, activeCompanyId: true },
+      });
+      dto.companyId = freshUser?.activeCompanyId || freshUser?.companyId || u.companyId;
       dto.companyByType = undefined;
       dto.roleByType = undefined;
       if (dto.role === 'platform_admin') throw new ForbiddenException('No podés asignar este rol');

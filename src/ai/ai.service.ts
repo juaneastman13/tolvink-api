@@ -15,6 +15,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
+import * as crypto from 'crypto';
+import * as bcryptAi from 'bcryptjs';
 
 const MAX_HISTORY = 50;           // Enough room for tool-heavy conversations
 const MAX_TOOL_LOOPS = 5;
@@ -46,9 +48,15 @@ export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
   private _requestLocationCooldowns = new Map<string, number>();
+  // Per-chat-call side-effects accumulated by tools, merged into single session write by chat()
+  private _chatSideEffects: Map<string, Record<string, any>> = new Map();
   private rateCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
+    // Clean stale request_location cooldowns (5 min TTL)
+    for (const [k, v] of this._requestLocationCooldowns) {
+      if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
+    }
   }, 5 * 60 * 1000);
 
   constructor(
@@ -153,6 +161,9 @@ export class AiService implements OnModuleDestroy {
     let loopCount = 0;
     const currentMessages = [...trimmed];
 
+    // Initialize per-call side-effects accumulator (tools write here, merged at end)
+    this._chatSideEffects.delete(session.id);
+
     try {
       while (loopCount < MAX_TOOL_LOOPS) {
         loopCount++;
@@ -234,9 +245,19 @@ export class AiService implements OnModuleDestroy {
       const latestFlowStep = freshSession?.flowStep ?? session.flowStep;
       const latestFlowType = freshSession?.flowType ?? session.flowType;
 
-      // Extract pending buttons (set by tools during execution) and exclude from saved state
-      const pendingButtons = latestState._pendingButtons || undefined;
-      const { _pendingButtons, ...cleanState } = latestState;
+      // Merge tool side-effects (accumulated by storePendingSelection, stageAction, updateActiveContext)
+      const sideEffects = this._chatSideEffects.get(session.id) || {};
+      this._chatSideEffects.delete(session.id);
+
+      // Extract pending buttons: side-effects take priority over DB state
+      const pendingButtons = sideEffects._pendingButtons || latestState._pendingButtons || undefined;
+      const { _pendingButtons: _dbBtns, ...cleanState } = latestState;
+      const { _pendingButtons: _seBtns, activeContext: seActiveContext, ...otherSideEffects } = sideEffects;
+
+      // Merge activeContext: DB state + side-effects
+      const mergedActiveContext = seActiveContext
+        ? { ...(cleanState.activeContext || {}), ...seActiveContext }
+        : cleanState.activeContext;
 
       // Trim old tool_result content to prevent flowState bloat (cap: 800 chars each)
       const trimmedMessages = currentMessages.slice(-MAX_HISTORY).map((msg, idx, arr) => {
@@ -253,6 +274,8 @@ export class AiService implements OnModuleDestroy {
       const updateData: any = {
         flowState: {
           ...cleanState,
+          ...otherSideEffects,
+          ...(mergedActiveContext ? { activeContext: mergedActiveContext } : {}),
           aiMessages: trimmedMessages,
           lastMessageAt: new Date().toISOString(),
         },
@@ -2010,24 +2033,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   }
 
   // ---- Helper: store _pendingSelection for interactive list ----
-  private async storePendingSelection(
+  // Accumulates in _chatSideEffects (merged by chat()) to avoid DB race conditions
+  private storePendingSelection(
     session: any,
     items: { id: string; title: string; description?: string }[],
     config: { headerText: string; listButtonLabel: string; sectionTitle: string },
     purpose: string,
     extraJson?: Record<string, any>,
-  ): Promise<string> {
-    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const currentState = (freshSession?.flowState as any) || {};
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: {
-          ...currentState,
-          _pendingSelection: { items, config, purpose },
-        },
-      },
-    });
+  ): string {
+    const effects = this._chatSideEffects.get(session.id) || {};
+    effects._pendingSelection = { items, config, purpose };
+    this._chatSideEffects.set(session.id, effects);
     return JSON.stringify({
       total: items.length,
       message: `Se presento lista interactiva de ${items.length} elemento(s). Espere a que seleccione uno.`,
@@ -2110,6 +2126,15 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       transporter: assignment?.transportCompany?.name || 'Sin asignar',
       driver: assignment?.driver?.name || null,
       truck: assignment?.truck?.plate || null,
+      // Include all assignments for multi-truck freights
+      assignments: freight.assignments.length > 1
+        ? freight.assignments.map((a: any) => ({
+            transporter: a.transportCompany?.name || null,
+            driver: a.driver?.name || null,
+            truck: a.truck?.plate || null,
+            tripStatus: a.tripStatus || null,
+          }))
+        : undefined,
       // Hide internal notes from pure transporters/drivers
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       link: `${APP_URL}/freights/${freight.id}`,
@@ -3056,8 +3081,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     const prismaRole = roleToEnum[inputRole] || 'operator';
 
     // Hash password NOW so plaintext never sits in session flowState
-    const bcrypt = require('bcryptjs');
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    const passwordHash = await bcryptAi.hash(input.password, 10);
 
     const dto: any = {
       name: input.name,
@@ -3106,9 +3130,9 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ---- generate_location_link ----
   private async toolGenerateLocationLink(input: any, session: any): Promise<string> {
-    const token = require('crypto').randomUUID();
+    const token = crypto.randomUUID();
     const purposeLabel = (input.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
-    const slug = `${purposeLabel}-${require('crypto').randomBytes(2).toString('hex')}`;
+    const slug = `${purposeLabel}-${crypto.randomBytes(2).toString('hex')}`;
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
     const state = (freshSession?.flowState as any) || {};
 
@@ -3182,7 +3206,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     // Reuse existing token or generate new one
     let token = freight.shareToken;
     if (!token) {
-      token = require('crypto').randomUUID();
+      token = crypto.randomUUID();
       await this.prisma.freight.update({
         where: { id: freight.id },
         data: { shareToken: token },
@@ -3250,7 +3274,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     // Reuse existing token or generate new one
     let token = freight.shareToken;
     if (!token) {
-      token = require('crypto').randomUUID();
+      token = crypto.randomUUID();
       await this.prisma.freight.update({
         where: { id: freight.id },
         data: { shareToken: token },
@@ -3506,7 +3530,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     // Ensure shareToken exists for tracking URL
     let shareToken = freight.shareToken;
     if (!shareToken) {
-      shareToken = require('crypto').randomUUID();
+      shareToken = crypto.randomUUID();
       await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken } });
     }
 
@@ -4099,6 +4123,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
           companyConfirmed: true,
           selectedCompanyId: input.companyId,
           aiMessages: [],
+          pendingAction: undefined,
+          pendingFreight: undefined,
+          activeContext: undefined,
+          _pendingSelection: undefined,
         },
       },
     });
@@ -4203,54 +4231,33 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
   // ======================== ACTIVE CONTEXT ==============================
 
-  /** Save active context (last freight, field, etc.) so it survives message trimming */
-  private async updateActiveContext(sessionId: string, context: Record<string, any>): Promise<void> {
-    try {
-      const fresh = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
-      const state = (fresh?.flowState as any) || {};
-      await this.prisma.whatsAppSession.update({
-        where: { id: sessionId },
-        data: {
-          flowState: {
-            ...state,
-            activeContext: {
-              ...(state.activeContext || {}),
-              ...context,
-              updatedAt: new Date().toISOString(),
-            },
-          },
-        },
-      });
-    } catch (e) {
-      this.logger.warn(`updateActiveContext failed: ${(e as any).message}`);
-    }
+  /** Accumulate active context update ‚Äî merged by chat() into single session write */
+  private updateActiveContext(sessionId: string, context: Record<string, any>): void {
+    const effects = this._chatSideEffects.get(sessionId) || {};
+    effects.activeContext = {
+      ...(effects.activeContext || {}),
+      ...context,
+      updatedAt: new Date().toISOString(),
+    };
+    this._chatSideEffects.set(sessionId, effects);
   }
 
   // ======================== GENERIC CONFIRMATION ========================
 
-  /** Stage an action for user confirmation ‚Äî stores pendingAction + buttons in session */
-  private async stageAction(
+  /** Stage an action for user confirmation ‚Äî accumulates in _chatSideEffects (merged by chat()) */
+  private stageAction(
     session: any,
     tool: string,
     params: Record<string, any>,
     summary: string,
-  ): Promise<string> {
-    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const state = (freshSession?.flowState as any) || {};
-
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: {
-          ...state,
-          pendingAction: { tool, params, summary },
-          _pendingButtons: [
-            { id: 'ai_confirm', title: 'CONFIRMAR' },
-            { id: 'ai_cancel', title: 'CANCELAR' },
-          ],
-        },
-      },
-    });
+  ): string {
+    const effects = this._chatSideEffects.get(session.id) || {};
+    effects.pendingAction = { tool, params, summary };
+    effects._pendingButtons = [
+      { id: 'ai_confirm', title: 'CONFIRMAR' },
+      { id: 'ai_cancel', title: 'CANCELAR' },
+    ];
+    this._chatSideEffects.set(session.id, effects);
 
     return JSON.stringify({
       status: 'pending_confirmation',

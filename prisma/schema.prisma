@@ -736,6 +736,7 @@ model PasswordResetCode {
   expiresAt DateTime @map("expires_at")
   attempts  Int      @default(0)
   used      Boolean  @default(false)
+  resetJti  String?  @map("reset_jti")
   createdAt DateTime @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

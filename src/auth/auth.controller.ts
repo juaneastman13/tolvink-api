@@ -1,4 +1,5 @@
-import { Controller, Post, Patch, Body, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Get, UseGuards, Res, UnauthorizedException } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -21,8 +22,15 @@ export class AuthController {
   @Post('login')
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Login con email o teléfono + contraseña' })
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    try {
+      return await this.authService.login(dto);
+    } catch (err) {
+      if (err instanceof UnauthorizedException && (err as any)._noPassword) {
+        res.setHeader('X-Auth-Hint', 'no-password');
+      }
+      throw err;
+    }
   }
 
   @Post('register')

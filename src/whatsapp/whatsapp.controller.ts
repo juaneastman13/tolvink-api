@@ -3,7 +3,7 @@
 // Handles Meta webhook: GET verification + POST incoming messages
 // =====================================================================
 
-import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -13,7 +13,6 @@ import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
 import { verifySignedToken } from '../common/signed-token';
 
-@SkipThrottle()
 @Controller('whatsapp')
 export class WhatsAppController {
   private readonly logger = new Logger(WhatsAppController.name);
@@ -36,6 +35,9 @@ export class WhatsAppController {
     this.internalKey = this.config.get<string>('INTERNAL_API_KEY');
     if (!this.appSecret) {
       this.logger.error('WHATSAPP_APP_SECRET is not set — webhook signature verification will be enforced');
+    }
+    if (!this.appSecret && process.env.NODE_ENV === 'production') {
+      throw new Error('WHATSAPP_APP_SECRET is required in production');
     }
   }
 
@@ -61,6 +63,7 @@ export class WhatsAppController {
   // ======================== RECEIVE MESSAGES ==============================
   // Meta sends POST with JSON body for incoming messages
 
+  @SkipThrottle()
   @Post('webhook')
   @HttpCode(200)
   async receive(@Req() req: Request, @Res() res: Response) {
@@ -299,7 +302,7 @@ export class WhatsAppController {
     // Validate internal caller: must provide internal API key (separate from webhook secret)
     const key = this.internalKey;
     if (!key || body.internalKey !== key) {
-      throw new BadRequestException('Unauthorized');
+      throw new UnauthorizedException('Unauthorized');
     }
 
     const session = await this.prisma.whatsAppSession.findUnique({ where: { id: body.sessionId } });
@@ -328,7 +331,7 @@ export class WhatsAppController {
     return {
       token,
       slug,
-      url: `${frontendUrl}/campo/${slug}/ubicacion`,
+      url: `${frontendUrl}/ubicacion/${slug}`,
     };
   }
 
@@ -487,7 +490,7 @@ export class WhatsAppController {
 
     // Compute "today" in Uruguay timezone (UTC-3)
     const nowUy = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    const today = new Date(nowUy.getFullYear(), nowUy.getMonth(), nowUy.getDate());
+    const today = new Date(Date.UTC(nowUy.getUTCFullYear(), nowUy.getUTCMonth(), nowUy.getUTCDate()));
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 

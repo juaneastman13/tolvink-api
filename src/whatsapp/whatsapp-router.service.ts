@@ -12,6 +12,7 @@ import { AiService } from '../ai/ai.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
+import * as crypto from 'crypto';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -410,7 +411,17 @@ export class WhatsAppRouterService {
 
       // Split long messages (WhatsApp max ~4096 chars per message)
       if (reply.length > 4000) {
-        const chunks = reply.match(/[\s\S]{1,4000}/g) || [reply];
+        // Split on whitespace boundaries to avoid breaking words/emojis
+        const chunks: string[] = [];
+        let remaining = reply;
+        while (remaining.length > 0) {
+          if (remaining.length <= 4000) { chunks.push(remaining); break; }
+          let splitAt = remaining.lastIndexOf('\n', 4000);
+          if (splitAt < 2000) splitAt = remaining.lastIndexOf(' ', 4000);
+          if (splitAt < 2000) splitAt = 4000;
+          chunks.push(remaining.slice(0, splitAt));
+          remaining = remaining.slice(splitAt).trimStart();
+        }
         for (let i = 0; i < chunks.length; i++) {
           // Attach buttons only to the last chunk
           if (i === chunks.length - 1 && buttons?.length) {
@@ -499,8 +510,6 @@ export class WhatsAppRouterService {
       this.logger.debug(`GPS throttled for user ${user.id} (${Math.round((30_000 - (now - lastWrite)) / 1000)}s remaining)`);
       return;
     }
-    this.gpsWriteCooldowns.set(user.id, now);
-
     // 1) Check if user is a driver with an active in_progress freight
     const driverAssignment = await this.prisma.freightAssignment.findFirst({
       where: { driverId: user.id, status: 'accepted', tripStatus: 'in_progress' },
@@ -510,6 +519,7 @@ export class WhatsAppRouterService {
       await this.prisma.freightTracking.create({
         data: { freightId: driverAssignment.freightId, userId: user.id, lat, lng },
       });
+      this.gpsWriteCooldowns.set(user.id, now); // Set after successful write
       this.logger.log(`GPS tracked for freight ${driverAssignment.freightId} from driver ${user.id}`);
       return;
     }
@@ -538,7 +548,15 @@ export class WhatsAppRouterService {
       await this.prisma.freightTracking.createMany({
         data: activeFreights.map(f => ({ freightId: f.id, userId: user.id, lat, lng })),
       }).catch((err) => this.logger.warn(`Batch GPS write failed for user ${user.id}: ${err.message}`));
+      this.gpsWriteCooldowns.set(user.id, now); // Set after successful write
       this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);
+    }
+
+    // Periodic cleanup of stale cooldown entries
+    if (this.gpsWriteCooldowns.size > 100) {
+      for (const [k, v] of this.gpsWriteCooldowns) {
+        if (now - v > 30_000) this.gpsWriteCooldowns.delete(k);
+      }
     }
   }
 
@@ -550,6 +568,8 @@ export class WhatsAppRouterService {
       this.logger.warn(`onLocationSaved: session ${sessionId} not found or missing phone`);
       return;
     }
+    // Check session expiry
+    if (session.expiresAt && session.expiresAt < new Date()) return;
 
     const user = await this.findUserByPhone(session.phone);
     if (!user) {
@@ -570,10 +590,21 @@ export class WhatsAppRouterService {
       return;
     }
 
-    // AI path: existing behavior
-    const desc = loc.address || loc.name || `${loc.lat}, ${loc.lng}`;
-    const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc.lat}, lng: ${loc.lng})]`;
-    await this.handleAiChat(session.phone, user, textForAi);
+    // AI path: route through phone lock to prevent race conditions
+    const phone = session.phone;
+    const prev = this.phoneLocks.get(phone) || Promise.resolve();
+    let unlock: () => void;
+    const lock = new Promise<void>(r => unlock = r);
+    this.phoneLocks.set(phone, lock);
+    await prev;
+    try {
+      const desc = loc.address || loc.name || `${loc.lat}, ${loc.lng}`;
+      const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc.lat}, lng: ${loc.lng})]`;
+      await this.handleAiChat(phone, user, textForAi);
+    } finally {
+      unlock!();
+      if (this.phoneLocks.get(phone) === lock) this.phoneLocks.delete(phone);
+    }
   }
 
   // ======================== AUDIO HANDLER =================================
@@ -940,7 +971,7 @@ export class WhatsAppRouterService {
     // Update DB (same as web switchCompany — but do NOT invalidate refresh tokens)
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { activeCompanyId: companyId, companyId: companyId },
+      data: { activeCompanyId: companyId },
     });
 
     // Audit log (fire-and-forget)
@@ -1411,6 +1442,7 @@ export class WhatsAppRouterService {
           { originCompanyId: activeCoId },
           { destCompanyId: activeCoId },
           { assignments: { some: { transportCompanyId: activeCoId } } },
+          { assignments: { some: { driverId: user.id } } },
         ],
       },
       select: { id: true },
@@ -1465,15 +1497,17 @@ export class WhatsAppRouterService {
 
     // Ensure shareToken exists for public tracking link (after access check)
     if (!freight.shareToken) {
-      const token = require('crypto').randomUUID();
+      const token = crypto.randomUUID();
       await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken: token } });
       (freight as any).shareToken = token;
     }
 
     // Save activeContext so AI retains freight context after message trimming
     try {
+      const normalizedPhone = this.wa.normalizePhone(phone);
       const sess = await this.prisma.whatsAppSession.findFirst({
-        where: { phone, userId: user.id },
+        where: { phone: normalizedPhone, userId: user.id, expiresAt: { gt: new Date() } },
+        orderBy: { updatedAt: 'desc' },
       });
       if (sess) {
         const st = (sess.flowState as any) || {};

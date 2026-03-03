@@ -10,6 +10,7 @@ import { FreightsService } from '../freights/freights.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import { fuzzySearch, classifyFuzzyResult, GRAIN_ALIASES } from '../common/fuzzy-match';
+import * as crypto from 'crypto';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
@@ -383,6 +384,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       // Not a valid selection reply — clear stale context, fall through
       const { selectionContext: _sc, ...cleanState } = state;
       state = cleanState;
+      // Also clear from DB
+      await this.updateState(session.id, session.flowStep, cleanState);
     }
 
     // ---- Step: Grain Selection ----
@@ -429,6 +432,11 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const tons = parseFloat(payload.body?.trim().replace(',', '.'));
       if (isNaN(tons) || tons <= 0) {
         await this.wa.sendText(phone, FLOW_HINT + 'Ingrese un número válido (ej: 30).');
+        return;
+      }
+
+      if (tons > 10000) {
+        await this.wa.sendText(phone, FLOW_HINT + 'La cantidad parece demasiado alta. Ingrese las toneladas (máximo 10.000):');
         return;
       }
 
@@ -500,16 +508,14 @@ export class WhatsAppFlowService implements OnModuleDestroy {
 
     // ---- Step: Own Fleet Decision ----
     if (step === 'awaiting_own_fleet') {
-      let useOwnFleet = false;
-      if (type === 'button_reply') {
-        useOwnFleet = payload.id === 'own_fleet:yes';
-      } else if (type === 'text') {
-        useOwnFleet = /^(si|sí|yes)$/i.test(payload.body?.trim());
-      }
-
-      if (!useOwnFleet) {
+      if (type === 'button_reply' && payload.id === 'own_fleet:no') {
         // Skip to plant selection
         await this.sendPlantSelection(phone, session, state);
+        return;
+      }
+
+      if (!(type === 'button_reply' && payload.id === 'own_fleet:yes')) {
+        await this.wa.sendText(phone, FLOW_HINT + 'Por favor, seleccione una opción usando los botones.');
         return;
       }
 
@@ -660,7 +666,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         await this.wa.sendText(phone, FLOW_HINT + 'Indique el nombre del destino.');
         return;
       }
-      const customDestName = payload.body.trim();
+      const customDestName = payload.body.trim().replace(/[\x00-\x1f]/g, '').slice(0, 255);
       const destState = { ...state, customDestName };
       // Location is mandatory for custom destination
       await this.sendDestLocationPrompt(phone, session, destState);
@@ -683,17 +689,23 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lat = freshState.lastLocation.lat;
           lng = freshState.lastLocation.lng;
         } else {
+          // Token may be consumed — regenerate a new one
+          const newLoc = this.generateLocationToken('destination');
+          const updatedState = { ...freshState, locationToken: newLoc.data };
+          await this.updateState(session.id, 'awaiting_dest_location', updatedState);
           await this.wa.sendButtons(phone,
-            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' +
-            (state.locationToken?.slug ? `${APP_URL}/ubicacion/${state.locationToken.slug}` : ''),
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' + newLoc.url,
             [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
           );
           return;
         }
       } else {
-        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/ubicacion/${state.locationToken.slug}` : '';
+        // Token may be consumed — regenerate a new one
+        const newLoc = this.generateLocationToken('destination');
+        const updatedState = { ...state, locationToken: newLoc.data };
+        await this.updateState(session.id, 'awaiting_dest_location', updatedState);
         await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.' + pickerUrl,
+          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.\n' + newLoc.url,
           [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
         );
         return;
@@ -720,7 +732,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         await this.wa.sendText(phone, FLOW_HINT + 'Indique el nombre del campo o lugar de origen.');
         return;
       }
-      const customOriginName = payload.body.trim();
+      const customOriginName = payload.body.trim().replace(/[\x00-\x1f]/g, '').slice(0, 255);
       const originState = { ...state, customOriginName };
       // Ask for location before continuing
       await this.sendOriginLocationPrompt(phone, session, originState);
@@ -743,17 +755,23 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           lat = freshState.lastLocation.lat;
           lng = freshState.lastLocation.lng;
         } else {
+          // Token may be consumed — regenerate a new one
+          const newLoc = this.generateLocationToken('origin');
+          const updatedState = { ...freshState, locationToken: newLoc.data };
+          await this.updateState(session.id, 'awaiting_origin_location', updatedState);
           await this.wa.sendButtons(phone,
-            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' +
-            (state.locationToken?.slug ? `${APP_URL}/ubicacion/${state.locationToken.slug}` : ''),
+            FLOW_HINT + 'Aún no se ha registrado la ubicación. Marque el punto en el siguiente enlace:\n' + newLoc.url,
             [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
           );
           return;
         }
       } else {
-        const pickerUrl = state.locationToken?.slug ? `\n${APP_URL}/ubicacion/${state.locationToken.slug}` : '';
+        // Token may be consumed — regenerate a new one
+        const newLoc = this.generateLocationToken('origin');
+        const updatedState = { ...state, locationToken: newLoc.data };
+        await this.updateState(session.id, 'awaiting_origin_location', updatedState);
         await this.wa.sendButtons(phone,
-          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.' + pickerUrl,
+          FLOW_HINT + 'Debe usar el enlace provisto para marcar la ubicación. No se aceptan direcciones en texto.\n' + newLoc.url,
           [{ id: 'location_done', title: 'UBICACIÓN LISTA' }],
         );
         return;
@@ -866,12 +884,23 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
       const text = payload.body?.trim();
-      const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-      if (!match) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Formato inválido. Indique dd/mm/aaaa (ej: 25/02/2026).');
-        return;
+      const textLower = text.toLowerCase();
+      let loadDate: string | null = null;
+
+      if (textLower === 'hoy') {
+        loadDate = new Date().toISOString().split('T')[0];
+      } else if (textLower === 'mañana' || textLower === 'manana') {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        loadDate = d.toISOString().split('T')[0];
+      } else {
+        const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (!match) {
+          await this.wa.sendText(phone, FLOW_HINT + 'Formato inválido. Indique dd/mm/aaaa (ej: 25/02/2026), "hoy" o "mañana".');
+          return;
+        }
+        loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
       }
-      const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+
       const parsedInputDate = new Date(loadDate + 'T00:00:00');
       const todayInput = new Date(); todayInput.setHours(0, 0, 0, 0);
       if (isNaN(parsedInputDate.getTime()) || parsedInputDate < todayInput) {
@@ -1097,7 +1126,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const freight = await this.freights.create(dto as any, synUser);
 
       // Generate shareToken for public tracking link
-      const shareToken = require('crypto').randomUUID();
+      const shareToken = crypto.randomUUID();
       await this.prisma.freight.update({ where: { id: (freight as any).id }, data: { shareToken } });
 
       const code = (freight as any).code;
@@ -1289,7 +1318,6 @@ export class WhatsAppFlowService implements OnModuleDestroy {
 
   /** Generate a location picker token and URL (pure, no DB write) */
   private generateLocationToken(purpose: string): { token: string; slug: string; url: string; data: any } {
-    const crypto = require('crypto');
     const token = crypto.randomUUID();
     const slug = `${purpose}-${crypto.randomBytes(4).toString('hex')}`;
     const url = `${APP_URL}/ubicacion/${slug}`;

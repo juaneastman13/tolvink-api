@@ -7,6 +7,7 @@ export class LoginDto {
 
   @ValidateIf(o => !o.email)
   @IsString()
+  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato de teléfono inválido' })
   phone?: string;
 
   @IsOptional()
@@ -37,6 +38,7 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'Contraseña requerida' })
   @IsString()
   @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, { message: 'La contraseña debe tener al menos 8 caracteres, una mayúscula, una minúscula y un número' })
   password: string;
 
   @IsArray({ message: 'userTypes debe ser un array' })
@@ -88,6 +90,7 @@ export class ResetPasswordDto {
   @IsNotEmpty({ message: 'Contraseña requerida' })
   @IsString()
   @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, { message: 'La contraseña debe tener al menos 8 caracteres, una mayúscula, una minúscula y un número' })
   newPassword: string;
 }
 
@@ -99,5 +102,6 @@ export class ChangePasswordDto {
   @IsNotEmpty({ message: 'Nueva contraseña requerida' })
   @IsString()
   @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, { message: 'La contraseña debe tener al menos 8 caracteres, una mayúscula, una minúscula y un número' })
   newPassword: string;
 }

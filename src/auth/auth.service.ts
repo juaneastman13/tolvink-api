@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, randomInt } from 'crypto';
+import { randomBytes, randomInt, randomUUID } from 'crypto';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bcrypt = require('bcryptjs');
 import { PrismaService } from '../database/prisma.service';
@@ -42,12 +42,8 @@ export class AuthService {
     }
 
     if (dto.email) dto.email = dto.email.toLowerCase().trim();
-    const where = dto.phone
-      ? { phone: dto.phone }
-      : { email: dto.email };
-
-    const user = await (this.prisma.user as any).findFirst({
-      where,
+    const user = await (this.prisma.user as any).findUnique({
+      where: dto.phone ? { phone: dto.phone } : { email: dto.email },
       include: {
         company: { select: COMPANY_SELECT },
         memberships: {
@@ -66,9 +62,8 @@ export class AuthService {
     // Check lockout
     if (user.lockedUntil) {
       if (user.lockedUntil > new Date()) {
-        const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
         throw new UnauthorizedException(
-          `Cuenta bloqueada temporalmente. Intentá de nuevo en ${minutesLeft} minuto${minutesLeft !== 1 ? 's' : ''}.`,
+          'Cuenta bloqueada temporalmente. Intente de nuevo más tarde.',
         );
       }
       // Lockout expired — reset counter so user gets full 5 attempts again
@@ -77,13 +72,11 @@ export class AuthService {
       user.lockedUntil = null;
     }
 
-    // User has no password set — same generic message to prevent enumeration
+    // User has no password set — generic message + header hint (not in JSON body)
     if (!user.passwordHash) {
-      throw new UnauthorizedException({
-        statusCode: 401,
-        message: 'Credenciales inválidas',
-        code: 'NO_PASSWORD',
-      });
+      const err = new UnauthorizedException('Credenciales inválidas');
+      (err as any)._noPassword = true;
+      throw err;
     }
 
     // Password is required
@@ -312,23 +305,19 @@ export class AuthService {
 
     const valid = await bcrypt.compare(dto.code, resetCode.codeHash);
     if (!valid) {
-      const remaining = MAX_CODE_ATTEMPTS - resetCode.attempts - 1;
-      throw new UnauthorizedException(
-        remaining > 0
-          ? `Código incorrecto. Te quedan ${remaining} intento${remaining !== 1 ? 's' : ''}.`
-          : 'Código inválido o expirado',
-      );
+      throw new UnauthorizedException('Código incorrecto.');
     }
 
-    // Mark code as used
+    // Mark code as used and store jti for replay prevention
+    const jti = randomUUID();
     await (this.prisma as any).passwordResetCode.update({
       where: { id: resetCode.id },
-      data: { used: true },
+      data: { used: true, resetJti: jti },
     });
 
-    // Issue short-lived reset token
+    // Issue short-lived reset token with jti nonce
     const resetToken = await this.jwt.signAsync(
-      { sub: user.id, purpose: 'password-reset' },
+      { sub: user.id, purpose: 'password-reset', jti },
       { expiresIn: '10m' },
     );
 
@@ -345,6 +334,19 @@ export class AuthService {
 
     if (payload.purpose !== 'password-reset') {
       throw new UnauthorizedException('Token inválido o expirado');
+    }
+
+    // Atomically consume the jti — prevents replay
+    const jti = payload.jti;
+    if (!jti) {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+    const consumed = await (this.prisma as any).passwordResetCode.updateMany({
+      where: { userId: payload.sub, resetJti: jti, used: true },
+      data: { resetJti: null },
+    });
+    if (consumed.count === 0) {
+      throw new UnauthorizedException('Token ya utilizado');
     }
 
     const user = await (this.prisma.user as any).findUnique({
