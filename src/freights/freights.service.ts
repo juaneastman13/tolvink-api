@@ -487,6 +487,16 @@ export class FreightsService {
       freightId, user.sub,
     ).catch(e => this.logger.error('Async side-effect failed', e.message));
 
+    // Notify producer about assignment
+    if (result.freight.originCompanyId) {
+      this.notifications.notifyCompany(
+        result.freight.originCompanyId, NotificationType.freight_assigned,
+        'Se asignó transportista a tu flete',
+        `${result.freight.code} → ${result.freight.destName || 'destino'}`,
+        freightId, user.sub,
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+    }
+
     // Notify driver personally if assigned
     if (dto.driverId) {
       this.notifications.notify(
