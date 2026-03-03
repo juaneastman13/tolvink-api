@@ -566,13 +566,17 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
-      // Get truck plate for summary
-      const truck = await this.prisma.truck.findUnique({
-        where: { id: truckId },
+      // Get truck plate for summary — verify ownership
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: truckId, companyId: state.producerCompanyId, active: true },
         select: { plate: true },
       });
+      if (!truck) {
+        await this.wa.sendText(phone, FLOW_HINT + 'El camión seleccionado no pertenece a su empresa.');
+        return;
+      }
 
-      const newState = { ...state, truckId, truckPlate: truck?.plate || '' };
+      const newState = { ...state, truckId, truckPlate: truck.plate || '' };
       await this.sendPlantSelection(phone, session, newState);
       return;
     }
@@ -837,6 +841,14 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
+      // Validate date is today or in the future
+      const parsedDate = new Date(loadDate + 'T00:00:00');
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      if (isNaN(parsedDate.getTime()) || parsedDate < today) {
+        await this.wa.sendText(phone, FLOW_HINT + 'La fecha debe ser hoy o posterior.');
+        return;
+      }
+
       const dateState = { ...state, loadDate };
       if (state.editing) {
         delete dateState.editing;
@@ -860,6 +872,12 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
       const loadDate = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+      const parsedInputDate = new Date(loadDate + 'T00:00:00');
+      const todayInput = new Date(); todayInput.setHours(0, 0, 0, 0);
+      if (isNaN(parsedInputDate.getTime()) || parsedInputDate < todayInput) {
+        await this.wa.sendText(phone, FLOW_HINT + 'La fecha debe ser hoy o posterior. Indique dd/mm/aaaa.');
+        return;
+      }
       const dateInputState = { ...state, loadDate };
       if (state.editing) {
         delete dateInputState.editing;
@@ -887,12 +905,15 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         const text = payload.body?.trim();
         const match = text.match(/^(\d{1,2}):(\d{2})$/);
         if (match) {
-          loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
+          const h = parseInt(match[1], 10), m = parseInt(match[2], 10);
+          if (h <= 23 && m <= 59) {
+            loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
+          }
         }
       }
 
       if (!loadTime) {
-        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un horario de la lista o indique HH:mm.');
+        await this.wa.sendText(phone, FLOW_HINT + 'Seleccione un horario de la lista o indique HH:mm (ej: 14:30).');
         return;
       }
 
@@ -912,6 +933,11 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       const match = text.match(/^(\d{1,2}):(\d{2})$/);
       if (!match) {
         await this.wa.sendText(phone, FLOW_HINT + 'Formato inválido. Indique HH:mm (ej: 14:30).');
+        return;
+      }
+      const h = parseInt(match[1], 10), m = parseInt(match[2], 10);
+      if (h > 23 || m > 59) {
+        await this.wa.sendText(phone, FLOW_HINT + 'Hora inválida. Indique HH:mm (ej: 14:30).');
         return;
       }
       const loadTime = `${match[1].padStart(2, '0')}:${match[2]}`;
@@ -1345,7 +1371,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       where: { id: destPlantId },
       select: { name: true, company: { select: { name: true } } },
     });
-    if (plant) return `${plant.company.name} - ${plant.name}`;
+    if (plant) return `${plant.company?.name || ''} - ${plant.name}`;
     const company = await this.prisma.company.findUnique({
       where: { id: destPlantId },
       select: { name: true },
@@ -1467,8 +1493,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       return user.companyId;
     }
 
-    // Fallback to activeCompanyId
-    return user.activeCompanyId || user.companyId || null;
+    // No fallback — only producer companies allowed
+    return null;
   }
 
   private buildSyntheticUser(dbUser: any): any {

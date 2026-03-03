@@ -711,6 +711,23 @@ export class FreightsService {
   async start(freightId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
 
+    // Verify caller's company is involved in this freight
+    if (user.role !== 'chofer') {
+      const allIds = await this.companyRes.resolveAllCompanyIds(user);
+      const freight = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: { originCompanyId: true, destCompanyId: true,
+          assignments: { select: { transportCompanyId: true } } },
+      });
+      if (freight) {
+        const involved = [freight.originCompanyId, freight.destCompanyId,
+          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+        if (!allIds.some(id => involved.includes(id))) {
+          throw new ForbiddenException('No tenés acceso a este flete');
+        }
+      }
+    }
+
     const ct = await this.resolveCompanyType(user);
 
     const { updated: startResult, freight } = await this.prisma.$transaction(async (tx) => {
@@ -1259,7 +1276,11 @@ export class FreightsService {
           }
         }
         if (dto.loadDate) {
-          data.loadDate = new Date(dto.loadDate);
+          const parsedLoadDate = new Date(dto.loadDate);
+          if (isNaN(parsedLoadDate.getTime())) {
+            throw new BadRequestException('Fecha de carga inválida');
+          }
+          data.loadDate = parsedLoadDate;
           data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`);
         }
         if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
@@ -1541,11 +1562,12 @@ export class FreightsService {
 
       const freight = await tx.freight.findUnique({ where: { id: freightId }, select: { code: true, originCompanyId: true, destCompanyId: true } });
 
-      // Notify requester
+      // Notify requester (the other party, not the approver who rejected)
       if (freight) {
         const requesterCompanyId = change.approverCompanyId === freight.originCompanyId
-          ? (freight.destCompanyId || freight.originCompanyId)
+          ? freight.destCompanyId
           : freight.originCompanyId;
+        if (!requesterCompanyId) return { ok: true };
         this.notifications.notifyCompany(
           requesterCompanyId,
           NotificationType.freight_updated,

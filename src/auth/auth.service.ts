@@ -301,12 +301,17 @@ export class AuthService {
       throw new UnauthorizedException('Código inválido o expirado');
     }
 
+    // Atomically increment attempts BEFORE comparing — prevents race condition
+    const updated = await (this.prisma as any).passwordResetCode.updateMany({
+      where: { id: resetCode.id, attempts: { lt: MAX_CODE_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    if (updated.count === 0) {
+      throw new UnauthorizedException('Código inválido o expirado');
+    }
+
     const valid = await bcrypt.compare(dto.code, resetCode.codeHash);
     if (!valid) {
-      await (this.prisma as any).passwordResetCode.update({
-        where: { id: resetCode.id },
-        data: { attempts: resetCode.attempts + 1 },
-      });
       const remaining = MAX_CODE_ATTEMPTS - resetCode.attempts - 1;
       throw new UnauthorizedException(
         remaining > 0
@@ -385,11 +390,12 @@ export class AuthService {
       throw new UnauthorizedException('Usuario no encontrado');
     }
 
-    if (user.passwordHash) {
-      const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
-      if (!valid) {
-        throw new UnauthorizedException('Contraseña actual incorrecta');
-      }
+    if (!user.passwordHash) {
+      throw new BadRequestException('No tenés contraseña configurada. Usá el flujo de recuperación por WhatsApp.');
+    }
+    const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!valid) {
+      throw new UnauthorizedException('Contraseña actual incorrecta');
     }
 
     const hash = await bcrypt.hash(dto.newPassword, 10);

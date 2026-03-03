@@ -1398,8 +1398,16 @@ export class WhatsAppRouterService {
   // ======================== SHOW FREIGHT BY CODE ========================
 
   private async showFreightByCode(phone: string, user: any, code: string) {
+    const activeCoId = user.activeCompanyId || user.companyId;
     const freight = await this.prisma.freight.findFirst({
-      where: { code },
+      where: {
+        code,
+        OR: [
+          { originCompanyId: activeCoId },
+          { destCompanyId: activeCoId },
+          { assignments: { some: { transportCompanyId: activeCoId } } },
+        ],
+      },
       select: { id: true },
     });
 

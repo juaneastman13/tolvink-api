@@ -80,11 +80,16 @@ export class FreightTrackingController {
   async getParticipantsByToken(@Param('token') token: string) {
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (!freight) {
       throw new NotFoundException('Link de seguimiento no válido');
+    }
+
+    // Don't expose historical GPS data for completed/canceled freights
+    if (['finished', 'canceled'].includes(freight.status)) {
+      return [];
     }
 
     return this.freightsService.getParticipantPositions(freight.id);

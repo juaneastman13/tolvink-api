@@ -1511,10 +1511,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       (a.destName || '').localeCompare(b.destName || '') || (a.originName || '').localeCompare(b.originName || ''));
     if (input.transporterName) {
       const t = input.transporterName.toLowerCase();
-      filtered = filtered.filter((f: any) => {
-        const tName = f.assignments?.[0]?.transportCompany?.name || '';
-        return tName.toLowerCase().includes(t);
-      });
+      filtered = filtered.filter((f: any) =>
+        f.assignments?.some((a: any) =>
+          (a.transportCompany?.name || '').toLowerCase().includes(t),
+        ) ?? false,
+      );
     }
 
     if (filtered.length === 0) {
@@ -1652,12 +1653,13 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       if (!effectiveOwnFleet) {
         return JSON.stringify({ error: 'Solo se puede asignar cami√≥n cuando el flete usa flota propia.' });
       }
-      const truck = await this.prisma.truck.findUnique({
-        where: { id: input.truckId },
+      const userCompanyId = user.activeCompanyId || user.companyId;
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: input.truckId, companyId: userCompanyId, active: true },
         select: { plate: true, model: true },
       });
       if (!truck) {
-        return JSON.stringify({ error: 'No se encontr√≥ el cami√≥n. Use list_trucks primero.' });
+        return JSON.stringify({ error: 'No se encontr√≥ el cami√≥n o no pertenece a su empresa. Use list_trucks primero.' });
       }
       dto.truckId = input.truckId;
       changes.push(`Cami√≥n: ${truck.plate}${truck.model ? ` (${truck.model})` : ''}`);
@@ -1895,20 +1897,20 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
     // Use lastLocation from WhatsApp if no lat/lng provided
     let lat = input.lat, lng = input.lng;
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        lat = lat || st.lastLocation.lat;
-        lng = lng || st.lastLocation.lng;
+        if (lat == null) lat = st.lastLocation.lat;
+        if (lng == null) lng = st.lastLocation.lng;
       }
     }
 
     const changes: string[] = [];
     const dto: any = {};
     if (input.address) { dto.address = input.address; changes.push(`Direcci√≥n: ${input.address}`); }
-    if (lat) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
-    if (lng) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
+    if (lat != null) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
+    if (lng != null) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
 
     if (changes.length === 0) {
       return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: address, lat, lng.' });
@@ -1936,20 +1938,20 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
 
     // Use lastLocation from WhatsApp if no lat/lng provided
     let lat = input.lat, lng = input.lng;
-    if (!lat || !lng) {
+    if (lat == null || lng == null) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        lat = lat || st.lastLocation.lat;
-        lng = lng || st.lastLocation.lng;
+        if (lat == null) lat = st.lastLocation.lat;
+        if (lng == null) lng = st.lastLocation.lng;
       }
     }
 
     const changes: string[] = [];
     const dto: any = {};
     if (input.hectares) { dto.hectares = input.hectares; changes.push(`Hect√°reas: ${input.hectares}`); }
-    if (lat) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
-    if (lng) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
+    if (lat != null) { dto.lat = lat; changes.push(`Latitud: ${lat}`); }
+    if (lng != null) { dto.lng = lng; changes.push(`Longitud: ${lng}`); }
 
     if (changes.length === 0) {
       return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: hectares, lat, lng.' });
@@ -1963,10 +1965,10 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   // ---- reactivate_user ----
   private async toolReactivateUser(input: any, user: any, session: any): Promise<string> {
     const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
     if (!this.isCallerAdminForCompany(user, companyId)) {
       return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden reactivar usuarios.' });
     }
-    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
 
     const searchTerm = input.userIdentifier.trim();
     const membership = await this.prisma.userCompany.findFirst({
@@ -2220,15 +2222,21 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       return JSON.stringify({ error: 'truckCount debe ser un n√∫mero >= 1.' });
     }
 
-    // Fallback to lastLocation from WhatsApp for custom origin/dest
-    if (!input.customDestLat || !input.customDestLng || !input.customOriginLat || !input.customOriginLng) {
+    // Fallback to lastLocation from WhatsApp ‚Äî only fill the field that needs it (not both)
+    const needsDestLoc = !input.destPlantId && input.destName && (input.customDestLat == null || input.customDestLng == null);
+    const needsOriginLoc = !input.originLotId && input.customOriginName && (input.customOriginLat == null || input.customOriginLng == null);
+    if (needsDestLoc || needsOriginLoc) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        if (input.customDestLat == null) input.customDestLat = st.lastLocation.lat;
-        if (input.customDestLng == null) input.customDestLng = st.lastLocation.lng;
-        if (input.customOriginLat == null) input.customOriginLat = st.lastLocation.lat;
-        if (input.customOriginLng == null) input.customOriginLng = st.lastLocation.lng;
+        // Only apply to ONE field ‚Äî prefer dest if both need it (user must share location twice for both)
+        if (needsDestLoc) {
+          if (input.customDestLat == null) input.customDestLat = st.lastLocation.lat;
+          if (input.customDestLng == null) input.customDestLng = st.lastLocation.lng;
+        } else if (needsOriginLoc) {
+          if (input.customOriginLat == null) input.customOriginLat = st.lastLocation.lat;
+          if (input.customOriginLng == null) input.customOriginLng = st.lastLocation.lng;
+        }
       }
     }
 
@@ -2253,7 +2261,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
         select: { name: true, company: { select: { name: true } } },
       });
       if (plant) {
-        destDisplayName = `${plant.company.name} - ${plant.name}`;
+        destDisplayName = `${plant.company?.name || ''} - ${plant.name}`;
       } else {
         const company = await this.prisma.company.findUnique({
           where: { id: input.destPlantId },
@@ -2272,11 +2280,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       if (lot) originDisplayName = lot.field?.name ? `${lot.field.name} - ${lot.name}` : lot.name;
     }
 
-    // Resolve truck name if own fleet
+    // Resolve truck name if own fleet ‚Äî verify ownership
     let truckDisplay: string | null = null;
     if (input.truckId) {
-      const truck = await this.prisma.truck.findUnique({
-        where: { id: input.truckId },
+      const truckOwnerCompany = user.activeCompanyId || user.companyId;
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: input.truckId, companyId: truckOwnerCompany, active: true },
         select: { plate: true, model: true },
       });
       if (truck) truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
@@ -2300,13 +2309,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
     };
     if (truckDisplay) summary.truck = truckDisplay;
 
-    // Store pending freight + pending confirm buttons in session
-    const state = (session.flowState as any) || {};
+    // Store pending freight + pending confirm buttons in session (fresh read to avoid overwriting)
+    const freshSess2 = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const currentState = (freshSess2?.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
         flowState: {
-          ...state,
+          ...currentState,
           pendingFreight: { ...input, truckCount },
           _pendingButtons: [
             { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
@@ -3616,8 +3626,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   // ---- assign_transporter ----
   private async toolAssignTransporter(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
-      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden asignar transportistas.' });
+    const isPlant = companyType.includes('plant');
+    const isOwnFleetInput = input.transporterCompanyId === OWN_FLEET_SHORTCUT;
+    const isProducerWithOwnFleet = companyType.includes('producer') && isOwnFleetInput;
+    if (!isPlant && !isProducerWithOwnFleet) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta o productores con flota propia pueden asignar transportistas.' });
     }
 
     const result = await this.resolveFreightWithAccess(input.code, user);
@@ -3853,11 +3866,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   // ---- update_user_role ----
   private async toolUpdateUserRole(input: any, user: any, session: any): Promise<string> {
     const companyId = user.activeCompanyId || user.companyId;
-    if (!this.isCallerAdminForCompany(user, companyId)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden cambiar roles.' });
-    }
     if (!companyId) {
       return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
+    }
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden cambiar roles.' });
     }
 
     const searchTerm = input.userIdentifier.trim();
@@ -3896,11 +3909,11 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
   // ---- deactivate_user ----
   private async toolDeactivateUser(input: any, user: any, session: any): Promise<string> {
     const companyId = user.activeCompanyId || user.companyId;
-    if (!this.isCallerAdminForCompany(user, companyId)) {
-      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden desactivar usuarios.' });
-    }
     if (!companyId) {
       return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
+    }
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo usuarios admin/gerente de esta empresa pueden desactivar usuarios.' });
     }
 
     const searchTerm = input.userIdentifier.trim();
@@ -3987,9 +4000,12 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       });
     }
 
-    // Validate membership
-    const target = memberships.find((m: any) => m.companyId === input.companyId);
-    if (!target) {
+    // Validate membership ‚Äî re-fetch from DB to prevent stale check
+    const freshMembership = await this.prisma.userCompany.findFirst({
+      where: { userId: user.id, companyId: input.companyId, active: true },
+      include: { company: { select: { name: true, type: true } } },
+    });
+    if (!freshMembership) {
       return JSON.stringify({ error: 'No pertenece a esa empresa.' });
     }
 
@@ -4015,13 +4031,14 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       },
     }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
 
-    // Update session: mark confirmed + clear AI history for clean context
-    const state = (session.flowState as any) || {};
+    // Update session: mark confirmed + clear AI history for clean context (fresh read to avoid overwriting)
+    const freshSessSw = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+    const switchState = (freshSessSw?.flowState as any) || {};
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
         flowState: {
-          ...state,
+          ...switchState,
           companyConfirmed: true,
           selectedCompanyId: input.companyId,
           aiMessages: [],
@@ -4029,8 +4046,8 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       },
     });
 
-    const companyName = target.company?.name || 'Empresa';
-    const companyType = TYPE_LABELS[target.company?.type] || target.company?.type || '';
+    const companyName = (freshMembership as any).company?.name || 'Empresa';
+    const companyType = TYPE_LABELS[(freshMembership as any).company?.type] || (freshMembership as any).company?.type || '';
 
     return JSON.stringify({
       status: 'switched',
@@ -4444,7 +4461,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un c√≥digo de flete, la √
       return companyByType.producer;
     }
     if (user.company?.type === 'producer') return user.companyId;
-    return user.activeCompanyId || user.companyId || null;
+    return null;
   }
 
   private resolvePlantCompanyId(user: any): string | null {

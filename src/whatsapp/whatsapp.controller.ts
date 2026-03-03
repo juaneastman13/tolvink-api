@@ -23,6 +23,8 @@ export class WhatsAppController {
   private readonly processedMessages = new Map<string, number>();
   private readonly DEDUP_TTL_MS = 60_000; // 1 minute
 
+  private readonly internalKey: string | undefined;
+
   constructor(
     private config: ConfigService,
     private wa: WhatsAppService,
@@ -31,6 +33,10 @@ export class WhatsAppController {
   ) {
     this.appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
     this.verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
+    this.internalKey = this.config.get<string>('INTERNAL_API_KEY');
+    if (!this.appSecret) {
+      this.logger.error('WHATSAPP_APP_SECRET is not set — webhook signature verification will be enforced');
+    }
   }
 
   // ======================== WEBHOOK VERIFICATION ==========================
@@ -59,12 +65,10 @@ export class WhatsAppController {
   @HttpCode(200)
   async receive(@Req() req: Request, @Res() res: Response) {
     // Verify HMAC-SHA256 signature BEFORE responding (prevents forged webhooks)
-    if (this.appSecret) {
-      if (!this.verifyMetaSignature(req)) {
-        this.logger.warn('Webhook signature verification failed');
-        res.status(401).send('INVALID_SIGNATURE');
-        return;
-      }
+    if (!this.appSecret || !this.verifyMetaSignature(req)) {
+      this.logger.warn('Webhook signature verification failed');
+      res.status(401).send('INVALID_SIGNATURE');
+      return;
     }
 
     // Respond 200 immediately after signature is verified (Meta requires fast response)
@@ -292,9 +296,9 @@ export class WhatsAppController {
   async createLocationToken(@Body() body: { sessionId: string; purpose?: string; internalKey?: string }) {
     if (!body.sessionId) throw new BadRequestException('sessionId required');
 
-    // Validate internal caller: must provide appSecret
-    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!appSecret || body.internalKey !== appSecret) {
+    // Validate internal caller: must provide internal API key (separate from webhook secret)
+    const key = this.internalKey || this.appSecret;
+    if (!key || body.internalKey !== key) {
       throw new BadRequestException('Unauthorized');
     }
 

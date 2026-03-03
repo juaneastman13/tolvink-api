@@ -507,6 +507,10 @@ export class AdminService {
 
     // Non-platform-admins can only edit users in their own companies (or themselves)
     if (!this.isPlatformAdmin(callerUser)) {
+      // Company admins can't set platform_admin role (applies to self-edit too)
+      if (dto.role === 'platform_admin') {
+        throw new ForbiddenException('No podés asignar rol de administrador principal');
+      }
       if (callerUser.sub !== userId) {
         const fullCaller = await this.resolveFullUser(callerUser);
         const callerCompanies = await this.getUserCompanyIds(fullCaller);
@@ -515,10 +519,6 @@ export class AdminService {
         if (!targetCompanies.some(c => callerCompanies.includes(c))) {
           throw new ForbiddenException('No podés editar este usuario');
         }
-      }
-      // Company admins can't set platform_admin role
-      if (dto.role === 'platform_admin') {
-        throw new ForbiddenException('No podés asignar rol de administrador principal');
       }
       // Prevent cross-tenant escalation: strip companyByType, roleByType, companyId
       dto.companyByType = undefined;
@@ -529,6 +529,16 @@ export class AdminService {
           throw new ForbiddenException('No podés mover usuarios a una empresa ajena');
         }
       }
+    }
+
+    // Uniqueness checks for email and phone
+    if (dto.email) {
+      const dup = await this.prisma.user.findFirst({ where: { email: dto.email, id: { not: userId } } });
+      if (dup) throw new BadRequestException('Ya existe un usuario con ese email');
+    }
+    if (dto.phone) {
+      const dup = await this.prisma.user.findFirst({ where: { phone: dto.phone, id: { not: userId } } });
+      if (dup) throw new BadRequestException('Ya existe un usuario con ese teléfono');
     }
 
     const data: any = {};
