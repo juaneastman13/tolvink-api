@@ -204,6 +204,13 @@ export class WhatsAppRouterService {
           return;
         }
 
+        // Notification action buttons (accept, reject, confirm_loaded, etc.) override active flow
+        if (type === 'button_reply' && payload.id && /^(accept|reject|confirm_loaded|confirm_finished|detail):/.test(payload.id)) {
+          await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
+          await this.handleButtonReply(phone, user, payload.id, payload.title);
+          return;
+        }
+
         await this.flow.continueFlow(session, type, payload, phone, user);
         return;
       }
@@ -971,11 +978,11 @@ export class WhatsAppRouterService {
     const fs = (freshSess?.flowState as any) || {};
     const pendingAction = fs._pendingAction;
     const pendingMsg = fs._pendingMessage;
-    if ((pendingAction || pendingMsg) && updatedUser) {
+    if ((pendingAction || pendingMsg) && updatedUser && freshSess) {
       // Clear pending data
       const { _pendingMessage, _pendingAction, ...cleanFS } = fs;
       await this.prisma.whatsAppSession.update({
-        where: { id: freshSess!.id },
+        where: { id: freshSess.id },
         data: { flowState: cleanFS },
       });
       // Replay button action or text message

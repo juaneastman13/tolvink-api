@@ -1503,15 +1503,14 @@ export class FreightsService {
         data: { entityType: 'freight', entityId: freightId, action: 'change_approved', userId: user.sub, freightId, metadata: { changeType: change.changeType, toValue } },
       }).catch(() => {});
 
-      // Notify requester
-      this.notifications.notifyCompany(
-        allIds.includes(freight.originCompanyId) ? freight.originCompanyId : (freight.destCompanyId || freight.originCompanyId),
+      // Notify all participants
+      this.notifyAllParticipants(
+        freight, freight.assignments || [],
         NotificationType.freight_updated,
         'Cambio aprobado',
         `El cambio de ${change.changeType === 'useOwnFleet' ? 'flota propia' : 'planta destino'} en el flete ${freight.code} fue aprobado`,
-        freight.id,
         user.sub,
-      ).catch(e => this.logger.warn(`Notify error: ${e.message}`));
+      );
 
       this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
       return updated;
@@ -2025,9 +2024,12 @@ export class FreightsService {
     if (dto.action === 'rejected') {
       if (!dto.reason?.trim()) throw new BadRequestException('Motivo obligatorio para rechazar');
 
-      const { result, freightCode } = await this.prisma.$transaction(async (tx) => {
+      const { result, freight: rejectFreight } = await this.prisma.$transaction(async (tx) => {
         // Read freight + assignment INSIDE transaction to prevent TOCTOU race
-        const freight = await tx.freight.findUnique({ where: { id: freightId } });
+        const freight = await tx.freight.findUnique({
+          where: { id: freightId },
+          include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+        });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
 
@@ -2060,16 +2062,27 @@ export class FreightsService {
           },
         });
 
-        return { result: updated, freightCode: freight.code };
+        return { result: updated, freight };
       });
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freightCode, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      // Notify all participants about trip rejection
+      this.notifyAllParticipants(
+        rejectFreight, (rejectFreight as any).assignments || [],
+        NotificationType.freight_rejected,
+        'Camión rechazado',
+        `${rejectFreight.code}: ${dto.reason}`,
+        user.sub,
+      );
+      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: rejectFreight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
 
     // Accept — all reads inside transaction
-    const { result, freightCode } = await this.prisma.$transaction(async (tx) => {
-      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+    const { result, freight: acceptFreight } = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+      });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
 
@@ -2127,10 +2140,18 @@ export class FreightsService {
         },
       });
 
-      return { result: updated, freightCode: freight.code };
+      return { result: updated, freight };
     });
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freightCode, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    // Notify all participants about trip acceptance
+    this.notifyAllParticipants(
+      acceptFreight, (acceptFreight as any).assignments || [],
+      NotificationType.freight_accepted,
+      'Camión aceptado',
+      `${acceptFreight.code} fue aceptado por el transportista`,
+      user.sub,
+    );
+    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: acceptFreight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
 
@@ -2205,12 +2226,12 @@ export class FreightsService {
         // Read INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
-          include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
+          include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-loaded');
 
-        const assignment: any = freight.assignments[0];
+        const assignment: any = freight.assignments.find((a: any) => a.id === assignmentId);
         if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
@@ -2265,6 +2286,19 @@ export class FreightsService {
         throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
       });
 
+      // Notify all participants about trip loaded
+      const tripLoadedBy = ct === 'transporter' ? 'el transportista' : 'el productor';
+      const tripLoadedActionIds = ct === 'transporter' && (result as any).originCompanyId
+        ? new Set([(result as any).originCompanyId])
+        : undefined;
+      this.notifyAllParticipants(
+        result as any, ((result as any).assignments || []),
+        NotificationType.freight_loaded,
+        'Carga confirmada',
+        `${(result as any).code}: ${tripLoadedBy} confirmó la carga`,
+        user.sub,
+        tripLoadedActionIds,
+      );
       this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
       return result;
     }
@@ -2277,16 +2311,16 @@ export class FreightsService {
 
     let ct = await this.resolveCompanyType(user);
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Read INSIDE transaction to prevent race condition
+    const { result, freight: txFreight, bothConfirmed, confirmedBy } = await this.prisma.$transaction(async (tx) => {
+      // Read INSIDE transaction to prevent race condition — load ALL active assignments for notification
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { id: assignmentId, status: { in: ['active', 'accepted'] } } } },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint confirm-finished');
 
-      const assignment: any = freight.assignments[0];
+      const assignment: any = freight.assignments.find((a: any) => a.id === assignmentId);
       if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
       if (assignment.tripStatus !== 'loaded') {
@@ -2323,7 +2357,7 @@ export class FreightsService {
             metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed },
           },
         });
-        return updated;
+        return { result: updated, freight, bothConfirmed, confirmedBy: 'transporter' as const };
       }
 
       if (ct === 'plant') {
@@ -2350,12 +2384,35 @@ export class FreightsService {
             metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed },
           },
         });
-        return updated;
+        return { result: updated, freight, bothConfirmed: transporterAlsoConfirmed, confirmedBy: 'plant' as const };
       }
 
       throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
     });
 
+    // Notify all participants about trip finish confirmation
+    const confirmerLabel = confirmedBy === 'transporter' ? 'el transportista' : 'la planta';
+    const tripTitle = bothConfirmed ? 'Entrega confirmada' : 'Confirmación de entrega';
+    const tripBody = bothConfirmed
+      ? `${txFreight.code}: entrega confirmada por ambas partes`
+      : `${txFreight.code}: ${confirmerLabel} confirmó la entrega`;
+    // If only one side confirmed, the other side gets action buttons
+    let tripActionIds: Set<string> | undefined;
+    if (!bothConfirmed) {
+      if (confirmedBy === 'transporter' && txFreight.destCompanyId) {
+        tripActionIds = new Set<string>([txFreight.destCompanyId]);
+      } else if (confirmedBy === 'plant') {
+        const transporterIds = txFreight.assignments
+          .filter((a: any) => a.transportCompanyId)
+          .map((a: any) => a.transportCompanyId);
+        if (transporterIds.length > 0) tripActionIds = new Set<string>(transporterIds);
+      }
+    }
+    this.notifyAllParticipants(
+      txFreight, txFreight.assignments || [],
+      bothConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed,
+      tripTitle, tripBody, user.sub, tripActionIds,
+    );
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
   }
