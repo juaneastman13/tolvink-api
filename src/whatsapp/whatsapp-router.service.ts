@@ -167,11 +167,13 @@ export class WhatsAppRouterService {
           if (isOperational) pendingData._pendingMessage = textBody;
           if (isButtonAction) pendingData._pendingAction = { id: payload.id, title: payload.title };
           if (Object.keys(pendingData).length > 0 && cachedSession) {
+            this.logger.log(`[MultiCo] Saving _pendingMessage="${pendingData._pendingMessage || ''}" to session ${cachedSession.id}`);
             await this.prisma.whatsAppSession.update({
               where: { id: cachedSession.id },
               data: { flowState: { ...sState, ...pendingData } },
             });
           } else if (Object.keys(pendingData).length > 0) {
+            this.logger.log(`[MultiCo] Creating session with _pendingMessage="${pendingData._pendingMessage || ''}"`);
             await this.prisma.whatsAppSession.create({
               data: {
                 userId: user.id, phone: this.wa.normalizePhone(phone),
@@ -180,6 +182,8 @@ export class WhatsAppRouterService {
                 expiresAt: new Date(Date.now() + 30 * 60 * 1000),
               },
             });
+          } else {
+            this.logger.log(`[MultiCo] No pending data to save — type=${type} textBody="${type === 'text' ? (payload.body || '').trim() : ''}" isOperational=${isOperational}`);
           }
           await this.sendCompanySelectionList(phone, user);
           return;
@@ -989,6 +993,7 @@ export class WhatsAppRouterService {
     const fs = (freshSess?.flowState as any) || {};
     const pendingAction = fs._pendingAction;
     const pendingMsg = fs._pendingMessage;
+    this.logger.log(`[CompanySelection] sessionId=${freshSess?.id} pendingMsg=${pendingMsg || 'NONE'} pendingAction=${pendingAction?.id || 'NONE'} flowStateKeys=${Object.keys(fs).join(',')}`);
     if ((pendingAction || pendingMsg) && updatedUser && freshSess) {
       // Clear pending data
       const { _pendingMessage, _pendingAction, ...cleanFS } = fs;
