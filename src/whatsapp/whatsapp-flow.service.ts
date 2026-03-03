@@ -14,6 +14,22 @@ import * as crypto from 'crypto';
 
 const FLOW_TIMEOUT_MINUTES = 10;
 
+/** Get current date in Uruguay timezone (UTC-3) as YYYY-MM-DD */
+function todayUY(): string {
+  const now = new Date();
+  // Uruguay is UTC-3 year-round
+  const uy = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  return uy.toISOString().split('T')[0];
+}
+
+/** Get date N days from now in Uruguay timezone as YYYY-MM-DD */
+function dayOffsetUY(days: number): string {
+  const now = new Date();
+  const uy = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  uy.setUTCDate(uy.getUTCDate() + days);
+  return uy.toISOString().split('T')[0];
+}
+
 // Header hint shown at the top of every flow message
 const FLOW_HINT = '_cancelar / menu_\n\n';
 
@@ -830,22 +846,19 @@ export class WhatsAppFlowService implements OnModuleDestroy {
           return;
         }
         if (payload.id === 'date:today') {
-          loadDate = new Date().toISOString().split('T')[0];
+          loadDate = todayUY();
         } else if (payload.id === 'date:tomorrow') {
-          const d = new Date(); d.setDate(d.getDate() + 1);
-          loadDate = d.toISOString().split('T')[0];
+          loadDate = dayOffsetUY(1);
         } else if (payload.id === 'date:day_after') {
-          const d = new Date(); d.setDate(d.getDate() + 2);
-          loadDate = d.toISOString().split('T')[0];
+          loadDate = dayOffsetUY(2);
         }
       } else if (type === 'text') {
         // Allow text shortcuts
         const text = payload.body?.trim().toLowerCase();
         if (text === 'hoy') {
-          loadDate = new Date().toISOString().split('T')[0];
+          loadDate = todayUY();
         } else if (text === 'manana' || text === 'mañana') {
-          const d = new Date(); d.setDate(d.getDate() + 1);
-          loadDate = d.toISOString().split('T')[0];
+          loadDate = dayOffsetUY(1);
         } else {
           const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
           if (match) {
@@ -859,10 +872,10 @@ export class WhatsAppFlowService implements OnModuleDestroy {
         return;
       }
 
-      // Validate date is today or in the future
+      // Validate date is today or in the future (Uruguay timezone)
       const parsedDate = new Date(loadDate + 'T00:00:00');
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      if (isNaN(parsedDate.getTime()) || parsedDate < today) {
+      const todayStr = todayUY();
+      if (isNaN(parsedDate.getTime()) || loadDate < todayStr) {
         await this.wa.sendText(phone, FLOW_HINT + 'La fecha debe ser hoy o posterior.');
         return;
       }
@@ -888,10 +901,9 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       let loadDate: string | null = null;
 
       if (textLower === 'hoy') {
-        loadDate = new Date().toISOString().split('T')[0];
+        loadDate = todayUY();
       } else if (textLower === 'mañana' || textLower === 'manana') {
-        const d = new Date(); d.setDate(d.getDate() + 1);
-        loadDate = d.toISOString().split('T')[0];
+        loadDate = dayOffsetUY(1);
       } else {
         const match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
         if (!match) {
@@ -902,8 +914,8 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       }
 
       const parsedInputDate = new Date(loadDate + 'T00:00:00');
-      const todayInput = new Date(); todayInput.setHours(0, 0, 0, 0);
-      if (isNaN(parsedInputDate.getTime()) || parsedInputDate < todayInput) {
+      const todayStr2 = todayUY();
+      if (isNaN(parsedInputDate.getTime()) || loadDate < todayStr2) {
         await this.wa.sendText(phone, FLOW_HINT + 'La fecha debe ser hoy o posterior. Indique dd/mm/aaaa.');
         return;
       }

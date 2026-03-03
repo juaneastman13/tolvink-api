@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, randomInt, randomUUID } from 'crypto';
+import { randomBytes, randomInt, randomUUID, createHash } from 'crypto';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bcrypt = require('bcryptjs');
 import { PrismaService } from '../database/prisma.service';
@@ -473,9 +473,10 @@ export class AuthService {
   }
 
   async refresh(dto: RefreshTokenDto) {
+    const tokenHash = this.hashToken(dto.refreshToken);
     const { storedUser } = await this.prisma.$transaction(async (tx) => {
       const stored = await (tx as any).refreshToken.findUnique({
-        where: { token: dto.refreshToken },
+        where: { token: tokenHash },
       });
 
       if (!stored || stored.expiresAt < new Date()) {
@@ -542,10 +543,15 @@ export class AuthService {
     return phone.slice(0, 3) + '*'.repeat(phone.length - 5) + phone.slice(-2);
   }
 
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
   private async createRefreshToken(userId: string): Promise<string> {
     const token = randomBytes(40).toString('hex');
+    const tokenHash = this.hashToken(token);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
-    await (this.prisma as any).refreshToken.create({ data: { token, userId, expiresAt } });
+    await (this.prisma as any).refreshToken.create({ data: { token: tokenHash, userId, expiresAt } });
     (this.prisma as any).refreshToken.deleteMany({
       where: { userId, expiresAt: { lt: new Date() } },
     }).catch(e => this.logger.warn(e.message));

@@ -545,11 +545,15 @@ export class WhatsAppRouterService {
     });
 
     if (activeFreights.length > 0) {
-      await this.prisma.freightTracking.createMany({
-        data: activeFreights.map(f => ({ freightId: f.id, userId: user.id, lat, lng })),
-      }).catch((err) => this.logger.warn(`Batch GPS write failed for user ${user.id}: ${err.message}`));
-      this.gpsWriteCooldowns.set(user.id, now); // Set after successful write
-      this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);
+      try {
+        await this.prisma.freightTracking.createMany({
+          data: activeFreights.map(f => ({ freightId: f.id, userId: user.id, lat, lng })),
+        });
+        this.gpsWriteCooldowns.set(user.id, now); // Set only after successful write
+        this.logger.log(`GPS tracked for ${activeFreights.length} freight(s) from user ${user.id}`);
+      } catch (err) {
+        this.logger.warn(`Batch GPS write failed for user ${user.id}: ${err.message}`);
+      }
     }
 
     // Periodic cleanup of stale cooldown entries
