@@ -1470,6 +1470,37 @@ export class WhatsAppRouterService {
       (freight as any).shareToken = token;
     }
 
+    // Save activeContext so AI retains freight context after message trimming
+    try {
+      const sess = await this.prisma.whatsAppSession.findFirst({
+        where: { phone, userId: user.id },
+      });
+      if (sess) {
+        const st = (sess.flowState as any) || {};
+        const grain = freight.items[0]?.grain || '';
+        const tons = freight.items[0]?.tons || '';
+        const originName = freight.originName || freight.originCompany?.name || '';
+        const destName = freight.destName || freight.destCompany?.name || '';
+        await this.prisma.whatsAppSession.update({
+          where: { id: sess.id },
+          data: {
+            flowState: {
+              ...st,
+              activeContext: {
+                ...(st.activeContext || {}),
+                lastFreightId: freight.id,
+                lastFreightCode: freight.code,
+                lastFreightSummary: `${grain} ${tons}tn, ${originName} → ${destName}, ${freight.status}`,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`activeContext save failed: ${(e as any).message}`);
+    }
+
     const statusLabel = STATUS_LABELS[freight.status] || freight.status;
 
     // Build detail text

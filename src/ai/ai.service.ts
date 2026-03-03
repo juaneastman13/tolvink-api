@@ -16,7 +16,7 @@ import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
 
-const MAX_HISTORY = 30;           // Tighter context for focused responses
+const MAX_HISTORY = 50;           // Enough room for tool-heavy conversations
 const MAX_TOOL_LOOPS = 5;
 const AI_SESSION_TIMEOUT_MIN = 30;
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
@@ -131,7 +131,16 @@ export class AiService implements OnModuleDestroy {
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
-      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${safeName}" (${doc.type}). Si el usuario indica un código de flete, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+      const ctxFreight = state.activeContext?.lastFreightCode
+        ? ` El último flete consultado fue ${state.activeContext.lastFreightCode} (${state.activeContext.lastFreightSummary || ''}).`
+        : '';
+      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${safeName}" (${doc.type}).${ctxFreight} Si el usuario indica un código de flete o hace referencia al flete anterior, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+    }
+
+    // Inject active context (survives message trimming)
+    if (state.activeContext?.lastFreightCode && !state.pendingDocument) {
+      const ac = state.activeContext;
+      messageToSend = `[Contexto activo: último flete consultado ${ac.lastFreightCode} — ${ac.lastFreightSummary || ''}]\n\n${messageToSend}`;
     }
 
     // Add user message
@@ -1384,7 +1393,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     try {
       switch (toolName) {
         case 'list_freights': return await this.toolListFreights(synUser, input, session);
-        case 'get_freight_detail': return await this.toolGetFreightDetail(input, user);
+        case 'get_freight_detail': return await this.toolGetFreightDetail(input, user, session);
         case 'search_plants': return await this.toolSearchPlants(input, user, session);
         case 'list_lots': return await this.toolListLots(user, session);
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
@@ -2028,7 +2037,7 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
   }
 
   // ---- get_freight_detail ----
-  private async toolGetFreightDetail(input: any, user: any): Promise<string> {
+  private async toolGetFreightDetail(input: any, user: any, session?: any): Promise<string> {
     // Use resolveFreightWithAccess for unified access control (includes driver check)
     const accessResult = await this.resolveFreightWithAccess(input.code, user);
     if (accessResult.error) return JSON.stringify({ error: accessResult.error });
@@ -2077,6 +2086,17 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
       p.set('lat', oLat.toFixed(6)); p.set('lng', oLng.toFixed(6)); p.set('n', originName.slice(0, 60));
       if (dLat != null && dLng != null) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
       mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
+    }
+
+    // Save active context so it survives message trimming
+    const grain = freight.items[0]?.grain || '';
+    const tons = freight.items[0]?.tons || '';
+    if (session?.id) {
+      this.updateActiveContext(session.id, {
+        lastFreightId: freight.id,
+        lastFreightCode: freight.code,
+        lastFreightSummary: `${grain} ${tons}tn, ${originName} → ${destName}, ${freight.status}`,
+      });
     }
 
     return JSON.stringify({
@@ -4179,6 +4199,31 @@ REGLA: Si hay un archivo pendiente y el usuario indica un código de flete, la �
     }
 
     return trimmed;
+  }
+
+  // ======================== ACTIVE CONTEXT ==============================
+
+  /** Save active context (last freight, field, etc.) so it survives message trimming */
+  private async updateActiveContext(sessionId: string, context: Record<string, any>): Promise<void> {
+    try {
+      const fresh = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+      const state = (fresh?.flowState as any) || {};
+      await this.prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: {
+          flowState: {
+            ...state,
+            activeContext: {
+              ...(state.activeContext || {}),
+              ...context,
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`updateActiveContext failed: ${(e as any).message}`);
+    }
   }
 
   // ======================== GENERIC CONFIRMATION ========================
