@@ -647,8 +647,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     this.phoneLocks.set(phone, lock);
     await prev;
     try {
-      const desc = loc.address || loc.name || `${loc.lat}, ${loc.lng}`;
-      const textForAi = `[Ubicación confirmada desde el mapa: ${desc} (lat: ${loc.lat}, lng: ${loc.lng})]`;
+      const desc = (loc.address || loc.name || 'ubicación').replace(/[\[\]]/g, '').slice(0, 100);
+      const textForAi = `[Ubicación confirmada desde el mapa: ${desc}]`;
       await this.handleAiChat(phone, user, textForAi);
     } finally {
       unlock!();
