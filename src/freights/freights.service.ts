@@ -2398,6 +2398,10 @@ export class FreightsService {
       if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
 
       if (ct === 'transporter') {
+        const callerCtfIds = await this.resolveAllCompanyIds(user);
+        if (!callerCtfIds.includes(assignment.transportCompanyId)) {
+          throw new ForbiddenException('No sos el transportista asignado a este viaje');
+        }
         if (assignment.transporterFinishedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la entrega');
         const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
 
@@ -2428,8 +2432,7 @@ export class FreightsService {
 
       if (ct === 'plant') {
         const allIdsCtf = await this.resolveAllCompanyIds(user);
-        const fCtf = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
-        if (!fCtf?.destCompanyId || !allIdsCtf.includes(fCtf.destCompanyId)) {
+        if (!freight.destCompanyId || !allIdsCtf.includes(freight.destCompanyId)) {
           throw new ForbiddenException('Solo la planta destino puede confirmar la recepción del viaje');
         }
 
