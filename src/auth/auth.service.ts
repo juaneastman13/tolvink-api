@@ -205,8 +205,11 @@ export class AuthService {
       : { email: identifier, active: true };
 
     const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
+
+    // Constant-time: always hash something to prevent timing-based user enumeration
+    await bcrypt.hash('dummy-constant-time-padding', 4);
+
     if (!user || !user.phone) {
-      // Generic response — do not reveal whether account exists
       return { ok: true, maskedPhone: '09*****XX' };
     }
 
@@ -400,6 +403,10 @@ export class AuthService {
       throw new UnauthorizedException('Contraseña actual incorrecta');
     }
 
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException('La nueva contraseña debe ser diferente a la actual');
+    }
+
     const hash = await bcrypt.hash(dto.newPassword, 10);
     await this.prisma.user.update({
       where: { id: userId },
@@ -419,40 +426,37 @@ export class AuthService {
   // ======================== EXISTING METHODS =============================
 
   async switchCompany(userId: string, dto: SwitchCompanyDto) {
-    // Parallel: verify membership + get current company (for audit)
-    const [membership, currentUser] = await Promise.all([
-      (this.prisma.userCompany as any).findFirst({
-        where: { userId, companyId: dto.companyId, active: true },
-        include: { company: { select: COMPANY_SELECT } },
-      }),
-      this.prisma.user.findUnique({
+    // Verify membership first
+    const membership = await (this.prisma.userCompany as any).findFirst({
+      where: { userId, companyId: dto.companyId, active: true },
+      include: { company: { select: COMPANY_SELECT } },
+    });
+    if (!membership) throw new BadRequestException('No pertenecés a esta empresa');
+
+    // Atomic: update user + revoke old tokens + audit in a single transaction
+    const user = await this.prisma.$transaction(async (tx) => {
+      const currentUser = await tx.user.findUnique({
         where: { id: userId },
         select: { activeCompanyId: true, companyId: true },
-      }),
-    ]);
-    if (!membership) throw new BadRequestException('No pertenecés a esta empresa');
-    const oldCompanyId = currentUser?.activeCompanyId || currentUser?.companyId || null;
+      });
+      const oldCompanyId = currentUser?.activeCompanyId || currentUser?.companyId || null;
 
-    const user = await (this.prisma.user as any).update({
-      where: { id: userId },
-      data: { activeCompanyId: dto.companyId, companyId: dto.companyId },
-      include: {
-        company: { select: COMPANY_SELECT },
-        memberships: {
-          where: { active: true },
-          include: { company: { select: COMPANY_SELECT } },
-          orderBy: { createdAt: 'asc' },
+      const updated = await (tx.user as any).update({
+        where: { id: userId },
+        data: { activeCompanyId: dto.companyId, companyId: dto.companyId },
+        include: {
+          company: { select: COMPANY_SELECT },
+          memberships: {
+            where: { active: true },
+            include: { company: { select: COMPANY_SELECT } },
+            orderBy: { createdAt: 'asc' },
+          },
         },
-      },
-    });
+      });
 
-    // Cleanup old tokens BEFORE creating new one to avoid race condition
-    await (this.prisma as any).refreshToken.deleteMany({ where: { userId } }).catch(e => this.logger.warn(e.message));
+      await (tx as any).refreshToken.deleteMany({ where: { userId } });
 
-    const [token, refreshToken] = await Promise.all([
-      this.signToken(user),
-      this.createRefreshToken(user.id),
-      this.prisma.auditLog.create({
+      await tx.auditLog.create({
         data: {
           entityType: 'user',
           entityId: userId,
@@ -461,7 +465,14 @@ export class AuthService {
           toValue: dto.companyId,
           userId,
         },
-      }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`)),
+      }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
+
+      return updated;
+    });
+
+    const [token, refreshToken] = await Promise.all([
+      this.signToken(user),
+      this.createRefreshToken(user.id),
     ]);
     this.logger.log(`User ${userId} switched to company ${dto.companyId}`);
 
@@ -552,7 +563,7 @@ export class AuthService {
     const tokenHash = this.hashToken(token);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
     await (this.prisma as any).refreshToken.create({ data: { token: tokenHash, userId, expiresAt } });
-    (this.prisma as any).refreshToken.deleteMany({
+    await (this.prisma as any).refreshToken.deleteMany({
       where: { userId, expiresAt: { lt: new Date() } },
     }).catch(e => this.logger.warn(e.message));
     return token;

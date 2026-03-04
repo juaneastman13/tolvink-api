@@ -14,7 +14,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
   IsNotEmpty, IsOptional, IsString, IsEmail, IsUUID,
-  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches,
+  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches, IsObject,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
@@ -95,6 +95,7 @@ export class CreateUserDto {
   password: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsArray()
+  @IsIn(['producer', 'plant', 'transporter'], { each: true })
   userTypes?: string[];
 
   @ApiProperty({ required: false, enum: ['operator', 'admin'] })
@@ -105,8 +106,8 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsUUID()
   companyId?: string;
 
-  @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
-  @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
+  @ApiProperty({ required: false }) @IsOptional() @IsObject() companyByType?: Record<string, string>;
+  @ApiProperty({ required: false }) @IsOptional() @IsObject() roleByType?: Record<string, string>;
 }
 
 export class AdminCreateFieldDto {
@@ -168,8 +169,8 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
-  @ApiProperty({ required: false }) @IsOptional() companyByType?: any;
-  @ApiProperty({ required: false }) @IsOptional() roleByType?: any;
+  @ApiProperty({ required: false }) @IsOptional() @IsObject() companyByType?: Record<string, string>;
+  @ApiProperty({ required: false }) @IsOptional() @IsObject() roleByType?: Record<string, string>;
 }
 
 export class UpdateSelfDto {

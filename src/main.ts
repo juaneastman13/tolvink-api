@@ -27,7 +27,7 @@ async function bootstrap() {
   }
 
   // Validate critical env vars at startup
-  const required = ['DATABASE_URL', 'JWT_SECRET', 'WHATSAPP_APP_SECRET'];
+  const required = ['DATABASE_URL', 'DIRECT_URL', 'JWT_SECRET', 'WHATSAPP_APP_SECRET'];
   for (const key of required) {
     if (!process.env[key]) {
       throw new Error(`Missing required environment variable: ${key}`);
@@ -51,7 +51,19 @@ async function bootstrap() {
 
   // Security
   app.use(helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'https://maps.googleapis.com', 'https://maps.gstatic.com'],
+        connectSrc: ["'self'", 'https://mlmecljidioymujsazrs.supabase.co', 'https://maps.googleapis.com', 'https://graph.facebook.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+        frameSrc: ["'none'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
     hsts: { maxAge: 31536000, includeSubDomains: true },
   }));
@@ -89,6 +101,7 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
     exposedHeaders: ['X-Auth-Hint'],
+    maxAge: 86400,
   });
 
   // Global prefix

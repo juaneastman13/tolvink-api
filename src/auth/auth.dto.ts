@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, IsArray, ArrayMinSize, Matches, ValidateIf, IsIn } from 'class-validator';
 
 export class LoginDto {
   @ValidateIf(o => !o.phone)
@@ -43,7 +43,7 @@ export class RegisterDto {
 
   @IsArray({ message: 'userTypes debe ser un array' })
   @ArrayMinSize(1, { message: 'Seleccioná al menos un tipo' })
-  @IsString({ each: true })
+  @IsIn(['producer', 'plant', 'transporter'], { each: true, message: 'Tipo inválido. Valores permitidos: producer, plant, transporter' })
   userTypes: string[];
 }
 

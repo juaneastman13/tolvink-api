@@ -1,7 +1,6 @@
 import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import { JwtService } from '@nestjs/jwt';
 import { Response, Request } from 'express';
 import { randomBytes } from 'crypto';
 import { SseService } from './sse.service';
@@ -21,7 +20,6 @@ export class SseController {
 
   constructor(
     private sseService: SseService,
-    private jwt: JwtService,
     private companyRes: CompanyResolutionService,
   ) {
     // Clean expired tickets every 60s
@@ -45,31 +43,18 @@ export class SseController {
 
   @Get('stream')
   @ApiOperation({ summary: 'SSE stream for real-time updates' })
-  async stream(@Query('token') token: string, @Query('ticket') ticket: string, @Res() res: Response) {
-    let user: any;
-
-    // Prefer ticket-based auth (no JWT in URL)
-    if (ticket) {
-      const entry = sseTickets.get(ticket);
-      if (!entry || entry.expiresAt < Date.now()) {
-        sseTickets.delete(ticket);
-        throw new UnauthorizedException('Invalid or expired ticket');
-      }
-      user = entry.user;
-      sseTickets.delete(ticket); // Single-use
-    } else if (token) {
-      // Legacy: JWT in URL (deprecated, kept for backwards compatibility)
-      try {
-        user = this.jwt.verify(token);
-      } catch {
-        throw new UnauthorizedException('Invalid token');
-      }
-      if (user.purpose) {
-        throw new UnauthorizedException('Invalid token');
-      }
-    } else {
-      throw new UnauthorizedException('Token or ticket required');
+  async stream(@Query('ticket') ticket: string, @Res() res: Response) {
+    if (!ticket) {
+      throw new UnauthorizedException('Ticket required');
     }
+
+    const entry = sseTickets.get(ticket);
+    if (!entry || entry.expiresAt < Date.now()) {
+      sseTickets.delete(ticket);
+      throw new UnauthorizedException('Invalid or expired ticket');
+    }
+    const user = entry.user;
+    sseTickets.delete(ticket); // Single-use
 
     // Resolve all company IDs for this user
     const companyIds = await this.companyRes.resolveAllCompanyIds(user);
