@@ -84,13 +84,22 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         if (batch < 5000) break;
       }
       const trackResult = { count: trackDeleted };
-      // Clean old WhatsApp message logs (>90 days)
-      const waLogResult = await this.prisma.whatsAppMessageLog.deleteMany({
-        where: { createdAt: { lt: cutoff } },
+      // Clean old WhatsApp message logs (>90 days) — batched to avoid long-running locks
+      let waLogDeleted = 0;
+      for (let i = 0; i < 20; i++) {
+        const batch: number = await this.prisma.$executeRaw`DELETE FROM whatsapp_message_logs WHERE id IN (SELECT id FROM whatsapp_message_logs WHERE created_at < ${cutoff} LIMIT 5000)`;
+        waLogDeleted += batch;
+        if (batch < 5000) break;
+      }
+      const waLogResult = { count: waLogDeleted };
+      // Clean old analytics events (>180 days)
+      const analyticsCutoff = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
+      const analyticsResult = await this.prisma.analyticsEvent.deleteMany({
+        where: { createdAt: { lt: analyticsCutoff } },
       });
-      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count;
+      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count + analyticsResult.count;
       if (totalCleaned > 0) {
-        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs deleted`);
+        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs, ${analyticsResult.count} old analytics deleted`);
       }
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);

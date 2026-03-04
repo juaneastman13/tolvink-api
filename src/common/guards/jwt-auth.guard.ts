@@ -15,7 +15,7 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = await this.jwt.verifyAsync(token);
+      const payload = await this.jwt.verifyAsync(token, { algorithms: ['HS256'] });
       // Reject special-purpose tokens (e.g. password-reset) — only normal access tokens allowed
       if (payload.purpose) {
         throw new UnauthorizedException('Token inválido o expirado');

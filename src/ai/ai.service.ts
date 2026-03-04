@@ -57,6 +57,10 @@ export class AiService implements OnModuleDestroy {
     for (const [k, v] of this._requestLocationCooldowns) {
       if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
     }
+    // Also clean stale side effects (older than 10 min) — if they're still here, they leaked
+    for (const [k] of this._chatSideEffects) {
+      this._chatSideEffects.delete(k);
+    }
   }, 5 * 60 * 1000);
 
   constructor(
@@ -291,6 +295,7 @@ export class AiService implements OnModuleDestroy {
 
       return { text: finalText, buttons: pendingButtons };
     } catch (e) {
+      this._chatSideEffects.delete(session.id);
       this.logger.error(`Chat error: ${e.message}`, e.stack?.slice(0, 300));
       return { text: 'Se produjo un inconveniente técnico. Por favor, intente nuevamente o utilice las opciones del menú.' };
     }

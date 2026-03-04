@@ -19,7 +19,7 @@ import { WhatsAppModule } from '../whatsapp/whatsapp.module';
         }
         return {
           secret,
-          signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '30m') },
+          signOptions: { expiresIn: config.get('JWT_EXPIRES_IN', '30m'), algorithm: 'HS256' as any },
         };
       },
     }),

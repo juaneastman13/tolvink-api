@@ -7,7 +7,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 
-const DUMMY_HASH = '$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWX';
+const DUMMY_HASH = '$2b$10$X4kv7j5ZcG39WgogSl16aurY0r1YFTRBCG2yvhJMubXTdWcN4xOey';
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
@@ -69,7 +69,10 @@ export class AuthService {
         );
       }
       // Lockout expired — reset counter so user gets full 5 attempts again
-      await this.prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockedUntil: null } });
+      await this.prisma.user.updateMany({
+        where: { id: user.id, lockedUntil: { not: null, lt: new Date() } },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
       user.failedLoginAttempts = 0;
       user.lockedUntil = null;
     }
@@ -91,7 +94,7 @@ export class AuthService {
     const passwordValid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!passwordValid) {
       const newAttempts = (user.failedLoginAttempts || 0) + 1;
-      const updateData: any = { failedLoginAttempts: newAttempts };
+      const updateData: any = { failedLoginAttempts: { increment: 1 } };
       if (newAttempts >= MAX_FAILED_ATTEMPTS) {
         updateData.lockedUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
         this.logger.warn(`User ${user.id} locked out after ${newAttempts} failed attempts`);

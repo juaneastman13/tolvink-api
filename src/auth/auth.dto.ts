@@ -27,6 +27,7 @@ export class RegisterDto {
   @IsNotEmpty({ message: 'Nombre requerido' })
   @IsString()
   @MinLength(2, { message: 'Nombre muy corto' })
+  @MaxLength(255)
   name: string;
 
   @IsEmail({}, { message: 'Email inválido' })

@@ -27,6 +27,7 @@ export function buildSyntheticUser(dbUser: any): any {
     role: dbUser.role || 'operator',
     companyId,
     companyType,
+    companyTypes: companyType ? [companyType] : [],
     userType: companyType,
     activeCompanyId: dbUser.activeCompanyId,
   };

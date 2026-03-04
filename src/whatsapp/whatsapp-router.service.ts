@@ -3,7 +3,7 @@
 // Routes incoming WhatsApp messages to appropriate handlers
 // =====================================================================
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
@@ -39,7 +39,7 @@ const STATUS_EMOJI: Record<string, string> = {
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 
 @Injectable()
-export class WhatsAppRouterService {
+export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppRouterService.name);
   private openai: OpenAI | null = null;
   /** Per-user GPS write cooldown — max 1 location save per 30s */
@@ -56,6 +56,8 @@ export class WhatsAppRouterService {
   private readonly MAX_PHONE_LOCKS = 10000;
   /** Cooldown for "not registered" replies — avoids spamming unregistered phones */
   private unregisteredCooldown = new Map<string, number>();
+  /** Periodic cleanup timer for unbounded maps */
+  private mapCleanupTimer: ReturnType<typeof setInterval>;
 
   constructor(
     private prisma: PrismaService,
@@ -71,6 +73,30 @@ export class WhatsAppRouterService {
     } else {
       this.logger.warn('OPENAI_API_KEY not set — audio transcription disabled');
     }
+  }
+
+  onModuleInit() {
+    this.mapCleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [k, v] of this.gpsWriteCooldowns) {
+        if (v < now) this.gpsWriteCooldowns.delete(k);
+      }
+      for (const [k, v] of this.freightCountsCache) {
+        if (now - v.ts > 60_000) this.freightCountsCache.delete(k);
+      }
+      for (const [k, v] of this.unregisteredCooldown) {
+        if (v < now) this.unregisteredCooldown.delete(k);
+      }
+      // phoneLocks: resolved promises are cleaned by their .finally() handlers
+    }, 300_000);
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.mapCleanupTimer);
+    this.gpsWriteCooldowns.clear();
+    this.freightCountsCache.clear();
+    this.phoneLocks.clear();
+    this.unregisteredCooldown.clear();
   }
 
   // ======================== MAIN ENTRY POINT ============================
@@ -243,7 +269,8 @@ export class WhatsAppRouterService {
         await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio, ubicaciones e imagenes/documentos. Escriba "menu" para ver las opciones disponibles.');
       }
     } catch (e) {
-      this.logger.error(`handleMessage error for ${phone}: ${e.message}`, e.stack);
+      const mp = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+      this.logger.error(`handleMessage error for ${mp}: ${e.message}`, e.stack);
       await this.wa.sendText(phone, 'Se produjo un error al procesar su mensaje. Por favor, intente nuevamente.');
     }
   }

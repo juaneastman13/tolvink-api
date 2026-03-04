@@ -183,7 +183,7 @@ export class TrucksService {
     if (driver.phone) {
       const welcomeMsg = `Hola ${driver.name?.split(' ')[0] || ''}! Te registraron como chofer en *Tolvink*.\n\nEscribime por acá para ver tus viajes asignados, iniciar fletes y compartir tu ubicación en tiempo real.`;
       this.wa.sendText(driver.phone, welcomeMsg).catch(err =>
-        this.logger.warn(`WhatsApp welcome failed for driver ${driver.phone}: ${err.message}`),
+        this.logger.warn(`WhatsApp welcome failed for driver: ${err.message}`),
       );
     }
 

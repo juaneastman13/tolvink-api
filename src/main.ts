@@ -41,14 +41,14 @@ async function bootstrap() {
     _exiting = true;
     logger.error(`Uncaught exception: ${err.message}`, err.stack);
     if (process.env.SENTRY_DSN) Sentry.captureException(err);
-    setTimeout(() => process.exit(1), 1500);
+    Sentry.flush(2000).catch(() => {}).finally(() => process.exit(1));
   });
   process.on('unhandledRejection', (reason: any) => {
     if (_exiting) return;
     _exiting = true;
     logger.error(`Unhandled rejection: ${reason?.message || reason}`, reason?.stack);
     if (process.env.SENTRY_DSN && reason instanceof Error) Sentry.captureException(reason);
-    setTimeout(() => process.exit(1), 1500);
+    Sentry.flush(2000).catch(() => {}).finally(() => process.exit(1));
   });
 
   const app = await NestFactory.create(AppModule, {

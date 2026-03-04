@@ -1,15 +1,17 @@
-import { IsString, IsOptional, IsNumber, MinLength, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsNumber, MinLength, Min, Max, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateFieldDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(255)
   name: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   address?: string;
 
   @ApiPropertyOptional()
@@ -30,11 +32,13 @@ export class UpdateFieldDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(255)
   name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   address?: string;
 
   @ApiPropertyOptional()
@@ -54,11 +58,14 @@ export class CreateLotDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(255)
   name: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(100000)
   hectares?: number;
 
   @ApiPropertyOptional()
@@ -79,11 +86,14 @@ export class UpdateLotDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(255)
   name?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
+  @Min(0)
+  @Max(100000)
   hectares?: number;
 
   @ApiPropertyOptional()

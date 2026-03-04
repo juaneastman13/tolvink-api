@@ -10,6 +10,7 @@ export class FreightItemDto {
   @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)' })
   @IsNumber()
   @Min(0.1, { message: 'Cantidad debe ser mayor a 0' })
+  @Max(100000)
   @Type(() => Number)
   tons: number;
 
@@ -208,6 +209,7 @@ export class TruckAssignmentDto {
   @IsOptional()
   @IsNumber()
   @Min(0.1)
+  @Max(100000)
   @Type(() => Number)
   tons?: number;
 }
@@ -242,6 +244,7 @@ export class UpdateAssignmentDto {
   @IsOptional()
   @IsNumber()
   @Min(0.1)
+  @Max(100000)
   @Type(() => Number)
   tons?: number;
 }

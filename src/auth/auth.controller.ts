@@ -26,9 +26,6 @@ export class AuthController {
     try {
       return await this.authService.login(dto);
     } catch (err) {
-      if (err instanceof UnauthorizedException && (err as any)._noPassword) {
-        res.setHeader('X-Auth-Hint', 'no-password');
-      }
       throw err;
     }
   }

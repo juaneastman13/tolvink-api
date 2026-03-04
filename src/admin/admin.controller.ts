@@ -9,7 +9,7 @@ import {
   UseGuards, ParseUUIDPipe, Delete,
 } from '@nestjs/common';
 import {
-  Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger,
+  Injectable, BadRequestException, NotFoundException, ForbiddenException, UnauthorizedException, Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
@@ -81,7 +81,7 @@ export class CreateBranchDto {
 }
 
 export class CreateUserDto {
-  @ApiProperty() @IsNotEmpty() @MinLength(2)
+  @ApiProperty() @IsNotEmpty() @MinLength(2) @MaxLength(255)
   name: string;
 
   @ApiProperty() @IsEmail()
@@ -90,7 +90,7 @@ export class CreateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString()
   phone?: string;
 
-  @ApiProperty() @IsNotEmpty() @MinLength(8)
+  @ApiProperty() @IsNotEmpty() @MinLength(8) @MaxLength(128)
   @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/, { message: 'La contraseña debe tener al menos 8 caracteres, una mayúscula, una minúscula y un número' })
   password: string;
 
@@ -162,9 +162,9 @@ export class AdminCreateTruckDto {
 }
 
 export class UpdateUserDto {
-  @ApiProperty({ required: false }) @IsOptional() @IsString() name?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() phone?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(255) name?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsEmail() @MaxLength(255) email?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(50) phone?: string;
   @ApiProperty({ required: false, enum: ['operator', 'admin'] }) @IsOptional() @IsIn(['operator', 'admin'], { message: 'Rol debe ser operator o admin' }) role?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
@@ -219,7 +219,13 @@ export class AdminService {
 
   // Fetch full user from DB (JWT only has sub, role, companyId)
   async resolveFullUser(jwtUser: any): Promise<any> {
-    if (this.isPlatformAdmin(jwtUser)) return jwtUser;
+    if (this.isPlatformAdmin(jwtUser)) {
+      const adminCheck = await this.prisma.user.findUnique({ where: { id: jwtUser.sub }, select: { active: true, role: true } });
+      if (!adminCheck || !adminCheck.active || adminCheck.role !== 'platform_admin') {
+        throw new UnauthorizedException('Usuario desactivado o sin permisos');
+      }
+      return jwtUser;
+    }
     const full = await this.prisma.user.findUnique({
       where: { id: jwtUser.sub },
       select: { id: true, role: true, companyId: true, isSuperAdmin: true },
@@ -515,7 +521,7 @@ export class AdminService {
       const companyName = user.company?.name || 'tu empresa';
       const welcomeMsg = `Hola ${user.name?.split(' ')[0] || ''}! Tu cuenta en *Tolvink* fue creada para ${companyName}.\n\nPodés escribirme por acá para gestionar tus fletes, consultar estados y más.`;
       this.wa.sendText(user.phone, welcomeMsg).catch(err =>
-        this.logger.warn(`WhatsApp welcome failed for ${user.phone}: ${err.message}`),
+        this.logger.warn(`WhatsApp welcome failed: ${err.message}`),
       );
     }
 

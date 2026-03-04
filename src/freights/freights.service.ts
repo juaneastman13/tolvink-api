@@ -824,6 +824,12 @@ export class FreightsService {
         }
 
         if (effectiveCt === 'transporter') {
+          const callerClIds = await this.resolveAllCompanyIds(user);
+          const hasActiveAssignment = freight.assignments?.some(a => callerClIds.includes(a.transportCompanyId));
+          if (!hasActiveAssignment) {
+            throw new ForbiddenException('No sos el transportista asignado a este flete');
+          }
+
           if (freight.status !== FreightStatus.in_progress) {
             throw new BadRequestException(
               `Solo se puede confirmar carga en estado "in_progress". Estado actual: "${freight.status}"`,
@@ -989,6 +995,12 @@ export class FreightsService {
     }
 
     if (ct === 'plant') {
+      const allIdsPlant = await this.resolveAllCompanyIds(user);
+      const fCheck = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+      if (!fCheck?.destCompanyId || !allIdsPlant.includes(fCheck.destCompanyId)) {
+        throw new ForbiddenException('Solo la planta destino puede confirmar la recepción');
+      }
+
       const pFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
@@ -1050,63 +1062,6 @@ export class FreightsService {
     }
 
     throw new ForbiddenException('Solo transportista o planta pueden confirmar finalizacion');
-  }
-
-  // ======================== FINISH ====================================
-
-  async finish(freightId: string, user: any) {
-    const finishCt = await this.resolveCompanyType(user);
-
-    const { updated: finishResult, freight } = await this.prisma.$transaction(async (tx) => {
-      // Read freight INSIDE transaction to prevent TOCTOU race
-      const freight = await tx.freight.findUnique({
-        where: { id: freightId },
-        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
-      });
-      if (!freight) throw new NotFoundException('Flete no encontrado');
-
-      if (freight.status === FreightStatus.in_progress) {
-        throw new BadRequestException(
-          'No se puede finalizar directamente. Primero debe confirmarse la carga (estado loaded).',
-        );
-      }
-
-      this.stateMachine.validateTransition(freight.status, FreightStatus.finished, finishCt);
-
-      const updated = await tx.freight.update({
-        where: { id: freightId },
-        data: { status: FreightStatus.finished, finishedAt: new Date() },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          entityType: 'freight',
-          entityId: freightId,
-          freightId: freightId,
-          action: 'finished',
-          fromValue: freight.status,
-          toValue: 'finished',
-          userId: user.sub,
-        },
-      });
-
-      return { updated, freight };
-    });
-
-    // Notify all parties
-    // Notify all participants
-    this.notifyAllParticipants(
-      freight, (freight as any).assignments || [],
-      NotificationType.freight_finished,
-      'Flete finalizado',
-      `${freight.code} fue marcado como finalizado`,
-      user.sub,
-    );
-
-    // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
-
-    return finishResult;
   }
 
   // ======================== CANCEL ====================================
@@ -2097,6 +2052,15 @@ export class FreightsService {
           throw new ForbiddenException('Solo la planta destino puede responder asignaciones');
         }
       }
+      if (isTransporter) {
+        const callerRtIds = await this.resolveAllCompanyIds(user);
+        const assignmentRt = await this.prisma.freightAssignment.findFirst({
+          where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
+        });
+        if (assignmentRt && !callerRtIds.includes(assignmentRt.transportCompanyId)) {
+          throw new ForbiddenException('No sos el transportista asignado a este viaje');
+        }
+      }
     }
 
     if (dto.action === 'rejected') {
@@ -2254,6 +2218,11 @@ export class FreightsService {
       });
       if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
+      const callerStIds = await this.resolveAllCompanyIds(user);
+      if (!callerStIds.includes(assignment.transportCompanyId)) {
+        throw new ForbiddenException('No sos el transportista asignado a este viaje');
+      }
+
       this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'in_progress' as any);
 
       await (tx.freightAssignment as any).update({
@@ -2317,6 +2286,11 @@ export class FreightsService {
         if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
 
         if (ct === 'transporter') {
+          const callerCtlIds = await this.resolveAllCompanyIds(user);
+          if (!callerCtlIds.includes(assignment.transportCompanyId)) {
+            throw new ForbiddenException('No sos el transportista asignado a este viaje');
+          }
+
           if (assignment.tripStatus !== 'in_progress' && assignment.tripStatus !== 'loaded') {
             throw new BadRequestException(`El camión debe estar en viaje para confirmar carga. Estado actual: ${assignment.tripStatus}`);
           }
@@ -2439,6 +2413,12 @@ export class FreightsService {
       }
 
       if (ct === 'plant') {
+        const allIdsCtf = await this.resolveAllCompanyIds(user);
+        const fCtf = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+        if (!fCtf?.destCompanyId || !allIdsCtf.includes(fCtf.destCompanyId)) {
+          throw new ForbiddenException('Solo la planta destino puede confirmar la recepción del viaje');
+        }
+
         if (assignment.plantFinishedConfirmedAt) throw new BadRequestException('La planta ya confirmó la recepción');
         const transporterAlsoConfirmed = !!assignment.transporterFinishedConfirmedAt;
 

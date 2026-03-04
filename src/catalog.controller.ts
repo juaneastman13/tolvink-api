@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, OnModuleDestroy } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { CurrentUser } from './common/decorators/current-user.decorator';
@@ -6,27 +6,15 @@ import { CompanyResolutionService } from './common/services/company-resolution.s
 import { PrismaService } from './database/prisma.service';
 
 const MAX_CATALOG = 500;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const cache = new Map<string, { data: any; ts: number }>();
 
-// Periodic cleanup: evict stale entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache) {
-    if (now - entry.ts > CACHE_TTL) cache.delete(key);
-  }
-}, CACHE_TTL);
-
-function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.ts < CACHE_TTL) return Promise.resolve(hit.data);
-  return fn().then(data => { cache.set(key, { data, ts: Date.now() }); return data; });
-}
+// Module-level ref so clearTransportCache() works without a class instance
+let _cacheRef: Map<string, { data: any; ts: number }> | null = null;
 
 /** Invalidate all transport-related cache entries (called after access changes) */
 export function clearTransportCache() {
-  for (const key of cache.keys()) {
-    if (key.startsWith('transport:')) cache.delete(key);
+  if (!_cacheRef) return;
+  for (const key of _cacheRef.keys()) {
+    if (key.startsWith('transport:')) _cacheRef.delete(key);
   }
 }
 
@@ -34,11 +22,34 @@ export function clearTransportCache() {
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('catalog')
-export class CatalogController {
+export class CatalogController implements OnModuleDestroy {
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private cache = new Map<string, { data: any; ts: number }>();
+  private cleanupTimer: ReturnType<typeof setInterval>;
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
-  ) {}
+  ) {
+    _cacheRef = this.cache;
+    this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of this.cache) {
+        if (now - entry.ts > this.CACHE_TTL) this.cache.delete(key);
+      }
+    }, this.CACHE_TTL);
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.cleanupTimer);
+    this.cache.clear();
+  }
+
+  private cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const hit = this.cache.get(key);
+    if (hit && Date.now() - hit.ts < this.CACHE_TTL) return Promise.resolve(hit.data);
+    return fn().then(data => { this.cache.set(key, { data, ts: Date.now() }); return data; });
+  }
 
   /** Check if user has ANY producer company (via all memberships) */
   private async hasProducerCompany(userId: string): Promise<boolean> {
@@ -59,7 +70,7 @@ export class CatalogController {
     const s = parseInt(skip || '0', 10) || 0;
     const key = `plants:${user.sub}:${user.companyId}:${s}:${t}`;
 
-    return cached(key, async () => {
+    return this.cached(key, async () => {
       const isProducer = await this.hasProducerCompany(user.sub);
 
       if (isProducer) {
@@ -133,7 +144,7 @@ export class CatalogController {
     const s = parseInt(skip || '0', 10) || 0;
     const key = `branches:${user.sub}:${user.companyId}:${s}:${t}`;
 
-    return cached(key, async () => {
+    return this.cached(key, async () => {
       const isProducer = await this.hasProducerCompany(user.sub);
 
       if (isProducer) {
@@ -220,7 +231,7 @@ export class CatalogController {
     const s = parseInt(skip || '0', 10) || 0;
     const key = `lots:${user.sub}:${user.companyId}:${s}:${t}`;
 
-    return cached(key, async () => {
+    return this.cached(key, async () => {
       if (user.role === 'platform_admin') {
         return this.prisma.lot.findMany({
           where: { active: true },
@@ -251,7 +262,7 @@ export class CatalogController {
     const s = parseInt(skip || '0', 10) || 0;
     const key = `transport:${user.companyId}:${s}:${t}`;
 
-    return cached(key, async () => {
+    return this.cached(key, async () => {
       const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
 
       if (isPlant) {

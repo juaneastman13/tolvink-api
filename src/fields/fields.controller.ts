@@ -1,6 +1,8 @@
 import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
 import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fields.dto';
@@ -19,12 +21,16 @@ export class FieldsController {
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
   @ApiOperation({ summary: 'Crear un campo' })
   createField(@CurrentUser() user: any, @Body() dto: CreateFieldDto) {
     return this.service.createField(user, dto);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
   @ApiOperation({ summary: 'Editar un campo (ubicación, dirección)' })
   updateField(
     @CurrentUser() user: any,
@@ -44,6 +50,8 @@ export class FieldsController {
   }
 
   @Post(':fieldId/lots')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
   @ApiOperation({ summary: 'Crear un lote dentro de un campo' })
   createLot(
     @CurrentUser() user: any,
@@ -54,6 +62,8 @@ export class FieldsController {
   }
 
   @Patch(':fieldId/lots/:lotId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
   @ApiOperation({ summary: 'Editar un lote (hectáreas, ubicación)' })
   updateLot(
     @CurrentUser() user: any,
