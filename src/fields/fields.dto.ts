@@ -27,6 +27,12 @@ export class UpdateFieldDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MinLength(1)
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
   address?: string;
 
   @ApiPropertyOptional()
@@ -63,6 +69,12 @@ export class CreateLotDto {
 }
 
 export class UpdateLotDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  name?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()

@@ -44,8 +44,8 @@ export class FieldsService {
         name: dto.name,
         companyId,
         address: dto.address || null,
-        lat: dto.lat || null,
-        lng: dto.lng || null,
+        lat: dto.lat != null ? dto.lat : null,
+        lng: dto.lng != null ? dto.lng : null,
       },
     });
   }
@@ -58,6 +58,7 @@ export class FieldsService {
     if (!field) throw new NotFoundException('Campo no encontrado');
 
     const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
     if (dto.address !== undefined) data.address = dto.address;
     if (dto.lat !== undefined) data.lat = dto.lat;
     if (dto.lng !== undefined) data.lng = dto.lng;
@@ -97,9 +98,9 @@ export class FieldsService {
         name: dto.name,
         companyId,
         fieldId: fieldId,
-        hectares: dto.hectares || null,
-        lat: lat || null,
-        lng: lng || null,
+        hectares: dto.hectares != null ? dto.hectares : null,
+        lat: lat != null ? lat : null,
+        lng: lng != null ? lng : null,
       },
     });
   }
@@ -112,6 +113,7 @@ export class FieldsService {
     if (!lot) throw new NotFoundException('Lote no encontrado');
 
     const data: any = {};
+    if (dto.name !== undefined) data.name = dto.name;
     if (dto.hectares !== undefined) data.hectares = dto.hectares;
     if (dto.lat !== undefined) data.lat = dto.lat;
     if (dto.lng !== undefined) data.lng = dto.lng;

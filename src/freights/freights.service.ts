@@ -415,6 +415,13 @@ export class FreightsService {
       throw new ForbiddenException('Solo la planta puede asignar transportista');
     }
 
+    // Verify caller's plant is the dest company of this freight
+    const allIds = await this.resolveAllCompanyIds(user);
+    const freightCheck = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+    if (!freightCheck?.destCompanyId || !allIds.includes(freightCheck.destCompanyId)) {
+      throw new ForbiddenException('Solo la planta destino del flete puede asignar transportista');
+    }
+
     const transport = await this.prisma.company.findFirst({
       where: { id: dto.transportCompanyId, active: true },
       select: { id: true, type: true, types: true, hasInternalFleet: true },
@@ -586,6 +593,7 @@ export class FreightsService {
           data: {
             entityType: 'freight',
             entityId: freightId,
+            freightId: freightId,
             action: 'rejected',
             fromValue: 'assigned',
             toValue: 'pending_assignment',
@@ -2596,8 +2604,8 @@ export class FreightsService {
     return this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
-      if (freight.status === 'finished') {
-        throw new ForbiddenException('No se pueden eliminar archivos de un flete finalizado');
+      if (freight.status === 'finished' || freight.status === 'canceled') {
+        throw new ForbiddenException('No se pueden eliminar archivos de un flete finalizado o cancelado');
       }
 
       const doc = await tx.freightDocument.findFirst({

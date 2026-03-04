@@ -168,7 +168,6 @@ model User {
 
   @@index([companyId])
   @@index([activeCompanyId])
-  @@index([email])
   @@index([phone])
   @@map("users")
 }
@@ -279,7 +278,6 @@ model Truck {
   assignments  FreightAssignment[]
 
   @@index([companyId])
-  @@index([plate])
   @@index([assignedUserId])
   @@map("trucks")
 }
@@ -382,7 +380,6 @@ model Freight {
   pendingChanges  FreightPendingChange[]
 
   @@index([loadDate])
-  @@index([code])
   @@index([fieldId])
   @@index([requestedById])
   @@index([originCompanyId])

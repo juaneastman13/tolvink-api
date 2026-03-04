@@ -53,9 +53,20 @@ export class TrucksService {
       throw new ForbiddenException('Solo transportistas, productores o plantas pueden crear camiones');
     }
 
-    // Check unique plate
-    const existing = await this.prisma.truck.findUnique({ where: { plate: dto.plate.toUpperCase() } });
-    if (existing) throw new BadRequestException(`La patente ${dto.plate} ya está registrada`);
+    // Normalize and check unique plate
+    const normalizedPlate = dto.plate.toUpperCase().replace(/\s+/g, '').trim();
+    const existing = await this.prisma.truck.findUnique({ where: { plate: normalizedPlate } });
+    if (existing) {
+      // Allow reactivation of same-company deactivated truck
+      if (!existing.active && existing.companyId === user.companyId) {
+        return this.prisma.truck.update({
+          where: { id: existing.id },
+          data: { active: true, model: dto.model || existing.model, assignedUserId: dto.assignedUserId || existing.assignedUserId },
+          include: { assignedUser: { select: { id: true, name: true } } },
+        });
+      }
+      throw new BadRequestException(`La patente ${dto.plate} ya está registrada`);
+    }
 
     // Validate assigned user belongs to same company
     if (dto.assignedUserId) {
@@ -67,7 +78,7 @@ export class TrucksService {
 
     return this.prisma.truck.create({
       data: {
-        plate: dto.plate.toUpperCase(),
+        plate: normalizedPlate,
         model: dto.model,
         companyId: user.companyId,
         assignedUserId: dto.assignedUserId,

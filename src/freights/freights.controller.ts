@@ -35,10 +35,12 @@ export class FreightsController {
     @Query('limit') limit?: string,
     @Query('company') company?: string,
   ) {
+    const parsedPage = page ? parseInt(page) : undefined;
+    const parsedLimit = limit ? parseInt(limit) : undefined;
     return this.service.findAll(user, {
       status,
-      page: page ? parseInt(page) : undefined,
-      limit: limit ? parseInt(limit) : undefined,
+      page: Number.isFinite(parsedPage) ? parsedPage : undefined,
+      limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       company,
     });
   }
@@ -267,7 +269,7 @@ export class FreightsController {
     @Body() dto: ResolvePendingChangeDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.rejectPendingChange(id, changeId, user);
+    return this.service.rejectPendingChange(id, changeId, user, dto.reason);
   }
 
   @Post(':id/tracking')
