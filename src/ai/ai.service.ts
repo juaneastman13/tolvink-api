@@ -53,13 +53,21 @@ export class AiService implements OnModuleDestroy {
   private rateCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
-    // Clean stale request_location cooldowns (5 min TTL)
+    // Clean stale request_location cooldowns (5 min TTL) + hard cap
     for (const [k, v] of this._requestLocationCooldowns) {
       if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
     }
-    // Also clean stale side effects (older than 10 min) — if they're still here, they leaked
-    for (const [k] of this._chatSideEffects) {
-      this._chatSideEffects.delete(k);
+    if (this._requestLocationCooldowns.size > 5000) {
+      const iter = this._requestLocationCooldowns.keys();
+      while (this._requestLocationCooldowns.size > 4000) {
+        const k = iter.next().value;
+        if (k) this._requestLocationCooldowns.delete(k); else break;
+      }
+    }
+    // Clean stale side effects (>10 min old, not all)
+    for (const [k, v] of this._chatSideEffects) {
+      if (v._ts && now - v._ts > 10 * 60 * 1000) this._chatSideEffects.delete(k);
+      else if (!v._ts) this._chatSideEffects.delete(k); // legacy entries without timestamp
     }
   }, 5 * 60 * 1000);
 
@@ -111,11 +119,9 @@ export class AiService implements OnModuleDestroy {
     } else {
       aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
     }
-    // Cleanup stale entries periodically
-    if (aiRateMap.size > 20) {
-      for (const [k, v] of aiRateMap) {
-        if (now > v.resetAt) aiRateMap.delete(k);
-      }
+    // Cleanup stale entries
+    for (const [k, v] of aiRateMap) {
+      if (now > v.resetAt) aiRateMap.delete(k);
     }
 
     const synUser = this.buildSyntheticUser(user);
@@ -2270,7 +2276,7 @@ FILTROS AVANZADOS:
   ): string {
     const effects = this._chatSideEffects.get(session.id) || {};
     effects._pendingSelection = { items, config, purpose };
-    this._chatSideEffects.set(session.id, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
     return JSON.stringify({
       total: items.length,
       message: `Se presento lista interactiva de ${items.length} elemento(s). Espere a que seleccione uno.`,
@@ -2592,7 +2598,7 @@ FILTROS AVANZADOS:
       { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
       { id: 'ai_cancel_freight', title: 'CANCELAR' },
     ];
-    this._chatSideEffects.set(session.id, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
 
     return JSON.stringify({
       status: 'pending_confirmation',
@@ -3391,7 +3397,7 @@ FILTROS AVANZADOS:
     effects._pendingButtons = [
       { id: 'location_done', title: 'UBICACIÓN LISTA' },
     ];
-    this._chatSideEffects.set(session.id, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
 
     this.logger.log(`generate_location_link — slug=${slug}, sessionId=${session.id}`);
 
@@ -4345,7 +4351,7 @@ FILTROS AVANZADOS:
     effects.pendingFreight = undefined;
     effects.activeContext = undefined;
     effects._pendingSelection = undefined;
-    this._chatSideEffects.set(session.id, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
 
     const companyName = (freshMembership as any).company?.name || 'Empresa';
     const companyType = TYPE_LABELS[(freshMembership as any).company?.type] || (freshMembership as any).company?.type || '';
@@ -4455,7 +4461,7 @@ FILTROS AVANZADOS:
       ...context,
       updatedAt: new Date().toISOString(),
     };
-    this._chatSideEffects.set(sessionId, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(sessionId, effects);
   }
 
   // ======================== GENERIC CONFIRMATION ========================
@@ -4473,7 +4479,7 @@ FILTROS AVANZADOS:
       { id: 'ai_confirm', title: 'CONFIRMAR' },
       { id: 'ai_cancel', title: 'CANCELAR' },
     ];
-    this._chatSideEffects.set(session.id, effects);
+    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
 
     return JSON.stringify({
       status: 'pending_confirmation',

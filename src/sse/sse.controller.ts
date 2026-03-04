@@ -40,11 +40,18 @@ export class SseController implements OnModuleDestroy {
   @ApiOperation({ summary: 'Get a short-lived SSE ticket (avoids JWT in URL)' })
   async getTicket(@Req() req: Request) {
     const user = (req as any).user;
-    // Bound ticket map — evict expired if approaching limit
+    // Bound ticket map — evict expired + forced eviction if over cap
     if (sseTickets.size > 10_000) {
       const now = Date.now();
       for (const [k, v] of sseTickets) {
         if (v.expiresAt < now) sseTickets.delete(k);
+      }
+      if (sseTickets.size > 9_000) {
+        const iter = sseTickets.keys();
+        while (sseTickets.size > 9_000) {
+          const k = iter.next().value;
+          if (k) sseTickets.delete(k); else break;
+        }
       }
     }
     const ticket = randomBytes(32).toString('hex');

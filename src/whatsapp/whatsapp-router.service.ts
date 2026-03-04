@@ -124,7 +124,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async _handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
       const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
-      const safePayload = type === 'text' ? `text(${(payload?.body?.length || 0)} chars)` : JSON.stringify(payload).slice(0, 150);
+      const safePayload = type === 'text' ? `text(${(payload?.body?.length || 0)} chars)`
+        : type === 'location' ? 'location(lat:***,lng:***)'
+        : type === 'image' || type === 'document' || type === 'audio' ? `${type}(file)`
+        : type === 'button_reply' || type === 'list_reply' ? `${type}(id:${(payload?.id || '').slice(0, 30)})`
+        : type;
       this.logger.log(`handleMessage type=${type} phone=${maskedPhone} payload=${safePayload}`);
 
       // Mark as read
@@ -142,11 +146,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             'Este número no se encuentra registrado en Tolvink.\n\n' +
             `Regístrese en la plataforma: ${APP_URL}`,
           );
-          // Prune stale cooldown entries
+          // Prune stale cooldown entries + hard cap
+          const ucNow = Date.now();
+          for (const [k, v] of this.unregisteredCooldown) {
+            if (ucNow - v > 10 * 60 * 1000) this.unregisteredCooldown.delete(k);
+          }
           if (this.unregisteredCooldown.size > 500) {
-            const now = Date.now();
-            for (const [k, v] of this.unregisteredCooldown) {
-              if (now - v > 10 * 60 * 1000) this.unregisteredCooldown.delete(k);
+            const iter = this.unregisteredCooldown.keys();
+            while (this.unregisteredCooldown.size > 400) {
+              const k = iter.next().value;
+              if (k) this.unregisteredCooldown.delete(k); else break;
             }
           }
         }
@@ -586,11 +595,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Periodic cleanup of stale cooldown entries
-    if (this.gpsWriteCooldowns.size > 100) {
-      for (const [k, v] of this.gpsWriteCooldowns) {
-        if (now - v > 30_000) this.gpsWriteCooldowns.delete(k);
-      }
+    // Periodic cleanup of stale cooldown entries (always prune, not just at cap)
+    for (const [k, v] of this.gpsWriteCooldowns) {
+      if (now - v > 30_000) this.gpsWriteCooldowns.delete(k);
     }
   }
 
@@ -1154,9 +1161,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     for (const c of counts) data[c.status] = c._count;
     this.freightCountsCache.set(companyId, { data, ts: Date.now() });
 
-    // Prune stale entries (>5min)
-    for (const [k, v] of this.freightCountsCache) {
-      if (Date.now() - v.ts > 300_000) this.freightCountsCache.delete(k);
+    // Prune stale entries (>5min) + hard cap
+    if (this.freightCountsCache.size > 500) {
+      const now = Date.now();
+      for (const [k, v] of this.freightCountsCache) {
+        if (now - v.ts > 300_000) this.freightCountsCache.delete(k);
+      }
+      if (this.freightCountsCache.size > 400) {
+        const iter = this.freightCountsCache.keys();
+        while (this.freightCountsCache.size > 400) {
+          const k = iter.next().value;
+          if (k) this.freightCountsCache.delete(k); else break;
+        }
+      }
     }
 
     return data;

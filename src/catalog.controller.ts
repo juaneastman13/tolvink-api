@@ -48,7 +48,24 @@ export class CatalogController implements OnModuleDestroy {
   private cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.ts < this.CACHE_TTL) return Promise.resolve(hit.data);
-    return fn().then(data => { this.cache.set(key, { data, ts: Date.now() }); return data; });
+    return fn().then(data => {
+      // Hard cap — evict stale then oldest if still over
+      if (this.cache.size > 5000) {
+        const now = Date.now();
+        for (const [k, entry] of this.cache) {
+          if (now - entry.ts > this.CACHE_TTL) this.cache.delete(k);
+        }
+        if (this.cache.size > 4000) {
+          const iter = this.cache.keys();
+          while (this.cache.size > 4000) {
+            const k = iter.next().value;
+            if (k) this.cache.delete(k); else break;
+          }
+        }
+      }
+      this.cache.set(key, { data, ts: Date.now() });
+      return data;
+    });
   }
 
   /** Check if user has ANY producer company (via all memberships) */

@@ -46,12 +46,10 @@ export class SseService implements OnModuleDestroy {
     });
     const userIds = participants.map(p => p.userId);
     this.participantsCache.set(conversationId, { userIds, ts: Date.now() });
-    // Cleanup old entries periodically
-    if (this.participantsCache.size > 200) {
-      const now = Date.now();
-      for (const [k, v] of this.participantsCache) {
-        if (now - v.ts > this.PARTICIPANTS_CACHE_TTL) this.participantsCache.delete(k);
-      }
+    // Always cleanup stale entries
+    const pcNow = Date.now();
+    for (const [k, v] of this.participantsCache) {
+      if (pcNow - v.ts > this.PARTICIPANTS_CACHE_TTL) this.participantsCache.delete(k);
     }
     return userIds;
   }
