@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Response } from 'express';
 import { PrismaService } from '../database/prisma.service';
 
@@ -14,7 +14,7 @@ const MAX_CLIENTS_GLOBAL = 500;
 const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 @Injectable()
-export class SseService {
+export class SseService implements OnModuleDestroy {
   private readonly logger = new Logger(SseService.name);
   // O(1) lookup indexes instead of flat array scan
   private byUser = new Map<string, Set<SseClient>>();
@@ -26,6 +26,16 @@ export class SseService {
   private readonly PARTICIPANTS_CACHE_TTL = 30_000; // 30 seconds
 
   constructor(private prisma: PrismaService) {}
+
+  onModuleDestroy() {
+    for (const client of this.allClients) {
+      try { client.res.end(); } catch {}
+    }
+    this.allClients.clear();
+    this.byUser.clear();
+    this.byCompany.clear();
+    this.logger.log('SSE clients drained on shutdown');
+  }
 
   private async getParticipantIds(conversationId: string): Promise<string[]> {
     const cached = this.participantsCache.get(conversationId);

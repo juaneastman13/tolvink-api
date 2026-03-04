@@ -3,7 +3,7 @@
 // Handles Meta webhook: GET verification + POST incoming messages
 // =====================================================================
 
-import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException, UnauthorizedException, OnModuleDestroy } from '@nestjs/common';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -14,13 +14,14 @@ import { PrismaService } from '../database/prisma.service';
 import { verifySignedToken } from '../common/signed-token';
 
 @Controller('whatsapp')
-export class WhatsAppController {
+export class WhatsAppController implements OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppController.name);
   private readonly appSecret: string | undefined;
   private readonly verifyToken: string | undefined;
   // Deduplication: track recently processed message IDs (Meta can send duplicates)
   private readonly processedMessages = new Map<string, number>();
   private readonly DEDUP_TTL_MS = 60_000; // 1 minute
+  private readonly dedupCleanupTimer: ReturnType<typeof setInterval>;
 
   private readonly internalKey: string | undefined;
 
@@ -40,12 +41,16 @@ export class WhatsAppController {
       throw new Error('WHATSAPP_APP_SECRET is required in production');
     }
     // Periodic cleanup of dedup map
-    setInterval(() => {
+    this.dedupCleanupTimer = setInterval(() => {
       const now = Date.now();
       for (const [id, ts] of this.processedMessages) {
         if (now - ts > this.DEDUP_TTL_MS) this.processedMessages.delete(id);
       }
     }, this.DEDUP_TTL_MS);
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.dedupCleanupTimer);
   }
 
   // ======================== WEBHOOK VERIFICATION ==========================

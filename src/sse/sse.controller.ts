@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req, OnModuleDestroy } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { Response, Request } from 'express';
@@ -14,7 +14,7 @@ const TICKET_TTL_MS = 30_000; // 30 seconds
 @ApiTags('SSE')
 @SkipThrottle()
 @Controller('sse')
-export class SseController {
+export class SseController implements OnModuleDestroy {
   private readonly logger = new Logger(SseController.name);
   private ticketCleanupTimer: ReturnType<typeof setInterval>;
 
@@ -31,11 +31,22 @@ export class SseController {
     }, 60_000);
   }
 
+  onModuleDestroy() {
+    clearInterval(this.ticketCleanupTimer);
+  }
+
   @Post('ticket')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get a short-lived SSE ticket (avoids JWT in URL)' })
   async getTicket(@Req() req: Request) {
     const user = (req as any).user;
+    // Bound ticket map — evict expired if approaching limit
+    if (sseTickets.size > 10_000) {
+      const now = Date.now();
+      for (const [k, v] of sseTickets) {
+        if (v.expiresAt < now) sseTickets.delete(k);
+      }
+    }
     const ticket = randomBytes(32).toString('hex');
     sseTickets.set(ticket, { user, expiresAt: Date.now() + TICKET_TTL_MS });
     return { ticket };

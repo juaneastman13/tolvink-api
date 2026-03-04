@@ -19,10 +19,23 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       status = exception.getStatus();
       const body = exception.getResponse();
       message = typeof body === 'string' ? body : (body as any).message || message;
+      // Report 5xx HttpExceptions to Sentry
+      if (status >= 500) {
+        Sentry.captureException(exception, {
+          extra: { url: req.url, method: req.method, userId: (req as any).user?.sub },
+        });
+      }
     } else if (exception instanceof Error) {
       this.logger.error(`Unhandled: ${exception.message}`, exception.stack);
-      // Report unhandled errors to Sentry
       Sentry.captureException(exception, {
+        extra: { url: req.url, method: req.method, userId: (req as any).user?.sub },
+      });
+    } else {
+      // Handle non-Error thrown values (strings, plain objects, etc.)
+      const desc = typeof exception === 'string' ? exception : JSON.stringify(exception);
+      this.logger.error(`Unhandled non-Error: ${desc}`);
+      Sentry.captureMessage(`Non-Error thrown: ${desc}`, {
+        level: 'error',
         extra: { url: req.url, method: req.method, userId: (req as any).user?.sub },
       });
     }

@@ -20,7 +20,7 @@ export class LoggingInterceptor implements NestInterceptor {
           const ms = Date.now() - start;
           // Production: log slow requests (>500ms) + sample 10%; avoid JSON.stringify overhead
           if (IS_PROD) {
-            _reqCount++;
+            _reqCount = (_reqCount + 1) % 1_000_000;
             if (ms > 500 || _reqCount % 10 === 0) {
               this.logger.log(`${method} ${url} ${ctx.switchToHttp().getResponse().statusCode} ${ms}ms uid=${userId}`);
             }

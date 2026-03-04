@@ -21,7 +21,7 @@ async function bootstrap() {
     Sentry.init({
       dsn: process.env.SENTRY_DSN,
       environment: process.env.NODE_ENV || 'development',
-      tracesSampleRate: 0.1,
+      tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_RATE || '0.2'),
     });
     logger.log('Sentry initialized');
   }
@@ -34,14 +34,17 @@ async function bootstrap() {
     }
   }
 
-  // Process-level error handlers — log and exit so Railway restarts
+  // Process-level error handlers — log, report to Sentry, then exit so Railway restarts
   process.on('uncaughtException', (err) => {
     logger.error(`Uncaught exception: ${err.message}`, err.stack);
-    process.exit(1);
+    if (process.env.SENTRY_DSN) Sentry.captureException(err);
+    // Allow Sentry flush before exit
+    setTimeout(() => process.exit(1), 1500);
   });
   process.on('unhandledRejection', (reason: any) => {
     logger.error(`Unhandled rejection: ${reason?.message || reason}`, reason?.stack);
-    process.exit(1);
+    if (process.env.SENTRY_DSN && reason instanceof Error) Sentry.captureException(reason);
+    setTimeout(() => process.exit(1), 1500);
   });
 
   const app = await NestFactory.create(AppModule, {
