@@ -387,6 +387,7 @@ model Freight {
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
   @@index([scheduledAt])
+  @@index([destName, originName, createdAt])
   @@map("freights")
 }
 
@@ -721,6 +722,7 @@ model WhatsAppMessageLog {
 
   @@index([phone])
   @@index([waMessageId])
+  @@index([createdAt])
   @@map("whatsapp_message_logs")
 }
 

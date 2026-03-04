@@ -35,7 +35,7 @@ export class WhatsAppController implements OnModuleDestroy {
     this.verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
     this.internalKey = this.config.get<string>('INTERNAL_API_KEY');
     if (!this.appSecret) {
-      this.logger.error('WHATSAPP_APP_SECRET is not set — webhook signature verification will be enforced');
+      this.logger.error('WHATSAPP_APP_SECRET is not set — ALL webhook requests will be REJECTED');
     }
     if (!this.appSecret && process.env.NODE_ENV === 'production') {
       throw new Error('WHATSAPP_APP_SECRET is required in production');
@@ -91,7 +91,7 @@ export class WhatsAppController implements OnModuleDestroy {
 
     try {
       const body = req.body;
-      this.logger.log(`Body received: ${JSON.stringify(body).slice(0, 500)}`);
+      this.logger.log('Webhook received: entries=' + (body?.entry?.length || 0));
 
       if (!body?.entry?.[0]?.changes?.[0]?.value) {
         this.logger.log('No entry/changes/value found, ignoring');
@@ -116,7 +116,8 @@ export class WhatsAppController implements OnModuleDestroy {
 
       const phone = message.from; // E.164 without + (e.g., "59898247552")
       const waMessageId = message.id;
-      this.logger.log(`Message from ${phone}, type: ${message.type}`);
+      const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+      this.logger.log(`Message from ${maskedPhone}, type: ${message.type}`);
 
       // Deduplication — Meta can send the same webhook multiple times
       if (waMessageId && this.processedMessages.has(waMessageId)) {
@@ -265,6 +266,9 @@ export class WhatsAppController implements OnModuleDestroy {
 
     if (!waMessageId || !statusValue) return;
 
+    const VALID_STATUSES = new Set(['sent', 'delivered', 'read', 'failed']);
+    if (!VALID_STATUSES.has(statusValue)) return;
+
     this.prisma.whatsAppMessageLog.updateMany({
       where: { waMessageId },
       data: { status: statusValue },
@@ -374,7 +378,7 @@ export class WhatsAppController implements OnModuleDestroy {
 
     const session = sessions[0];
     if (!session) {
-      this.logger.warn(`save-location: token not found — ${body.token}`);
+      this.logger.warn('save-location: token not found — ' + (body.token?.slice(0, 8) || '') + '...');
       throw new NotFoundException('Token inválido o expirado');
     }
 
@@ -406,7 +410,7 @@ export class WhatsAppController implements OnModuleDestroy {
       throw new BadRequestException('Token ya utilizado');
     }
 
-    this.logger.log(`Location saved for session ${session.id}: ${body.lat},${body.lng}`);
+    this.logger.log(`Location saved for session ${session.id}`);
 
     // Auto-trigger AI flow continuation (fire-and-forget)
     this.router.onLocationSaved(session.id).catch(err =>
@@ -445,7 +449,7 @@ export class WhatsAppController implements OnModuleDestroy {
 
     const session = sessions[0];
     if (!session) {
-      this.logger.warn(`save-location-by-slug: slug not found — ${body.slug}`);
+      this.logger.warn('save-location-by-slug: token not found — ' + (body.slug?.slice(0, 8) || '') + '...');
       throw new NotFoundException('Enlace inválido o expirado');
     }
 
@@ -475,7 +479,7 @@ export class WhatsAppController implements OnModuleDestroy {
       throw new BadRequestException('Enlace ya utilizado');
     }
 
-    this.logger.log(`Location saved by slug for session ${session.id}: ${body.lat},${body.lng}`);
+    this.logger.log(`Location saved for session ${session.id}`);
 
     this.router.onLocationSaved(session.id).catch(err =>
       this.logger.error(`onLocationSaved failed: ${err.message}`),

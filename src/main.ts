@@ -35,13 +35,17 @@ async function bootstrap() {
   }
 
   // Process-level error handlers — log, report to Sentry, then exit so Railway restarts
+  let _exiting = false;
   process.on('uncaughtException', (err) => {
+    if (_exiting) return;
+    _exiting = true;
     logger.error(`Uncaught exception: ${err.message}`, err.stack);
     if (process.env.SENTRY_DSN) Sentry.captureException(err);
-    // Allow Sentry flush before exit
     setTimeout(() => process.exit(1), 1500);
   });
   process.on('unhandledRejection', (reason: any) => {
+    if (_exiting) return;
+    _exiting = true;
     logger.error(`Unhandled rejection: ${reason?.message || reason}`, reason?.stack);
     if (process.env.SENTRY_DSN && reason instanceof Error) Sentry.captureException(reason);
     setTimeout(() => process.exit(1), 1500);

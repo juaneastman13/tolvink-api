@@ -316,6 +316,9 @@ export class FreightsService {
     }
 
     if (query.status) {
+      if (!Object.values(FreightStatus).includes(query.status as FreightStatus)) {
+        throw new BadRequestException(`Estado inválido: ${query.status}`);
+      }
       where.status = query.status;
     }
     if (query.dateFrom || query.dateTo) {
@@ -503,6 +506,7 @@ export class FreightsService {
           data: {
             entityType: 'freight',
             entityId: freightId,
+            freightId: freightId,
             action: 'assigned',
             fromValue: freight.status,
             toValue: 'assigned',
@@ -1112,6 +1116,13 @@ export class FreightsService {
 
     const cancelCt = await this.resolveCompanyType(user);
 
+    const callerIds = await this.resolveAllCompanyIds(user);
+    const freightParticipant = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { originCompanyId: true, destCompanyId: true } });
+    if (freightParticipant) {
+      const isParticipant = callerIds.includes(freightParticipant.originCompanyId) || (freightParticipant.destCompanyId && callerIds.includes(freightParticipant.destCompanyId));
+      if (!isParticipant) throw new ForbiddenException('Solo participantes del flete pueden cancelarlo');
+    }
+
     const cancelResult = await this.prisma.$transaction(async (tx) => {
       // Read freight INSIDE transaction to prevent TOCTOU race
       const freight = await tx.freight.findUnique({
@@ -1178,6 +1189,12 @@ export class FreightsService {
     const isPlantAuth = await this.hasCompanyType(user, 'plant');
     if (!isPlantAuth) {
       throw new ForbiddenException('Solo la planta puede autorizar');
+    }
+
+    const allIdsAuth = await this.resolveAllCompanyIds(user);
+    const freightCheck = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+    if (!freightCheck?.destCompanyId || !allIdsAuth.includes(freightCheck.destCompanyId)) {
+      throw new ForbiddenException('Solo la planta destino puede autorizar este flete');
     }
 
     const { updated, freight } = await this.prisma.$transaction(async (tx) => {
@@ -1461,7 +1478,7 @@ export class FreightsService {
         // Audit log
         await tx.auditLog.create({
           data: { entityType: 'freight', entityId: freightId, action: 'updated', userId: user.sub, freightId, metadata: data },
-        }).catch(() => {});
+        }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
         this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
         return { ...updated, pendingChangeCreated };
       }
@@ -1535,7 +1552,7 @@ export class FreightsService {
       // Audit log
       await tx.auditLog.create({
         data: { entityType: 'freight', entityId: freightId, action: 'change_approved', userId: user.sub, freightId, metadata: { changeType: change.changeType, toValue } },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
 
       // Notify all participants
       this.notifyAllParticipants(
@@ -1764,6 +1781,12 @@ export class FreightsService {
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede asignar transportistas');
 
+    const allIdsAm = await this.resolveAllCompanyIds(user);
+    const freightAm = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+    if (!freightAm?.destCompanyId || !allIdsAm.includes(freightAm.destCompanyId)) {
+      throw new ForbiddenException('Solo la planta destino del flete puede asignar transportistas');
+    }
+
     let result: { updated: any; freight: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
@@ -1910,6 +1933,12 @@ export class FreightsService {
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede cancelar asignaciones');
 
+    const allIdsCa = await this.resolveAllCompanyIds(user);
+    const freightCa = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+    if (!freightCa?.destCompanyId || !allIdsCa.includes(freightCa.destCompanyId)) {
+      throw new ForbiddenException('Solo la planta destino puede cancelar asignaciones');
+    }
+
     const { result, freight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
@@ -1955,6 +1984,12 @@ export class FreightsService {
   async updateAssignment(freightId: string, assignmentId: string, dto: any, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
     if (!isPlant) throw new ForbiddenException('Solo la planta puede editar asignaciones');
+
+    const allIdsUa = await this.resolveAllCompanyIds(user);
+    const freightUa = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+    if (!freightUa?.destCompanyId || !allIdsUa.includes(freightUa.destCompanyId)) {
+      throw new ForbiddenException('Solo la planta destino puede editar asignaciones');
+    }
 
     const { updated, freight: freshFreight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
@@ -2055,6 +2090,13 @@ export class FreightsService {
       const isTransporter = await this.hasCompanyType(user, 'transporter');
       const isPlant = await this.hasCompanyType(user, 'plant');
       if (!isTransporter && !isPlant) throw new ForbiddenException('Solo el transportista o la planta pueden responder');
+      if (isPlant && !isTransporter) {
+        const allIdsRt = await this.resolveAllCompanyIds(user);
+        const freightRt = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
+        if (!freightRt?.destCompanyId || !allIdsRt.includes(freightRt.destCompanyId)) {
+          throw new ForbiddenException('Solo la planta destino puede responder asignaciones');
+        }
+      }
     }
 
     if (dto.action === 'rejected') {

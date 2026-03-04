@@ -7,6 +7,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 
+const DUMMY_HASH = '$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWX';
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
@@ -56,6 +57,7 @@ export class AuthService {
 
     // Generic error — same whether user exists or not
     if (!user || !user.active) {
+      await bcrypt.compare(dto.password || 'x', DUMMY_HASH);
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
@@ -74,6 +76,7 @@ export class AuthService {
 
     // User has no password set — generic message + header hint (not in JSON body)
     if (!user.passwordHash) {
+      await bcrypt.compare(dto.password || 'x', DUMMY_HASH);
       const err = new UnauthorizedException('Credenciales inválidas');
       (err as any)._noPassword = true;
       throw err;
@@ -562,6 +565,12 @@ export class AuthService {
     const token = randomBytes(40).toString('hex');
     const tokenHash = this.hashToken(token);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
+    // Limit active refresh tokens per user (max 10)
+    const activeCount = await (this.prisma as any).refreshToken.count({ where: { userId, expiresAt: { gt: new Date() } } });
+    if (activeCount >= 10) {
+      const oldest = await (this.prisma as any).refreshToken.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, take: activeCount - 9, select: { id: true } });
+      if (oldest.length > 0) await (this.prisma as any).refreshToken.deleteMany({ where: { id: { in: oldest.map((t: any) => t.id) } } });
+    }
     await (this.prisma as any).refreshToken.create({ data: { token: tokenHash, userId, expiresAt } });
     await (this.prisma as any).refreshToken.deleteMany({
       where: { userId, expiresAt: { lt: new Date() } },
@@ -633,6 +642,6 @@ export class AuthService {
       companyType,
       companyTypes,
     };
-    return this.jwt.signAsync(payload);
+    return this.jwt.signAsync(payload, { expiresIn: '30m' });
   }
 }

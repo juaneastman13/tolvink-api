@@ -41,7 +41,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
 
     // For 500 errors, return generic message in production (don't leak internals)
-    const safeMessage = status >= 500 && process.env.NODE_ENV === 'production'
+    const safeMessage = status >= 500 && process.env.NODE_ENV !== 'development'
       ? 'Error interno del servidor'
       : message;
 

@@ -76,12 +76,21 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       });
       // Archive old FreightTracking records (>90 days)
       const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-      const trackResult = await this.prisma.freightTracking.deleteMany({
+      // Batch delete to avoid long-running locks (PostgreSQL)
+      let trackDeleted = 0;
+      for (let i = 0; i < 20; i++) {
+        const batch: number = await this.prisma.$executeRaw`DELETE FROM freight_tracking WHERE id IN (SELECT id FROM freight_tracking WHERE created_at < ${cutoff} LIMIT 5000)`;
+        trackDeleted += batch;
+        if (batch < 5000) break;
+      }
+      const trackResult = { count: trackDeleted };
+      // Clean old WhatsApp message logs (>90 days)
+      const waLogResult = await this.prisma.whatsAppMessageLog.deleteMany({
         where: { createdAt: { lt: cutoff } },
       });
-      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count;
+      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count;
       if (totalCleaned > 0) {
-        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking records deleted`);
+        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs deleted`);
       }
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);
@@ -440,7 +449,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    this.logger.error(`WhatsApp send to ${normalized} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
+    const masked = normalized.length > 4 ? '*'.repeat(normalized.length - 4) + normalized.slice(-4) : normalized;
+    this.logger.error(`WhatsApp send to ${masked} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
 
     this.prisma.whatsAppMessageLog.create({
       data: {
@@ -465,7 +475,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     else if (p.length === 8 || p.length === 9) p = '598' + p;
     // Validate E.164 length (10-15 digits)
     if (p.length < 10 || p.length > 15) {
-      this.logger.warn(`normalizePhone: invalid length ${p.length} for "${phone}"`);
+      this.logger.warn('normalizePhone: invalid length ' + p.length);
     }
     return p;
   }

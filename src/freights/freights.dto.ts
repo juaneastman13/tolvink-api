@@ -85,7 +85,7 @@ export class CreateFreightDto {
   loadDate: string;
 
   @ApiProperty({ example: '08:00' })
-  @Matches(/^\d{2}:\d{2}$/, { message: 'Formato de hora inválido (HH:MM)' })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { message: 'Formato de hora inválido (HH:MM, 00:00-23:59)' })
   loadTime: string;
 
   @ApiProperty({ type: [FreightItemDto] })
@@ -319,7 +319,7 @@ export class UpdateFreightDto {
 
   @ApiProperty({ required: false, description: 'Hora de carga (HH:MM)' })
   @IsOptional()
-  @Matches(/^\d{2}:\d{2}$/, { message: 'loadTime debe ser HH:MM' })
+  @Matches(/^([01]\d|2[0-3]):([0-5]\d)$/, { message: 'loadTime debe ser HH:MM (00:00-23:59)' })
   loadTime?: string;
 
   @ApiProperty({ required: false, description: 'Notas', maxLength: 2000 })

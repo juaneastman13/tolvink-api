@@ -454,7 +454,8 @@ export class WhatsAppRouterService {
     if (typeof latitude !== 'number' || typeof longitude !== 'number' ||
         latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 ||
         !isFinite(latitude) || !isFinite(longitude)) {
-      this.logger.warn(`Invalid coordinates from ${phone}: lat=${latitude}, lng=${longitude}`);
+      const mp = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+      this.logger.warn(`Invalid coordinates from ${mp}`);
       return;
     }
 
@@ -629,7 +630,8 @@ export class WhatsAppRouterService {
 
       // MIME type validation — only accept audio formats
       if (!mimeType.startsWith('audio/')) {
-        this.logger.warn(`Non-audio MIME from ${phone}: ${mimeType}`);
+        const mp = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+        this.logger.warn(`Non-audio MIME from ${mp}: ${mimeType}`);
         await this.wa.sendText(phone, 'El archivo no es un audio válido. Por favor, envíe un mensaje de voz.');
         return;
       }
@@ -637,12 +639,14 @@ export class WhatsAppRouterService {
       // Size check: Whisper API limit is 25MB, WhatsApp max ~16MB
       const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB safety margin
       if (buffer.length > MAX_AUDIO_BYTES) {
-        this.logger.warn(`Audio too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB from ${phone}`);
+        const mp2 = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+        this.logger.warn(`Audio too large: ${(buffer.length / 1024 / 1024).toFixed(1)}MB from ${mp2}`);
         await this.wa.sendText(phone, 'El audio excede el límite permitido. Por favor, envíe un mensaje más breve (menos de 2 minutos) o escriba como texto.');
         return;
       }
       if (buffer.length > 10 * 1024 * 1024) {
-        this.logger.warn(`Large audio (${(buffer.length / 1024 / 1024).toFixed(1)}MB) from ${phone}`);
+        const mp3 = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+        this.logger.warn(`Large audio (${(buffer.length / 1024 / 1024).toFixed(1)}MB) from ${mp3}`);
       }
 
       // Map MIME type to file extension for Whisper
