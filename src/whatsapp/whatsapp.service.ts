@@ -97,9 +97,21 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       const analyticsResult = await this.prisma.analyticsEvent.deleteMany({
         where: { createdAt: { lt: analyticsCutoff } },
       });
-      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count + analyticsResult.count;
+      // Clean old read notifications (>90 days)
+      const notifCutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const notifResult = await this.prisma.notification.deleteMany({
+          where: { read: true, createdAt: { lt: notifCutoff } },
+      });
+      // Clean expired/used password reset codes
+      const resetResult = await this.prisma.passwordResetCode.deleteMany({
+        where: { OR: [
+          { expiresAt: { lt: now } },
+          { used: true, createdAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
+        ]},
+      });
+      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count + analyticsResult.count + notifResult.count + resetResult.count;
       if (totalCleaned > 0) {
-        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs, ${analyticsResult.count} old analytics deleted`);
+        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs, ${analyticsResult.count} old analytics, ${notifResult.count} old notifications, ${resetResult.count} expired reset codes deleted`);
       }
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);

@@ -124,7 +124,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async _handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
       const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
-      this.logger.log(`handleMessage type=${type} phone=${maskedPhone} payload=${JSON.stringify(payload).slice(0, 150)}`);
+      const safePayload = type === 'text' ? `text(${(payload?.body?.length || 0)} chars)` : JSON.stringify(payload).slice(0, 150);
+      this.logger.log(`handleMessage type=${type} phone=${maskedPhone} payload=${safePayload}`);
 
       // Mark as read
       this.wa.markRead(waMessageId).catch(e => this.logger.warn(e.message));

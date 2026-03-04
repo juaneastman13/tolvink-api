@@ -166,7 +166,7 @@ export class UpdateUserDto {
   @ApiProperty({ required: false }) @IsOptional() @IsEmail() @MaxLength(255) email?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(50) phone?: string;
   @ApiProperty({ required: false, enum: ['operator', 'admin'] }) @IsOptional() @IsIn(['operator', 'admin'], { message: 'Rol debe ser operator o admin' }) role?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsArray() userTypes?: string[];
+  @ApiProperty({ required: false }) @IsOptional() @IsArray() @IsString({ each: true }) @IsIn(['producer', 'plant', 'transporter'], { each: true }) userTypes?: string[];
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() active?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsObject() companyByType?: Record<string, string>;
@@ -228,9 +228,9 @@ export class AdminService {
     }
     const full = await this.prisma.user.findUnique({
       where: { id: jwtUser.sub },
-      select: { id: true, role: true, companyId: true, isSuperAdmin: true },
+      select: { id: true, role: true, companyId: true, isSuperAdmin: true, active: true },
     });
-    if (!full) throw new ForbiddenException('Usuario no encontrado');
+    if (!full || !full.active) throw new ForbiddenException('Usuario no encontrado');
     return { ...jwtUser, ...full, sub: full.id };
   }
 

@@ -80,9 +80,7 @@ export class AuthService {
     // User has no password set — generic message + header hint (not in JSON body)
     if (!user.passwordHash) {
       await bcrypt.compare(dto.password || 'x', DUMMY_HASH);
-      const err = new UnauthorizedException('Credenciales inválidas');
-      (err as any)._noPassword = true;
-      throw err;
+      throw new UnauthorizedException('Credenciales inválidas');
     }
 
     // Password is required

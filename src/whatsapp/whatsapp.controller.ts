@@ -7,6 +7,7 @@ import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, 
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { timingSafeEqual } from 'crypto';
 import * as crypto from 'crypto';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppRouterService } from './whatsapp-router.service';
@@ -63,11 +64,14 @@ export class WhatsAppController implements OnModuleDestroy {
     @Query('hub.challenge') challenge: string,
     @Res() res: Response,
   ) {
-    if (mode === 'subscribe' && token === this.verifyToken) {
+    const tokenMatch = token && this.verifyToken &&
+        token.length === this.verifyToken.length &&
+        timingSafeEqual(Buffer.from(token), Buffer.from(this.verifyToken));
+    if (mode === 'subscribe' && tokenMatch) {
       this.logger.log('Webhook verified successfully');
       res.status(200).send(challenge);
     } else {
-      this.logger.warn(`Webhook verification failed — mode: ${mode}, token match: ${token === this.verifyToken}`);
+      this.logger.warn(`Webhook verification failed — mode: ${mode}, tokenMatch: ${!!tokenMatch}`);
       res.status(403).send('Forbidden');
     }
   }
@@ -317,7 +321,10 @@ export class WhatsAppController implements OnModuleDestroy {
 
     // Validate internal caller: must provide internal API key (separate from webhook secret)
     const key = this.internalKey;
-    if (!key || body.internalKey !== key) {
+    const keyMatch = key && body.internalKey &&
+        key.length === body.internalKey.length &&
+        timingSafeEqual(Buffer.from(body.internalKey), Buffer.from(key));
+    if (!keyMatch) {
       throw new UnauthorizedException('Unauthorized');
     }
 
@@ -602,25 +609,28 @@ export class WhatsAppController implements OnModuleDestroy {
       throw new BadRequestException('El flete no está activo');
     }
 
+    const safeSpeed = (typeof body.speed === 'number' && isFinite(body.speed) && body.speed >= 0) ? body.speed : null;
+    const safeHeading = (typeof body.heading === 'number' && isFinite(body.heading) && body.heading >= 0 && body.heading <= 360) ? body.heading : null;
+
     await this.prisma.liveLocation.upsert({
       where: { freightId_userId: { freightId: fid, userId: uid } },
       update: {
         lat: body.lat,
         lng: body.lng,
-        speed: body.speed ?? null,
-        heading: body.heading ?? null,
+        speed: safeSpeed,
+        heading: safeHeading,
         active: true,
         expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2h
       },
       create: {
         freightId: fid,
         userId: uid,
-        userName: name || 'Usuario',
+        userName: (name || 'Usuario').slice(0, 100),
         userRole: role || 'unknown',
         lat: body.lat,
         lng: body.lng,
-        speed: body.speed ?? null,
-        heading: body.heading ?? null,
+        speed: safeSpeed,
+        heading: safeHeading,
         active: true,
         expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
       },
@@ -633,8 +643,8 @@ export class WhatsAppController implements OnModuleDestroy {
         userId: uid,
         lat: body.lat,
         lng: body.lng,
-        speed: body.speed ?? null,
-        heading: body.heading ?? null,
+        speed: safeSpeed,
+        heading: safeHeading,
       },
     }).catch((err) => {
       this.logger.warn(`FreightTracking write failed: ${err.message}`);

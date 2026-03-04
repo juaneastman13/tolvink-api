@@ -949,6 +949,12 @@ export class FreightsService {
           throw new BadRequestException('El transportista ya confirmo la entrega');
         }
 
+        const callerCfIds = await this.resolveAllCompanyIds(user);
+        const hasAssignment = freight.assignments?.some(a => callerCfIds.includes(a.transportCompanyId));
+        if (!hasAssignment) {
+            throw new ForbiddenException('No sos el transportista asignado a este flete');
+        }
+
         const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
         const data: any = { transporterFinishedConfirmedAt: new Date() };
         if (plantAlsoConfirmed) {
@@ -995,12 +1001,6 @@ export class FreightsService {
     }
 
     if (ct === 'plant') {
-      const allIdsPlant = await this.resolveAllCompanyIds(user);
-      const fCheck = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { destCompanyId: true } });
-      if (!fCheck?.destCompanyId || !allIdsPlant.includes(fCheck.destCompanyId)) {
-        throw new ForbiddenException('Solo la planta destino puede confirmar la recepción');
-      }
-
       const pFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
@@ -1008,6 +1008,13 @@ export class FreightsService {
           include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
+
+        // Check destCompany inside transaction (was previously outside — TOCTOU fix)
+        const allIdsPlant = await this.resolveAllCompanyIds(user);
+        if (!freight.destCompanyId || !allIdsPlant.includes(freight.destCompanyId)) {
+          throw new ForbiddenException('Solo la planta destino puede confirmar la recepción');
+        }
+
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
         if (freight.status !== FreightStatus.loaded) {
           throw new BadRequestException(`Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`);
@@ -1962,8 +1969,15 @@ export class FreightsService {
       const updateData: any = {};
 
       if (dto.transportCompanyId && dto.transportCompanyId !== assignment.transportCompanyId) {
-        const company = await tx.company.findUnique({ where: { id: dto.transportCompanyId } });
-        if (!company) throw new NotFoundException('Empresa transportista no encontrada');
+        const transport = await tx.company.findFirst({
+            where: { id: dto.transportCompanyId, active: true },
+            select: { id: true, type: true, types: true, hasInternalFleet: true },
+        });
+        if (!transport) throw new BadRequestException('Empresa transportista no encontrada o inactiva');
+        const tTypes = Array.isArray(transport.types) && (transport.types as string[]).length > 0
+            ? (transport.types as string[]) : [transport.type];
+        if (!tTypes.includes('transporter') && !transport.hasInternalFleet)
+            throw new BadRequestException('La empresa no es transportista');
         updateData.transportCompanyId = dto.transportCompanyId;
         updateData.truckId = null;
         updateData.plate = null;

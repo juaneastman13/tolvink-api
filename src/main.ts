@@ -41,14 +41,16 @@ async function bootstrap() {
     _exiting = true;
     logger.error(`Uncaught exception: ${err.message}`, err.stack);
     if (process.env.SENTRY_DSN) Sentry.captureException(err);
-    Sentry.flush(2000).catch(() => {}).finally(() => process.exit(1));
+    const flushP = process.env.SENTRY_DSN ? Sentry.flush(2000) : Promise.resolve();
+    flushP.catch(() => {}).finally(() => process.exit(1));
   });
   process.on('unhandledRejection', (reason: any) => {
     if (_exiting) return;
     _exiting = true;
     logger.error(`Unhandled rejection: ${reason?.message || reason}`, reason?.stack);
     if (process.env.SENTRY_DSN && reason instanceof Error) Sentry.captureException(reason);
-    Sentry.flush(2000).catch(() => {}).finally(() => process.exit(1));
+    const flushP = process.env.SENTRY_DSN ? Sentry.flush(2000) : Promise.resolve();
+    flushP.catch(() => {}).finally(() => process.exit(1));
   });
 
   const app = await NestFactory.create(AppModule, {
@@ -90,8 +92,9 @@ async function bootstrap() {
     requestCache.run(new Map(), () => next());
   });
 
-  // Request timeout — 30s max per request
+  // Request timeout — 30s max per request (skip SSE streams)
   app.use((req: any, res: any, next: any) => {
+    if (req.url?.includes('/sse/stream')) return next();
     res.setTimeout(30000, () => {
       if (!res.headersSent) {
         res.status(408).json({ message: 'Request timeout' });
@@ -107,7 +110,7 @@ async function bootstrap() {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
-    exposedHeaders: ['X-Auth-Hint'],
+    exposedHeaders: [],
     maxAge: 86400,
   });
 

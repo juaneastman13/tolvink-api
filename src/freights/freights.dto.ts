@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -33,6 +33,8 @@ export class FreightItemDto {
   productTypeOther?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(1000)
   notes?: string;
 }
 
