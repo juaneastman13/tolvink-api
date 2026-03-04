@@ -150,14 +150,18 @@ export class WhatsAppController implements OnModuleDestroy {
       // Parse message type and payload
       const { type, payload } = this.parseMessage(message);
 
-      // Log inbound message
+      // Log inbound message (mask sensitive payload fields)
+      const maskedPayload = type === 'location' ? { type: 'location' }
+        : type === 'image' || type === 'document' || type === 'audio' ? { type, mime: payload?.mime_type }
+        : type === 'text' ? { type: 'text', length: payload?.body?.length || 0 }
+        : { type };
       this.prisma.whatsAppMessageLog.create({
         data: {
           waMessageId,
           phone,
           direction: 'inbound',
           type,
-          content: payload,
+          content: maskedPayload,
           status: 'received',
         },
       }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));

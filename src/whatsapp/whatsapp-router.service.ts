@@ -595,9 +595,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Periodic cleanup of stale cooldown entries (always prune, not just at cap)
+    // Periodic cleanup of stale cooldown entries (always prune) + hard cap
     for (const [k, v] of this.gpsWriteCooldowns) {
       if (now - v > 30_000) this.gpsWriteCooldowns.delete(k);
+    }
+    if (this.gpsWriteCooldowns.size > 5000) {
+      const iter = this.gpsWriteCooldowns.keys();
+      while (this.gpsWriteCooldowns.size > 4000) {
+        const k = iter.next().value;
+        if (k) this.gpsWriteCooldowns.delete(k); else break;
+      }
     }
   }
 

@@ -1077,11 +1077,6 @@ export class FreightsService {
     const cancelCt = await this.resolveCompanyType(user);
 
     const callerIds = await this.resolveAllCompanyIds(user);
-    const freightParticipant = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { originCompanyId: true, destCompanyId: true } });
-    if (freightParticipant) {
-      const isParticipant = callerIds.includes(freightParticipant.originCompanyId) || (freightParticipant.destCompanyId && callerIds.includes(freightParticipant.destCompanyId));
-      if (!isParticipant) throw new ForbiddenException('Solo participantes del flete pueden cancelarlo');
-    }
 
     const cancelResult = await this.prisma.$transaction(async (tx) => {
       // Read freight INSIDE transaction to prevent TOCTOU race
@@ -1090,6 +1085,8 @@ export class FreightsService {
         include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
+      const isParticipant = callerIds.includes(freight.originCompanyId) || (freight.destCompanyId && callerIds.includes(freight.destCompanyId));
+      if (!isParticipant) throw new ForbiddenException('Solo participantes del flete pueden cancelarlo');
 
       if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
         throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
