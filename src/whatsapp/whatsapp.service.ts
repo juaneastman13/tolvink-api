@@ -305,6 +305,18 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const url = metaData.url;
     const mimeType = metaData.mime_type || 'audio/ogg';
 
+    // Validate URL points to a known Meta CDN domain (SSRF protection)
+    const ALLOWED_HOSTS = ['lookaside.fbsbx.com', 'scontent.whatsapp.net', 'media.fna.whatsapp.net'];
+    try {
+      const parsed = new URL(url);
+      if (!ALLOWED_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`))) {
+        throw new Error(`Unexpected media host: ${parsed.hostname}`);
+      }
+    } catch (e) {
+      if (e instanceof TypeError) throw new Error(`Invalid media URL from Meta`);
+      throw e;
+    }
+
     // Step 2: Download the actual file
     const fileRes = await fetch(url, {
       headers: { Authorization: `Bearer ${this.accessToken}` },
@@ -313,7 +325,15 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     if (!fileRes.ok) {
       throw new Error(`Media download failed (${fileRes.status})`);
     }
+    const MAX_MEDIA_SIZE = 25 * 1024 * 1024; // 25MB
+    const contentLength = parseInt(fileRes.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_MEDIA_SIZE) {
+      throw new Error(`Media too large: ${contentLength} bytes (max ${MAX_MEDIA_SIZE})`);
+    }
     const buffer = Buffer.from(await fileRes.arrayBuffer());
+    if (buffer.length > MAX_MEDIA_SIZE) {
+      throw new Error(`Media download exceeded limit: ${buffer.length} bytes`);
+    }
 
     return { buffer, mimeType };
   }

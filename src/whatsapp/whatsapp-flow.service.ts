@@ -1304,7 +1304,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
 
   /** Show time selection list with common loading hours */
   private async sendTimeSelection(phone: string, session: any, state: any) {
-    const dateFormatted = state.loadDate.split('-').reverse().join('/');
+    const dateFormatted = state.loadDate?.split('-').reverse().join('/') || 'Sin fecha';
 
     await this.updateState(session.id, 'awaiting_time', state);
     await this.wa.sendList(phone,
@@ -1331,7 +1331,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   /** Generate a location picker token and URL (pure, no DB write) */
   private generateLocationToken(purpose: string): { token: string; slug: string; url: string; data: any } {
     const token = crypto.randomUUID();
-    const slug = `${purpose}-${crypto.randomBytes(4).toString('hex')}`;
+    const slug = `${purpose}-${crypto.randomBytes(8).toString('hex')}`;
     const url = `${APP_URL}/ubicacion/${slug}`;
     return { token, slug, url, data: { token, slug, purpose, createdAt: new Date().toISOString() } };
   }

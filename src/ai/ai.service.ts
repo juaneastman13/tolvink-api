@@ -201,7 +201,7 @@ export class AiService implements OnModuleDestroy {
             // Execute all read-only tools in parallel
             this.logger.log(`Executing ${toolBlocks.length} read-only tools in parallel`);
             const settled = await Promise.allSettled(toolBlocks.map(async (block: any) => {
-              this.logger.log(`AI tool call (parallel): ${block.name}(${JSON.stringify(block.input).slice(0, 200)})`);
+              this.logger.log(`AI tool call (parallel): ${block.name}`);
               const result = await this.executeTool(block.name, block.input, user, synUser, session);
               return { type: 'tool_result' as const, tool_use_id: block.id, content: result };
             }));
@@ -214,7 +214,7 @@ export class AiService implements OnModuleDestroy {
             // Sequential execution for mutating tools or single tool
             toolResults = [];
             for (const block of toolBlocks) {
-              this.logger.log(`AI tool call: ${(block as any).name}(${JSON.stringify((block as any).input).slice(0, 200)})`);
+              this.logger.log(`AI tool call: ${(block as any).name}`);
               const result = await this.executeTool((block as any).name, (block as any).input, user, synUser, session);
               toolResults.push({
                 type: 'tool_result' as const,
@@ -2775,6 +2775,12 @@ FILTROS AVANZADOS:
           break;
 
         case 'assign_transporter': {
+          // Re-validate caller has access to the plant company
+          const callerCompanies = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
+          if (!callerCompanies.includes(params.plantCompanyId)) {
+            result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
+            break;
+          }
           const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
           const dto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) dto.truckId = params.truckId;
@@ -2791,6 +2797,11 @@ FILTROS AVANZADOS:
         }
 
         case 'assign_truck_to_trip': {
+          const callerCos2 = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
+          if (!callerCos2.includes(params.plantCompanyId)) {
+            result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
+            break;
+          }
           const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
           const dto: any = { truckId: params.truckId };
           if (params.driverId) dto.driverId = params.driverId;
@@ -2800,6 +2811,11 @@ FILTROS AVANZADOS:
         }
 
         case 'assign_truck_to_freight': {
+          const callerCos3 = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
+          if (!callerCos3.includes(params.plantCompanyId)) {
+            result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
+            break;
+          }
           const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
           const truckDto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) truckDto.truckId = params.truckId;
@@ -2836,6 +2852,10 @@ FILTROS AVANZADOS:
         }
 
         case 'deactivate_user': {
+          const membershipCheck = await this.prisma.userCompany.findFirst({
+            where: { id: params.membershipId, companyId: params.companyId || synUser.companyId, userId: params.targetUserId, active: true },
+          });
+          if (!membershipCheck) throw new Error('Membresía no encontrada o ya fue modificada');
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
           const otherActive = await this.prisma.userCompany.count({ where: { userId: params.targetUserId, active: true } });
           if (otherActive === 0) {
@@ -3088,8 +3108,12 @@ FILTROS AVANZADOS:
 
   // ---- confirm_loaded ----
   private async toolConfirmLoaded(input: any, user: any, synUser: any, session: any): Promise<string> {
-    if (input.tons == null || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
+    const tons = Number(input.tons);
+    if (input.tons == null || isNaN(tons) || tons <= 0) {
       return JSON.stringify({ error: 'Toneladas cargadas (tons) requeridas y deben ser un número positivo.' });
+    }
+    if (tons > 200) {
+      return JSON.stringify({ error: `${tons} toneladas parece un valor inusual. Verifique con el usuario. Máximo razonable: 200 tn.` });
     }
 
     const result = await this.resolveFreightWithAccess(input.code, user);
@@ -3097,8 +3121,8 @@ FILTROS AVANZADOS:
     const freight = result.freight;
 
     return this.stageAction(session, 'confirm_loaded', {
-      freightId: freight.id, code: freight.code, tons: Number(input.tons),
-    }, `Confirmar carga del flete ${freight.code} · ${Number(input.tons)} tn`);
+      freightId: freight.id, code: freight.code, tons,
+    }, `Confirmar carga del flete ${freight.code} · ${tons} tn`);
   }
 
   // ---- confirm_finished ----
@@ -3349,7 +3373,7 @@ FILTROS AVANZADOS:
   private toolGenerateLocationLink(input: any, session: any): string {
     const token = crypto.randomUUID();
     const purposeLabel = (input.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
-    const slug = `${purposeLabel}-${crypto.randomBytes(2).toString('hex')}`;
+    const slug = `${purposeLabel}-${crypto.randomBytes(8).toString('hex')}`;
 
     // Use side-effects pattern (merged by chat()) — avoids direct DB write race
     const effects = this._chatSideEffects.get(session.id) || {};
@@ -3784,12 +3808,12 @@ FILTROS AVANZADOS:
         phone: { not: null },
         active: true,
         OR: [
-          { companyId: { in: Array.from(companyIds) } },
-          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true } } },
+          { companyId: { in: Array.from(companyIds) }, role: { in: ['admin', 'platform_admin'] } },
+          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true, role: { in: ['gerente', 'admin'] } } } },
         ],
       },
       select: { phone: true, id: true, companyId: true },
-      take: 100,
+      take: 30,
     });
 
     const driverIds = new Set(freight.assignments.map(a => a.driverId).filter(Boolean));
@@ -4697,6 +4721,9 @@ FILTROS AVANZADOS:
 
   /** Resolve freight by code WITH access control — returns { freight } or { error } */
   private async resolveFreightWithAccess(code: string, user: any): Promise<{ freight?: any; error?: string }> {
+    if (!code || typeof code !== 'string') {
+      return { error: 'Código de flete requerido.' };
+    }
     const freight = await this.prisma.freight.findFirst({
       where: { code: code.toUpperCase() },
       select: {

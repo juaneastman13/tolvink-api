@@ -39,6 +39,13 @@ export class WhatsAppController {
     if (!this.appSecret && process.env.NODE_ENV === 'production') {
       throw new Error('WHATSAPP_APP_SECRET is required in production');
     }
+    // Periodic cleanup of dedup map
+    setInterval(() => {
+      const now = Date.now();
+      for (const [id, ts] of this.processedMessages) {
+        if (now - ts > this.DEDUP_TTL_MS) this.processedMessages.delete(id);
+      }
+    }, this.DEDUP_TTL_MS);
   }
 
   // ======================== WEBHOOK VERIFICATION ==========================
@@ -488,9 +495,10 @@ export class WhatsAppController {
     const { cid } = payload;
     if (!cid) throw new BadRequestException('Token inválido');
 
-    // Compute "today" in Uruguay timezone (UTC-3)
-    const nowUy = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    const today = new Date(Date.UTC(nowUy.getUTCFullYear(), nowUy.getUTCMonth(), nowUy.getUTCDate()));
+    // Compute "today" in Uruguay timezone (America/Montevideo)
+    const nowUyStr = new Date().toLocaleString('en-US', { timeZone: 'America/Montevideo' });
+    const nowUy = new Date(nowUyStr);
+    const today = new Date(Date.UTC(nowUy.getFullYear(), nowUy.getMonth(), nowUy.getDate()));
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 

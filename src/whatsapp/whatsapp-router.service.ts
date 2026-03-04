@@ -97,7 +97,8 @@ export class WhatsAppRouterService {
 
   private async _handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     try {
-      this.logger.log(`handleMessage type=${type} phone=${phone} payload=${JSON.stringify(payload).slice(0, 150)}`);
+      const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
+      this.logger.log(`handleMessage type=${type} phone=${maskedPhone} payload=${JSON.stringify(payload).slice(0, 150)}`);
 
       // Mark as read
       this.wa.markRead(waMessageId).catch(e => this.logger.warn(e.message));
@@ -577,7 +578,8 @@ export class WhatsAppRouterService {
 
     const user = await this.findUserByPhone(session.phone);
     if (!user) {
-      this.logger.warn(`onLocationSaved: user not found for phone ${session.phone}`);
+      const mp = session.phone?.length > 4 ? '*'.repeat(session.phone.length - 4) + session.phone.slice(-4) : session.phone;
+      this.logger.warn(`onLocationSaved: user not found for phone ${mp}`);
       return;
     }
 
@@ -664,7 +666,7 @@ export class WhatsAppRouterService {
         return;
       }
 
-      this.logger.log(`Audio transcribed (${buffer.length} bytes): "${text.slice(0, 100)}"`);
+      this.logger.log(`Audio transcribed (${buffer.length} bytes, ${text.length} chars)`);
 
       // Tag as audio-sourced so AI knows to handle filler words/noise
       const taggedText = `[Audio transcripto] ${text}`;
@@ -781,8 +783,10 @@ export class WhatsAppRouterService {
         return;
       }
       const activeCoId = user.activeCompanyId || user.companyId;
-      const canAccess = activeCoId === freight.originCompanyId || activeCoId === freight.destCompanyId
-        || freight.assignments.some(a => a.transportCompanyId === activeCoId || a.driverId === user.id);
+      const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+      const allUserCompanies = [activeCoId, ...memberCompanyIds].filter(Boolean);
+      const canAccess = allUserCompanies.some(c => c === freight.originCompanyId || c === freight.destCompanyId)
+        || freight.assignments.some(a => allUserCompanies.includes(a.transportCompanyId) || a.driverId === user.id);
       if (!canAccess) {
         await this.wa.sendText(phone, 'No tiene acceso a este flete.');
         return;
@@ -1499,12 +1503,7 @@ export class WhatsAppRouterService {
       return;
     }
 
-    // Ensure shareToken exists for public tracking link (after access check)
-    if (!freight.shareToken) {
-      const token = crypto.randomUUID();
-      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken: token } });
-      (freight as any).shareToken = token;
-    }
+    // shareToken is only generated when explicitly requested via tracking/report link tools
 
     // Save activeContext so AI retains freight context after message trimming
     try {
@@ -1559,7 +1558,9 @@ export class WhatsAppRouterService {
     text += `👤 Transporte: ${transportLine}\n`;
     if (loadDate) text += `📅 Fecha: ${loadDate}${freight.loadTime ? ` ${freight.loadTime}` : ''}\n`;
     if (freight.notes) text += `📝 Obs: ${freight.notes}\n`;
-    text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/${freight.code}/ubicacion?s=${freight.shareToken}`;
+    if (freight.shareToken) {
+      text += `\n🗺️ Seguimiento disponible.\n${APP_URL}/${freight.code}/ubicacion?s=${freight.shareToken}`;
+    }
 
     // Determine pending actions based on user's active company role
     const buttons = this.getActionButtons(freight, user, activeCompanyId);
