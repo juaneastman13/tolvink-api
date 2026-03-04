@@ -534,9 +534,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch(() => {});
     });
 
-    // Forward as text to AI so Claude knows the user shared a location
-    const locationDesc = name || address || `${latitude}, ${longitude}`;
-    const textForAi = `[Ubicación compartida: ${locationDesc} (lat: ${latitude}, lng: ${longitude})]`;
+    // Forward as text to AI so Claude knows the user shared a location (no raw coords — policy)
+    const locationDesc = (name || address || 'ubicación').replace(/[\[\]]/g, '').slice(0, 100);
+    const textForAi = `[Ubicación compartida: ${locationDesc}]`;
     await this.handleAiChat(phone, user, textForAi);
   }
 

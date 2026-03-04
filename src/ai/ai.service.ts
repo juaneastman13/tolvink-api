@@ -142,8 +142,10 @@ export class AiService implements OnModuleDestroy {
     const companyType = this.resolveCompanyType(user);
     const systemPrompt = this.buildSystemPrompt(user, companyType);
 
+    // Cap message length to prevent context window abuse (5000 chars max)
+    const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
     // Preprocess: clean audio fillers, normalize whitespace
-    const cleanedMessage = this.preprocessMessage(userMessage);
+    const cleanedMessage = this.preprocessMessage(cappedMessage);
 
     // Load conversation history from session
     const state = (session?.flowState as any) || {};
@@ -164,15 +166,15 @@ export class AiService implements OnModuleDestroy {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
       const ctxFreight = state.activeContext?.lastFreightCode
-        ? ` El último flete consultado fue ${state.activeContext.lastFreightCode} (${state.activeContext.lastFreightSummary || ''}).`
+        ? ` El último flete consultado fue ${this.sanitizeForPrompt(state.activeContext.lastFreightCode)} (${this.sanitizeForPrompt(state.activeContext.lastFreightSummary || '')}).`
         : '';
       messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${safeName}" (${doc.type}).${ctxFreight} Si el usuario indica un código de flete o hace referencia al flete anterior, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
     }
 
-    // Inject active context (survives message trimming)
+    // Inject active context (survives message trimming) — sanitized to prevent injection
     if (state.activeContext?.lastFreightCode && !state.pendingDocument) {
       const ac = state.activeContext;
-      messageToSend = `[Contexto activo: último flete consultado ${ac.lastFreightCode} — ${ac.lastFreightSummary || ''}]\n\n${messageToSend}`;
+      messageToSend = `[Contexto activo: último flete consultado ${this.sanitizeForPrompt(ac.lastFreightCode)} — ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}]\n\n${messageToSend}`;
     }
 
     // Add user message
@@ -188,21 +190,27 @@ export class AiService implements OnModuleDestroy {
     // Initialize per-call side-effects accumulator (tools write here, merged at end)
     this._chatSideEffects.delete(session.id);
 
+    // Filter tools by role — don't expose admin/mutation tools to unauthorized roles
+    const filteredTools = this.getFilteredTools(user, companyType);
+
     try {
       while (loopCount < MAX_TOOL_LOOPS) {
         loopCount++;
 
         this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
-        response = await this.client.messages.create({
+        const apiCall = this.client.messages.create({
           model: MODEL_ID,
           max_tokens: MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-          tools: this.tools.map((t, i, arr) =>
+          tools: filteredTools.map((t, i, arr) =>
             i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t,
           ) as any,
           messages: currentMessages,
         });
+        // 45s timeout to prevent hanging requests
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Claude API timeout')), 45_000));
+        response = await Promise.race([apiCall, timeout]) as any;
         this.logger.log(`Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
 
         if (response.stop_reason === 'tool_use') {
@@ -323,8 +331,13 @@ export class AiService implements OnModuleDestroy {
 
   // ======================== SYSTEM PROMPT ================================
 
+  /** Strip newlines/control chars from user-controlled strings interpolated into system prompt */
+  private sanitizeForPrompt(s: string): string {
+    return s.replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
+  }
+
   private buildSystemPrompt(user: any, companyType: string): string {
-    const name = user.name?.split(' ')[0] || 'usuario';
+    const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
     const today = new Date().toISOString().split('T')[0];
 
     // Detect own fleet capability (works for both producers and plants with hasInternalFleet)
@@ -338,7 +351,7 @@ export class AiService implements OnModuleDestroy {
     const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
     const activeCoId = user.activeCompanyId || user.companyId;
     const activeMem = activeMemberships.find((m: any) => m.companyId === activeCoId);
-    const activeCoName = activeMem?.company?.name || user.company?.name || '';
+    const activeCoName = this.sanitizeForPrompt(activeMem?.company?.name || user.company?.name || '');
     const multiCompanyNote = activeMemberships.length > 1
       ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Este usuario pertenece a ${activeMemberships.length} empresas. Si solicita cambiar de empresa u operar con otra, usar switch_company. Sin companyId devuelve la lista; con companyId ejecuta el cambio.`
       : '';
@@ -913,6 +926,32 @@ FILTROS AVANZADOS:
 - Si un flete está en estado "borrador" (draft) y el usuario lo consulta, informar:
   "Este flete está en borrador y aún no fue enviado. Puede completarlo desde la plataforma web."
 - Plataforma web: ${APP_URL}`;
+  }
+
+  // ======================== ROLE-BASED TOOL FILTERING =====================
+
+  private static readonly CHOFER_TOOLS = new Set([
+    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
+    'confirm_finished', 'get_freight_detail', 'list_freights', 'generate_tracking_link',
+    'share_live_location', 'view_live_locations', 'request_location', 'confirm_action',
+  ]);
+
+  private static readonly ADMIN_ONLY_TOOLS = new Set([
+    'create_user', 'update_user_role', 'deactivate_user',
+  ]);
+
+  private getFilteredTools(user: any, companyType: string): any[] {
+    const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
+    const isAdmin = ['admin', 'platform_admin', 'gerente'].includes(user.role) ||
+      (user.memberships || []).some((m: any) => ['admin', 'gerente'].includes(m.role) && m.active);
+
+    if (isChofer && !isAdmin) {
+      return this.tools.filter(t => AiService.CHOFER_TOOLS.has(t.name));
+    }
+    if (!isAdmin) {
+      return this.tools.filter(t => !AiService.ADMIN_ONLY_TOOLS.has(t.name));
+    }
+    return this.tools;
   }
 
   // ======================== TOOL DEFINITIONS =============================
@@ -1739,7 +1778,7 @@ FILTROS AVANZADOS:
       dateFrom: input.dateFrom,
       dateTo: input.dateTo,
       grain: input.grain,
-      limit: 100,
+      limit: 50,
       page: 1,
     } as any);
 
@@ -1784,7 +1823,7 @@ FILTROS AVANZADOS:
       dateFrom: input.dateFrom,
       dateTo: input.dateTo,
       grain: input.grain,
-      limit: 500,
+      limit: 100,
       page: 1,
     } as any);
 
@@ -2753,6 +2792,12 @@ FILTROS AVANZADOS:
 
     if (!pending) {
       return JSON.stringify({ error: 'No hay una acción pendiente de confirmación.' });
+    }
+
+    // TTL: reject actions older than 5 minutes
+    const ACTION_TTL_MS = 5 * 60_000;
+    if (pending.createdAt && Date.now() - pending.createdAt > ACTION_TTL_MS) {
+      return JSON.stringify({ error: 'La acción pendiente expiró. Por favor, vuelva a solicitarla.' });
     }
 
     const preExecState = { ...oldState };
@@ -4148,8 +4193,8 @@ FILTROS AVANZADOS:
     }));
 
     const usersData = activeUsers.map(m => ({
-      id: m.user.id, name: m.user.name, email: m.user.email,
-      phone: m.user.phone, role: m.role, company: m.company.name,
+      id: m.user.id, name: m.user.name,
+      role: m.role, company: m.company.name,
     }));
 
     return this.storePendingSelection(session, items, {
@@ -4188,7 +4233,7 @@ FILTROS AVANZADOS:
     const driversData = (drivers as any[]).map((d: any) => {
       const truck = truckByDriver.get(d.id);
       return {
-        id: d.id, name: d.name, phone: d.phone,
+        id: d.id, name: d.name,
         assignedTruck: truck ? (truck.model ? `${truck.plate} (${truck.model})` : truck.plate) : null,
       };
     });
@@ -4488,7 +4533,7 @@ FILTROS AVANZADOS:
     summary: string,
   ): string {
     const effects = this._chatSideEffects.get(session.id) || {};
-    effects.pendingAction = { tool, params, summary };
+    effects.pendingAction = { tool, params, summary, createdAt: Date.now() };
     effects._pendingButtons = [
       { id: 'ai_confirm', title: 'CONFIRMAR' },
       { id: 'ai_cancel', title: 'CANCELAR' },
@@ -4757,10 +4802,12 @@ FILTROS AVANZADOS:
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
       },
     });
-    if (!freight) return { error: `No se encontró ${code}` };
+    // Unified error message prevents freight code enumeration
+    const ACCESS_DENIED = `No se encontró el flete ${code} o no tiene acceso.`;
+    if (!freight) return { error: ACCESS_DENIED };
 
     const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const memberCompanyIds = (user.memberships || []).filter((m: any) => m.active).map((m: any) => m.companyId);
     const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
     const freightCompanies = [
       freight.originCompanyId, freight.destCompanyId,
@@ -4769,7 +4816,7 @@ FILTROS AVANZADOS:
     const isDriver = freight.assignments.some((a: any) => a.driverId === user.id);
     const isCompanyUser = allUserCompanies.some((c: string) => freightCompanies.includes(c));
     if (!isDriver && !isCompanyUser) {
-      return { error: `No tiene acceso al flete ${code}` };
+      return { error: ACCESS_DENIED };
     }
     // Drivers without company access only see their own assignment
     if (isDriver && !isCompanyUser) {
