@@ -934,10 +934,12 @@ FILTROS AVANZADOS:
     'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
     'confirm_finished', 'get_freight_detail', 'list_freights', 'generate_tracking_link',
     'share_live_location', 'view_live_locations', 'request_location', 'confirm_action',
+    'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
+    'update_profile',
   ]);
 
   private static readonly ADMIN_ONLY_TOOLS = new Set([
-    'create_user', 'update_user_role', 'deactivate_user',
+    'create_user', 'update_user_role', 'deactivate_user', 'reactivate_user',
   ]);
 
   private getFilteredTools(user: any, companyType: string): any[] {
@@ -1188,11 +1190,10 @@ FILTROS AVANZADOS:
         properties: {
           name: { type: 'string', description: 'Nombre completo' },
           email: { type: 'string', description: 'Email del usuario' },
-          password: { type: 'string', description: 'Contraseña inicial' },
           phone: { type: 'string', description: 'Teléfono (opcional)' },
           role: { type: 'string', enum: ['admin', 'gerente', 'operario', 'chofer'], description: 'Rol: admin/gerente, operario, o chofer (default: operario)' },
         },
-        required: ['name', 'email', 'password'],
+        required: ['name', 'email'],
       },
     },
     // ---- Document attachment ----
@@ -2101,7 +2102,6 @@ FILTROS AVANZADOS:
       type: d.type,
       step: STEP_LABELS[d.step] || d.step || 'General',
       date: new Date(d.createdAt).toISOString().split('T')[0],
-      url: d.url,
     }));
 
     return JSON.stringify({ total: items.length, code: input.code, documents: items });
@@ -2315,7 +2315,7 @@ FILTROS AVANZADOS:
       membershipId: membership.id,
       targetUserId: membership.user.id,
       userName: membership.user.name,
-    }, `Reactivar usuario "${membership.user.name}" en su empresa`);
+    }, `Reactivar usuario "${membership.user.name}" en su empresa`, user);
   }
 
   // ---- Helper: store _pendingSelection for interactive list ----
@@ -2800,6 +2800,12 @@ FILTROS AVANZADOS:
       return JSON.stringify({ error: 'La acción pendiente expiró. Por favor, vuelva a solicitarla.' });
     }
 
+    // Company mismatch: reject if user switched company after staging
+    const currentCompanyId = user.activeCompanyId || user.companyId;
+    if (pending.stagedCompanyId && pending.stagedCompanyId !== currentCompanyId) {
+      return JSON.stringify({ error: 'Su empresa activa cambió desde que se preparó esta acción. Por favor, vuelva a solicitarla.' });
+    }
+
     const preExecState = { ...oldState };
     delete preExecState.pendingAction;
     delete preExecState._pendingButtons;
@@ -2954,8 +2960,11 @@ FILTROS AVANZADOS:
         }
 
         case 'create_user': {
-          const newUser = await this.adminService.createUser(params.dto, params.passwordHash);
-          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel } });
+          // Generate random password at confirm time — never stored in session
+          const randomPwd = require('crypto').randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
+          const pwdHash = await bcryptAi.hash(randomPwd, 10);
+          const newUser = await this.adminService.createUser(params.dto, pwdHash);
+          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel }, tempPassword: randomPwd });
           break;
         }
 
@@ -3020,6 +3029,15 @@ FILTROS AVANZADOS:
         }
 
         case 'reactivate_user': {
+          // Re-validate: membership belongs to caller's company and caller is admin
+          const reactivateCoId = user.activeCompanyId || user.companyId;
+          if (!this.isCallerAdminForCompany(user, reactivateCoId)) {
+            throw new Error('No tiene permisos de administrador para esta acción.');
+          }
+          const memberCheck = await this.prisma.userCompany.findFirst({
+            where: { id: params.membershipId, companyId: reactivateCoId, userId: params.targetUserId, active: false },
+          });
+          if (!memberCheck) throw new Error('Membresía no encontrada o ya fue modificada.');
           await this.prisma.userCompany.update({
             where: { id: params.membershipId },
             data: { active: true },
@@ -3385,14 +3403,17 @@ FILTROS AVANZADOS:
 
     // Map Spanish role names to Prisma UserRole enum (admin | operator | platform_admin)
     const inputRole = input.role || 'operario';
+    const validRoles = ['admin', 'gerente', 'operario', 'chofer'];
+    if (!validRoles.includes(inputRole)) {
+      return JSON.stringify({ error: `Rol inválido: ${inputRole}. Valores válidos: ${validRoles.join(', ')}` });
+    }
     const roleToEnum: Record<string, string> = {
       admin: 'admin', gerente: 'admin',
       operario: 'operator', chofer: 'operator',
     };
     const prismaRole = roleToEnum[inputRole] || 'operator';
 
-    // Hash password NOW so plaintext never sits in session flowState
-    const passwordHash = await bcryptAi.hash(input.password, 10);
+    // Password generated at confirm time — never stored in session flowState
 
     const dto: any = {
       name: input.name,
@@ -3407,7 +3428,7 @@ FILTROS AVANZADOS:
     };
 
     const summary = `Crear usuario "${input.name}" (${input.email}) con rol ${inputRole}`;
-    return this.stageAction(session, 'create_user', { dto, passwordHash, roleLabel: inputRole }, summary);
+    return this.stageAction(session, 'create_user', { dto, roleLabel: inputRole }, summary, user);
   }
 
   // ======================== DOCUMENT ATTACHMENT TOOL =======================
@@ -4045,7 +4066,7 @@ FILTROS AVANZADOS:
       truckId: input.truckId || null,
       driverId: input.driverId || null,
       plantCompanyId: actingCompanyId,
-    }, `Asignar transportista "${displayName}" a flete ${freight.code}`);
+    }, `Asignar transportista "${displayName}" a flete ${freight.code}`, user);
   }
 
   // ---- assign_truck_to_trip ----
@@ -4287,7 +4308,7 @@ FILTROS AVANZADOS:
       targetUserId: membership.user.id,
       userName: membership.user.name,
       newRole: input.newRole,
-    }, `Cambiar rol de "${membership.user.name}" a ${input.newRole}`);
+    }, `Cambiar rol de "${membership.user.name}" a ${input.newRole}`, user);
   }
 
   // ---- deactivate_user ----
@@ -4328,7 +4349,7 @@ FILTROS AVANZADOS:
       membershipId: membership.id,
       targetUserId: membership.user.id,
       userName: membership.user.name,
-    }, `Desactivar usuario "${membership.user.name}" de su empresa`);
+    }, `Desactivar usuario "${membership.user.name}" de su empresa`, user);
   }
 
   // ---- switch_company ----
@@ -4531,9 +4552,11 @@ FILTROS AVANZADOS:
     tool: string,
     params: Record<string, any>,
     summary: string,
+    user?: any,
   ): string {
     const effects = this._chatSideEffects.get(session.id) || {};
-    effects.pendingAction = { tool, params, summary, createdAt: Date.now() };
+    const stagedCompanyId = user ? (user.activeCompanyId || user.companyId) : null;
+    effects.pendingAction = { tool, params, summary, createdAt: Date.now(), stagedCompanyId };
     effects._pendingButtons = [
       { id: 'ai_confirm', title: 'CONFIRMAR' },
       { id: 'ai_cancel', title: 'CANCELAR' },
@@ -4560,7 +4583,7 @@ FILTROS AVANZADOS:
     const freight = result.freight;
     if (freight.status !== 'assigned') return JSON.stringify({ error: `Solo se puede autorizar en estado "assigned". Estado actual: "${freight.status}".` });
     if (!freight.useOwnFleet) return JSON.stringify({ error: 'Solo se puede autorizar fletes con flota propia.' });
-    return this.stageAction(session, 'authorize_freight', { freightId: freight.id, code: freight.code }, `Autorizar flete ${freight.code} (flota propia)`);
+    return this.stageAction(session, 'authorize_freight', { freightId: freight.id, code: freight.code }, `Autorizar flete ${freight.code} (flota propia)`, user);
   }
 
   // ---- approve_pending_change ----
@@ -4766,14 +4789,16 @@ FILTROS AVANZADOS:
 
   // ---- update_profile ----
   private async toolUpdateProfile(input: any, user: any, session: any): Promise<string> {
+    // Block email/phone changes via WhatsApp for security — require web
+    if (input.email || input.phone) {
+      return JSON.stringify({ error: 'El email y teléfono solo se pueden cambiar desde la plataforma web por seguridad.' });
+    }
     const changes: string[] = [];
     if (input.name) changes.push(`nombre: ${input.name}`);
-    if (input.email) changes.push(`email: ${input.email}`);
-    if (input.phone) changes.push(`teléfono: ${input.phone}`);
-    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios. Indique al menos uno: name, email o phone.' });
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios. Indique el nombre que desea actualizar.' });
     return this.stageAction(session, 'update_profile', {
-      userId: user.id, name: input.name, email: input.email, phone: input.phone,
-    }, `Editar perfil: ${changes.join(', ')}`);
+      userId: user.id, name: input.name,
+    }, `Editar perfil: ${changes.join(', ')}`, user);
   }
 
   // ---- generate_batch_report_link ----

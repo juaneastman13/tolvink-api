@@ -56,6 +56,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private readonly MAX_PHONE_LOCKS = 10000;
   /** Cooldown for "not registered" replies — avoids spamming unregistered phones */
   private unregisteredCooldown = new Map<string, number>();
+  /** Early per-phone message rate limit — prevents DB query flood before AI rate limit kicks in */
+  private messageRate = new Map<string, { count: number; resetAt: number }>();
   /** Periodic cleanup timer for unbounded maps */
   private mapCleanupTimer: ReturnType<typeof setInterval>;
 
@@ -87,6 +89,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       for (const [k, v] of this.unregisteredCooldown) {
         if (v < now) this.unregisteredCooldown.delete(k);
       }
+      for (const [k, v] of this.messageRate) {
+        if (now > v.resetAt) this.messageRate.delete(k);
+      }
       // phoneLocks: resolved promises are cleaned by their .finally() handlers
     }, 300_000);
   }
@@ -97,6 +102,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     this.freightCountsCache.clear();
     this.phoneLocks.clear();
     this.unregisteredCooldown.clear();
+    this.messageRate.clear();
   }
 
   // ======================== MAIN ENTRY POINT ============================
@@ -122,6 +128,21 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async _handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
+    // Early per-phone rate limit — 30 msgs/min — prevents DB query flood
+    const now = Date.now();
+    const rate = this.messageRate.get(phone);
+    if (rate && now < rate.resetAt) {
+      if (rate.count >= 30) return; // silently drop
+      rate.count++;
+    } else {
+      this.messageRate.set(phone, { count: 1, resetAt: now + 60_000 });
+    }
+    // Hard cap on messageRate map
+    if (this.messageRate.size > 5000) {
+      const first = this.messageRate.keys().next().value;
+      if (first) this.messageRate.delete(first);
+    }
+
     try {
       const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
       const safePayload = type === 'text' ? `text(${(payload?.body?.length || 0)} chars)`
@@ -762,8 +783,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       const publicUrl = await this.wa.uploadToStorage(buffer, storagePath, mimeType);
       this.logger.log(`Media uploaded to storage: ${publicUrl}`);
 
-      // 3. Determine display name
-      const displayName = filename || `${type === 'image' ? 'foto' : 'documento'}${ext}`;
+      // 3. Determine display name (sanitize to prevent prompt injection via filename)
+      const rawName = filename || `${type === 'image' ? 'foto' : 'documento'}${ext}`;
+      const displayName = rawName.replace(/[\[\]\x00-\x1f]/g, '').slice(0, 60);
       const docType = type === 'image' ? 'photo' : 'document';
 
       // 4. Store pendingDocument in AI session — reuse cached session if valid
@@ -795,9 +817,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      // 5. Forward to AI with context
-      const contextMsg = caption
-        ? `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${caption}`
+      // 5. Forward to AI with context (sanitize caption to prevent prompt injection)
+      const safeCaption = caption.replace(/[\[\]\x00-\x1f]/g, '').slice(0, 500);
+      const contextMsg = safeCaption
+        ? `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${safeCaption}`
         : `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}]`;
 
       await this.handleAiChat(phone, user, contextMsg);
@@ -958,8 +981,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
     } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant'].includes(type)) {
-      // Generic AI list selection — feed back to AI as synthetic message
-      await this.handleAiChat(phone, user, `[Seleccionó: ${title} (id: ${id})]`);
+      // Generic AI list selection — feed back to AI as synthetic message (sanitize to prevent injection)
+      const safeTitle = (title || '').replace(/[\[\]\x00-\x1f]/g, '').slice(0, 50);
+      const safeId = (id || '').replace(/[^\w\-.:]/g, '').slice(0, 80);
+      await this.handleAiChat(phone, user, `[Seleccionó: ${safeTitle} (id: ${safeId})]`);
     } else {
       await this.handleButtonReply(phone, user, listId, title);
     }
