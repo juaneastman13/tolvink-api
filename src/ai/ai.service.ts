@@ -64,10 +64,17 @@ export class AiService implements OnModuleDestroy {
         if (k) this._requestLocationCooldowns.delete(k); else break;
       }
     }
-    // Clean stale side effects (>10 min old, not all)
+    // Clean stale side effects (>10 min old, not all) + hard cap
     for (const [k, v] of this._chatSideEffects) {
       if (v._ts && now - v._ts > 10 * 60 * 1000) this._chatSideEffects.delete(k);
       else if (!v._ts) this._chatSideEffects.delete(k); // legacy entries without timestamp
+    }
+    if (this._chatSideEffects.size > 5_000) {
+      const iter = this._chatSideEffects.keys();
+      while (this._chatSideEffects.size > 4_000) {
+        const k = iter.next().value;
+        if (k) this._chatSideEffects.delete(k); else break;
+      }
     }
   }, 5 * 60 * 1000);
 
@@ -119,9 +126,16 @@ export class AiService implements OnModuleDestroy {
     } else {
       aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
     }
-    // Cleanup stale entries
+    // Cleanup stale entries + hard cap
     for (const [k, v] of aiRateMap) {
       if (now > v.resetAt) aiRateMap.delete(k);
+    }
+    if (aiRateMap.size > 10_000) {
+      const iter = aiRateMap.keys();
+      while (aiRateMap.size > 8_000) {
+        const k = iter.next().value;
+        if (k) aiRateMap.delete(k); else break;
+      }
     }
 
     const synUser = this.buildSyntheticUser(user);
