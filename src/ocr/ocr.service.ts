@@ -13,18 +13,24 @@ const SYSTEM_PROMPT = `Sos un asistente de OCR especializado en documentos de tr
 Analizá la imagen y extraé todos los datos relevantes en formato JSON estructurado.
 Respondé SOLO con JSON válido, sin texto adicional, sin markdown code fences.
 Si no podés leer algún campo, poné null en su valor.
-Incluí siempre un campo "confianza" de 0 a 1 indicando qué tan seguro estás de la extracción.`;
+Incluí siempre un campo "confianza" de 0 a 1 indicando qué tan seguro estás de la extracción.
+REGLA IMPORTANTE: Nunca agrupes varios valores en un solo campo separados por ";" o ",". Cada dato debe tener su propio campo individual. Por ejemplo, en vez de "origen": "Mercedes; Soriano" usá "origenLocalidad": "Mercedes", "origenProvincia": "Soriano". Los objetos dentro de "datos" deben ser siempre valores planos (string, number, null), nunca objetos anidados ni arrays (excepto items en remitos).`;
 
 const DOC_PROMPTS: Record<string, string> = {
-  carta_porte: `Extraé de esta carta de porte los siguientes datos en JSON:
+  carta_porte: `Extraé de esta carta de porte los siguientes datos en JSON.
+Cada campo debe ser un valor individual (nunca agrupar varios datos en un campo):
 {
   "tipoDocumento": "carta_porte",
   "datos": {
     "numero": "número de carta de porte",
     "ctg": "código de trazabilidad de granos",
     "fecha": "fecha del documento (YYYY-MM-DD)",
-    "origen": { "localidad": "", "provincia": "", "establecimiento": "" },
-    "destino": { "planta": "", "localidad": "", "provincia": "" },
+    "origenLocalidad": "localidad de origen",
+    "origenProvincia": "provincia de origen",
+    "origenEstablecimiento": "nombre del establecimiento de origen",
+    "destinoPlanta": "nombre de la planta de destino",
+    "destinoLocalidad": "localidad de destino",
+    "destinoProvincia": "provincia de destino",
     "grano": "tipo de grano",
     "pesoNeto": 0,
     "pesoBruto": 0,
@@ -68,10 +74,11 @@ const DOC_PROMPTS: Record<string, string> = {
 }`,
 
   general: `Detectá qué tipo de documento es esta imagen y extraé todos los datos relevantes.
+Cada dato debe tener su propio campo individual — nunca agrupes múltiples valores en un campo separados por ";" o ",".
 Respondé con JSON:
 {
   "tipoDocumento": "tipo detectado (carta_porte, remito, pesaje, u otro)",
-  "datos": { ... todos los campos que puedas extraer ... },
+  "datos": { ... un campo por cada dato extraído, valores planos (string/number/null) ... },
   "confianza": 0.0
 }`,
 };
@@ -166,6 +173,20 @@ export class OcrService {
     }
   }
 
+  /** Flatten nested objects in datos: { origen: { localidad: "X" } } → { origenLocalidad: "X" } */
+  private flattenDatos(datos: Record<string, any>, prefix = ''): Record<string, any> {
+    const result: Record<string, any> = {};
+    for (const [key, val] of Object.entries(datos)) {
+      const fullKey = prefix ? `${prefix}${key.charAt(0).toUpperCase()}${key.slice(1)}` : key;
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        Object.assign(result, this.flattenDatos(val, fullKey));
+      } else {
+        result[fullKey] = val;
+      }
+    }
+    return result;
+  }
+
   /** Parse Claude response to structured OcrResult */
   private parseResponse(raw: string, docType?: DocType): OcrResult {
     // Strip markdown fences if present
@@ -176,9 +197,10 @@ export class OcrService {
 
     try {
       const parsed = JSON.parse(cleaned);
+      const rawDatos = parsed.datos || parsed;
       return {
         tipoDocumento: parsed.tipoDocumento || docType || 'desconocido',
-        datos: parsed.datos || parsed,
+        datos: this.flattenDatos(rawDatos),
         confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : 0.5,
         textoOriginal: raw.slice(0, 2000),
       };
