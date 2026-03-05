@@ -34,7 +34,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       }
     } else {
       // Handle non-Error thrown values (strings, plain objects, etc.)
-      const desc = typeof exception === 'string' ? exception : JSON.stringify(exception);
+      const desc = typeof exception === 'string' ? exception.slice(0, 200) : '[non-Error object]';
       this.logger.error(`Unhandled non-Error: ${desc}`);
       if (process.env.SENTRY_DSN) {
         Sentry.captureMessage(`Non-Error thrown: ${desc}`, {

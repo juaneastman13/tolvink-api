@@ -135,7 +135,7 @@ export class OcrService {
     const textBlock = (response as any).content?.find((b: any) => b.type === 'text');
     const raw = textBlock?.text || '';
 
-    this.logger.log(`OCR response: ${raw.slice(0, 200)}`);
+    this.logger.log(`OCR response received: ${raw.length} chars`);
 
     return this.parseResponse(raw, docType);
   }
@@ -177,13 +177,14 @@ export class OcrService {
     return this.analyze(buffer, mimeType, docType);
   }
 
-  /** Validate URL is from our Supabase instance */
+  /** Validate URL is from our Supabase instance (SSRF protection) */
   private validateUrl(url: string): void {
     if (!this.supabaseUrl) throw new BadRequestException('Configuración de storage incompleta');
     try {
       const parsed = new URL(url);
       const expected = new URL(this.supabaseUrl);
-      if (parsed.hostname !== expected.hostname) {
+      // Compare full origin (protocol + hostname + port) — not just hostname
+      if (parsed.origin !== expected.origin) {
         throw new BadRequestException('URL no permitida — solo se aceptan archivos de Tolvink');
       }
       if (parsed.protocol !== 'https:') {
@@ -197,10 +198,11 @@ export class OcrService {
 
   /** Flatten nested objects in datos: { origen: { localidad: "X" } } → { origenLocalidad: "X" } */
   private flattenDatos(datos: Record<string, any>, prefix = '', depth = 0): Record<string, any> {
+    if (depth > 3 || Object.keys(datos).length > 100) return datos;
     const result: Record<string, any> = {};
     for (const [key, val] of Object.entries(datos)) {
       const fullKey = prefix ? `${prefix}${key.charAt(0).toUpperCase()}${key.slice(1)}` : key;
-      if (val && typeof val === 'object' && !Array.isArray(val) && depth < 5) {
+      if (val && typeof val === 'object' && !Array.isArray(val) && depth < 3) {
         Object.assign(result, this.flattenDatos(val, fullKey, depth + 1));
       } else {
         result[fullKey] = val;
@@ -223,11 +225,11 @@ export class OcrService {
       return {
         tipoDocumento: parsed.tipoDocumento || docType || 'desconocido',
         datos: this.flattenDatos(rawDatos),
-        confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : (() => { this.logger.warn('OCR response missing confianza field — defaulting to 0.5'); return 0.5; })(),
+        confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : 0.5,
         textoOriginal: raw.slice(0, 2000),
       };
     } catch {
-      this.logger.warn(`OCR: failed to parse JSON response: ${raw.slice(0, 200)}`);
+      this.logger.warn(`OCR: failed to parse JSON response (${raw.length} chars)`);
       return {
         tipoDocumento: docType || 'desconocido',
         datos: { textoExtraido: raw.slice(0, 3000) },

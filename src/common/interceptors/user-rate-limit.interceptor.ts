@@ -20,10 +20,17 @@ export class UserRateLimitInterceptor implements NestInterceptor {
 
     const now = Date.now();
 
-    // Periodic cleanup (every 5 min)
-    if (now - this.lastCleanup > 300000) {
+    // Periodic cleanup (every 5 min) + hard cap at 10k entries
+    if (now - this.lastCleanup > 300000 || this.store.size > 10_000) {
       for (const [k, v] of this.store) {
         if (now > v.resetAt) this.store.delete(k);
+      }
+      if (this.store.size > 10_000) {
+        const iter = this.store.keys();
+        while (this.store.size > 8_000) {
+          const k = iter.next().value;
+          if (k) this.store.delete(k); else break;
+        }
       }
       this.lastCleanup = now;
     }

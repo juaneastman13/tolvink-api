@@ -118,7 +118,7 @@ async function bootstrap() {
     maxAge: 86400,
   });
 
-  // CSRF protection — validate Origin header on state-changing requests
+  // CSRF protection — validate Origin/Referer on state-changing requests
   // Skip webhooks (Meta WhatsApp) and analytics (fire-and-forget)
   const csrfSkipPaths = ['/api/whatsapp/', '/api/analytics/'];
   const allowedOrigins = new Set(corsOrigins);
@@ -126,10 +126,21 @@ async function bootstrap() {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       if (csrfSkipPaths.some(p => req.url?.startsWith(p))) return next();
       const origin = req.headers['origin'];
-      // If Origin header is present and doesn't match whitelist, reject
-      // (GET/HEAD/OPTIONS are safe; missing Origin = same-origin or non-browser client)
-      if (origin && !allowedOrigins.has(origin)) {
-        return res.status(403).json({ message: 'Origin not allowed' });
+      if (origin) {
+        if (!allowedOrigins.has(origin)) {
+          return res.status(403).json({ message: 'Origin not allowed' });
+        }
+      } else {
+        // Fallback: check Referer when Origin is absent
+        const referer = req.headers['referer'];
+        if (referer) {
+          try {
+            const refOrigin = new URL(referer).origin;
+            if (!allowedOrigins.has(refOrigin)) {
+              return res.status(403).json({ message: 'Origin not allowed' });
+            }
+          } catch { /* malformed referer — allow (non-browser client) */ }
+        }
       }
     }
     next();

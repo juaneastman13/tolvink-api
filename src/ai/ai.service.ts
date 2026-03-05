@@ -195,9 +195,16 @@ export class AiService implements OnModuleDestroy {
     // Filter tools by role — don't expose admin/mutation tools to unauthorized roles
     const filteredTools = this.getFilteredTools(user, companyType);
 
+    // Global timeout for entire tool execution loop (H1: prevent hanging)
+    const loopDeadline = Date.now() + 90_000; // 90s max for all loops
+
     try {
       while (loopCount < MAX_TOOL_LOOPS) {
         loopCount++;
+        if (Date.now() > loopDeadline) {
+          this.logger.warn(`Tool loop deadline exceeded after ${loopCount} iterations`);
+          break;
+        }
 
         this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         const apiCall = this.client.messages.create({
@@ -333,9 +340,14 @@ export class AiService implements OnModuleDestroy {
 
   // ======================== SYSTEM PROMPT ================================
 
-  /** Strip newlines/control chars from user-controlled strings interpolated into system prompt */
+  /** Strip newlines/control chars/prompt delimiters from user-controlled strings interpolated into system prompt */
   private sanitizeForPrompt(s: string): string {
-    return s.replace(/[\r\n\x00-\x1F]/g, ' ').trim().slice(0, 100);
+    return s
+      .replace(/[\r\n\x00-\x1F]/g, ' ')
+      .replace(/[\[\]{}]/g, '')   // Strip bracket/brace delimiters to prevent prompt injection
+      .replace(/[<>]/g, '')       // Strip angle brackets
+      .trim()
+      .slice(0, 100);
   }
 
   private buildSystemPrompt(user: any, companyType: string): string {
@@ -1783,10 +1795,14 @@ FILTROS AVANZADOS:
       }
     } catch (e) {
       this.logger.error(`Tool ${toolName} error: ${e.message}`);
-      // H2: Don't leak raw error messages to AI/user
-      const safeMsg = /no encontrad|no tiene acceso|no se puede|solo.*pueden|no.*permiso/i.test(e.message || '')
-        ? e.message
-        : 'Error al procesar la solicitud.';
+      // Don't leak raw error messages to AI/user — explicit safe-pattern allowlist
+      const SAFE_PATTERNS = [
+        /no (se )?encontr/i, /no tiene acceso/i, /no se puede/i, /solo.*pueden/i,
+        /no.*permiso/i, /ya existe/i, /no pertenec/i, /flete.*no/i, /campo.*no/i,
+        /lote.*no/i, /camión.*no/i, /código.*requerido/i, /inválid/i,
+      ];
+      const isSafe = SAFE_PATTERNS.some(p => p.test(e.message || ''));
+      const safeMsg = isSafe ? e.message : 'Error al procesar la solicitud.';
       return JSON.stringify({ error: safeMsg });
     }
   }
@@ -2994,10 +3010,11 @@ FILTROS AVANZADOS:
           const randomPwd = require('crypto').randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
           const pwdHash = await bcryptAi.hash(randomPwd, 10);
           const newUser = await this.adminService.createUser(params.dto, pwdHash);
-          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel }, tempPassword: '***enviada al usuario***' });
-          // Send temp password directly via WhatsApp to new user (if phone available), never store in AI history
+          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel } });
+          // Send password reset link instead of plaintext password (C1: never send passwords via WhatsApp)
           if (params.dto?.phone) {
-            this.wa.sendText(params.dto.phone, `Tu contraseña temporal de Tolvink: ${randomPwd}\nCambiala al iniciar sesión.`).catch(e => this.logger.warn(`Failed to send temp password via WA to ${params.dto.phone}: ${e.message}`));
+            const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
+            this.wa.sendText(params.dto.phone, `¡Bienvenido a Tolvink! Tu cuenta fue creada.\n\nPara configurar tu contraseña, ingresá a:\n${frontendUrl}/reset-password\n\nUsá tu email o teléfono para identificarte.`).catch(e => this.logger.warn(`Failed to send welcome WA to ${params.dto.phone}: ${e.message}`));
           }
           break;
         }
@@ -3663,7 +3680,7 @@ FILTROS AVANZADOS:
     const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
     if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
-    const token = createSignedToken({ uid: user.id, cid: companyId }, secret, 1440); // 24h
+    const token = createSignedToken({ uid: user.id, cid: companyId, purpose: 'daily_map' }, secret, 1440); // 24h
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const url = `${frontendUrl}/daily-map?t=${token}`;
@@ -3711,7 +3728,7 @@ FILTROS AVANZADOS:
       : companyType.includes('plant') ? 'plant' : 'producer';
 
     const token = createSignedToken(
-      { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario' },
+      { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario', purpose: 'live_location' },
       secret,
       120, // 2h
     );
@@ -3753,7 +3770,7 @@ FILTROS AVANZADOS:
     if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
     const token = createSignedToken(
-      { uid: user.id, cid: userCompanyId, fid: freight.id },
+      { uid: user.id, cid: userCompanyId, fid: freight.id, purpose: 'view_locations' },
       secret,
       120, // 2h
     );

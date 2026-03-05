@@ -7,7 +7,10 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 
-const DUMMY_HASH = '$2b$10$X4kv7j5ZcG39WgogSl16aurY0r1YFTRBCG2yvhJMubXTdWcN4xOey';
+// Pre-computed valid bcrypt hash for constant-time comparison against non-existent users
+let DUMMY_HASH = '$2b$10$X4kv7j5ZcG39WgogSl16aurY0r1YFTRBCG2yvhJMubXTdWcN4xOey';
+// Generate fresh dummy hash at startup (async, replaces static one)
+(async () => { try { DUMMY_HASH = await require('bcryptjs').hash(require('crypto').randomBytes(16).toString('hex'), 10); } catch {} })();
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;

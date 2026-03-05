@@ -36,8 +36,8 @@ export class FreightsController {
     @Query('limit') limit?: string,
     @Query('company') company?: string,
   ) {
-    const parsedPage = page ? Math.min(parseInt(page), 10000) : undefined;
-    const parsedLimit = limit ? parseInt(limit) : undefined;
+    const parsedPage = page ? Math.min(Math.max(1, parseInt(page) || 1), 200) : undefined;
+    const parsedLimit = limit ? Math.min(Math.max(1, parseInt(limit) || 20), 50) : undefined;
     return this.service.findAll(user, {
       status,
       page: Number.isFinite(parsedPage) ? parsedPage : undefined,

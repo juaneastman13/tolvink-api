@@ -31,7 +31,8 @@ export class LoggingInterceptor implements NestInterceptor {
         error: (err) => {
           const ms = Date.now() - start;
           const status = err?.status || err?.getStatus?.() || 500;
-          this.logger.warn(`${method} ${url} ${status} ${ms}ms uid=${userId} err=${err?.message}`);
+          const errMsg = (err?.message || '').slice(0, 100).replace(/[^\w\s.\-:]/g, '');
+          this.logger.warn(`${method} ${url} ${status} ${ms}ms uid=${userId} err=${errMsg}`);
         },
       }),
     );
