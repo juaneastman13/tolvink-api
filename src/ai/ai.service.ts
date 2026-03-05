@@ -4907,7 +4907,7 @@ FILTROS AVANZADOS:
       return JSON.stringify(result);
     } catch (e: any) {
       this.logger.warn(`OCR analyze failed: ${e.message}`);
-      return JSON.stringify({ error: `Error al analizar el documento: ${e.message}` });
+      return JSON.stringify({ error: 'Error al analizar el documento. Intentá de nuevo o con otra imagen.' });
     }
   }
 

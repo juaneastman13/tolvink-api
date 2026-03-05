@@ -2725,6 +2725,15 @@ export class FreightsService {
   // ======================== SAVE OCR DATA ================================
 
   async saveOcrData(freightId: string, docId: string, ocrData: any, user: any) {
+    // Validate ocrData shape and size
+    if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
+      throw new BadRequestException('ocrData debe ser un objeto JSON');
+    }
+    const serialized = JSON.stringify(ocrData);
+    if (serialized.length > 50_000) {
+      throw new BadRequestException('ocrData demasiado grande (máx 50KB)');
+    }
+
     const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
     return this.prisma.$transaction(async (tx) => {

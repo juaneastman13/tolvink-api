@@ -144,10 +144,17 @@ export class OcrService {
   async analyzeFromUrl(url: string, docType?: DocType): Promise<OcrResult> {
     this.validateUrl(url);
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     if (!res.ok) throw new BadRequestException(`No se pudo descargar la imagen (HTTP ${res.status})`);
 
-    const contentType = res.headers.get('content-type') || 'image/jpeg';
+    // Check Content-Length before buffering to prevent memory exhaustion
+    const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_BUFFER_SIZE) {
+      throw new BadRequestException(`Imagen demasiado grande (${Math.round(contentLength / 1024 / 1024)}MB, máx 10MB)`);
+    }
+
+    const contentType = res.headers.get('content-type');
+    if (!contentType) throw new BadRequestException('El servidor no devolvió Content-Type — no se puede determinar el tipo de archivo');
     const mimeType = contentType.split(';')[0].trim();
     const arrayBuf = await res.arrayBuffer();
     const buffer = Buffer.from(arrayBuf);
@@ -174,12 +181,12 @@ export class OcrService {
   }
 
   /** Flatten nested objects in datos: { origen: { localidad: "X" } } → { origenLocalidad: "X" } */
-  private flattenDatos(datos: Record<string, any>, prefix = ''): Record<string, any> {
+  private flattenDatos(datos: Record<string, any>, prefix = '', depth = 0): Record<string, any> {
     const result: Record<string, any> = {};
     for (const [key, val] of Object.entries(datos)) {
       const fullKey = prefix ? `${prefix}${key.charAt(0).toUpperCase()}${key.slice(1)}` : key;
-      if (val && typeof val === 'object' && !Array.isArray(val)) {
-        Object.assign(result, this.flattenDatos(val, fullKey));
+      if (val && typeof val === 'object' && !Array.isArray(val) && depth < 5) {
+        Object.assign(result, this.flattenDatos(val, fullKey, depth + 1));
       } else {
         result[fullKey] = val;
       }
@@ -201,7 +208,7 @@ export class OcrService {
       return {
         tipoDocumento: parsed.tipoDocumento || docType || 'desconocido',
         datos: this.flattenDatos(rawDatos),
-        confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : 0.5,
+        confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : (() => { this.logger.warn('OCR response missing confianza field — defaulting to 0.5'); return 0.5; })(),
         textoOriginal: raw.slice(0, 2000),
       };
     } catch {

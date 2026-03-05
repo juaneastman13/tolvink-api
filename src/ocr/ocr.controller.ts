@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { OcrService } from './ocr.service';
@@ -11,7 +11,7 @@ export class OcrController {
 
   @Post('analyze')
   @Throttle({ default: { ttl: 60000, limit: 20 } })
-  async analyze(@Body() dto: AnalyzeDocumentDto, @Req() req: any) {
+  async analyze(@Body() dto: AnalyzeDocumentDto) {
     return this.ocrService.analyzeFromUrl(dto.url, dto.docType);
   }
 }
