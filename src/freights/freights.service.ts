@@ -352,6 +352,7 @@ export class FreightsService {
         include: {
           items: true,
           originLot: { select: { id: true, name: true } },
+          field: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
           originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
           destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
