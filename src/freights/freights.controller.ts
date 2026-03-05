@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto } from './freights.dto';
@@ -346,5 +347,18 @@ export class FreightsController {
     @CurrentUser() user: any,
   ) {
     return this.service.deleteDocument(id, docId, user);
+  }
+
+  @Patch(':id/documents/:docId/ocr')
+  @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 20 } })
+  @ApiOperation({ summary: 'Guardar datos OCR de un documento' })
+  saveOcrData(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+    @Body('ocrData') ocrData: any,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.saveOcrData(id, docId, ocrData, user);
   }
 }

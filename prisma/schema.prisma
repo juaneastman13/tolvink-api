@@ -465,6 +465,7 @@ model FreightDocument {
   type         String        @db.VarChar(50)
   step         DocumentStep?
   uploadedById String        @map("uploaded_by_id")
+  ocrData      Json?         @map("ocr_data")
   createdAt    DateTime      @default(now()) @map("created_at")
 
   freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
