@@ -119,9 +119,12 @@ async function bootstrap() {
   });
 
   // CSRF protection — validate Origin header on state-changing requests
+  // Skip webhooks (Meta WhatsApp) and analytics (fire-and-forget)
+  const csrfSkipPaths = ['/api/whatsapp/', '/api/analytics/'];
   const allowedOrigins = new Set(corsOrigins);
   app.use((req: any, res: any, next: any) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      if (csrfSkipPaths.some(p => req.url?.startsWith(p))) return next();
       const origin = req.headers['origin'];
       // If Origin header is present and doesn't match whitelist, reject
       // (GET/HEAD/OPTIONS are safe; missing Origin = same-origin or non-browser client)
