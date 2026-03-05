@@ -18,6 +18,7 @@ import { NotificationModule } from './notifications/notification.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SseModule } from './sse/sse.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { OcrModule } from './ocr/ocr.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     AnalyticsModule,
     SseModule,
     WhatsAppModule,
+    OcrModule,
   ],
   controllers: [
     CatalogController,

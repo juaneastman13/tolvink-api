@@ -11,6 +11,7 @@ import { FieldsService } from '../fields/fields.service';
 import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { OcrService } from '../ocr/ocr.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
@@ -86,6 +87,7 @@ export class AiService implements OnModuleDestroy {
     private fieldsService: FieldsService,
     private trucksService: TrucksService,
     private adminService: AdminService,
+    private ocrService: OcrService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -935,7 +937,7 @@ FILTROS AVANZADOS:
     'confirm_finished', 'get_freight_detail', 'list_freights', 'generate_tracking_link',
     'share_live_location', 'view_live_locations', 'request_location', 'confirm_action',
     'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
-    'update_profile',
+    'update_profile', 'ocr_analyze',
   ]);
 
   private static readonly ADMIN_ONLY_TOOLS = new Set([
@@ -1689,6 +1691,22 @@ FILTROS AVANZADOS:
         required: [],
       },
     },
+    {
+      name: 'ocr_analyze',
+      description: 'Analiza una imagen de documento (carta de porte, remito, ticket de pesaje) y extrae datos estructurados usando OCR. Útil cuando el usuario envía una foto de un documento y quiere extraer la información. Requiere la URL del documento previamente subido.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          url: { type: 'string', description: 'URL pública de la imagen en Supabase Storage' },
+          docType: {
+            type: 'string',
+            enum: ['carta_porte', 'remito', 'pesaje', 'general'],
+            description: 'Tipo de documento. Si no se sabe, usar "general" para detección automática.',
+          },
+        },
+        required: ['url'],
+      },
+    },
   ];
 
   // ======================== TOOL EXECUTION ===============================
@@ -1760,6 +1778,7 @@ FILTROS AVANZADOS:
         case 'create_driver': return await this.toolCreateDriver(input, user, session);
         case 'update_profile': return await this.toolUpdateProfile(input, user, session);
         case 'generate_batch_report_link': return await this.toolGenerateBatchReportLink(input, user);
+        case 'ocr_analyze': return await this.toolOcrAnalyze(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
       }
     } catch (e) {
@@ -2423,7 +2442,7 @@ FILTROS AVANZADOS:
         : undefined,
       // Hide internal notes from pure transporters/drivers
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
-      link: `${APP_URL}/freights/${freight.id}`,
+      link: `${APP_URL}/freight/${freight.id}`,
       mapLink,
     });
   }
@@ -2662,10 +2681,29 @@ FILTROS AVANZADOS:
 
   // ---- confirm_create_freight ----
   private async toolConfirmCreateFreight(user: any, synUser: any, session: any): Promise<string> {
-    // Reload session from DB to get pendingFreight saved by prepare_freight
-    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const state = (freshSession?.flowState as any) || {};
-    const pending = state.pendingFreight;
+    // Atomic consume: capture old state via CTE, then clear pendingFreight.
+    // Prevents double-creation from concurrent requests.
+    const rows = await this.prisma.$queryRaw<any[]>`
+      WITH old AS (
+        SELECT "id", "flow_state"
+        FROM "whatsapp_sessions"
+        WHERE "id" = ${session.id}
+          AND "flow_state" ? 'pendingFreight'
+        FOR UPDATE
+      )
+      UPDATE "whatsapp_sessions" s
+      SET "flow_state" = s."flow_state" #- '{pendingFreight}'
+      FROM old
+      WHERE s."id" = old."id"
+      RETURNING old."flow_state" AS "old_state"
+    `;
+
+    if (!rows.length) {
+      return JSON.stringify({ error: 'No hay un flete pendiente de confirmación. Primero usa prepare_freight.' });
+    }
+
+    const oldState = rows[0].old_state || {};
+    const pending = oldState.pendingFreight;
 
     this.logger.log(`confirm_create_freight — pendingFreight: ${pending ? JSON.stringify(pending).slice(0, 200) : 'NULL'}`);
 
@@ -2746,20 +2784,12 @@ FILTROS AVANZADOS:
     const freight = await this.freights.create(dto, producerSynUser);
     this.logger.log(`Freight created: ${(freight as any).code}`);
 
-    // Clear pending freight — re-read session to avoid overwriting aiMessages updated by chat()
-    const freshSess = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const latestState = (freshSess?.flowState as any) || {};
-    await this.prisma.whatsAppSession.update({
-      where: { id: session.id },
-      data: {
-        flowState: { ...latestState, pendingFreight: null },
-      },
-    });
+    // pendingFreight already cleared atomically by the CTE above
 
     return JSON.stringify({
       status: 'created',
       code: (freight as any).code,
-      link: `${APP_URL}/freights/${(freight as any).id}`,
+      link: `${APP_URL}/freight/${(freight as any).id}`,
     });
   }
 
@@ -2964,7 +2994,11 @@ FILTROS AVANZADOS:
           const randomPwd = require('crypto').randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
           const pwdHash = await bcryptAi.hash(randomPwd, 10);
           const newUser = await this.adminService.createUser(params.dto, pwdHash);
-          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel }, tempPassword: randomPwd });
+          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel }, tempPassword: '***enviada al usuario***' });
+          // Send temp password directly via WhatsApp to new user (if phone available), never store in AI history
+          if (params.dto?.phone) {
+            this.wa.sendText(params.dto.phone, `Tu contraseña temporal de Tolvink: ${randomPwd}\nCambiala al iniciar sesión.`).catch(e => this.logger.warn(`Failed to send temp password via WA to ${params.dto.phone}: ${e.message}`));
+          }
           break;
         }
 
@@ -3010,7 +3044,7 @@ FILTROS AVANZADOS:
           if (orig.originLat != null && orig.originLng != null) { createDto.overrideOriginLat = orig.originLat; createDto.overrideOriginLng = orig.originLng; }
           if (orig.destLat != null && orig.destLng != null) { createDto.overrideDestLat = orig.destLat; createDto.overrideDestLng = orig.destLng; }
           const newFreight = await this.freights.create(createDto, producerSynUser);
-          result = JSON.stringify({ status: 'duplicated', originalCode: params.originalCode, newCode: (newFreight as any).code, link: `${APP_URL}/freights/${(newFreight as any).id}` });
+          result = JSON.stringify({ status: 'duplicated', originalCode: params.originalCode, newCode: (newFreight as any).code, link: `${APP_URL}/freight/${(newFreight as any).id}` });
           break;
         }
 
@@ -3550,7 +3584,9 @@ FILTROS AVANZADOS:
   private toolGenerateMapLink(input: any): string {
     const lat = Number(input.lat);
     const lng = Number(input.lng);
-    if (isNaN(lat) || isNaN(lng)) return JSON.stringify({ error: 'Coordenadas inválidas' });
+    if (isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return JSON.stringify({ error: 'Coordenadas inválidas (lat: -90..90, lng: -180..180)' });
+    }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
     const params = new URLSearchParams();
@@ -3558,9 +3594,12 @@ FILTROS AVANZADOS:
     params.set('lng', lng.toFixed(6));
     params.set('n', (input.name || 'Ubicación').slice(0, 60));
     if (input.destLat != null && input.destLng != null) {
-      params.set('dlat', Number(input.destLat).toFixed(6));
-      params.set('dlng', Number(input.destLng).toFixed(6));
-      if (input.destName) params.set('dn', input.destName.slice(0, 60));
+      const dlat = Number(input.destLat), dlng = Number(input.destLng);
+      if (!isNaN(dlat) && !isNaN(dlng) && isFinite(dlat) && isFinite(dlng) && dlat >= -90 && dlat <= 90 && dlng >= -180 && dlng <= 180) {
+        params.set('dlat', dlat.toFixed(6));
+        params.set('dlng', dlng.toFixed(6));
+        if (input.destName) params.set('dn', input.destName.slice(0, 60));
+      }
     }
     const url = `${frontendUrl}/ver-mapa?${params.toString()}`;
 
@@ -4555,7 +4594,8 @@ FILTROS AVANZADOS:
     user?: any,
   ): string {
     const effects = this._chatSideEffects.get(session.id) || {};
-    const stagedCompanyId = user ? (user.activeCompanyId || user.companyId) : null;
+    // Always record stagedCompanyId — try params.actionSynUser as fallback for company context
+    const stagedCompanyId = user?.activeCompanyId || user?.companyId || params?.actionSynUser?.companyId || null;
     effects.pendingAction = { tool, params, summary, createdAt: Date.now(), stagedCompanyId };
     effects._pendingButtons = [
       { id: 'ai_confirm', title: 'CONFIRMAR' },
@@ -4848,6 +4888,27 @@ FILTROS AVANZADOS:
       freight.assignments = freight.assignments.filter((a: any) => a.driverId === user.id);
     }
     return { freight };
+  }
+
+  // ---- ocr_analyze ----
+  private async toolOcrAnalyze(input: any, user: any, session: any): Promise<string> {
+    const url = input.url;
+    if (!url) {
+      // Try to use pendingDocument URL from session
+      const state = (session.flowState as any) || {};
+      const pending = state.pendingDocument;
+      if (!pending?.url) {
+        return JSON.stringify({ error: 'Se necesita la URL del documento. Pedile al usuario que envíe una foto primero.' });
+      }
+      input.url = pending.url;
+    }
+    try {
+      const result = await this.ocrService.analyzeFromUrl(input.url, input.docType || 'general');
+      return JSON.stringify(result);
+    } catch (e: any) {
+      this.logger.warn(`OCR analyze failed: ${e.message}`);
+      return JSON.stringify({ error: `Error al analizar el documento: ${e.message}` });
+    }
   }
 
   private resolveCompanyType(user: any): string {

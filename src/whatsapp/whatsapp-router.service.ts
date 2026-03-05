@@ -819,9 +819,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
       // 5. Forward to AI with context (sanitize caption to prevent prompt injection)
       const safeCaption = caption.replace(/[\[\]\x00-\x1f]/g, '').slice(0, 500);
+      const ocrHint = type === 'image' ? ' Podés usar la herramienta ocr_analyze con esta URL para extraer datos del documento si el usuario lo pide.' : '';
       const contextMsg = safeCaption
-        ? `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}] ${safeCaption}`
-        : `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName}]`;
+        ? `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName} — URL: ${publicUrl}]${ocrHint} ${safeCaption}`
+        : `[El usuario envió ${type === 'image' ? 'una imagen' : 'un documento'}: ${displayName} — URL: ${publicUrl}]${ocrHint}`;
 
       await this.handleAiChat(phone, user, contextMsg);
     } catch (e) {
