@@ -5,7 +5,7 @@ import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
 import { SseService } from '../sse/sse.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
-import { FreightStatus, AssignmentStatus, NotificationType } from '@prisma/client';
+import { FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
 
 @Injectable()
 export class FreightsService {
@@ -2680,7 +2680,7 @@ export class FreightsService {
           name: body.name || 'foto',
           url: body.url,
           type: body.type || 'photo',
-          step: body.step || null,
+          step: (body.step as DocumentStep) || null,
           uploadedById: user.sub,
         },
       });
