@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req, OnModuleDestroy } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { Response, Request } from 'express';
 import { randomBytes } from 'crypto';
 import { SseService } from './sse.service';
@@ -37,6 +37,7 @@ export class SseController implements OnModuleDestroy {
 
   @Post('ticket')
   @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Get a short-lived SSE ticket (avoids JWT in URL)' })
   async getTicket(@Req() req: Request) {
     const user = (req as any).user;

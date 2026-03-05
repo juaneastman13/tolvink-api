@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Req, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { NotificationService } from './notification.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { IsNotEmpty, IsString, ValidateNested, IsUrl, MaxLength } from 'class-validator';
@@ -20,6 +21,7 @@ class UnsubscribePushDto {
 
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
+@Throttle({ default: { ttl: 60000, limit: 30 } })
 export class NotificationController {
   constructor(private notificationService: NotificationService) {}
 

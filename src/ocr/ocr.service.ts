@@ -156,8 +156,23 @@ export class OcrService {
     const contentType = res.headers.get('content-type');
     if (!contentType) throw new BadRequestException('El servidor no devolvió Content-Type — no se puede determinar el tipo de archivo');
     const mimeType = contentType.split(';')[0].trim();
-    const arrayBuf = await res.arrayBuffer();
-    const buffer = Buffer.from(arrayBuf);
+
+    // Stream response body and abort if accumulated bytes exceed MAX_BUFFER_SIZE
+    const reader = res.body?.getReader();
+    if (!reader) throw new BadRequestException('No se pudo leer la respuesta');
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.length;
+      if (totalSize > MAX_BUFFER_SIZE) {
+        reader.cancel();
+        throw new BadRequestException('Imagen demasiado grande (máx 10 MB)');
+      }
+      chunks.push(value);
+    }
+    const buffer = Buffer.concat(chunks);
 
     return this.analyze(buffer, mimeType, docType);
   }

@@ -5,6 +5,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -547,6 +548,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
 @ApiTags('Conversations')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('conversations')
 export class ConversationsController {
   constructor(private service: ConversationsService) {}
@@ -599,6 +601,7 @@ export class ConversationsController {
     @Query('take') take?: string,
     @Query('before') before?: string,
   ) {
+    if (before && !UUID_RE.test(before)) throw new BadRequestException('Cursor inválido');
     return this.service.getMessages(id, user, {
       take: take ? Math.min(parseInt(take) || 50, 100) : 50,
       before: before || undefined,
@@ -626,6 +629,7 @@ export class ConversationsController {
   }
 
   @Post(':id/messages')
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: 'Enviar mensaje' })
   send(
     @Param('id', ParseUUIDPipe) id: string,

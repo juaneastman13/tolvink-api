@@ -1,5 +1,5 @@
-import { Controller, Post, Patch, Body, Get, UseGuards, Res, UnauthorizedException } from '@nestjs/common';
-import { Response } from 'express';
+import { Controller, Post, Patch, Body, Get, UseGuards, Res, Req, UnauthorizedException } from '@nestjs/common';
+import { Response, Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
@@ -7,10 +7,22 @@ import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForRe
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
+const COOKIE_OPTS: any = { httpOnly: true, secure: true, sameSite: 'none', partitioned: true };
+
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
+
+  private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+    res.cookie('accessToken', accessToken, { ...COOKIE_OPTS, path: '/api', maxAge: 30 * 60 * 1000 });
+    res.cookie('refreshToken', refreshToken, { ...COOKIE_OPTS, path: '/api/auth', maxAge: 7 * 24 * 60 * 60 * 1000 });
+  }
+
+  private clearAuthCookies(res: Response) {
+    res.clearCookie('accessToken', { ...COOKIE_OPTS, path: '/api' });
+    res.clearCookie('refreshToken', { ...COOKIE_OPTS, path: '/api/auth' });
+  }
 
   @Get('ping')
   @SkipThrottle()
@@ -23,18 +35,18 @@ export class AuthController {
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Login con email o teléfono + contraseña' })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    try {
-      return await this.authService.login(dto);
-    } catch (err) {
-      throw err;
-    }
+    const result = await this.authService.login(dto);
+    this.setAuthCookies(res, result.access_token, result.refresh_token);
+    return { user: result.user };
   }
 
   @Post('register')
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Registrar usuario' })
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.register(dto);
+    this.setAuthCookies(res, result.access_token, result.refresh_token);
+    return { user: result.user };
   }
 
   @Post('identify-for-reset')
@@ -61,31 +73,54 @@ export class AuthController {
   @Post('reset-password')
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Establecer nueva contraseña con token de reset' })
-  resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  async resetPassword(@Body() dto: ResetPasswordDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.resetPassword(dto);
+    if (result.access_token) {
+      this.setAuthCookies(res, result.access_token, result.refresh_token);
+    }
+    return { user: result.user };
   }
 
   @Post('refresh')
   @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Renovar token de acceso' })
-  refresh(@Body() dto: RefreshTokenDto) {
-    return this.authService.refresh(dto);
+  async refresh(
+    @Body() dto: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    // Accept refresh token from body (legacy) or cookie (new)
+    const refreshToken = dto.refreshToken || (req as any).cookies?.refreshToken;
+    if (!refreshToken) throw new UnauthorizedException('Refresh token requerido');
+    const result = await this.authService.refresh({ refreshToken });
+    this.setAuthCookies(res, result.access_token, result.refresh_token);
+    return { user: result.user };
   }
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Cerrar sesión (revocar refresh tokens)' })
-  logout(@CurrentUser() user: any) {
-    return this.authService.revokeRefreshTokens(user.sub);
+  async logout(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+    await this.authService.revokeRefreshTokens(user.sub);
+    this.clearAuthCookies(res);
+    return { ok: true };
   }
 
   @Post('switch-company')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Cambiar empresa activa' })
-  switchCompany(@Body() dto: SwitchCompanyDto, @CurrentUser() user: any) {
-    return this.authService.switchCompany(user.sub, dto);
+  async switchCompany(
+    @Body() dto: SwitchCompanyDto,
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.switchCompany(user.sub, dto);
+    this.setAuthCookies(res, result.access_token, result.refresh_token);
+    return { user: result.user };
   }
 
   @Patch('password')
@@ -93,8 +128,17 @@ export class AuthController {
   @ApiBearerAuth()
   @Throttle({ default: { ttl: 60000, limit: 3 } })
   @ApiOperation({ summary: 'Cambiar contraseña (autenticado)' })
-  changePassword(@Body() dto: ChangePasswordDto, @CurrentUser() user: any) {
-    return this.authService.changePassword(user.sub, dto);
+  async changePassword(
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.changePassword(user.sub, dto);
+    // changePassword returns { ok, message, refresh_token } — set cookie
+    if (result.refresh_token) {
+      res.cookie('refreshToken', result.refresh_token, { ...COOKIE_OPTS, path: '/api/auth', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    }
+    return { ok: result.ok, message: result.message };
   }
 
   @Get('me/companies')

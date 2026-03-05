@@ -85,7 +85,7 @@ export class CatalogController implements OnModuleDestroy {
   async plants(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `plants:${user.sub}:${user.companyId}:${s}:${t}`;
+    const key = `plants:${user.sub}:${user.companyId}:${user.role}:${s}:${t}`;
 
     return this.cached(key, async () => {
       const isProducer = await this.hasProducerCompany(user.sub);
@@ -159,7 +159,7 @@ export class CatalogController implements OnModuleDestroy {
   async branches(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `branches:${user.sub}:${user.companyId}:${s}:${t}`;
+    const key = `branches:${user.sub}:${user.companyId}:${user.role}:${s}:${t}`;
 
     return this.cached(key, async () => {
       const isProducer = await this.hasProducerCompany(user.sub);
@@ -246,7 +246,7 @@ export class CatalogController implements OnModuleDestroy {
   async lots(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `lots:${user.sub}:${user.companyId}:${s}:${t}`;
+    const key = `lots:${user.sub}:${user.companyId}:${user.role}:${s}:${t}`;
 
     return this.cached(key, async () => {
       if (user.role === 'platform_admin') {

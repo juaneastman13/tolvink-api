@@ -3,6 +3,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as compression from 'compression';
+import * as cookieParser from 'cookie-parser';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bodyParser = require('body-parser');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -86,6 +87,9 @@ async function bootstrap() {
     verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; },
   }));
   app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
+
+  // Cookie parser — for HttpOnly auth cookies
+  app.use(cookieParser());
 
   // Request-scoped cache (AsyncLocalStorage) — must be before guards/interceptors
   app.use((req: any, res: any, next: any) => {

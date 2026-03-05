@@ -28,8 +28,10 @@ export class JwtAuthGuard implements CanActivate {
   }
 
   private extractToken(request: Request): string | null {
+    // 1. Authorization header (Swagger, testing, backward compat)
     const header = request.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) return null;
-    return header.split(' ')[1];
+    if (header?.startsWith('Bearer ')) return header.split(' ')[1];
+    // 2. HttpOnly cookie fallback
+    return (request as any).cookies?.accessToken || null;
   }
 }

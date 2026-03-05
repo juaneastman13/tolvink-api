@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
@@ -17,6 +18,7 @@ export class FreightsService {
     private stateMachine: FreightStateMachine,
     private notifications: NotificationService,
     private sse: SseService,
+    private config: ConfigService,
   ) {}
 
   /** Generate a unique freight code: F + year(2) + "-" + letters(3) + "." + digits(4) → e.g. F26-LCP.1822 */
@@ -169,7 +171,11 @@ export class FreightsService {
       useOwnFleet = !!dto.truckId;
     }
 
-    const freight = await this.prisma.$transaction(async (tx) => {
+    const MAX_CODE_RETRIES = 3;
+    let freight: any;
+    for (let codeRetry = 0; codeRetry < MAX_CODE_RETRIES; codeRetry++) {
+      try {
+        freight = await this.prisma.$transaction(async (tx) => {
       // Generate unique random freight code (F + year + 3 letters + 4 digits)
       let code: string;
       let attempts = 0;
@@ -265,6 +271,15 @@ export class FreightsService {
 
       return f;
     });
+        break; // success — exit retry loop
+      } catch (err: any) {
+        if (err?.code === 'P2002' && err?.meta?.target?.includes('code') && codeRetry < MAX_CODE_RETRIES - 1) {
+          this.logger.warn(`Freight code collision (P2002), retry ${codeRetry + 1}/${MAX_CODE_RETRIES}`);
+          continue;
+        }
+        throw err;
+      }
+    }
 
     // Notify all participants about new freight
     const grain = dto.items?.[0]?.grain || 'producto';
@@ -2648,6 +2663,19 @@ export class FreightsService {
     // Validate step if provided
     if (body.step && !FreightsService.VALID_DOC_STEPS.includes(body.step)) {
       throw new BadRequestException(`Paso inválido. Valores permitidos: ${FreightsService.VALID_DOC_STEPS.join(', ')}`);
+    }
+
+    // Validate URL hostname matches Supabase (SSRF protection)
+    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
+    if (supabaseUrl) {
+      try {
+        const docHost = new URL(body.url).hostname;
+        const expectedHost = new URL(supabaseUrl).hostname;
+        if (docHost !== expectedHost) throw new BadRequestException('URL no permitida');
+      } catch (e) {
+        if (e instanceof BadRequestException) throw e;
+        throw new BadRequestException('URL inválida');
+      }
     }
 
     return this.prisma.$transaction(async (tx) => {

@@ -6,6 +6,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -397,6 +398,7 @@ export class PlantAccessController {
   @ApiOperation({ summary: 'Plantas y sucursales de mi empresa (o de empresa indicada para admin)' })
   @ApiQuery({ name: 'plantCompanyId', required: false })
   myFacilities(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string) {
+    if (plantCompanyId && !UUID_RE.test(plantCompanyId)) throw new BadRequestException('plantCompanyId inválido');
     return this.service.getMyFacilities(user, plantCompanyId);
   }
 
@@ -420,6 +422,8 @@ export class PlantAccessController {
   @ApiQuery({ name: 'plantCompanyId', required: false })
   @ApiQuery({ name: 'producerCompanyId', required: false })
   listProducers(@CurrentUser() user: any, @Query('plantCompanyId') plantCompanyId?: string, @Query('producerCompanyId') producerCompanyId?: string) {
+    if (plantCompanyId && !UUID_RE.test(plantCompanyId)) throw new BadRequestException('plantCompanyId inválido');
+    if (producerCompanyId && !UUID_RE.test(producerCompanyId)) throw new BadRequestException('producerCompanyId inválido');
     return this.service.listForPlant(user, plantCompanyId, producerCompanyId);
   }
 

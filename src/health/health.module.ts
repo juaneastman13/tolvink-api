@@ -5,6 +5,8 @@ import { PrismaService } from '../database/prisma.service';
 import { SseService } from '../sse/sse.service';
 import { Response } from 'express';
 
+// NOTE: This endpoint is intentionally public (no auth) for Railway health checks and monitoring.
+// It exposes basic metrics (memory, uptime, SSE clients, DB pool) which is acceptable for ops visibility.
 @ApiTags('Health')
 @SkipThrottle()
 @Controller('health')

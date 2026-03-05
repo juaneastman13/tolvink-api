@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl, IsIn } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, IsObject, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -389,10 +389,16 @@ export class ReorderQueueDto {
 }
 
 export class CancelAssignmentDto {
-  @ApiProperty({ required: false, description: 'Motivo de cancelación', maxLength: 500 })
-  @IsOptional()
+  @ApiProperty({ description: 'Motivo de cancelación', maxLength: 500 })
+  @IsNotEmpty({ message: 'Motivo obligatorio' })
   @MaxLength(500)
-  reason?: string;
+  reason: string;
+}
+
+export class SaveOcrDataDto {
+  @IsNotEmpty()
+  @IsObject()
+  ocrData: Record<string, any>;
 }
 
 export class RespondTripDto {

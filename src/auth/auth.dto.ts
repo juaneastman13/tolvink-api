@@ -52,10 +52,10 @@ export class RegisterDto {
 }
 
 export class RefreshTokenDto {
-  @IsNotEmpty({ message: 'refreshToken requerido' })
+  @IsOptional()
   @IsString()
   @MaxLength(500)
-  refreshToken: string;
+  refreshToken?: string;
 }
 
 export class IdentifyForResetDto {

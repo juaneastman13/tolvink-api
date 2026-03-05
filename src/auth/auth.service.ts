@@ -211,7 +211,7 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
 
     // Constant-time: always hash something to prevent timing-based user enumeration
-    await bcrypt.hash('dummy-constant-time-padding', 4);
+    await bcrypt.hash('dummy-constant-time-padding', 10);
 
     if (!user || !user.phone) {
       return { ok: true, maskedPhone: '09*****XX' };
@@ -334,7 +334,7 @@ export class AuthService {
   async resetPassword(dto: ResetPasswordDto) {
     let payload: any;
     try {
-      payload = await this.jwt.verifyAsync(dto.resetToken);
+      payload = await this.jwt.verifyAsync(dto.resetToken, { algorithms: ['HS256'] });
     } catch {
       throw new UnauthorizedException('Token inválido o expirado');
     }
@@ -487,7 +487,7 @@ export class AuthService {
     };
   }
 
-  async refresh(dto: RefreshTokenDto) {
+  async refresh(dto: RefreshTokenDto | { refreshToken: string }) {
     const tokenHash = this.hashToken(dto.refreshToken);
     const { storedUser } = await this.prisma.$transaction(async (tx) => {
       const stored = await (tx as any).refreshToken.findUnique({

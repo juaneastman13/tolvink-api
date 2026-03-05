@@ -2,7 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Pa
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -36,7 +36,7 @@ export class FreightsController {
     @Query('limit') limit?: string,
     @Query('company') company?: string,
   ) {
-    const parsedPage = page ? parseInt(page) : undefined;
+    const parsedPage = page ? Math.min(parseInt(page), 10000) : undefined;
     const parsedLimit = limit ? parseInt(limit) : undefined;
     return this.service.findAll(user, {
       status,
@@ -47,7 +47,7 @@ export class FreightsController {
   }
 
   @Get('drivers')
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar choferes disponibles de una empresa' })
   @ApiQuery({ name: 'companyId', required: true })
   getDrivers(@Query('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() user: any) {
@@ -173,7 +173,7 @@ export class FreightsController {
     @Body() dto: CancelAssignmentDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.cancelAssignment(id, aId, dto.reason || '', user);
+    return this.service.cancelAssignment(id, aId, dto.reason, user);
   }
 
   @Patch(':id/assignments/:aId')
@@ -275,6 +275,7 @@ export class FreightsController {
 
   @Post(':id/tracking')
   @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 60 } })
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Enviar punto de tracking GPS' })
   addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AddTrackingDto, @CurrentUser() user: any) {
@@ -282,7 +283,7 @@ export class FreightsController {
   }
 
   @Get('drivers/:driverId/queue')
-  @Roles('plant', 'transporter', 'producer', 'admin')
+  @Roles('plant', 'transporter', 'producer')
   @ApiOperation({ summary: 'Cola de fletes de un chofer' })
   getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string, @CurrentUser() user: any) {
     return this.service.getDriverQueue(driverId, user);
@@ -356,9 +357,9 @@ export class FreightsController {
   saveOcrData(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('docId', ParseUUIDPipe) docId: string,
-    @Body('ocrData') ocrData: any,
+    @Body() dto: SaveOcrDataDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.saveOcrData(id, docId, ocrData, user);
+    return this.service.saveOcrData(id, docId, dto.ocrData, user);
   }
 }

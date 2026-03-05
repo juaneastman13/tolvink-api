@@ -8,6 +8,7 @@ import {
   Controller, Get, Post, Patch, Param, Body, Query,
   UseGuards, ParseUUIDPipe, Delete,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import {
   Injectable, BadRequestException, NotFoundException, ForbiddenException, UnauthorizedException, Logger,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import {
   IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches, IsObject,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
@@ -180,6 +182,54 @@ export class UpdateSelfDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() currentPassword?: string;
 }
 
+// ======================== UPDATE DTOs (with @IsOptional on every field) ==
+
+export class UpdateCompanyDto {
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(255) name?: string;
+  @ApiProperty({ required: false, enum: ['producer', 'plant', 'transporter'] }) @IsOptional() @IsIn(['producer', 'plant', 'transporter']) type?: string;
+  @ApiProperty({ required: false, type: [String] }) @IsOptional() @IsArray() @IsString({ each: true }) @IsIn(['producer', 'plant', 'transporter'], { each: true }) types?: string[];
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(255) address?: string;
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(50) phone?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(20) rut?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsBoolean() hasInternalFleet?: boolean;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lng?: number;
+}
+
+export class UpdateBranchDto {
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(255) name?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(500) address?: string;
+  @ApiProperty({ required: false }) @IsOptional() @MaxLength(500) reference?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lng?: number;
+}
+
+export class UpdateFieldDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(200) name?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500) address?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lng?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() hectares?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000) comments?: string;
+}
+
+export class UpdateLotDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(200) name?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() lng?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() hectares?: number;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(1000) comments?: string;
+}
+
+export class UpdateAdminTruckDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(20) plate?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100) brand?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100) model?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() capacity?: number;
+}
+
 // ======================== SERVICE ====================================
 
 @Injectable()
@@ -319,7 +369,7 @@ export class AdminService {
     });
   }
 
-  async updateCompany(id: string, dto: Partial<CreateCompanyDto>, user: any) {
+  async updateCompany(id: string, dto: UpdateCompanyDto, user: any) {
     // Non-superadmin can only edit companies they belong to
     if (!this.isPlatformAdmin(user)) {
       const myIds = await this.getUserCompanyIds(user);
@@ -382,7 +432,7 @@ export class AdminService {
     });
   }
 
-  async updateBranch(id: string, dto: Partial<CreateBranchDto>) {
+  async updateBranch(id: string, dto: UpdateBranchDto) {
     const branch = await this.prisma.branch.findUnique({ where: { id } });
     if (!branch) throw new NotFoundException('Sucursal no encontrada');
 
@@ -447,7 +497,7 @@ export class AdminService {
   }
 
   async createUser(dto: CreateUserDto, preHashedPassword?: string) {
-    const bcrypt = require('bcryptjs');
+
     dto.email = dto.email.toLowerCase().trim();
 
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
@@ -641,7 +691,7 @@ export class AdminService {
         if (!dto.currentPassword) {
           throw new BadRequestException('Se requiere la contraseña actual para cambiar email o teléfono');
         }
-        const bcrypt = require('bcryptjs');
+    
         const valid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
         if (!valid) throw new BadRequestException('Contraseña incorrecta');
       }
@@ -791,6 +841,7 @@ export class AdminService {
 @ApiTags('Admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@Throttle({ default: { ttl: 60000, limit: 30 } })
 @Controller('admin')
 export class AdminController {
   constructor(private svc: AdminService) {}
@@ -830,7 +881,7 @@ export class AdminController {
 
   @Patch('companies/:id')
   @ApiOperation({ summary: 'Editar empresa' })
-  async updateCompany(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateCompanyDto>, @CurrentUser() u: any) {
+  async updateCompany(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCompanyDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.updateCompany(id, dto, fullUser);
@@ -865,7 +916,7 @@ export class AdminController {
 
   @Patch('branches/:id')
   @ApiOperation({ summary: 'Editar sucursal' })
-  async updateBranch(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<CreateBranchDto>, @CurrentUser() u: any) {
+  async updateBranch(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -895,6 +946,7 @@ export class AdminController {
   @ApiQuery({ name: 'search', required: false })
   @ApiQuery({ name: 'companyId', required: false })
   async users(@CurrentUser() u: any, @Query('search') search?: string, @Query('companyId') companyId?: string) {
+    if (companyId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new BadRequestException('companyId inválido');
     this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.listUsers(search, companyId, fullUser);
@@ -927,6 +979,7 @@ export class AdminController {
 
   // --- Self edit (any user) ---
   @Patch('me')
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Editar mi perfil' })
   updateMe(@Body() dto: UpdateSelfDto, @CurrentUser() u: any) {
     return this.svc.updateSelf(u.sub, dto);
@@ -959,7 +1012,7 @@ export class AdminController {
 
   @Patch('fields/:id')
   @ApiOperation({ summary: 'Editar campo' })
-  async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateFieldDto>, @CurrentUser() u: any) {
+  async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFieldDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -1013,7 +1066,7 @@ export class AdminController {
 
   @Patch('lots/:id')
   @ApiOperation({ summary: 'Editar lote' })
-  async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateLotDto>, @CurrentUser() u: any) {
+  async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateLotDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -1064,7 +1117,7 @@ export class AdminController {
 
   @Patch('trucks/:id')
   @ApiOperation({ summary: 'Editar vehículo' })
-  async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: Partial<AdminCreateTruckDto>, @CurrentUser() u: any) {
+  async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateAdminTruckDto, @CurrentUser() u: any) {
     this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);

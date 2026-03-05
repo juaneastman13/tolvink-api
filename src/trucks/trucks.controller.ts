@@ -6,8 +6,9 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, MaxLength, IsUUID, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
@@ -33,6 +34,26 @@ export class CreateTruckDto {
   @IsOptional()
   @IsUUID()
   assignedUserId?: string;
+}
+
+export class CreateDriverDto {
+  @ApiProperty({ example: 'Juan Pérez' })
+  @IsNotEmpty({ message: 'Nombre obligatorio' })
+  @IsString()
+  @MaxLength(255)
+  name: string;
+
+  @ApiProperty({ required: false, example: '098765432' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  phone?: string;
+
+  @ApiProperty({ required: false, example: 'juan@email.com' })
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(255)
+  email?: string;
 }
 
 // ======================== SERVICE ====================================
@@ -148,8 +169,8 @@ export class TrucksService {
 
   // ======================== DRIVER CRUD ================================
 
-  async createDriver(body: { name: string; phone?: string; email?: string }, user: any) {
-    if (!body.name?.trim()) throw new BadRequestException('Nombre obligatorio');
+  async createDriver(dto: CreateDriverDto, user: any) {
+    const body = dto;
 
     const email = body.email?.trim().toLowerCase() || `chofer_${require('crypto').randomBytes(8).toString('hex')}@tolvink.internal`;
     const existing = await this.prisma.user.findUnique({ where: { email } });
@@ -235,22 +256,23 @@ export class TrucksController {
   constructor(private service: TrucksService) {}
 
   @Post()
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Registrar camión' })
   create(@Body() dto: CreateTruckDto, @CurrentUser() user: any) {
     return this.service.create(dto, user);
   }
 
   @Get()
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar camiones de la empresa' })
   @ApiQuery({ name: 'companyId', required: false })
   list(@CurrentUser() user: any, @Query('companyId') companyId?: string) {
+    if (companyId && !UUID_RE.test(companyId)) throw new BadRequestException('companyId inválido');
     return this.service.list(user, companyId);
   }
 
   @Patch(':id/deactivate')
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Desactivar camión' })
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.deactivate(id, user);
@@ -259,21 +281,21 @@ export class TrucksController {
   // ======================== DRIVER ENDPOINTS =============================
 
   @Post('drivers')
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Registrar chofer para la empresa' })
-  createDriver(@Body() body: { name: string; phone?: string; email?: string }, @CurrentUser() user: any) {
-    return this.service.createDriver(body, user);
+  createDriver(@Body() dto: CreateDriverDto, @CurrentUser() user: any) {
+    return this.service.createDriver(dto, user);
   }
 
   @Get('drivers')
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar choferes de la empresa' })
   listDrivers(@CurrentUser() user: any) {
     return this.service.listDrivers(user);
   }
 
   @Patch('drivers/:id/deactivate')
-  @Roles('transporter', 'producer', 'plant', 'admin')
+  @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Desactivar chofer' })
   deactivateDriver(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.deactivateDriver(id, user);

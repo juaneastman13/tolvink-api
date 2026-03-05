@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef, Optional } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, Optional, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from '../sse/sse.service';
@@ -7,9 +7,10 @@ import * as webpush from 'web-push';
 import { NotificationType } from '@prisma/client';
 
 @Injectable()
-export class NotificationService {
+export class NotificationService implements OnModuleDestroy {
   private readonly logger = new Logger(NotificationService.name);
   private pushEnabled = false;
+  private cleanupInterval: ReturnType<typeof setInterval>;
 
   constructor(
     private prisma: PrismaService,
@@ -30,7 +31,13 @@ export class NotificationService {
     }
 
     // Cleanup old notifications and tracking points every 6 hours
-    setInterval(() => this.cleanupOldRecords(), 6 * 60 * 60 * 1000);
+    this.cleanupInterval = setInterval(() => this.cleanupOldRecords(), 6 * 60 * 60 * 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
   }
 
   /** Remove read notifications older than 30 days and tracking points older than 90 days */

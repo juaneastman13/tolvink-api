@@ -3,7 +3,7 @@
 // Public endpoints (no JWT) for real-time freight tracking via share link
 // =====================================================================
 
-import { Controller, Get, Param, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Param, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 import { FreightsService } from './freights.service';
@@ -13,9 +13,16 @@ import { FreightsService } from './freights.service';
 export class FreightTrackingController {
   constructor(private prisma: PrismaService, private freightsService: FreightsService) {}
 
+  private validateToken(token: string) {
+    if (!token || token.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(token)) {
+      throw new NotFoundException('Link de seguimiento no valido');
+    }
+  }
+
   /** Get freight info by public share token (no auth) */
   @Get(':token')
   async getFreightByToken(@Param('token') token: string) {
+    this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
       select: {
@@ -55,6 +62,7 @@ export class FreightTrackingController {
   /** Get last truck position by public share token (no auth) */
   @Get(':token/position')
   async getLastPositionByToken(@Param('token') token: string) {
+    this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
       select: { id: true, status: true },
@@ -78,6 +86,7 @@ export class FreightTrackingController {
   /** Get participant positions by public share token (no auth) */
   @Get(':token/participants')
   async getParticipantsByToken(@Param('token') token: string) {
+    this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
       select: { id: true, status: true },
@@ -98,6 +107,7 @@ export class FreightTrackingController {
   /** Get full freight data for PDF report generation (no auth) */
   @Get(':token/report-data')
   async getReportDataByToken(@Param('token') token: string) {
+    this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
       select: {

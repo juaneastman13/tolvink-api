@@ -360,10 +360,23 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     if (contentLength > MAX_MEDIA_SIZE) {
       throw new Error(`Media too large: ${contentLength} bytes (max ${MAX_MEDIA_SIZE})`);
     }
-    const buffer = Buffer.from(await fileRes.arrayBuffer());
-    if (buffer.length > MAX_MEDIA_SIZE) {
-      throw new Error(`Media download exceeded limit: ${buffer.length} bytes`);
+
+    // Stream response body and abort if accumulated bytes exceed MAX_MEDIA_SIZE
+    const reader = fileRes.body?.getReader();
+    if (!reader) throw new Error('No se pudo leer la respuesta de media');
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.length;
+      if (totalSize > MAX_MEDIA_SIZE) {
+        reader.cancel();
+        throw new Error(`Media download exceeded limit: ${totalSize} bytes (max ${MAX_MEDIA_SIZE})`);
+      }
+      chunks.push(value);
     }
+    const buffer = Buffer.concat(chunks);
 
     return { buffer, mimeType };
   }
