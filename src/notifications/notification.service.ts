@@ -28,6 +28,26 @@ export class NotificationService {
     } else {
       this.logger.warn('VAPID keys not set — push notifications disabled');
     }
+
+    // Cleanup old notifications and tracking points every 6 hours
+    setInterval(() => this.cleanupOldRecords(), 6 * 60 * 60 * 1000);
+  }
+
+  /** Remove read notifications older than 30 days and tracking points older than 90 days */
+  private async cleanupOldRecords() {
+    try {
+      const notifCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const trackingCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const [notifResult, trackResult] = await Promise.all([
+        this.prisma.notification.deleteMany({ where: { read: true, createdAt: { lt: notifCutoff } } }),
+        this.prisma.freightTracking.deleteMany({ where: { createdAt: { lt: trackingCutoff } } }),
+      ]);
+      if (notifResult.count > 0 || trackResult.count > 0) {
+        this.logger.log(`Cleanup: removed ${notifResult.count} old notifications, ${trackResult.count} old tracking points`);
+      }
+    } catch (e) {
+      this.logger.warn(`Cleanup failed: ${e.message}`);
+    }
   }
 
   // ======================== PUSH SUBSCRIPTION ============================

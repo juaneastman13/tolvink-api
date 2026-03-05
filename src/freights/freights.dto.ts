@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -265,12 +265,12 @@ export class AddDocumentDto {
 
   @ApiProperty({ required: false, maxLength: 50 })
   @IsOptional()
-  @MaxLength(50)
+  @IsIn(['photo', 'pdf', 'remito', 'carta_porte', 'pesaje', 'other'])
   type?: string;
 
   @ApiProperty({ required: false, maxLength: 50 })
   @IsOptional()
-  @MaxLength(50)
+  @IsIn(['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'])
   step?: string;
 }
 

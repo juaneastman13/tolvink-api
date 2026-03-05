@@ -50,9 +50,10 @@ export class CompanyResolutionService {
     // extract IDs and only query memberships (skip the user DB query)
     const jwtCbt = (user as any).companyByType;
     if (jwtCbt && typeof jwtCbt === 'object' && Object.keys(jwtCbt).length > 0) {
-      Object.values(jwtCbt).forEach((v: any) => { if (v) ids.add(v); });
-      // Still need memberships for completeness (e.g. newly added memberships not in JWT)
+      // Validate JWT company IDs against current memberships to filter stale entries
       const memberships = await this.getMemberships(user.sub);
+      const memberCompanyIds = new Set(memberships.map(m => m.companyId));
+      Object.values(jwtCbt).forEach((v: any) => { if (v && memberCompanyIds.has(v)) ids.add(v); });
       for (const m of memberships) ids.add(m.companyId);
       const result = Array.from(ids);
       cache?.set(key, result);
@@ -77,7 +78,7 @@ export class CompanyResolutionService {
     return result;
   }
 
-  async resolveProducerCompanyId(user: { sub: string; companyId?: string; companyType?: string }): Promise<string> {
+  async resolveProducerCompanyId(user: { sub: string; companyId?: string; companyType?: string }): Promise<string | null> {
     const cache = this.getCache();
     const key = `producerId:${user.sub}`;
     if (cache?.has(key)) return cache.get(key);
@@ -93,7 +94,7 @@ export class CompanyResolutionService {
     return result;
   }
 
-  async resolvePlantCompanyId(user: { sub: string; companyId?: string }): Promise<string> {
+  async resolvePlantCompanyId(user: { sub: string; companyId?: string }): Promise<string | null> {
     const cache = this.getCache();
     const key = `plantId:${user.sub}`;
     if (cache?.has(key)) return cache.get(key);

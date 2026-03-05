@@ -44,7 +44,7 @@ export class SseService implements OnModuleDestroy {
       where: { conversationId },
       select: { userId: true },
     });
-    const userIds = participants.map(p => p.userId);
+    const userIds = participants.map(p => p.userId).filter(Boolean);
     this.participantsCache.set(conversationId, { userIds, ts: Date.now() });
     // Always cleanup stale entries
     const pcNow = Date.now();

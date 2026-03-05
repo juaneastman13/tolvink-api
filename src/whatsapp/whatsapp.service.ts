@@ -494,10 +494,11 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     if (p.startsWith('598')) { /* already prefixed */ }
     else if (p.startsWith('0')) p = '598' + p.slice(1);
     else if (p.length === 8 || p.length === 9) p = '598' + p;
-    // Validate E.164 length (10-15 digits)
+    // Validate E.164 length (10-15 digits) — return original digits if invalid
     if (p.length < 10 || p.length > 15) {
-      this.logger.warn('normalizePhone: invalid length ' + p.length);
+      this.logger.warn(`normalizePhone: invalid length ${p.length} for input "${phone.slice(0, 20)}"`);
     }
-    return p;
+    // Strip any remaining non-digits
+    return p.replace(/\D/g, '');
   }
 }

@@ -471,6 +471,7 @@ model FreightDocument {
 
   @@index([freightId])
   @@index([freightId, step])
+  @@index([uploadedById])
   @@map("freight_documents")
 }
 
@@ -674,7 +675,7 @@ model RefreshToken {
 model AnalyticsEvent {
   id        String   @id @default(uuid())
   event     String   @db.VarChar(100)
-  data      Json     @default("{}")
+  data      Json     @default("{}")  // Prisma handles this correctly for PostgreSQL
   userId    String?  @map("user_id")
   sessionId String?  @map("session_id") @db.VarChar(64)
   createdAt DateTime @default(now()) @map("created_at")

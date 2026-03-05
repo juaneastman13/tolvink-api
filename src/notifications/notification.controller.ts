@@ -1,6 +1,22 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Req, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { NotificationService } from './notification.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { IsNotEmpty, IsString, ValidateNested, IsUrl, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+
+class PushKeysDto {
+  @IsNotEmpty() @IsString() p256dh: string;
+  @IsNotEmpty() @IsString() auth: string;
+}
+
+class SubscribePushDto {
+  @IsNotEmpty() @IsUrl({ require_protocol: true }) @MaxLength(500) endpoint: string;
+  @ValidateNested() @Type(() => PushKeysDto) keys: PushKeysDto;
+}
+
+class UnsubscribePushDto {
+  @IsNotEmpty() @IsUrl({ require_protocol: true }) @MaxLength(500) endpoint: string;
+}
 
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
@@ -8,13 +24,13 @@ export class NotificationController {
   constructor(private notificationService: NotificationService) {}
 
   @Post('subscribe')
-  async subscribe(@Req() req: any, @Body() body: { endpoint: string; keys: { p256dh: string; auth: string } }) {
+  async subscribe(@Req() req: any, @Body() body: SubscribePushDto) {
     await this.notificationService.subscribe(req.user.sub, body);
     return { ok: true };
   }
 
   @Delete('subscribe')
-  async unsubscribe(@Req() req: any, @Body() body: { endpoint: string }) {
+  async unsubscribe(@Req() req: any, @Body() body: UnsubscribePushDto) {
     await this.notificationService.unsubscribe(req.user.sub, body.endpoint);
     return { ok: true };
   }
@@ -29,7 +45,7 @@ export class NotificationController {
   }
 
   @Patch(':id/read')
-  async markRead(@Req() req: any, @Param('id') id: string) {
+  async markRead(@Req() req: any, @Param('id', ParseUUIDPipe) id: string) {
     await this.notificationService.markRead(req.user.sub, id);
     return { ok: true };
   }

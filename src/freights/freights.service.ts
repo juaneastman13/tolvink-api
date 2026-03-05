@@ -82,6 +82,7 @@ export class FreightsService {
     }
 
     const producerCompanyId = await this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) throw new BadRequestException('No se encontró una empresa productora asociada a tu usuario');
 
     let lot: any = null;
     if (dto.originLotId) {
@@ -1258,8 +1259,8 @@ export class FreightsService {
       // --- loadDate / loadTime / notes: only in pending_assignment ---
       if (dto.loadDate || dto.loadTime !== undefined || dto.notes !== undefined) {
         if (freight.status !== FreightStatus.pending_assignment) {
-          if (dto.loadDate || dto.loadTime !== undefined) {
-            throw new BadRequestException('Fecha y hora solo se pueden editar en estado pendiente de asignación');
+          if (dto.loadDate || dto.loadTime !== undefined || dto.notes !== undefined) {
+            throw new BadRequestException('Fecha, hora y notas solo se pueden editar en estado pendiente de asignación');
           }
         }
         if (dto.loadDate) {
@@ -1292,6 +1293,7 @@ export class FreightsService {
               fromValue: { useOwnFleet: freight.useOwnFleet },
               toValue: { useOwnFleet: dto.useOwnFleet },
               requestedById: user.sub,
+              // Approver should be the OTHER party; if no dest company, auto-apply since no counter-party
               approverCompanyId: freight.destCompanyId || freight.originCompanyId,
             },
           });
@@ -1545,15 +1547,15 @@ export class FreightsService {
       // Audit log
       await tx.auditLog.create({
         data: { entityType: 'freight', entityId: freightId, action: 'change_rejected', userId: user.sub, freightId, metadata: { changeType: change.changeType, reason } },
-      }).catch(() => {});
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
 
       const freight = await tx.freight.findUnique({ where: { id: freightId }, select: { code: true, originCompanyId: true, destCompanyId: true } });
 
-      // Notify requester (the other party, not the approver who rejected)
+      // Notify requester (use requestedById to find their company accurately)
       if (freight) {
-        const requesterCompanyId = change.approverCompanyId === freight.originCompanyId
-          ? freight.destCompanyId
-          : freight.originCompanyId;
+        const requester = await tx.user.findUnique({ where: { id: change.requestedById }, select: { companyId: true, activeCompanyId: true } });
+        const requesterCompanyId = requester?.activeCompanyId || requester?.companyId
+          || (change.approverCompanyId === freight.originCompanyId ? freight.destCompanyId : freight.originCompanyId);
         if (!requesterCompanyId) return { ok: true };
         this.notifications.notifyCompany(
           requesterCompanyId,
@@ -1699,11 +1701,13 @@ export class FreightsService {
     const truckCount = freight?.truckCount || 1;
 
     // Monotonic guard helper: never regress freight status below current
+    // Exception: allow regression to pending_assignment when all assignments are removed
     const freightStatusOrder: Record<string, number> = {
       draft: 0, pending_assignment: 1, assigned: 2, accepted: 3,
       in_progress: 4, loaded: 5, finished: 6, canceled: 7,
     };
-    const applyMonotonicGuard = (derived: FreightStatus): FreightStatus => {
+    const applyMonotonicGuard = (derived: FreightStatus, allowRegression = false): FreightStatus => {
+      if (allowRegression) return derived;
       const currentRank = freightStatusOrder[freight.status] ?? 0;
       const derivedRank = freightStatusOrder[derived] ?? 0;
       return derivedRank >= currentRank ? derived : (freight.status as FreightStatus);
@@ -1713,7 +1717,8 @@ export class FreightsService {
       where: { freightId, status: { in: ['active', 'accepted'] } },
       select: { tripStatus: true },
     });
-    if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment);
+    // When all assignments are removed, allow regression to pending_assignment
+    if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
 
     // If not all truck slots are filled, stay at pending_assignment (but respect monotonic guard)
     if (assignments.length < truckCount) return applyMonotonicGuard(FreightStatus.pending_assignment);
@@ -1908,11 +1913,14 @@ export class FreightsService {
         data: { status: AssignmentStatus.canceled, reason: reason || 'Cancelado por planta', tripStatus: 'canceled' },
       });
 
-      const newCount = Math.max(0, ((freight as any).assignedTruckCount || 1) - 1);
+      // Compute actual count from DB to avoid race conditions
+      const activeCount = await (tx.freightAssignment as any).count({
+        where: { freightId, status: { in: ['active', 'accepted'] } },
+      });
       const newStatus = await this.deriveFreightStatus(tx, freightId);
       const updated = await tx.freight.update({
         where: { id: freightId },
-        data: { status: newStatus, assignedTruckCount: newCount } as any,
+        data: { status: newStatus, assignedTruckCount: activeCount } as any,
       });
 
       await tx.auditLog.create({
@@ -1930,6 +1938,21 @@ export class FreightsService {
 
       return { result: updated, freight };
     });
+
+    // Notify transporter about canceled assignment
+    if (freight.destCompanyId) {
+      const canceledAssignment = await this.prisma.freightAssignment.findUnique({ where: { id: assignmentId }, select: { transportCompanyId: true } });
+      if (canceledAssignment) {
+        this.notifications.notifyCompany(
+          canceledAssignment.transportCompanyId,
+          NotificationType.freight_canceled,
+          'Asignación cancelada',
+          `${freight.code}: ${reason || 'Cancelado por planta'}`,
+          freightId,
+          user.sub,
+        ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      }
+    }
 
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return result;
@@ -2036,24 +2059,39 @@ export class FreightsService {
       return { updated: result, freight };
     });
 
+    // Notify transporter about assignment update
+    if (updated.transportCompanyId) {
+      this.notifications.notifyCompany(
+        updated.transportCompanyId,
+        NotificationType.freight_updated,
+        'Asignación actualizada',
+        `${freshFreight.code}: se actualizó tu asignación`,
+        freightId,
+        user.sub,
+      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+    }
+
     this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freshFreight.code, status: freshFreight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
     return updated;
   }
 
   async respondTrip(freightId: string, assignmentId: string, dto: RespondTripDto, user: any) {
+    let _rtCallerIds: string[] | undefined;
+    let _rtIsPlantOnly = false;
+    let _rtIsTransporter = false;
+
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
-        where: { id: assignmentId, freightId, driverId: user.sub },
+        where: { id: assignmentId, freightId, driverId: user.sub, status: { in: ['active', 'accepted'] } },
       });
-      if (!a) throw new ForbiddenException('No sos el chofer asignado');
+      if (!a) throw new ForbiddenException('No sos el chofer asignado o la asignación ya no está activa');
     } else {
       const isTransporter = await this.hasCompanyType(user, 'transporter');
       const isPlant = await this.hasCompanyType(user, 'plant');
       if (!isTransporter && !isPlant) throw new ForbiddenException('Solo el transportista o la planta pueden responder');
-      // Resolve caller IDs upfront; ownership checks moved inside transactions
-      var _rtCallerIds = await this.resolveAllCompanyIds(user);
-      var _rtIsPlantOnly = isPlant && !isTransporter;
-      var _rtIsTransporter = isTransporter;
+      _rtCallerIds = await this.resolveAllCompanyIds(user);
+      _rtIsPlantOnly = isPlant && !isTransporter;
+      _rtIsTransporter = isTransporter;
     }
 
     if (dto.action === 'rejected') {
@@ -2085,11 +2123,14 @@ export class FreightsService {
           data: { status: AssignmentStatus.rejected, reason: dto.reason, tripStatus: 'canceled' },
         });
 
-        const newCount = Math.max(0, ((freight as any).assignedTruckCount || 1) - 1);
+        // Compute actual count from DB to avoid race conditions
+        const activeCount = await (tx.freightAssignment as any).count({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+        });
         const newStatus = await this.deriveFreightStatus(tx, freightId);
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: newStatus, assignedTruckCount: newCount } as any,
+          data: { status: newStatus, assignedTruckCount: activeCount } as any,
         });
 
         await tx.auditLog.create({
@@ -2525,21 +2566,23 @@ export class FreightsService {
       throw new BadRequestException('Coordenadas inválidas (lat: -90..90, lng: -180..180)');
     }
 
-    const freight = await this.prisma.freight.findUnique({ where: { id: freightId } });
-    if (!freight) throw new NotFoundException('Flete no encontrado');
-    if (freight.status !== FreightStatus.in_progress && freight.status !== FreightStatus.loaded) {
-      throw new BadRequestException('Solo se puede trackear un flete en curso o cargado');
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId }, select: { status: true } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (freight.status !== FreightStatus.in_progress && freight.status !== FreightStatus.loaded) {
+        throw new BadRequestException('Solo se puede trackear un flete en curso o cargado');
+      }
 
-    return this.prisma.freightTracking.create({
-      data: {
-        freightId,
-        lat: body.lat,
-        lng: body.lng,
-        speed: body.speed ?? null,
-        heading: body.heading ?? null,
-        userId: user.sub,
-      },
+      return tx.freightTracking.create({
+        data: {
+          freightId,
+          lat: body.lat,
+          lng: body.lng,
+          speed: body.speed ?? null,
+          heading: body.heading ?? null,
+          userId: user.sub,
+        },
+      });
     });
   }
 
@@ -2591,6 +2634,9 @@ export class FreightsService {
 
   // ======================== ADD DOCUMENT ================================
 
+  private static readonly MAX_DOCS_PER_FREIGHT = 50;
+  private static readonly VALID_DOC_STEPS = ['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'];
+
   async addDocument(
     freightId: string,
     body: { name: string; url: string; type?: string; step?: string },
@@ -2599,11 +2645,16 @@ export class FreightsService {
     // Resolve company IDs outside tx (doesn't change concurrently)
     const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
+    // Validate step if provided
+    if (body.step && !FreightsService.VALID_DOC_STEPS.includes(body.step)) {
+      throw new BadRequestException(`Paso inválido. Valores permitidos: ${FreightsService.VALID_DOC_STEPS.join(', ')}`);
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
         select: {
-          id: true, originCompanyId: true, destCompanyId: true,
+          id: true, code: true, originCompanyId: true, destCompanyId: true,
           assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
         },
       });
@@ -2617,16 +2668,28 @@ export class FreightsService {
         if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
       }
 
-      return tx.freightDocument.create({
+      // Enforce document limit per freight
+      const docCount = await tx.freightDocument.count({ where: { freightId } });
+      if (docCount >= FreightsService.MAX_DOCS_PER_FREIGHT) {
+        throw new BadRequestException(`Límite de ${FreightsService.MAX_DOCS_PER_FREIGHT} documentos por flete alcanzado`);
+      }
+
+      const doc = await tx.freightDocument.create({
         data: {
           freightId,
           name: body.name || 'foto',
           url: body.url,
           type: body.type || 'photo',
-          step: (body.step as any) || null,
+          step: body.step || null,
           uploadedById: user.sub,
         },
       });
+
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, freightId, action: 'document_added', userId: user.sub, metadata: { docId: doc.id, name: body.name, type: body.type } },
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
+
+      return doc;
     });
   }
 
@@ -2650,6 +2713,11 @@ export class FreightsService {
       }
 
       await tx.freightDocument.delete({ where: { id: docId } });
+
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, freightId, action: 'document_deleted', userId: user.sub, metadata: { docId, name: doc.name, type: doc.type } },
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
+
       return { ok: true };
     });
   }

@@ -39,7 +39,7 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
     { to: FreightStatus.canceled, requiresReason: true },
   ],
   assigned: [
-    { to: FreightStatus.accepted, requiredRole: ['transporter'] },
+    { to: FreightStatus.accepted, requiredRole: ['transporter', 'plant'] },
     {
       to: FreightStatus.pending_assignment,
       requiredRole: ['transporter'],
