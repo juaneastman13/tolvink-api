@@ -134,9 +134,8 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.changePassword(user.sub, dto);
-    // changePassword returns { ok, message, refresh_token } — set cookie
-    if (result.refresh_token) {
-      res.cookie('refreshToken', result.refresh_token, { ...COOKIE_OPTS, path: '/api/auth', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    if (result.access_token && result.refresh_token) {
+      this.setAuthCookies(res, result.access_token, result.refresh_token);
     }
     return { ok: result.ok, message: result.message };
   }

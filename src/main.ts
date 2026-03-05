@@ -118,6 +118,20 @@ async function bootstrap() {
     maxAge: 86400,
   });
 
+  // CSRF protection — validate Origin header on state-changing requests
+  const allowedOrigins = new Set(corsOrigins);
+  app.use((req: any, res: any, next: any) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      const origin = req.headers['origin'];
+      // If Origin header is present and doesn't match whitelist, reject
+      // (GET/HEAD/OPTIONS are safe; missing Origin = same-origin or non-browser client)
+      if (origin && !allowedOrigins.has(origin)) {
+        return res.status(403).json({ message: 'Origin not allowed' });
+      }
+    }
+    next();
+  });
+
   // Global prefix
   app.setGlobalPrefix('api');
 

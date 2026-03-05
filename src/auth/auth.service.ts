@@ -210,8 +210,8 @@ export class AuthService {
 
     const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
 
-    // Constant-time: always hash something to prevent timing-based user enumeration
-    await bcrypt.hash('dummy-constant-time-padding', 10);
+    // Constant-time: compare against dummy hash to prevent timing-based user enumeration
+    await bcrypt.compare('x', '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012');
 
     if (!user || !user.phone) {
       return { ok: true, maskedPhone: '09*****XX' };
@@ -420,11 +420,14 @@ export class AuthService {
     // Revoke all refresh tokens (force re-login on other devices)
     await (this.prisma as any).refreshToken.deleteMany({ where: { userId } });
 
-    // Issue new refresh token for the current session
-    const newRefreshToken = await this.createRefreshToken(userId);
+    // Issue new tokens for the current session
+    const [newAccessToken, newRefreshToken] = await Promise.all([
+      this.signToken(user),
+      this.createRefreshToken(userId),
+    ]);
 
     this.logger.log(`User ${userId} changed password`);
-    return { ok: true, message: 'Contraseña actualizada correctamente', refresh_token: newRefreshToken };
+    return { ok: true, message: 'Contraseña actualizada correctamente', access_token: newAccessToken, refresh_token: newRefreshToken };
   }
 
   // ======================== EXISTING METHODS =============================

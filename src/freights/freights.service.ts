@@ -7,6 +7,7 @@ import { NotificationService } from '../notifications/notification.service';
 import { SseService } from '../sse/sse.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
 import { FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
+import { randomInt } from 'crypto';
 
 @Injectable()
 export class FreightsService {
@@ -26,9 +27,9 @@ export class FreightsService {
     const year = String(new Date().getFullYear()).slice(-2);
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     const letterPart = Array.from({ length: 3 }, () =>
-      letters[Math.floor(Math.random() * 26)],
+      letters[randomInt(26)],
     ).join('');
-    const numberPart = String(Math.floor(Math.random() * 10_000)).padStart(4, '0');
+    const numberPart = String(randomInt(10_000)).padStart(4, '0');
     return `F${year}-${letterPart}.${numberPart}`;
   }
 
@@ -2756,6 +2757,9 @@ export class FreightsService {
     // Validate ocrData shape and size
     if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
       throw new BadRequestException('ocrData debe ser un objeto JSON');
+    }
+    if (Object.keys(ocrData).length > 100) {
+      throw new BadRequestException('ocrData tiene demasiados campos (máx 100)');
     }
     const serialized = JSON.stringify(ocrData);
     if (serialized.length > 50_000) {

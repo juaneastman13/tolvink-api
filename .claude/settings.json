@@ -15,7 +15,12 @@
       "Bash(npx prisma:*)",
       "Bash(node scripts/check-codes.js)",
       "Bash(grep -n \"type=\"\"number\"\"\\\\|onClick.*increment\\\\|onClick.*decrement\\\\|incrementBy\\\\|decrementBy\" \"c:/Users/Usuario/Desktop/tolvink-deploy/tolvink-deploy/src/screens\"/*.jsx)",
-      "Bash(grep -n \"tolvink\\\\.com\" src/**/*.ts)"
+      "Bash(grep -n \"tolvink\\\\.com\" src/**/*.ts)",
+      "Read(//c/Users/Usuario/Downloads/**)",
+      "Read(//dev/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Usuario\\.claude\\plans"
     ]
   }
 }

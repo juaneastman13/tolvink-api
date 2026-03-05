@@ -12,7 +12,6 @@ const sseTickets = new Map<string, { user: any; expiresAt: number }>();
 const TICKET_TTL_MS = 30_000; // 30 seconds
 
 @ApiTags('SSE')
-@SkipThrottle()
 @Controller('sse')
 export class SseController implements OnModuleDestroy {
   private readonly logger = new Logger(SseController.name);
@@ -61,6 +60,7 @@ export class SseController implements OnModuleDestroy {
   }
 
   @Get('stream')
+  @SkipThrottle()
   @ApiOperation({ summary: 'SSE stream for real-time updates' })
   async stream(@Query('ticket') ticket: string, @Res() res: Response) {
     if (!ticket) {

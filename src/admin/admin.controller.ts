@@ -15,7 +15,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
   IsNotEmpty, IsOptional, IsString, IsEmail, IsUUID,
-  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches, IsObject,
+  IsBoolean, IsArray, MaxLength, MinLength, IsNumber, IsIn, Matches, IsObject, Min, Max,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import * as bcrypt from 'bcryptjs';
@@ -119,10 +119,10 @@ export class AdminCreateFieldDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(500)
   address?: string;
 
-  @ApiProperty() @IsNumber()
+  @ApiProperty() @IsNumber() @Min(-90) @Max(90)
   lat: number;
 
-  @ApiProperty() @IsNumber()
+  @ApiProperty() @IsNumber() @Min(-180) @Max(180)
   lng: number;
 
   @ApiProperty({ required: false }) @IsOptional() @IsNumber()
@@ -136,10 +136,10 @@ export class AdminCreateLotDto {
   @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(200)
   name: string;
 
-  @ApiProperty() @IsNumber()
+  @ApiProperty() @IsNumber() @Min(-90) @Max(90)
   lat: number;
 
-  @ApiProperty() @IsNumber()
+  @ApiProperty() @IsNumber() @Min(-180) @Max(180)
   lng: number;
 
   @ApiProperty({ required: false }) @IsOptional() @IsNumber()
@@ -159,7 +159,7 @@ export class AdminCreateTruckDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100)
   model?: string;
 
-  @ApiProperty({ required: false }) @IsOptional() @IsNumber()
+  @ApiProperty({ required: false }) @IsOptional() @IsNumber() @Min(0) @Max(1000)
   capacity?: number;
 }
 
@@ -199,7 +199,6 @@ export class UpdateCompanyDto {
 
 export class UpdateBranchDto {
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(255) name?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsUUID() companyId?: string;
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(500) address?: string;
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(500) reference?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;

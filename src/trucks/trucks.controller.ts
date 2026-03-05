@@ -10,6 +10,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -172,7 +173,7 @@ export class TrucksService {
   async createDriver(dto: CreateDriverDto, user: any) {
     const body = dto;
 
-    const email = body.email?.trim().toLowerCase() || `chofer_${require('crypto').randomBytes(8).toString('hex')}@tolvink.internal`;
+    const email = body.email?.trim().toLowerCase() || `chofer_${randomBytes(8).toString('hex')}@tolvink.internal`;
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) throw new BadRequestException('Ya existe un usuario con ese email');
 

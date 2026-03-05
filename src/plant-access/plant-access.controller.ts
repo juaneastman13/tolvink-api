@@ -90,8 +90,8 @@ export class PlantAccessService {
       .map(c => ({
         companyId: c.id,
         companyName: c.name,
-        phone: c.phone,
-        email: c.email,
+        phone: c.phone ? `***${c.phone.slice(-3)}` : null,
+        email: c.email ? `${c.email[0]}***@${c.email.split('@')[1] || ''}` : null,
         address: c.address,
         companyType: c.type,
       }));
@@ -141,8 +141,8 @@ export class PlantAccessService {
         results.push({
           userId: user.id,
           userName: user.name,
-          phone: user.phone,
-          email: user.email,
+          phone: user.phone ? `***${user.phone.slice(-3)}` : null,
+          email: user.email ? `${user.email[0]}***@${user.email.split('@')[1] || ''}` : null,
           producerCompanyId: typedMembership.companyId,
           producerCompanyName: typedMembership.company?.name || '',
         });
