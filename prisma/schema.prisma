@@ -386,6 +386,7 @@ model Freight {
   @@index([destCompanyId])
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
+  @@index([status, loadDate])
   @@index([scheduledAt])
   @@index([destName, originName, createdAt])
   @@map("freights")

@@ -2670,9 +2670,9 @@ export class FreightsService {
     const supabaseUrl = this.config.get<string>('SUPABASE_URL');
     if (supabaseUrl) {
       try {
-        const docHost = new URL(body.url).hostname;
-        const expectedHost = new URL(supabaseUrl).hostname;
-        if (docHost !== expectedHost) throw new BadRequestException('URL no permitida');
+        const docOrigin = new URL(body.url).origin;
+        const expectedOrigin = new URL(supabaseUrl).origin;
+        if (docOrigin !== expectedOrigin) throw new BadRequestException('URL no permitida');
       } catch (e) {
         if (e instanceof BadRequestException) throw e;
         throw new BadRequestException('URL inválida');

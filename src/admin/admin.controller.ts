@@ -700,15 +700,23 @@ export class AdminService {
     if (dto.name) data.name = dto.name;
     if (dto.email) data.email = dto.email;
     if (dto.phone) data.phone = dto.phone;
-    return this.prisma.user.update({
-      where: { id: userId },
-      data,
-      select: {
-        id: true, name: true, email: true, phone: true, role: true,
-        userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
-        company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
-      },
-    });
+    try {
+      return await this.prisma.user.update({
+        where: { id: userId },
+        data,
+        select: {
+          id: true, name: true, email: true, phone: true, role: true,
+          userTypes: true, active: true, companyId: true, companyByType: true, roleByType: true,
+          company: { select: { id: true, name: true, type: true, hasInternalFleet: true } },
+        },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        const field = e.meta?.target?.[0] || 'email o teléfono';
+        throw new BadRequestException(`Ya existe un usuario con ese ${field}`);
+      }
+      throw e;
+    }
   }
 
   // ===================== FIELDS (Producer) =====================

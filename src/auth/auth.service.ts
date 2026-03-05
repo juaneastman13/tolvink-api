@@ -214,7 +214,7 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({ where, select: { phone: true } });
 
     // Constant-time: compare against dummy hash to prevent timing-based user enumeration
-    await bcrypt.compare('x', '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012');
+    await bcrypt.compare('x', DUMMY_HASH);
 
     if (!user || !user.phone) {
       return { ok: true, maskedPhone: '09*****XX' };
