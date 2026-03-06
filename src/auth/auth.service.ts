@@ -66,9 +66,8 @@ export class AuthService {
     // Check lockout
     if (user.lockedUntil) {
       if (user.lockedUntil > new Date()) {
-        throw new UnauthorizedException(
-          'Cuenta bloqueada temporalmente. Intente de nuevo más tarde.',
-        );
+        await bcrypt.compare(dto.password || 'x', DUMMY_HASH); // constant-time to prevent timing oracle
+        throw new UnauthorizedException('Credenciales inválidas');
       }
       // Lockout expired — reset counter so user gets full 5 attempts again
       await this.prisma.user.updateMany({

@@ -21,6 +21,7 @@ export function verifySignedToken(
   token: string,
   secret: string,
 ): Record<string, any> | null {
+  if (!token || token.length > 2048) return null;
   const dotIdx = token.indexOf('.');
   if (dotIdx < 1) return null;
 

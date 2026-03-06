@@ -51,6 +51,8 @@ export class AiService implements OnModuleDestroy {
   private _requestLocationCooldowns = new Map<string, number>();
   // Per-chat-call side-effects accumulated by tools, merged into single session write by chat()
   private _chatSideEffects: Map<string, Record<string, any>> = new Map();
+  // Per-session lock to prevent concurrent chat() calls from racing on side-effects
+  private _chatLocks = new Set<string>();
   private rateCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
@@ -115,6 +117,12 @@ export class AiService implements OnModuleDestroy {
     if (!this.client) {
       return { text: 'El asistente IA no está disponible en este momento.' };
     }
+
+    // Per-session lock: prevent concurrent chat() calls from racing on side-effects
+    if (this._chatLocks.has(session.id)) {
+      return { text: 'Estoy procesando tu mensaje anterior, esperá un momento.' };
+    }
+    this._chatLocks.add(session.id);
 
     // Per-user rate limiting
     const now = Date.now();
@@ -342,6 +350,8 @@ export class AiService implements OnModuleDestroy {
       this._chatSideEffects.delete(session.id);
       this.logger.error(`Chat error: ${e.message}`, e.stack?.slice(0, 300));
       return { text: 'Se produjo un inconveniente técnico. Por favor, intente nuevamente o utilice las opciones del menú.' };
+    } finally {
+      this._chatLocks.delete(session.id);
     }
   }
 
