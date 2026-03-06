@@ -139,7 +139,13 @@ async function bootstrap() {
             if (!allowedOrigins.has(refOrigin)) {
               return res.status(403).json({ message: 'Origin not allowed' });
             }
-          } catch { /* malformed referer — allow (non-browser client) */ }
+          } catch {
+            return res.status(403).json({ message: 'Invalid Referer' });
+          }
+        } else {
+          // No Origin and no Referer on state-changing request — reject
+          // (non-browser clients should use Bearer auth, not cookies)
+          return res.status(403).json({ message: 'Origin header required' });
         }
       }
     }

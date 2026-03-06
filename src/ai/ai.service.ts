@@ -2051,7 +2051,7 @@ FILTROS AVANZADOS:
 
     return this.stageAction(session, 'update_freight', {
       freightId: freight.id, code: freight.code, dto,
-    }, `Modificar flete ${freight.code}\n${changes.join('\n')}`);
+    }, `Modificar flete ${freight.code}\n${changes.join('\n')}`, user);
   }
 
   // ---- duplicate_freight ----
@@ -2275,7 +2275,7 @@ FILTROS AVANZADOS:
 
     return this.stageAction(session, 'update_field', {
       fieldId: field.id, fieldName: field.name, dto, producerCompanyId,
-    }, `Modificar campo "${field.name}"\n${changes.join('\n')}`);
+    }, `Modificar campo "${field.name}"\n${changes.join('\n')}`, user);
   }
 
   // ---- update_lot ----
@@ -2316,7 +2316,7 @@ FILTROS AVANZADOS:
 
     return this.stageAction(session, 'update_lot', {
       fieldId: lot.field.id, lotId: lot.id, lotName: lot.name, fieldName: lot.field.name, dto, producerCompanyId,
-    }, `Modificar lote "${lot.name}" (campo "${lot.field.name}")\n${changes.join('\n')}`);
+    }, `Modificar lote "${lot.name}" (campo "${lot.field.name}")\n${changes.join('\n')}`, user);
   }
 
   // ---- reactivate_user ----

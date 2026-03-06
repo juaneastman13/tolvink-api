@@ -86,8 +86,9 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    // Password is required
+    // Password is required — dummy compare to prevent timing oracle
     if (!dto.password) {
+      await bcrypt.compare('x', DUMMY_HASH);
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
@@ -153,10 +154,10 @@ export class AuthService {
   async register(dto: RegisterDto) {
     dto.email = dto.email.toLowerCase().trim();
     const emailExists = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    if (emailExists) throw new ConflictException('Email ya registrado');
+    if (emailExists) throw new ConflictException('Email o teléfono ya registrado');
 
     const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
-    if (phoneExists) throw new ConflictException('Teléfono ya registrado');
+    if (phoneExists) throw new ConflictException('Email o teléfono ya registrado');
 
     const hash = await bcrypt.hash(dto.password, 10);
 

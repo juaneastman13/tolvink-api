@@ -1694,6 +1694,20 @@ export class FreightsService {
     const isAdmin = user.role === 'platform_admin';
     if (!isPlant && !isAdmin) throw new ForbiddenException('Solo la planta puede reordenar la cola');
 
+    // Verify caller has a business relationship with this driver
+    if (!isAdmin) {
+      const callerIds = await this.resolveAllCompanyIds(user);
+      const hasRelation = await this.prisma.freightAssignment.findFirst({
+        where: {
+          driverId,
+          status: { in: ['active', 'accepted'] },
+          freight: { OR: [{ originCompanyId: { in: callerIds } }, { destCompanyId: { in: callerIds } }] },
+        },
+        select: { id: true },
+      });
+      if (!hasRelation) throw new ForbiddenException('No tiene acceso a este chofer');
+    }
+
     await this.prisma.$transaction(async (tx) => {
       for (let i = 0; i < orderedFreightIds.length; i++) {
         await (tx.freightAssignment as any).updateMany({
