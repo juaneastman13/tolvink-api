@@ -1276,12 +1276,15 @@ export class FreightsService {
       const data: any = {};
       let pendingChangeCreated = false;
 
-      // --- loadDate / loadTime / notes: only in pending_assignment ---
-      if (dto.loadDate || dto.loadTime !== undefined || dto.notes !== undefined) {
+      const isOriginCompany = allIds.includes(freight.originCompanyId);
+
+      // --- loadDate / loadTime: only origin company, only in pending_assignment ---
+      if (dto.loadDate || dto.loadTime !== undefined) {
+        if (!isOriginCompany) {
+          throw new ForbiddenException('Solo la empresa de origen puede editar fecha y hora de carga');
+        }
         if (freight.status !== FreightStatus.pending_assignment) {
-          if (dto.loadDate || dto.loadTime !== undefined || dto.notes !== undefined) {
-            throw new BadRequestException('Fecha, hora y notas solo se pueden editar en estado pendiente de asignación');
-          }
+          throw new BadRequestException('Fecha y hora solo se pueden editar en estado pendiente de asignación');
         }
         if (dto.loadDate) {
           const parsedLoadDate = new Date(dto.loadDate);
@@ -1292,13 +1295,21 @@ export class FreightsService {
           data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`);
         }
         if (dto.loadTime !== undefined) data.loadTime = dto.loadTime;
-        if (dto.notes !== undefined) data.notes = dto.notes;
+      }
+
+      // --- notes: origin company only, any non-terminal status ---
+      if (dto.notes !== undefined) {
+        if (!isOriginCompany) {
+          throw new ForbiddenException('Solo la empresa de origen puede editar notas');
+        }
+        data.notes = dto.notes;
       }
 
       // --- useOwnFleet ---
       if (dto.useOwnFleet !== undefined && dto.useOwnFleet !== freight.useOwnFleet) {
         const hasActiveAssignments = freight.assignments.length > 0;
-        if (!hasActiveAssignments) {
+        if (!hasActiveAssignments || !freight.destCompanyId) {
+          // No active assignments or no counter-party → apply directly
           data.useOwnFleet = dto.useOwnFleet;
         } else {
           // Invalidate existing pending changes of same type
@@ -1313,13 +1324,12 @@ export class FreightsService {
               fromValue: { useOwnFleet: freight.useOwnFleet },
               toValue: { useOwnFleet: dto.useOwnFleet },
               requestedById: user.sub,
-              // Approver should be the OTHER party; if no dest company, auto-apply since no counter-party
-              approverCompanyId: freight.destCompanyId || freight.originCompanyId,
+              approverCompanyId: freight.destCompanyId,
             },
           });
           pendingChangeCreated = true;
           // Notify approver company
-          const approverCompanyId = freight.destCompanyId || freight.originCompanyId;
+          const approverCompanyId = freight.destCompanyId;
           this.notifications.notifyCompany(
             approverCompanyId,
             NotificationType.freight_updated,

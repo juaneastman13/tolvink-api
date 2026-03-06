@@ -380,7 +380,9 @@ export class PlantAccessController {
   @ApiQuery({ name: 'type', required: false })
   searchCompany(@Query('q') q: string, @Query('type') type?: string) {
     if (!q?.trim() || q.trim().length < 2) throw new BadRequestException('Ingresá al menos 2 caracteres');
-    return this.service.searchCompanies(q.trim(), type || 'producer');
+    const VALID_TYPES = ['producer', 'plant', 'transporter'];
+    const safeType = type && VALID_TYPES.includes(type) ? type : 'producer';
+    return this.service.searchCompanies(q.trim(), safeType);
   }
 
   @Get('search-producer')
@@ -390,7 +392,9 @@ export class PlantAccessController {
   @ApiQuery({ name: 'type', required: false })
   searchProducer(@Query('q') q: string, @Query('type') type?: string) {
     if (!q?.trim() || q.trim().length < 2) throw new BadRequestException('Ingresá al menos 2 caracteres');
-    return this.service.searchUsers(q.trim(), type || 'producer');
+    const VALID_TYPES = ['producer', 'plant', 'transporter'];
+    const safeType = type && VALID_TYPES.includes(type) ? type : 'producer';
+    return this.service.searchUsers(q.trim(), safeType);
   }
 
   @Get('my-facilities')

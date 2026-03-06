@@ -216,7 +216,8 @@ export class AuthService {
     await bcrypt.compare('x', DUMMY_HASH);
 
     if (!user || !user.phone) {
-      return { ok: true, maskedPhone: '09*****XX' };
+      // Match maskPhone output format for standard 9-digit UY phone: slice(0,3) + repeat(4) + slice(-2)
+      return { ok: true, maskedPhone: '09x****00' };
     }
 
     return { ok: true, maskedPhone: this.maskPhone(user.phone) };

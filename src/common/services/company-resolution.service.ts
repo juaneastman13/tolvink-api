@@ -133,7 +133,7 @@ export class CompanyResolutionService {
     const key = `companyType:${user.sub}`;
     if (cache?.has(key)) return cache.get(key);
 
-    if (user.companyType) { cache?.set(key, user.companyType); return user.companyType; }
+    // Always verify against DB — JWT companyType may be stale
     const memberships = await this.getMemberships(user.sub);
     // Prefer types[] array if available, fallback to type field
     if (memberships.length > 0) {

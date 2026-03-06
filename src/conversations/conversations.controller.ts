@@ -159,6 +159,24 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
     const myPrimaryId = allIds[0];
     const targetCompanyId = targetUser.companyId;
 
+    // Tenant boundary: target must be in same company or a freight-related company
+    if (!allIds.includes(targetCompanyId)) {
+      const relatedFreights = await this.prisma.freight.findFirst({
+        where: {
+          OR: [
+            { originCompanyId: { in: allIds }, destCompanyId: targetCompanyId },
+            { destCompanyId: { in: allIds }, originCompanyId: targetCompanyId },
+            { originCompanyId: targetCompanyId, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
+            { destCompanyId: targetCompanyId, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
+            { assignments: { some: { transportCompanyId: targetCompanyId, status: { in: ['active', 'accepted'] } } }, originCompanyId: { in: allIds } },
+            { assignments: { some: { transportCompanyId: targetCompanyId, status: { in: ['active', 'accepted'] } } }, destCompanyId: { in: allIds } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!relatedFreights) throw new ForbiddenException('No tenés relación comercial con ese usuario');
+    }
+
     // Check existing conversation between these two users (not freight-related)
     const existing = await this.prisma.conversation.findFirst({
       where: {
