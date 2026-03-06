@@ -122,8 +122,8 @@ export class FreightStateMachine {
       );
     }
 
-    if (transition.requiredRole && companyType) {
-      if (!transition.requiredRole.includes(companyType)) {
+    if (transition.requiredRole && transition.requiredRole.length > 0) {
+      if (!companyType || !transition.requiredRole.includes(companyType)) {
         throw new BadRequestException(
           `Solo ${transition.requiredRole.join('/')} puede ejecutar esta transición`,
         );

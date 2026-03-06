@@ -814,8 +814,12 @@ export class AdminService {
   async createTruck(companyId: string, dto: any) {
     if (!dto.plate?.trim()) throw new BadRequestException('Patente requerida');
     const plate = dto.plate.trim().toUpperCase();
-    const existing = await this.prisma.truck.findFirst({ where: { plate, companyId, active: true } });
-    if (existing) throw new BadRequestException(`La patente ${plate} ya existe en esta empresa`);
+    const existing = await this.prisma.truck.findUnique({ where: { plate } });
+    if (existing && existing.active) throw new BadRequestException(`La patente ${plate} ya está registrada`);
+    if (existing && !existing.active && existing.companyId === companyId) {
+      return this.prisma.truck.update({ where: { id: existing.id }, data: { active: true, brand: dto.brand || existing.brand, model: dto.model || existing.model } });
+    }
+    if (existing) throw new BadRequestException(`La patente ${plate} ya está registrada`);
     return this.prisma.truck.create({
       data: {
         plate,

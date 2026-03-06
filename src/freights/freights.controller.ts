@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, ParseUUIDPipe, BadRequestException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
@@ -52,6 +52,24 @@ export class FreightsController {
   @ApiQuery({ name: 'companyId', required: true })
   getDrivers(@Query('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() user: any) {
     return this.service.getAvailableDrivers(companyId, user);
+  }
+
+  @Get('drivers/:driverId/queue')
+  @Roles('plant', 'transporter', 'producer')
+  @ApiOperation({ summary: 'Cola de fletes de un chofer' })
+  getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string, @CurrentUser() user: any) {
+    return this.service.getDriverQueue(driverId, user);
+  }
+
+  @Post('drivers/:driverId/reorder')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Reordenar cola de un chofer (solo planta gerente)' })
+  reorderDriverQueue(
+    @Param('driverId', ParseUUIDPipe) driverId: string,
+    @Body() dto: ReorderQueueDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
   }
 
   @Get(':id')
@@ -282,24 +300,6 @@ export class FreightsController {
     return this.service.addTrackingPoint(id, dto, user);
   }
 
-  @Get('drivers/:driverId/queue')
-  @Roles('plant', 'transporter', 'producer')
-  @ApiOperation({ summary: 'Cola de fletes de un chofer' })
-  getDriverQueue(@Param('driverId', ParseUUIDPipe) driverId: string, @CurrentUser() user: any) {
-    return this.service.getDriverQueue(driverId, user);
-  }
-
-  @Post('drivers/:driverId/reorder')
-  @Roles('plant', 'platform_admin')
-  @ApiOperation({ summary: 'Reordenar cola de un chofer (solo planta gerente)' })
-  reorderDriverQueue(
-    @Param('driverId', ParseUUIDPipe) driverId: string,
-    @Body() dto: ReorderQueueDto,
-    @CurrentUser() user: any,
-  ) {
-    return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
-  }
-
   @Get(':id/tracking/participants')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Última posición de cada participante' })
@@ -360,6 +360,9 @@ export class FreightsController {
     @Body() dto: SaveOcrDataDto,
     @CurrentUser() user: any,
   ) {
+    if (JSON.stringify(dto.ocrData).length > 50_000) {
+      throw new BadRequestException('ocrData demasiado grande (máx 50KB)');
+    }
     return this.service.saveOcrData(id, docId, dto.ocrData, user);
   }
 }

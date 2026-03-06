@@ -7,7 +7,7 @@ export class LoginDto {
 
   @ValidateIf(o => !o.email)
   @IsString()
-  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato de teléfono inválido' })
+  @Matches(/^09\d{7}$/, { message: 'Formato de teléfono inválido' })
   phone?: string;
 
   @IsOptional()
@@ -35,7 +35,7 @@ export class RegisterDto {
 
   @IsNotEmpty({ message: 'Teléfono requerido' })
   @IsString()
-  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
   phone: string;
 
   @IsNotEmpty({ message: 'Contraseña requerida' })
@@ -73,14 +73,14 @@ export class RequestCodeDto {
 
   @IsNotEmpty({ message: 'Teléfono requerido' })
   @IsString()
-  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
   phone: string;
 }
 
 export class VerifyCodeDto {
   @IsNotEmpty({ message: 'Teléfono requerido' })
   @IsString()
-  @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
   phone: string;
 
   @IsNotEmpty({ message: 'Código requerido' })

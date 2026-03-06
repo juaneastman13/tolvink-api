@@ -109,7 +109,11 @@ export class FreightPublicController {
     const normalized = this.validateCode(code);
     const freight = await this.findSharedFreight(normalized, shareToken, {
       id: true,
+      status: true,
     });
+    if (['finished', 'canceled'].includes(freight.status)) {
+      return [];
+    }
     return this.freightsService.getParticipantPositions(freight.id);
   }
 

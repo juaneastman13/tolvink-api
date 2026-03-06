@@ -30,8 +30,9 @@ export class NotificationService implements OnModuleDestroy {
       this.logger.warn('VAPID keys not set — push notifications disabled');
     }
 
-    // Cleanup old notifications and tracking points every 6 hours
+    // Cleanup old notifications and tracking points every 6 hours (+ on startup after 30s)
     this.cleanupInterval = setInterval(() => this.cleanupOldRecords(), 6 * 60 * 60 * 1000);
+    setTimeout(() => this.cleanupOldRecords(), 30_000);
   }
 
   onModuleDestroy() {

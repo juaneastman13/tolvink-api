@@ -8,7 +8,7 @@ import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDP
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches, ValidateIf } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
@@ -23,7 +23,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 export class CreateTruckDto {
   @ApiProperty({ example: 'ABC-123' })
   @IsNotEmpty()
-  @MaxLength(20)
+  @Matches(/^[A-Za-z0-9\-\s]{2,20}$/, { message: 'Patente inválida (solo letras, números y guiones)' })
   plate: string;
 
   @ApiProperty({ required: false, example: 'Scania R500' })
@@ -47,7 +47,7 @@ export class CreateDriverDto {
   @ApiProperty({ required: false, example: '098765432' })
   @IsOptional()
   @IsString()
-  @MaxLength(50)
+  @Matches(/^09\d{7}$/, { message: 'Formato de teléfono inválido (09XXXXXXX)' })
   phone?: string;
 
   @ApiProperty({ required: false, example: 'juan@email.com' })
@@ -124,7 +124,7 @@ export class TrucksService {
             freight: { destCompanyId: user.companyId, status: { notIn: ['canceled'] } },
           },
         });
-        const hasPlantAccess = await (this.prisma as any).plantAccess?.findFirst?.({
+        const hasPlantAccess = await this.prisma.plantProducerAccess.findFirst({
           where: { plantCompanyId: user.companyId, producerCompanyId: companyId, active: true },
         }).catch(e => { this.logger.warn(e.message); return null; });
         if (!hasRelation && !hasPlantAccess) {

@@ -7,7 +7,7 @@ import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDP
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { IsUUID, IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
+import { IsUUID, IsNotEmpty, MaxLength, IsOptional, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
@@ -28,6 +28,7 @@ export class StartConversationDto {
 export class SendMessageDto {
   @ApiProperty({ description: 'Texto del mensaje', maxLength: 2000 })
   @IsNotEmpty()
+  @Matches(/\S/, { message: 'El mensaje no puede estar vacío' })
   @MaxLength(2000)
   text: string;
 }
@@ -366,6 +367,11 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async typing(conversationId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+    const participant = await this.prisma.conversationParticipant.findFirst({
+      where: { conversationId, companyId: { in: allIds } },
+    });
+    if (!participant) throw new ForbiddenException('No participás en esta conversación');
     await this.sse.broadcastTyping(conversationId, user.sub, user.name || 'Usuario');
     return { ok: true };
   }

@@ -12,6 +12,7 @@ interface SseClient {
 const MAX_CLIENTS_PER_USER = 3;
 const MAX_CLIENTS_GLOBAL = 500;
 const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
 
 @Injectable()
 export class SseService implements OnModuleDestroy {
@@ -20,14 +21,18 @@ export class SseService implements OnModuleDestroy {
   private byUser = new Map<string, Set<SseClient>>();
   private byCompany = new Map<string, Set<SseClient>>();
   private allClients = new Set<SseClient>();
+  private heartbeatTimer: ReturnType<typeof setInterval>;
 
   // In-memory cache for conversation participants (avoids repeated DB queries)
   private participantsCache = new Map<string, { userIds: string[]; ts: number }>();
   private readonly PARTICIPANTS_CACHE_TTL = 30_000; // 30 seconds
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) {
+    this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_INTERVAL_MS);
+  }
 
   onModuleDestroy() {
+    clearInterval(this.heartbeatTimer);
     for (const client of this.allClients) {
       try { client.res.end(); } catch {}
     }

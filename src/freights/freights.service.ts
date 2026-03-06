@@ -114,8 +114,8 @@ export class FreightsService {
         destPlantId = plant.id;
         // If customDestName also provided (branch mode) → use branch info for display
         destName = dto.customDestName || plant.name;
-        destLat = dto.customDestLat || dto.overrideDestLat || plant.lat;
-        destLng = dto.customDestLng || dto.overrideDestLng || plant.lng;
+        destLat = dto.customDestLat ?? dto.overrideDestLat ?? plant.lat;
+        destLng = dto.customDestLng ?? dto.overrideDestLng ?? plant.lng;
       } else {
         // Fallback: destPlantId might be a Company ID (producers select companies as destinations)
         const company = await this.prisma.company.findFirst({
@@ -125,13 +125,13 @@ export class FreightsService {
         destCompanyId = company.id;
         destPlantId = null;
         destName = dto.customDestName || company.name;
-        destLat = dto.customDestLat || dto.overrideDestLat || company.lat;
-        destLng = dto.customDestLng || dto.overrideDestLng || company.lng;
+        destLat = dto.customDestLat ?? dto.overrideDestLat ?? company.lat;
+        destLng = dto.customDestLng ?? dto.overrideDestLng ?? company.lng;
       }
     } else {
       destName = dto.customDestName!;
-      destLat = dto.customDestLat || null;
-      destLng = dto.customDestLng || null;
+      destLat = dto.customDestLat ?? null;
+      destLng = dto.customDestLng ?? null;
       // Allow explicit destCompanyId for custom dests linked to a company
       if (dto.destCompanyId) {
         const co = await this.prisma.company.findFirst({ where: { id: dto.destCompanyId, active: true } });

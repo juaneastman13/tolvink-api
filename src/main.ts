@@ -98,7 +98,7 @@ async function bootstrap() {
 
   // Request timeout — 30s max per request (skip SSE streams)
   app.use((req: any, res: any, next: any) => {
-    if (req.url?.includes('/sse/stream')) return next();
+    if (req.url?.startsWith('/api/sse/stream')) return next();
     res.setTimeout(30000, () => {
       if (!res.headersSent) {
         res.status(408).json({ message: 'Request timeout' });
@@ -143,9 +143,11 @@ async function bootstrap() {
             return res.status(403).json({ message: 'Invalid Referer' });
           }
         } else {
-          // No Origin and no Referer on state-changing request — reject
-          // (non-browser clients should use Bearer auth, not cookies)
-          return res.status(403).json({ message: 'Origin header required' });
+          // No Origin and no Referer — allow if using Bearer auth (non-browser client)
+          const authHeader = req.headers['authorization'];
+          if (!authHeader?.startsWith('Bearer ')) {
+            return res.status(403).json({ message: 'Origin header required' });
+          }
         }
       }
     }

@@ -207,7 +207,7 @@ export class AuthService {
   /** Step 1: Identify user by email/phone → return masked phone */
   async identifyForReset(dto: IdentifyForResetDto) {
     const identifier = dto.identifier.trim().toLowerCase();
-    const isPhone = /^09[1-9]\d{6}$/.test(identifier.replace(/[\s\-()]/g, ''));
+    const isPhone = /^09\d{7}$/.test(identifier.replace(/[\s\-()]/g, ''));
     const where = isPhone
       ? { phone: identifier.replace(/[\s\-()]/g, ''), active: true }
       : { email: identifier, active: true };
@@ -227,7 +227,7 @@ export class AuthService {
   /** Step 2: Confirm phone matches → send WhatsApp code */
   async requestCode(dto: RequestCodeDto) {
     const identifier = dto.identifier.trim().toLowerCase();
-    const isPhone = /^09[1-9]\d{6}$/.test(identifier.replace(/[\s\-()]/g, ''));
+    const isPhone = /^09\d{7}$/.test(identifier.replace(/[\s\-()]/g, ''));
     const where = isPhone
       ? { phone: identifier.replace(/[\s\-()]/g, ''), active: true }
       : { email: identifier, active: true };
