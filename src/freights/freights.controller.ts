@@ -360,9 +360,6 @@ export class FreightsController {
     @Body() dto: SaveOcrDataDto,
     @CurrentUser() user: any,
   ) {
-    if (JSON.stringify(dto.ocrData).length > 50_000) {
-      throw new BadRequestException('ocrData demasiado grande (máx 50KB)');
-    }
     return this.service.saveOcrData(id, docId, dto.ocrData, user);
   }
 }

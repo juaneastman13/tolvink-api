@@ -91,7 +91,7 @@ export class PlantAccessService {
         companyId: c.id,
         companyName: c.name,
         phone: c.phone ? `***${c.phone.slice(-3)}` : null,
-        email: c.email ? `${c.email[0]}***@${c.email.split('@')[1] || ''}` : null,
+        email: c.email && c.email.includes('@') ? `${c.email.substring(0, 1)}***@${c.email.split('@')[1]}` : c.email ? '***' : null,
         address: c.address,
         companyType: c.type,
       }));
@@ -142,7 +142,7 @@ export class PlantAccessService {
           userId: user.id,
           userName: user.name,
           phone: user.phone ? `***${user.phone.slice(-3)}` : null,
-          email: user.email ? `${user.email[0]}***@${user.email.split('@')[1] || ''}` : null,
+          email: user.email && user.email.includes('@') ? `${user.email.substring(0, 1)}***@${user.email.split('@')[1]}` : user.email ? '***' : null,
           producerCompanyId: typedMembership.companyId,
           producerCompanyName: typedMembership.company?.name || '',
         });
@@ -273,8 +273,8 @@ export class PlantAccessService {
       });
     }
 
-    // Non-admin without specific plant → use their own plant company
-    if (!isAdmin && !plantCompanyId) {
+    // Non-admin: always scope to their own plant company (ignore user-provided plantCompanyId)
+    if (!isAdmin) {
       where.plantCompanyId = await this.resolvePlantCompanyId(user);
     }
 
@@ -350,7 +350,7 @@ export class PlantAccessService {
 
   async listPlantCompanies() {
     return this.prisma.company.findMany({
-      where: { type: 'plant' },
+      where: { active: true, OR: [{ type: 'plant' }, { types: { has: 'plant' } }] as any },
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     });

@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Body, Get, UseGuards, Res, Req, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Get, UseGuards, Res, Req, UnauthorizedException, Logger } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle, SkipThrottle } from '@nestjs/throttler';
@@ -12,6 +12,7 @@ const COOKIE_OPTS: any = { httpOnly: true, secure: true, sameSite: 'none', parti
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
   constructor(private authService: AuthService) {}
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
@@ -89,8 +90,12 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    // Accept refresh token from body (legacy) or cookie (new)
-    const refreshToken = dto.refreshToken || (req as any).cookies?.refreshToken;
+    // Accept refresh token from cookie (preferred) or body (legacy — deprecated)
+    const cookieToken = (req as any).cookies?.refreshToken;
+    const refreshToken = cookieToken || dto.refreshToken;
+    if (dto.refreshToken && !cookieToken) {
+      this.logger.warn('Refresh token via body is deprecated — migrate to HttpOnly cookies');
+    }
     if (!refreshToken) throw new UnauthorizedException('Refresh token requerido');
     const result = await this.authService.refresh({ refreshToken });
     this.setAuthCookies(res, result.access_token, result.refresh_token);

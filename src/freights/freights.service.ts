@@ -889,7 +889,11 @@ export class FreightsService {
           return { updated, freight, path: 'transporter' as const };
         }
 
-        // Producer path
+        // Producer path — verify caller is the origin company
+        const callerProducerIds = await this.resolveAllCompanyIds(user);
+        if (!callerProducerIds.includes(freight.originCompanyId)) {
+          throw new ForbiddenException('Solo el productor de origen puede confirmar la carga');
+        }
         if (freight.status !== FreightStatus.loaded) {
           throw new BadRequestException(
             `El productor solo puede confirmar carga en estado "loaded". Estado actual: "${freight.status}"`,
@@ -1708,16 +1712,21 @@ export class FreightsService {
       if (!hasRelation) throw new ForbiddenException('No tiene acceso a este chofer');
     }
 
+    // Scope: only allow reordering freights where caller is origin or dest company
+    const callerIds = isAdmin ? null : await this.resolveAllCompanyIds(user);
+
     await this.prisma.$transaction(async (tx) => {
       for (let i = 0; i < orderedFreightIds.length; i++) {
-        await (tx.freightAssignment as any).updateMany({
-          where: {
-            driverId,
-            freightId: orderedFreightIds[i],
-            status: { in: ['active', 'accepted'] },
-          },
-          data: { queuePosition: i + 1 },
-        });
+        const where: any = {
+          driverId,
+          freightId: orderedFreightIds[i],
+          status: { in: ['active', 'accepted'] },
+        };
+        // Non-admin: only reorder freights belonging to caller's companies
+        if (callerIds) {
+          where.freight = { OR: [{ originCompanyId: { in: callerIds } }, { destCompanyId: { in: callerIds } }] };
+        }
+        await (tx.freightAssignment as any).updateMany({ where, data: { queuePosition: i + 1 } });
       }
     });
 
@@ -2399,6 +2408,11 @@ export class FreightsService {
         }
 
         if (ct === 'producer') {
+          // Verify caller is the origin company
+          const callerProdIds = await this.resolveAllCompanyIds(user);
+          if (!callerProdIds.includes(freight.originCompanyId)) {
+            throw new ForbiddenException('Solo el productor de origen puede confirmar la carga');
+          }
           if (assignment.tripStatus !== 'loaded') throw new BadRequestException('El camión debe estar cargado para que el productor confirme');
           if (assignment.producerLoadedConfirmedAt) throw new BadRequestException('El productor ya confirmó la carga');
 
@@ -2774,6 +2788,19 @@ export class FreightsService {
     }
     if (Object.keys(ocrData).length > 100) {
       throw new BadRequestException('ocrData tiene demasiados campos (máx 100)');
+    }
+    // Depth check to prevent stack overflow from deeply nested objects
+    const checkDepth = (obj: any, depth: number): boolean => {
+      if (depth > 10) return false;
+      if (obj && typeof obj === 'object') {
+        for (const v of Object.values(obj)) {
+          if (!checkDepth(v, depth + 1)) return false;
+        }
+      }
+      return true;
+    };
+    if (!checkDepth(ocrData, 0)) {
+      throw new BadRequestException('ocrData demasiado anidado (máx 10 niveles)');
     }
     const serialized = JSON.stringify(ocrData);
     if (serialized.length > 50_000) {

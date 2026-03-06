@@ -373,7 +373,7 @@ export class WhatsAppController implements OnModuleDestroy {
     if (!body.token || body.lat == null || body.lng == null) {
       throw new BadRequestException('token, lat, lng required');
     }
-    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || !isFinite(body.lat) || !isFinite(body.lng) || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
       throw new BadRequestException('Invalid coordinates');
     }
     if (body.name && body.name.length > 255) body.name = body.name.slice(0, 255);
@@ -445,7 +445,7 @@ export class WhatsAppController implements OnModuleDestroy {
     if (typeof body.slug !== 'string' || !/^[a-z0-9-]{3,30}$/.test(body.slug)) {
       throw new BadRequestException('Invalid slug format');
     }
-    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number' || !isFinite(body.lat) || !isFinite(body.lng) || body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
       throw new BadRequestException('Invalid coordinates');
     }
     if (body.name && body.name.length > 255) body.name = body.name.slice(0, 255);

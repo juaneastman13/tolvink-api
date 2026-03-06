@@ -131,8 +131,12 @@ export class OcrService {
       timeoutHandle = setTimeout(() => reject(new Error('OCR timeout')), TIMEOUT_MS);
     });
 
-    const response = await Promise.race([apiCall, timeout]);
-    clearTimeout(timeoutHandle!);
+    let response: any;
+    try {
+      response = await Promise.race([apiCall, timeout]);
+    } finally {
+      clearTimeout(timeoutHandle!);
+    }
 
     const textBlock = (response as any).content?.find((b: any) => b.type === 'text');
     const raw = textBlock?.text || '';

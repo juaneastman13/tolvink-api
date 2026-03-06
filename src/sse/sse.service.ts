@@ -114,7 +114,8 @@ export class SseService implements OnModuleDestroy {
   emitToUser(userId: string, event: string, data: any) {
     const clients = this.byUser.get(userId);
     if (!clients || clients.size === 0) return;
-    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const safeEvent = event.replace(/[\r\n]/g, '');
+    const payload = `event: ${safeEvent}\ndata: ${JSON.stringify(data)}\n\n`;
     const dead: SseClient[] = [];
     for (const c of clients) {
       try { c.res.write(payload); c.lastActivity = Date.now(); } catch { dead.push(c); }
@@ -126,7 +127,8 @@ export class SseService implements OnModuleDestroy {
   emitToCompany(companyId: string, event: string, data: any, excludeUserId?: string) {
     const clients = this.byCompany.get(companyId);
     if (!clients || clients.size === 0) return;
-    const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    const safeEvent = event.replace(/[\r\n]/g, '');
+    const payload = `event: ${safeEvent}\ndata: ${JSON.stringify(data)}\n\n`;
     const dead: SseClient[] = [];
     for (const c of clients) {
       if (c.userId !== excludeUserId) {

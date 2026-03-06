@@ -7,6 +7,8 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { requestCache } from '../request-cache';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class CompanyResolutionService {
   constructor(private prisma: PrismaService) {}
@@ -53,7 +55,7 @@ export class CompanyResolutionService {
       // Validate JWT company IDs against current memberships to filter stale entries
       const memberships = await this.getMemberships(user.sub);
       const memberCompanyIds = new Set(memberships.map(m => m.companyId));
-      Object.values(jwtCbt).forEach((v: any) => { if (v && memberCompanyIds.has(v)) ids.add(v); });
+      Object.values(jwtCbt).forEach((v: any) => { if (v && typeof v === 'string' && UUID_RE.test(v) && memberCompanyIds.has(v)) ids.add(v); });
       for (const m of memberships) ids.add(m.companyId);
       const result = Array.from(ids);
       cache?.set(key, result);
@@ -71,7 +73,7 @@ export class CompanyResolutionService {
     for (const m of memberships) ids.add(m.companyId);
     if (dbUser?.companyId) ids.add(dbUser.companyId);
     const cbt = (dbUser?.companyByType as any) || {};
-    Object.values(cbt).forEach((v: any) => { if (v) ids.add(v); });
+    Object.values(cbt).forEach((v: any) => { if (v && typeof v === 'string' && UUID_RE.test(v)) ids.add(v); });
 
     const result = Array.from(ids);
     cache?.set(key, result);

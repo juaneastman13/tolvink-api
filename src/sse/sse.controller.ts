@@ -40,17 +40,18 @@ export class SseController implements OnModuleDestroy {
   @ApiOperation({ summary: 'Get a short-lived SSE ticket (avoids JWT in URL)' })
   async getTicket(@Req() req: Request) {
     const user = (req as any).user;
-    // Bound ticket map — evict expired + forced eviction if over cap
-    if (sseTickets.size > 10_000) {
+    // Bound ticket map — evict expired first, then oldest by insertion order if still over cap
+    if (sseTickets.size > 5_000) {
       const now = Date.now();
       for (const [k, v] of sseTickets) {
         if (v.expiresAt < now) sseTickets.delete(k);
       }
-      if (sseTickets.size > 9_000) {
-        const iter = sseTickets.keys();
-        while (sseTickets.size > 9_000) {
-          const k = iter.next().value;
-          if (k) sseTickets.delete(k); else break;
+      // If still over cap after evicting expired, remove oldest entries (Map iterates in insertion order)
+      if (sseTickets.size > 5_000) {
+        let toRemove = sseTickets.size - 5_000;
+        for (const k of sseTickets.keys()) {
+          if (toRemove-- <= 0) break;
+          sseTickets.delete(k);
         }
       }
     }
@@ -73,9 +74,9 @@ export class SseController implements OnModuleDestroy {
       throw new UnauthorizedException('Invalid or expired ticket');
     }
     const user = entry.user;
-    sseTickets.delete(ticket); // Single-use
+    sseTickets.delete(ticket); // Single-use — delete BEFORE any await to prevent double-use
 
-    // Resolve all company IDs for this user
+    // Resolve all company IDs for this user (safe: ticket already consumed above)
     const companyIds = await this.companyRes.resolveAllCompanyIds(user);
 
     // Set SSE headers

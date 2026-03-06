@@ -8,9 +8,8 @@ import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 
 // Pre-computed valid bcrypt hash for constant-time comparison against non-existent users
-let DUMMY_HASH = '$2b$10$X4kv7j5ZcG39WgogSl16aurY0r1YFTRBCG2yvhJMubXTdWcN4xOey';
-// Generate fresh dummy hash at startup (async, replaces static one)
-(async () => { try { DUMMY_HASH = await require('bcryptjs').hash(require('crypto').randomBytes(16).toString('hex'), 10); } catch {} })();
+// Use synchronous hashSync to guarantee DUMMY_HASH is ready before any request
+const DUMMY_HASH = bcrypt.hashSync(randomBytes(16).toString('hex'), 10);
 const REFRESH_TOKEN_DAYS = 7;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
@@ -285,6 +284,7 @@ export class AuthService {
   async verifyCode(dto: VerifyCodeDto) {
     const user = await this.prisma.user.findFirst({ where: { phone: dto.phone, active: true } });
     if (!user) {
+      await bcrypt.compare(dto.code || 'x', DUMMY_HASH); // constant-time to prevent timing oracle
       throw new UnauthorizedException('Código inválido o expirado');
     }
 

@@ -74,10 +74,10 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
 
 // ======================== TRIP-LEVEL TRANSITIONS (v6.0) ================
 const TRIP_TRANSITIONS: Record<TripStatus, { to: TripStatus; requiredRole?: string[] }[]> = {
-  pending:     [{ to: 'accepted' }, { to: 'canceled' }],
-  accepted:    [{ to: 'in_progress' }, { to: 'canceled' }],
-  in_progress: [{ to: 'loaded' }],
-  loaded:      [{ to: 'finished' }],
+  pending:     [{ to: 'accepted', requiredRole: ['transporter'] }, { to: 'canceled' }],
+  accepted:    [{ to: 'in_progress', requiredRole: ['transporter'] }, { to: 'canceled' }],
+  in_progress: [{ to: 'loaded', requiredRole: ['transporter'] }],
+  loaded:      [{ to: 'finished', requiredRole: ['transporter', 'plant'] }],
   finished:    [],
   canceled:    [],
 };

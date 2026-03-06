@@ -150,10 +150,11 @@ export class NotificationService implements OnModuleDestroy {
   // ======================== GET NOTIFICATIONS ============================
 
   async getNotifications(userId: string, limit = 50) {
+    const safeLim = Math.min(Math.max(1, limit || 50), 200);
     return this.prisma.notification.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: safeLim,
     });
   }
 

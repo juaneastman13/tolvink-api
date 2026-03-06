@@ -218,8 +218,15 @@ export class AiService implements OnModuleDestroy {
           messages: currentMessages,
         });
         // 45s timeout to prevent hanging requests
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Claude API timeout')), 45_000));
-        response = await Promise.race([apiCall, timeout]) as any;
+        let timeoutHandle: ReturnType<typeof setTimeout>;
+        const timeout = new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error('Claude API timeout')), 45_000);
+        });
+        try {
+          response = await Promise.race([apiCall, timeout]) as any;
+        } finally {
+          clearTimeout(timeoutHandle!);
+        }
         this.logger.log(`Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
 
         if (response.stop_reason === 'tool_use') {
@@ -2114,8 +2121,8 @@ FILTROS AVANZADOS:
     const accessResult = await this.resolveFreightWithAccess(input.code, user);
     if (accessResult.error) return JSON.stringify({ error: accessResult.error });
 
-    const freight = await this.prisma.freight.findFirst({
-      where: { code: input.code.toUpperCase() },
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: accessResult.freight.id },
       include: {
         documents: { orderBy: { createdAt: 'desc' }, select: { id: true, name: true, type: true, step: true, url: true, createdAt: true } },
       },
@@ -2904,6 +2911,10 @@ FILTROS AVANZADOS:
             break;
           }
           const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          // Set own fleet flag if deferred from staging
+          if (params.setOwnFleet) {
+            await this.prisma.freight.update({ where: { id: params.freightId }, data: { useOwnFleet: true } as any });
+          }
           const dto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) dto.truckId = params.truckId;
           if (params.driverId) dto.driverId = params.driverId;
@@ -3158,6 +3169,11 @@ FILTROS AVANZADOS:
         }
 
         case 'create_driver': {
+          // Re-validate admin role at confirm time (may have changed since staging)
+          if (!this.isCallerAdminForCompany(user, params.companyId)) {
+            result = JSON.stringify({ error: 'Ya no tenés permisos de administrador para esta empresa.' });
+            break;
+          }
           const driverSyn = { ...synUser, companyId: params.companyId };
           const driver = await this.trucksService.createDriver({ name: params.name, phone: params.phone }, driverSyn);
           result = JSON.stringify({ status: 'created', driver: { id: (driver as any).id, name: (driver as any).name }, message: `Chofer "${params.name}" registrado.` });
@@ -3165,10 +3181,9 @@ FILTROS AVANZADOS:
         }
 
         case 'update_profile': {
+          // Only allow name changes from WhatsApp (email/phone blocked)
           const dto: any = {};
           if (params.name) dto.name = params.name;
-          if (params.email) dto.email = params.email;
-          if (params.phone) dto.phone = params.phone;
           await this.adminService.updateSelf(params.userId, dto);
           result = JSON.stringify({ status: 'updated', message: 'Perfil actualizado exitosamente.' });
           break;
@@ -4103,9 +4118,9 @@ FILTROS AVANZADOS:
     if (!transporter) return JSON.stringify({ error: 'Empresa transportista no encontrada.' });
     const transporterName = transporter.name;
 
-    // Persist own fleet decision if using own_fleet shortcut
+    // Note: useOwnFleet flag will be set in confirm_action handler, not here (before confirmation)
     if (isOwnFleetShortcut && (freight as any).useOwnFleet == null) {
-      await this.prisma.freight.update({ where: { id: freight.id }, data: { useOwnFleet: true } as any });
+      // Deferred to confirm_action — mark in staged params instead
     }
 
     // Resolve the acting company: plant users only
@@ -4122,6 +4137,7 @@ FILTROS AVANZADOS:
       truckId: input.truckId || null,
       driverId: input.driverId || null,
       plantCompanyId: actingCompanyId,
+      setOwnFleet: isOwnFleetShortcut && (freight as any).useOwnFleet == null,
     }, `Asignar transportista "${displayName}" a flete ${freight.code}`, user);
   }
 
@@ -4403,6 +4419,7 @@ FILTROS AVANZADOS:
 
     return this.stageAction(session, 'deactivate_user', {
       membershipId: membership.id,
+      companyId,
       targetUserId: membership.user.id,
       userName: membership.user.name,
     }, `Desactivar usuario "${membership.user.name}" de su empresa`, user);

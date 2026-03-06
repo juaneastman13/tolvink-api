@@ -150,7 +150,7 @@ export class AdminCreateLotDto {
 }
 
 export class AdminCreateTruckDto {
-  @ApiProperty() @IsNotEmpty() @IsString() @MaxLength(20)
+  @ApiProperty() @IsNotEmpty() @IsString() @Matches(/^[A-Za-z0-9\-\s]{2,20}$/, { message: 'Patente: solo letras, números, guiones (2-20 chars)' })
   plate: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MaxLength(100)
@@ -178,7 +178,7 @@ export class UpdateUserDto {
 export class UpdateSelfDto {
   @ApiProperty({ required: false }) @IsOptional() @IsString() @MinLength(2, { message: 'Nombre muy corto' }) @MaxLength(255) name?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsEmail({}, { message: 'Email inválido' }) email?: string;
-  @ApiProperty({ required: false }) @IsOptional() @IsString() @Matches(/^09[1-9]\d{6}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' }) phone?: string;
+  @ApiProperty({ required: false }) @IsOptional() @IsString() @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' }) phone?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsString() currentPassword?: string;
 }
 
@@ -515,7 +515,7 @@ export class AdminService {
     // Use pre-hashed password (internal callers like AI) or hash from plaintext
     const hash = preHashedPassword || await bcrypt.hash(dto.password, 10);
 
-    const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
+    const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
 
     let user: any;
     try {
@@ -641,7 +641,7 @@ export class AdminService {
 
     // Sync memberships if companyId changed
     if (dto.companyId !== undefined && dto.companyId) {
-      const membershipRole = dto.role === 'admin' ? 'gerente' : dto.role === 'chofer' ? 'chofer' : 'operario';
+      const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
       await (this.prisma as any).userCompany.upsert({
         where: { userId_companyId: { userId, companyId: dto.companyId } },
         create: { userId, companyId: dto.companyId, role: membershipRole },
@@ -835,7 +835,12 @@ export class AdminService {
     const t = await this.prisma.truck.findFirst({ where: { id: truckId, active: true } });
     if (!t) throw new NotFoundException('Vehículo no encontrado');
     const data: any = {};
-    if (dto.plate !== undefined) data.plate = dto.plate.trim().toUpperCase();
+    if (dto.plate !== undefined) {
+      const normalized = dto.plate.trim().toUpperCase();
+      const dup = await this.prisma.truck.findFirst({ where: { plate: normalized, id: { not: truckId }, active: true } });
+      if (dup) throw new BadRequestException(`La patente ${normalized} ya está registrada`);
+      data.plate = normalized;
+    }
     if (dto.brand !== undefined) data.brand = dto.brand;
     if (dto.model !== undefined) data.model = dto.model;
     if (dto.capacity !== undefined) data.capacity = dto.capacity;
@@ -973,7 +978,8 @@ export class AdminController {
         where: { id: u.sub },
         select: { companyId: true, activeCompanyId: true },
       });
-      dto.companyId = freshUser?.activeCompanyId || freshUser?.companyId || u.companyId;
+      if (!freshUser) throw new ForbiddenException('Usuario no encontrado');
+      dto.companyId = freshUser.activeCompanyId || freshUser.companyId;
       dto.companyByType = undefined;
       dto.roleByType = undefined;
       if (dto.role === 'platform_admin') throw new ForbiddenException('No podés asignar este rol');

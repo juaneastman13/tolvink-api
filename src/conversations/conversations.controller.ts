@@ -563,6 +563,7 @@ export class ConversationsController {
   @ApiOperation({ summary: 'Buscar usuarios por nombre para iniciar chat' })
   @ApiQuery({ name: 'q', required: true })
   searchUsers(@Query('q') q: string, @CurrentUser() user: any) {
+    if (q && q.length > 100) q = q.slice(0, 100);
     return this.service.searchUsers(q, user);
   }
 

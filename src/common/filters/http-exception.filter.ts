@@ -52,7 +52,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     res.status(status).json({
       statusCode: status,
       message: safeMessage,
-      path: req.url,
+      path: req.path || req.url?.split('?')[0],
       timestamp: new Date().toISOString(),
     });
   }
