@@ -22,8 +22,19 @@ export class RolesGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest();
     if (!user) throw new ForbiddenException('No autenticado');
 
-    // Platform admin passes all checks
-    if (user.role === 'platform_admin') return true;
+    // Platform admin passes all checks — verify against DB to prevent stale JWT bypass
+    if (user.role === 'platform_admin') {
+      if (user.sub) {
+        const dbUser = await (this.prisma as any).user.findUnique({
+          where: { id: user.sub },
+          select: { isSuperAdmin: true, active: true },
+        });
+        if (!dbUser?.active || !dbUser?.isSuperAdmin) {
+          throw new ForbiddenException('Sin permisos para esta acción');
+        }
+      }
+      return true;
+    }
 
     // Quick check: JWT companyType or companyTypes[] matches a required role
     const hasType = requiredRoles.some(

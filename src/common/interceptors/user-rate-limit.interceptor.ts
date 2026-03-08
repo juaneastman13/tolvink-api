@@ -1,7 +1,8 @@
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler, HttpException } from '@nestjs/common';
 import { Observable } from 'rxjs';
 
-const LIMIT = 2000;
+const LIMIT_AUTH = 500;      // authenticated users: 500 req/min
+const LIMIT_ANON = 100;      // unauthenticated (IP-based): 100 req/min
 const WINDOW_MS = 60000;
 
 /**
@@ -16,7 +17,9 @@ export class UserRateLimitInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const req = context.switchToHttp().getRequest();
     const userId = req.user?.sub;
-    if (!userId) return next.handle();
+    // Fall back to IP-based rate limiting for unauthenticated requests
+    const key = userId || `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+    const limit = userId ? LIMIT_AUTH : LIMIT_ANON;
 
     const now = Date.now();
 
@@ -35,14 +38,14 @@ export class UserRateLimitInterceptor implements NestInterceptor {
       this.lastCleanup = now;
     }
 
-    let entry = this.store.get(userId);
+    let entry = this.store.get(key);
     if (!entry || now > entry.resetAt) {
       entry = { count: 0, resetAt: now + WINDOW_MS };
-      this.store.set(userId, entry);
+      this.store.set(key, entry);
     }
     entry.count++;
 
-    if (entry.count > LIMIT) {
+    if (entry.count > limit) {
       throw new HttpException('Demasiadas solicitudes, intenta en un minuto', 429);
     }
 

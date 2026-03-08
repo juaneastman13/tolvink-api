@@ -335,10 +335,13 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const url = metaData.url;
     const mimeType = metaData.mime_type || 'audio/ogg';
 
-    // Validate URL points to a known Meta CDN domain (SSRF protection)
+    // Validate URL points to a known Meta CDN domain over HTTPS (SSRF protection)
     const ALLOWED_HOSTS = ['lookaside.fbsbx.com', 'scontent.whatsapp.net', 'media.fna.whatsapp.net'];
     try {
       const parsed = new URL(url);
+      if (parsed.protocol !== 'https:') {
+        throw new Error('Non-HTTPS media URL rejected');
+      }
       if (!ALLOWED_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`))) {
         throw new Error(`Unexpected media host: ${parsed.hostname}`);
       }
