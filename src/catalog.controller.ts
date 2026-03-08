@@ -252,7 +252,7 @@ export class CatalogController implements OnModuleDestroy {
       if (user.role === 'platform_admin') {
         return this.prisma.lot.findMany({
           where: { active: true },
-          select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true },
+          select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true, fieldId: true, field: { select: { name: true } } },
           orderBy: { name: 'asc' },
           take: t,
           skip: s,
@@ -262,7 +262,7 @@ export class CatalogController implements OnModuleDestroy {
       const allIds = await this.companyRes.resolveAllCompanyIds(user);
       return this.prisma.lot.findMany({
         where: { active: true, companyId: { in: allIds } },
-        select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true },
+        select: { id: true, name: true, hectares: true, lat: true, lng: true, companyId: true, fieldId: true, field: { select: { name: true } } },
         orderBy: { name: 'asc' },
         take: t,
         skip: s,

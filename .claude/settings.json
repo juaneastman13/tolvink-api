@@ -17,10 +17,24 @@
       "Bash(grep -n \"type=\"\"number\"\"\\\\|onClick.*increment\\\\|onClick.*decrement\\\\|incrementBy\\\\|decrementBy\" \"c:/Users/Usuario/Desktop/tolvink-deploy/tolvink-deploy/src/screens\"/*.jsx)",
       "Bash(grep -n \"tolvink\\\\.com\" src/**/*.ts)",
       "Read(//c/Users/Usuario/Downloads/**)",
-      "Read(//dev/**)"
+      "Read(//dev/**)",
+      "Bash(grep -rn \"WHATSAPP\\\\|WABA\\\\|PHONE_NUMBER\" .env .env.*)",
+      "Bash(grep -n \"$queryRaw\\\\|$executeRaw\" /c/Users/Usuario/Desktop/tolvink-deploy/tolvink/tolvink-api/tolvink-api/src/freights/freights.service.ts)",
+      "Bash(xargs head -100)",
+      "Bash(grep -n \"sql\\\\`\" /c/Users/Usuario/Desktop/tolvink-deploy/tolvink/tolvink-api/tolvink-api/src/ai/ai.service.ts)",
+      "Bash(npm list --depth=0)",
+      "Bash(for f in adb80e9e75fe170b4 ae753e8d32e537003 ae39049782988f59c a15c8da9a6159e32a)",
+      "Read(//c/Users/Usuario/AppData/Local/Temp/claude/c--Users-Usuario-Desktop-tolvink-deploy-tolvink-tolvink-api-tolvink-api/tasks/**)",
+      "Bash(xargs grep -l \"analytics\\\\|Controller\")",
+      "Read(//c/Users/Usuario/AppData/Local/Temp/claude//**)",
+      "Read(//tmp/**)",
+      "Read(//c/Users/Usuario/AppData/Local/Temp//**)",
+      "WebSearch",
+      "Bash(grep -n \"$queryRaw\\\\|sql\\\\`\\\\|prisma\\\\.$executeRaw\\\\|queryRaw\" \"c:\\\\Users\\\\Usuario\\\\Desktop\\\\tolvink-deploy\\\\tolvink\\\\tolvink-api\\\\tolvink-api/src/freights/freights.service.ts\")"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Usuario\\.claude\\plans"
+      "C:\\Users\\Usuario\\.claude\\plans",
+      "c:\\Users\\Usuario\\Desktop\\tolvink-deploy"
     ]
   }
 }
