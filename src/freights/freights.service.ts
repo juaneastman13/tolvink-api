@@ -500,11 +500,16 @@ export class FreightsService {
           if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
           assignData.driverId = driverMembership.user.id;
           assignData.driverName = driverMembership.user.name;
-          const maxPos: any = await (tx.freightAssignment as any).aggregate({
-            _max: { queuePosition: true },
-            where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-          });
-          assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+          // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
+          const lockRows: any[] = await tx.$queryRaw`
+            SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+            FROM "FreightAssignment" fa
+            JOIN "Freight" f ON f.id = fa."freightId"
+            WHERE fa."driverId" = ${dto.driverId}::uuid
+              AND fa.status IN ('active','accepted')
+              AND f.status IN ('assigned','accepted','in_progress','loaded')
+            FOR UPDATE OF fa`;
+          assignData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
         }
         const assignment = await tx.freightAssignment.create({ data: assignData });
 
@@ -527,6 +532,8 @@ export class FreightsService {
             },
             update: {},
           });
+          // Invalidate SSE participants cache so new transporter receives real-time events
+          this.sse.invalidateParticipantsCache(freight.conversation.id);
         }
 
         await tx.auditLog.create({
@@ -1885,11 +1892,16 @@ export class FreightsService {
             if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa');
             assignData.driverId = dm.user.id;
             assignData.driverName = dm.user.name;
-            const maxPos: any = await (tx.freightAssignment as any).aggregate({
-              _max: { queuePosition: true },
-              where: { driverId: truck.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-            });
-            assignData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+            // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
+            const lockRows: any[] = await tx.$queryRaw`
+              SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+              FROM "FreightAssignment" fa
+              JOIN "Freight" f ON f.id = fa."freightId"
+              WHERE fa."driverId" = ${truck.driverId}::uuid
+                AND fa.status IN ('active','accepted')
+                AND f.status IN ('assigned','accepted','in_progress','loaded')
+              FOR UPDATE OF fa`;
+            assignData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
           }
 
           await tx.freightAssignment.create({ data: assignData });
@@ -1900,6 +1912,8 @@ export class FreightsService {
               create: { conversationId: freight.conversation.id, companyId: truck.transportCompanyId },
               update: {},
             });
+            // Invalidate SSE participants cache so new transporter receives real-time events
+            this.sse.invalidateParticipantsCache(freight.conversation.id);
           }
         }
 

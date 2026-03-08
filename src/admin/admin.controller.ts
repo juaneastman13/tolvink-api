@@ -932,6 +932,13 @@ export class AdminService {
       const myIds = await this.getUserCompanyIds(user);
       if (!myIds.includes(t.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
     }
+    // Prevent deactivation if truck has active/accepted assignments
+    const activeAssignments = await this.prisma.freightAssignment.count({
+      where: { truckId, status: { in: ['active', 'accepted'] } },
+    });
+    if (activeAssignments > 0) {
+      throw new BadRequestException(`No se puede eliminar: el camión tiene ${activeAssignments} asignación(es) activa(s)`);
+    }
     return this.prisma.truck.update({ where: { id: truckId }, data: { active: false } });
   }
 }
