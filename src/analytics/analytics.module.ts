@@ -39,10 +39,22 @@ class AnalyticsController {
 
   constructor(private prisma: PrismaService) {}
 
+  // Allowlist of known event names to prevent arbitrary data pollution
+  private static ALLOWED_EVENTS = new Set([
+    'page_view', 'screen_view', 'login', 'logout', 'register',
+    'freight_create', 'freight_view', 'freight_action', 'freight_search',
+    'map_view', 'chat_open', 'notification_click', 'error',
+    'wizard_step', 'filter_change', 'upload', 'ocr_scan',
+  ]);
+
   @Post('track')
-  @Throttle({ default: { ttl: 60000, limit: 100 } })
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: 'Track an analytics event (public, auth optional)' })
   async track(@Body() dto: TrackDto, @Req() req: any) {
+    // Reject unknown event names to prevent pollution from unauthenticated callers
+    if (!AnalyticsController.ALLOWED_EVENTS.has(dto.event)) {
+      return { ok: true }; // Silent drop — don't reveal allowlist
+    }
     const userId = req.user?.sub || null;
     this.prisma.analyticsEvent.create({
       data: {

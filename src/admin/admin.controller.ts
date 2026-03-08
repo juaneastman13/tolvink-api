@@ -581,15 +581,18 @@ export class AdminService {
     const target = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!target) throw new NotFoundException('Usuario no encontrado');
 
+    // Always resolve caller from DB to prevent stale JWT role bypass
+    const resolvedCaller = await this.resolveFullUser(callerUser);
+    const callerIsPlatformAdmin = resolvedCaller.isSuperAdmin === true;
+
     // Non-platform-admins can only edit users in their own companies (or themselves)
-    if (!this.isPlatformAdmin(callerUser)) {
+    if (!callerIsPlatformAdmin) {
       // Company admins can't set platform_admin role (applies to self-edit too)
       if (dto.role === 'platform_admin') {
         throw new ForbiddenException('No podés asignar rol de administrador principal');
       }
       if (callerUser.sub !== userId) {
-        const fullCaller = await this.resolveFullUser(callerUser);
-        const callerCompanies = await this.getUserCompanyIds(fullCaller);
+        const callerCompanies = await this.getUserCompanyIds(resolvedCaller);
         const targetMemberships = await this.prisma.userCompany.findMany({ where: { userId }, select: { companyId: true } });
         const targetCompanies = [target.companyId, ...targetMemberships.map(m => m.companyId)].filter(Boolean);
         if (!targetCompanies.some(c => callerCompanies.includes(c))) {
@@ -600,7 +603,7 @@ export class AdminService {
       dto.companyByType = undefined;
       dto.roleByType = undefined;
       if (dto.companyId !== undefined) {
-        const callerCoIds = await this.getUserCompanyIds(await this.resolveFullUser(callerUser));
+        const callerCoIds = await this.getUserCompanyIds(resolvedCaller);
         if (!callerCoIds.includes(dto.companyId)) {
           throw new ForbiddenException('No podés mover usuarios a una empresa ajena');
         }

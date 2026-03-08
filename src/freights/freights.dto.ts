@@ -1,6 +1,15 @@
-import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, IsObject, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl, IsIn } from 'class-validator';
+import { IsNotEmpty, IsEnum, IsUUID, IsOptional, IsArray, ArrayMinSize, ArrayMaxSize, ValidateNested, IsNumber, IsBoolean, IsString, IsObject, Min, Max, MaxLength, IsDateString, Matches, ValidateIf, IsUrl, IsIn, ValidatorConstraint, ValidatorConstraintInterface, Validate } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
+
+@ValidatorConstraint({ name: 'maxJsonSize', async: false })
+class MaxJsonSize50KB implements ValidatorConstraintInterface {
+  validate(value: any) {
+    if (!value) return true;
+    try { return JSON.stringify(value).length <= 51200; } catch { return false; }
+  }
+  defaultMessage() { return 'JSON data must be under 50KB'; }
+}
 
 export class FreightItemDto {
   @ApiProperty({ enum: ['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] })
@@ -398,6 +407,7 @@ export class CancelAssignmentDto {
 export class SaveOcrDataDto {
   @IsNotEmpty()
   @IsObject()
+  @Validate(MaxJsonSize50KB)
   ocrData: Record<string, any>;
 }
 
