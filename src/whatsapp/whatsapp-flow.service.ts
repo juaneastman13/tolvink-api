@@ -184,7 +184,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   private async rejectFreightStart(phone: string, session: any) {
     await this.updateStep(session.id, 'awaiting_reason');
     await this.wa.sendText(phone,
-      'Indique el motivo del rechazo:\n\n_(Escriba "cancelar" para volver al menu)_',
+      'Indique el motivo del rechazo:\n\n_(Escriba "cancelar" para volver al menú)_',
     );
   }
 
@@ -226,7 +226,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
     await this.wa.sendText(phone,
       `Indique las toneladas cargadas.\n` +
       `_(Planificadas: ${planned} tn)_\n\n` +
-      'Escriba el numero (ej: 30.5) o "cancelar" para volver.',
+      'Escriba el número (ej: 30.5) o "cancelar" para volver.',
     );
   }
 
@@ -291,7 +291,7 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   private async cancelFreightStart(phone: string, session: any) {
     await this.updateStep(session.id, 'awaiting_reason');
     await this.wa.sendText(phone,
-      'Indique el motivo de la cancelación:\n\n_(Escriba "cancelar" para volver al menu)_',
+      'Indique el motivo de la cancelación:\n\n_(Escriba "cancelar" para volver al menú)_',
     );
   }
 

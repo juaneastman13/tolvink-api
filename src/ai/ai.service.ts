@@ -1014,14 +1014,14 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
     },
     {
       name: 'search_plants',
-      description: 'Busca plantas/empresas destino. Envia menu interactivo si hay multiples resultados. Retorna _selectionSent: true — NO reformatear.',
+      description: 'Busca plantas/empresas destino. Envía menú interactivo si hay multiples resultados. Retorna _selectionSent: true — NO reformatear.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1088,7 +1088,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
@@ -1099,7 +1099,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           reason: { type: 'string', description: 'Motivo del rechazo' },
         },
         required: ['code', 'reason'],
@@ -1111,7 +1111,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
@@ -1122,7 +1122,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           tons: { type: 'number', description: 'Toneladas cargadas' },
         },
         required: ['code', 'tons'],
@@ -1134,18 +1134,18 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
     },
     {
       name: 'cancel_freight',
-      description: 'Cancela un flete. No se puede si esta in_progress o loaded. Prepara la acción para confirmación.',
+      description: 'Cancela un flete. No se puede si está in_progress o loaded. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           reason: { type: 'string', description: 'Motivo de cancelación' },
         },
         required: ['code', 'reason'],
@@ -1230,11 +1230,11 @@ FILTROS AVANZADOS:
     // ---- Document attachment ----
     {
       name: 'attach_document',
-      description: 'USAR CUANDO EL USUARIO INDICA UN CODIGO DE FLETE DESPUES DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el código. Prepara la acción para confirmación.',
+      description: 'USAR CUANDO EL USUARIO INDICA UN CÓDIGO DE FLETE DESPUÉS DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el código. Prepara la acción para confirmación.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           step: { type: 'string', enum: ['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'], description: 'Etapa del documento (opcional)' },
         },
         required: ['code'],
@@ -1243,7 +1243,7 @@ FILTROS AVANZADOS:
     // ---- Location picker ----
     {
       name: 'generate_location_link',
-      description: 'Genera un link para que el usuario elija una ubicación en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicación personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicación, y las coordenadas se guardan automáticamente en la sesion.',
+      description: 'Genera un link para que el usuario elija una ubicación en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicación personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicación, y las coordenadas se guardan automáticamente en la sesión.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1255,11 +1255,11 @@ FILTROS AVANZADOS:
     // ---- Tracking link ----
     {
       name: 'generate_tracking_link',
-      description: 'Genera un link público para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posición del camión en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete este activo.',
+      description: 'Genera un link público para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posición del camión en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete esté activo.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
@@ -1288,7 +1288,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
@@ -1305,33 +1305,33 @@ FILTROS AVANZADOS:
     },
     {
       name: 'share_live_location',
-      description: 'Genera un link para que el usuario comparta su ubicación en vivo en el mapa de un flete especifico. Todos los participantes del flete podrán ver la posición del usuario. Usar cuando el usuario quiera compartir donde está durante un viaje.',
+      description: 'Genera un link para que el usuario comparta su ubicación en vivo en el mapa de un flete específico. Todos los participantes del flete podrán ver la posición del usuario. Usar cuando el usuario quiera compartir dónde está durante un viaje.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
     },
     {
       name: 'view_live_locations',
-      description: 'Genera un link para ver las ubicaciones en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver donde están los involucrados en un flete.',
+      description: 'Genera un link para ver las ubicaciones en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver dónde están los involucrados en un flete.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
     },
     {
       name: 'request_location',
-      description: 'Solicitar a los involucrados de un flete que compartan su ubicación por WhatsApp. Envia un mensaje a los participantes pidiéndoles que envíen su ubicación. Usar cuando alguien pregunta donde está el chofer o pide ubicación.',
+      description: 'Solicitar a los involucrados de un flete que compartan su ubicación por WhatsApp. Envía un mensaje a los participantes pidiéndoles que envíen su ubicación. Usar cuando alguien pregunta dónde está el chofer o pide ubicación.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
         },
         required: ['code'],
       },
@@ -1352,7 +1352,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           transporterCompanyId: { type: 'string', description: 'ID de empresa transportista, o "own_fleet" para flota interna del productor' },
           truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
@@ -1366,7 +1366,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           truckId: { type: 'string', description: 'ID del camión (de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
         },
@@ -1379,7 +1379,7 @@ FILTROS AVANZADOS:
       input_schema: {
         type: 'object' as const,
         properties: {
-          code: { type: 'string', description: 'Codigo del flete, ej: F26-LCP.1822' },
+          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
           transporterCompanyId: { type: 'string', description: 'ID empresa o "own_fleet" para flota interna' },
           truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
           driverId: { type: 'string', description: 'ID del chofer (opcional)' },
@@ -2708,7 +2708,7 @@ FILTROS AVANZADOS:
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'El flete NO fue creado todavía. Mostra el resumen y pregunta al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automáticamente.',
+      IMPORTANT: 'El flete NO fue creado todavía. Mostrá el resumen y pregunta al usuario si confirma. Se enviarán botones CONFIRMAR/CANCELAR automáticamente.',
     });
   }
 
@@ -3577,7 +3577,7 @@ FILTROS AVANZADOS:
   // ---- generate_tracking_link ----
   private async toolGenerateTrackingLink(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
@@ -3654,7 +3654,7 @@ FILTROS AVANZADOS:
   // ---- generate_report_link ----
   private async toolGenerateReportLink(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
@@ -3719,7 +3719,7 @@ FILTROS AVANZADOS:
   // ---- share_live_location ----
   private async toolShareLiveLocation(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
@@ -3770,7 +3770,7 @@ FILTROS AVANZADOS:
   // ---- view_live_locations ----
   private async toolViewLiveLocations(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
@@ -3812,7 +3812,7 @@ FILTROS AVANZADOS:
   // ---- request_location ----
   private async toolRequestLocation(input: any, user: any): Promise<string> {
     const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Codigo de flete requerido' });
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
     const freight = await this.prisma.freight.findFirst({
       where: { code },
@@ -3892,7 +3892,7 @@ FILTROS AVANZADOS:
     }
 
     const requesterName = user.name?.split(' ')[0] || 'Un participante';
-    const msg = `*Solicitud de ubicación*\n${requesterName} solicita tu ubicación para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicación en este chat (adjuntar \u2192 Ubicacion).`;
+    const msg = `*Solicitud de ubicación*\n${requesterName} solicita tu ubicación para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicación en este chat (adjuntar \u2192 Ubicación).`;
 
     let sent = 0;
     for (const [, target] of allTargets) {
@@ -3961,7 +3961,7 @@ FILTROS AVANZADOS:
       }
 
       const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} \u2192 ${freight.destName}\n\n`
-        + `Puede enviar su ubicación en este chat (adjuntar \u2192 Ubicacion) para que las empresas sigan el viaje.\n\n`
+        + `Puede enviar su ubicación en este chat (adjuntar \u2192 Ubicación) para que las empresas sigan el viaje.\n\n`
         + `Seguimiento: ${trackingUrl}`;
 
       sends.push(this.wa.sendText(driver.phone, driverMsg));
@@ -4090,7 +4090,7 @@ FILTROS AVANZADOS:
 
     const extraJson: any = { transporters: result };
     if (hasOwnFleet) {
-      extraJson.NOTA = 'Este usuario tiene FLOTA INTERNA. Para asignar su propia flota, llamar assign_transporter con transporterCompanyId="own_fleet". No es necesario preguntar al usuario cual empresa.';
+      extraJson.NOTA = 'Este usuario tiene FLOTA INTERNA. Para asignar su propia flota, llamar assign_transporter con transporterCompanyId="own_fleet". No es necesario preguntar al usuario cuál empresa.';
     }
 
     return this.storePendingSelection(session, items, {
@@ -4650,7 +4650,7 @@ FILTROS AVANZADOS:
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'La acción NO fue ejecutada todavía. Presente el resumen y consulte al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automáticamente.',
+      IMPORTANT: 'La acción NO fue ejecutada todavía. Presente el resumen y consulte al usuario si confirma. Se enviarán botones CONFIRMAR/CANCELAR automáticamente.',
     });
   }
 

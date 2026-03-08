@@ -15,7 +15,7 @@ export class FreightTrackingController {
 
   private validateToken(token: string) {
     if (!token || token.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(token)) {
-      throw new NotFoundException('Link de seguimiento no valido');
+      throw new NotFoundException('Link de seguimiento no válido');
     }
   }
 
@@ -42,7 +42,7 @@ export class FreightTrackingController {
     });
 
     if (!freight) {
-      throw new NotFoundException('Link de seguimiento no valido');
+      throw new NotFoundException('Link de seguimiento no válido');
     }
 
     return {
@@ -69,7 +69,7 @@ export class FreightTrackingController {
     });
 
     if (!freight) {
-      throw new NotFoundException('Link de seguimiento no valido');
+      throw new NotFoundException('Link de seguimiento no válido');
     }
 
     if (['finished', 'canceled'].includes(freight.status)) {
@@ -156,7 +156,7 @@ export class FreightTrackingController {
     });
 
     if (!freight) {
-      throw new NotFoundException('Link de informe no valido');
+      throw new NotFoundException('Link de informe no válido');
     }
 
     // Fetch audit log

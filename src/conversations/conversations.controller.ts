@@ -155,7 +155,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
     if (!targetUser) throw new BadRequestException('Usuario no encontrado');
 
     const allIds = await this.resolveAllCompanyIds(user);
-    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('Sin empresa asignada');
     const myPrimaryId = allIds[0];
     const targetCompanyId = targetUser.companyId;
 
@@ -227,7 +227,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
 
   async listConversations(user: any, search?: string, skip?: number, take?: number) {
     const allIds = await this.resolveAllCompanyIds(user);
-    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('Sin empresa asignada');
 
     const takeNum = Math.min(take || 50, 100); // Max 100 conversations per request
     const skipNum = skip || 0;
@@ -428,7 +428,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
 
   async getMessages(conversationId: string, user: any, pagination?: { take?: number; before?: string }) {
     const allIds = await this.resolveAllCompanyIds(user);
-    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('Sin empresa asignada');
 
     const participant = await this.prisma.conversationParticipant.findFirst({
       where: { conversationId, companyId: { in: allIds } },
@@ -509,7 +509,7 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
 
   async sendMessage(conversationId: string, dto: SendMessageDto, user: any) {
     const allIds = await this.resolveAllCompanyIds(user);
-    if (!allIds || allIds.length === 0) throw new ForbiddenException('No company assigned');
+    if (!allIds || allIds.length === 0) throw new ForbiddenException('Sin empresa asignada');
 
     const participant = await this.prisma.conversationParticipant.findFirst({
       where: { conversationId, companyId: { in: allIds } },

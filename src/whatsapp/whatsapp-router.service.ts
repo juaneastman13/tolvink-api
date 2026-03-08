@@ -297,7 +297,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       } else if (type === 'image' || type === 'document') {
         await this.handleMedia(phone, user, type, payload, session);
       } else {
-        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio, ubicaciones e imagenes/documentos. Escriba "menu" para ver las opciones disponibles.');
+        await this.wa.sendText(phone, 'Actualmente se procesan mensajes de texto, audio, ubicaciones e imágenes/documentos. Escriba "menu" para ver las opciones disponibles.');
       }
     } catch (e) {
       const mp = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
@@ -1007,7 +1007,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }));
 
     const selConfig = {
-      headerText: 'Tiene acceso a varias empresas.\nSeleccione con cual desea operar:',
+      headerText: 'Tiene acceso a varias empresas.\nSeleccione con cuál desea operar:',
       listButtonLabel: 'Ver empresas',
       sectionTitle: 'Sus empresas',
     };
@@ -1255,7 +1255,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     await this.wa.sendButtons(phone,
       header + statsBlock + features +
-      `\nSiguiente paso: escriba la opcion o describa su pedido.`,
+      `\nSiguiente paso: escriba la opción o describa su pedido.`,
       this.getRoleMenuButtons(role),
     );
   }
@@ -1265,11 +1265,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async showHelp(phone: string, user: any) {
     const role = this.getUserRole(user);
 
-    const header = `GUIA DE USO\n\n`;
+    const header = `GUÍA DE USO\n\n`;
 
     const body =
       `Enviando un mensaje de texto o audio puede realizar las gestiones que tenga habilitadas. ` +
-      `Comience la conversacion y Tolvink lo ayudara.\n\n`;
+      `Comience la conversación y Tolvink lo ayudará.\n\n`;
 
     const roleSection = this.getRoleHelpSection(role);
 
@@ -1278,7 +1278,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     await this.wa.sendText(phone, header + body + roleSection + footer);
 
     await this.wa.sendButtons(phone,
-      'Seleccione una opcion:',
+      'Seleccione una opción:',
       this.getRoleMenuButtons(role),
     );
   }
@@ -1353,25 +1353,25 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       return [
         { id: 'active_freights', title: 'MIS FLETES' },
         { id: 'create_freight', title: 'SOLICITAR FLETE' },
-        { id: 'show_help', title: 'GUIA DE USO' },
+        { id: 'show_help', title: 'GUÍA DE USO' },
       ];
     }
     if (role === 'plant') {
       return [
         { id: 'active_freights', title: 'FLETES PENDIENTES' },
-        { id: 'show_help', title: 'GUIA DE USO' },
+        { id: 'show_help', title: 'GUÍA DE USO' },
       ];
     }
     if (role === 'transporter') {
       return [
         { id: 'active_freights', title: 'MIS ASIGNACIONES' },
-        { id: 'show_help', title: 'GUIA DE USO' },
+        { id: 'show_help', title: 'GUÍA DE USO' },
       ];
     }
     return [
       { id: 'active_freights', title: 'MIS FLETES' },
       { id: 'create_freight', title: 'SOLICITAR FLETE' },
-      { id: 'show_help', title: 'GUIA DE USO' },
+      { id: 'show_help', title: 'GUÍA DE USO' },
     ];
   }
 

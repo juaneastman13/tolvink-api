@@ -596,7 +596,7 @@ export class FreightsService {
 
         const assignment = freight.assignments[0];
         if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
-          throw new ForbiddenException('Tu empresa no esta asignada a este flete');
+          throw new ForbiddenException('Tu empresa no está asignada a este flete');
         }
 
         await tx.freightAssignment.update({
@@ -650,7 +650,7 @@ export class FreightsService {
 
       const assignment = freight.assignments[0];
       if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
-        throw new ForbiddenException('Tu empresa no esta asignada a este flete');
+        throw new ForbiddenException('Tu empresa no está asignada a este flete');
       }
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
@@ -662,7 +662,7 @@ export class FreightsService {
         const truck = await tx.truck.findFirst({
           where: { id: dto.truckId, companyId: user.companyId, active: true },
         });
-        if (!truck) throw new BadRequestException('Camion no encontrado o no pertenece a tu empresa');
+        if (!truck) throw new BadRequestException('Camión no encontrado o no pertenece a tu empresa');
 
         assignmentUpdate.truckId = truck.id;
         assignmentUpdate.plate = truck.plate;
@@ -852,7 +852,7 @@ export class FreightsService {
             );
           }
           if (freight.transporterLoadedConfirmedAt) {
-            throw new BadRequestException('El transportista ya confirmo la carga');
+            throw new BadRequestException('El transportista ya confirmó la carga');
           }
 
           this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
@@ -900,7 +900,7 @@ export class FreightsService {
           );
         }
         if (freight.producerLoadedConfirmedAt) {
-          throw new BadRequestException('El productor ya confirmo la carga');
+          throw new BadRequestException('El productor ya confirmó la carga');
         }
 
         const updated = await tx.freight.update({
@@ -963,10 +963,10 @@ export class FreightsService {
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
         if (freight.status !== FreightStatus.loaded) {
-          throw new BadRequestException(`Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`);
+          throw new BadRequestException(`Solo se puede confirmar finalización en estado "loaded". Estado actual: "${freight.status}"`);
         }
         if (freight.transporterFinishedConfirmedAt) {
-          throw new BadRequestException('El transportista ya confirmo la entrega');
+          throw new BadRequestException('El transportista ya confirmó la entrega');
         }
 
         const callerCfIds = await this.resolveAllCompanyIds(user);
@@ -1037,10 +1037,10 @@ export class FreightsService {
 
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
         if (freight.status !== FreightStatus.loaded) {
-          throw new BadRequestException(`Solo se puede confirmar finalizacion en estado "loaded". Estado actual: "${freight.status}"`);
+          throw new BadRequestException(`Solo se puede confirmar finalización en estado "loaded". Estado actual: "${freight.status}"`);
         }
         if (freight.plantFinishedConfirmedAt) {
-          throw new BadRequestException('La planta ya confirmo la recepcion');
+          throw new BadRequestException('La planta ya confirmó la recepción');
         }
 
         const transporterAlsoConfirmed = !!freight.transporterFinishedConfirmedAt;
@@ -1088,7 +1088,7 @@ export class FreightsService {
       return pFinishResult.updated;
     }
 
-    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalizacion');
+    throw new ForbiddenException('Solo transportista o planta pueden confirmar finalización');
   }
 
   // ======================== CANCEL ====================================
@@ -1187,7 +1187,7 @@ export class FreightsService {
         throw new ForbiddenException('Solo la planta destino puede autorizar este flete');
       }
       if (freight.status !== FreightStatus.assigned) {
-        throw new BadRequestException('El flete no esta en estado asignado');
+        throw new BadRequestException('El flete no está en estado asignado');
       }
 
       const updated = await tx.freight.update({
@@ -1820,7 +1820,7 @@ export class FreightsService {
         // Validate truckCount limit
         if (freight.isMultiTruck && freight.truckCount && existingCount + dto.trucks.length > freight.truckCount) {
           throw new BadRequestException(
-            `El flete permite ${freight.truckCount} camiones, ya tiene ${existingCount} asignados. Solo puede agregar ${freight.truckCount - existingCount} mas.`,
+            `El flete permite ${freight.truckCount} camiones, ya tiene ${existingCount} asignados. Solo puede agregar ${freight.truckCount - existingCount} más.`,
           );
         }
 
