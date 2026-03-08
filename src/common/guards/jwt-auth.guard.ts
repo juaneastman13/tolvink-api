@@ -1,12 +1,13 @@
 import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
+import { PrismaService } from '../../database/prisma.service';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   private readonly logger = new Logger(JwtAuthGuard.name);
 
-  constructor(private jwt: JwtService) {}
+  constructor(private jwt: JwtService, private prisma: PrismaService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
@@ -23,6 +24,22 @@ export class JwtAuthGuard implements CanActivate {
         throw new UnauthorizedException('Token inválido o expirado');
       }
       (request as any)['user'] = payload;
+
+      // After JWT validation succeeds, verify user is still active in DB
+      // Use cached result if already checked in this request
+      if (!(request as any)._dbUserChecked) {
+        const dbUser = await this.prisma.user.findUnique({
+          where: { id: payload.sub },
+          select: { active: true, role: true },
+        });
+        if (!dbUser || !dbUser.active) {
+          throw new UnauthorizedException('Usuario desactivado');
+        }
+        // Attach fresh role from DB to prevent stale JWT role escalation
+        (request as any).user = { ...(request as any).user, dbRole: dbUser.role };
+        (request as any)._dbUserChecked = true;
+      }
+
       return true;
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;

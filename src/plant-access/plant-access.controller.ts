@@ -6,7 +6,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_RE } from '../common/constants';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';

@@ -229,6 +229,25 @@ export class UpdateAdminTruckDto {
   @ApiProperty({ required: false }) @IsOptional() @IsNumber() capacity?: number;
 }
 
+// ======================== CONSTANTS ===================================
+
+const BCRYPT_ROUNDS = 10;
+const MAX_USER_LIST_RESULTS = 200;
+const STATS_CACHE_TTL_MS = 60_000;
+
+// ======================== HELPERS =====================================
+
+function handlePrismaUniqueError(err: any, fieldLabels: Record<string, string>): string | null {
+  if (err?.code === 'P2002') {
+    const target = err.meta?.target;
+    for (const [field, label] of Object.entries(fieldLabels)) {
+      if (target?.includes(field)) return `Ya existe un registro con ese ${label}`;
+    }
+    return 'Ya existe un registro con esos datos';
+  }
+  return null;
+}
+
 // ======================== SERVICE ====================================
 
 @Injectable()
@@ -246,8 +265,14 @@ export class AdminService {
     return user.role === 'platform_admin';
   }
 
-  isCompanyAdmin(user: any): boolean {
-    return user.role === 'admin' || user.role === 'gerente';
+  /** Verify company admin role against the DATABASE, not JWT claims */
+  async isCompanyAdmin(user: any): Promise<boolean> {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub || user.id },
+      select: { role: true, active: true },
+    });
+    if (!dbUser || !dbUser.active) return false;
+    return dbUser.role === 'admin';
   }
 
   assertPlatformAdmin(user: any) {
@@ -256,8 +281,15 @@ export class AdminService {
     }
   }
 
-  assertCompanyOrPlatformAdmin(user: any) {
-    if (!this.isPlatformAdmin(user) && !this.isCompanyAdmin(user)) {
+  /** Verify role against DB — not just JWT claims */
+  async assertCompanyOrPlatformAdmin(user: any) {
+    if (this.isPlatformAdmin(user)) {
+      // Still verify platform_admin in DB via resolveFullUser
+      await this.resolveFullUser(user);
+      return;
+    }
+    const isAdmin = await this.isCompanyAdmin(user);
+    if (!isAdmin) {
       throw new ForbiddenException('Permisos insuficientes');
     }
   }
@@ -287,7 +319,7 @@ export class AdminService {
   private _statsCache: { data: any; ts: number } | null = null;
   async getStats() {
     const now = Date.now();
-    if (this._statsCache && now - this._statsCache.ts < 60000) return this._statsCache.data;
+    if (this._statsCache && now - this._statsCache.ts < STATS_CACHE_TTL_MS) return this._statsCache.data;
     const [users, companies, branches, freights] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.company.count(),
@@ -431,9 +463,13 @@ export class AdminService {
     });
   }
 
-  async updateBranch(id: string, dto: UpdateBranchDto) {
-    const branch = await this.prisma.branch.findUnique({ where: { id } });
+  async updateBranch(id: string, dto: UpdateBranchDto, user: any) {
+    const branch = await this.prisma.branch.findUnique({ where: { id }, select: { id: true, companyId: true, name: true } });
     if (!branch) throw new NotFoundException('Sucursal no encontrada');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(branch.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
 
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
@@ -445,7 +481,13 @@ export class AdminService {
     return this.prisma.branch.update({ where: { id }, data });
   }
 
-  async deleteBranch(id: string) {
+  async deleteBranch(id: string, user: any) {
+    const branch = await this.prisma.branch.findUnique({ where: { id }, select: { id: true, companyId: true } });
+    if (!branch) throw new NotFoundException('Recurso no encontrado');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(branch.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     return this.prisma.branch.update({ where: { id }, data: { active: false } });
   }
 
@@ -491,7 +533,7 @@ export class AdminService {
         company: { select: { id: true, name: true, type: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      take: MAX_USER_LIST_RESULTS,
     });
   }
 
@@ -513,7 +555,7 @@ export class AdminService {
     }
 
     // Use pre-hashed password (internal callers like AI) or hash from plaintext
-    const hash = preHashedPassword || await bcrypt.hash(dto.password, 10);
+    const hash = preHashedPassword || await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
     const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
 
@@ -539,9 +581,8 @@ export class AdminService {
         },
       });
     } catch (err: any) {
-      if (err.code === 'P2002') {
-        throw new BadRequestException('Ya existe un usuario con ese email o teléfono');
-      }
+      const msg = handlePrismaUniqueError(err, { email: 'email', phone: 'teléfono' });
+      if (msg) throw new BadRequestException(msg);
       throw err;
     }
 
@@ -714,10 +755,8 @@ export class AdminService {
         },
       });
     } catch (e: any) {
-      if (e?.code === 'P2002') {
-        const field = e.meta?.target?.[0] || 'email o teléfono';
-        throw new BadRequestException(`Ya existe un usuario con ese ${field}`);
-      }
+      const msg = handlePrismaUniqueError(e, { email: 'email', phone: 'teléfono' });
+      if (msg) throw new BadRequestException(msg);
       throw e;
     }
   }
@@ -749,9 +788,13 @@ export class AdminService {
     });
   }
 
-  async updateField(fieldId: string, dto: any) {
-    const f = await this.prisma.field.findFirst({ where: { id: fieldId, active: true } });
+  async updateField(fieldId: string, dto: any, user: any) {
+    const f = await this.prisma.field.findFirst({ where: { id: fieldId, active: true }, select: { id: true, companyId: true } });
     if (!f) throw new NotFoundException('Campo no encontrado');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(f.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.address !== undefined) data.address = dto.address;
@@ -762,7 +805,13 @@ export class AdminService {
     return this.prisma.field.update({ where: { id: fieldId }, data });
   }
 
-  async deleteField(fieldId: string) {
+  async deleteField(fieldId: string, user: any) {
+    const f = await this.prisma.field.findUnique({ where: { id: fieldId }, select: { id: true, companyId: true } });
+    if (!f) throw new NotFoundException('Recurso no encontrado');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(f.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     return this.prisma.field.update({ where: { id: fieldId }, data: { active: false } });
   }
 
@@ -789,9 +838,17 @@ export class AdminService {
     });
   }
 
-  async updateLot(lotId: string, dto: any) {
-    const l = await this.prisma.lot.findFirst({ where: { id: lotId, active: true } });
+  async updateLot(lotId: string, dto: any, user: any) {
+    const l = await this.prisma.lot.findFirst({
+      where: { id: lotId, active: true },
+      select: { id: true, companyId: true, field: { select: { companyId: true } } },
+    });
     if (!l) throw new NotFoundException('Lote no encontrado');
+    const ownerCompanyId = l.field?.companyId || l.companyId;
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!ownerCompanyId || !myIds.includes(ownerCompanyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     const data: any = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.hectares !== undefined) data.hectares = dto.hectares;
@@ -801,7 +858,17 @@ export class AdminService {
     return this.prisma.lot.update({ where: { id: lotId }, data });
   }
 
-  async deleteLot(lotId: string) {
+  async deleteLot(lotId: string, user: any) {
+    const l = await this.prisma.lot.findUnique({
+      where: { id: lotId },
+      select: { id: true, companyId: true, field: { select: { companyId: true } } },
+    });
+    if (!l) throw new NotFoundException('Recurso no encontrado');
+    const ownerCompanyId = l.field?.companyId || l.companyId;
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!ownerCompanyId || !myIds.includes(ownerCompanyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     return this.prisma.lot.update({ where: { id: lotId }, data: { active: false } });
   }
 
@@ -834,9 +901,13 @@ export class AdminService {
     });
   }
 
-  async updateTruck(truckId: string, dto: any) {
-    const t = await this.prisma.truck.findFirst({ where: { id: truckId, active: true } });
+  async updateTruck(truckId: string, dto: any, user: any) {
+    const t = await this.prisma.truck.findFirst({ where: { id: truckId, active: true }, select: { id: true, companyId: true } });
     if (!t) throw new NotFoundException('Vehículo no encontrado');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(t.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     const data: any = {};
     if (dto.plate !== undefined) {
       const normalized = dto.plate.trim().toUpperCase();
@@ -850,7 +921,13 @@ export class AdminService {
     return this.prisma.truck.update({ where: { id: truckId }, data });
   }
 
-  async deleteTruck(truckId: string) {
+  async deleteTruck(truckId: string, user: any) {
+    const t = await this.prisma.truck.findUnique({ where: { id: truckId }, select: { id: true, companyId: true } });
+    if (!t) throw new NotFoundException('Recurso no encontrado');
+    if (!this.isPlatformAdmin(user)) {
+      const myIds = await this.getUserCompanyIds(user);
+      if (!myIds.includes(t.companyId)) throw new ForbiddenException('No tenés acceso a este recurso');
+    }
     return this.prisma.truck.update({ where: { id: truckId }, data: { active: false } });
   }
 }
@@ -868,7 +945,7 @@ export class AdminController {
   // --- Stats (platform_admin only) ---
   @Get('stats')
   @ApiOperation({ summary: 'Dashboard stats' })
-  stats(@CurrentUser() u: any) {
+  async stats(@CurrentUser() u: any) {
     this.svc.assertPlatformAdmin(u);
     return this.svc.getStats();
   }
@@ -878,7 +955,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Listar empresas' })
   @ApiQuery({ name: 'search', required: false })
   async companies(@CurrentUser() u: any, @Query('search') search?: string) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.listCompanies(search, fullUser);
   }
@@ -886,7 +963,7 @@ export class AdminController {
   @Get('companies/:id')
   @ApiOperation({ summary: 'Detalle de empresa' })
   async company(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.getCompany(id, fullUser);
   }
@@ -901,7 +978,7 @@ export class AdminController {
   @Patch('companies/:id')
   @ApiOperation({ summary: 'Editar empresa' })
   async updateCompany(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCompanyDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.updateCompany(id, dto, fullUser);
   }
@@ -910,7 +987,7 @@ export class AdminController {
   @Get('branches/:companyId')
   @ApiOperation({ summary: 'Listar sucursales de empresa' })
   async branches(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     // Non-superadmin: verify they belong to this company
     if (!this.svc.isPlatformAdmin(fullUser)) {
@@ -923,7 +1000,7 @@ export class AdminController {
   @Post('branches')
   @ApiOperation({ summary: 'Crear sucursal' })
   async createBranch(@Body() dto: CreateBranchDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     // Non-superadmin: verify they own the target company
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
@@ -936,27 +1013,17 @@ export class AdminController {
   @Patch('branches/:id')
   @ApiOperation({ summary: 'Editar sucursal' })
   async updateBranch(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const branch = await this.svc.getBranchCompanyId(id);
-      if (!branch || !myIds.includes(branch)) throw new ForbiddenException('Sin acceso a esta sucursal');
-    }
-    return this.svc.updateBranch(id, dto);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.updateBranch(id, dto, fullUser);
   }
 
   @Delete('branches/:id')
   @ApiOperation({ summary: 'Desactivar sucursal' })
   async deleteBranch(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const branch = await this.svc.getBranchCompanyId(id);
-      if (!branch || !myIds.includes(branch)) throw new ForbiddenException('Sin acceso a esta sucursal');
-    }
-    return this.svc.deleteBranch(id);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.deleteBranch(id, fullUser);
   }
 
   // --- Users ---
@@ -966,7 +1033,7 @@ export class AdminController {
   @ApiQuery({ name: 'companyId', required: false })
   async users(@CurrentUser() u: any, @Query('search') search?: string, @Query('companyId') companyId?: string) {
     if (companyId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new BadRequestException('companyId inválido');
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.listUsers(search, companyId, fullUser);
   }
@@ -974,7 +1041,7 @@ export class AdminController {
   @Post('users')
   @ApiOperation({ summary: 'Crear usuario' })
   async createUser(@Body() dto: CreateUserDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     // Company admins can only create users for their own company
     if (!this.svc.isPlatformAdmin(u)) {
       const freshUser = await this.svc.prisma.user.findUnique({
@@ -992,8 +1059,8 @@ export class AdminController {
 
   @Patch('users/:id')
   @ApiOperation({ summary: 'Editar usuario' })
-  updateUser(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+  async updateUser(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserDto, @CurrentUser() u: any) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     return this.svc.updateUser(id, dto, u);
   }
 
@@ -1009,7 +1076,7 @@ export class AdminController {
   @Get('companies/:companyId/fields')
   @ApiOperation({ summary: 'Listar campos de empresa productora' })
   async companyFields(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
       const myIds = await this.svc.getUserCompanyIds(fullUser);
@@ -1021,7 +1088,7 @@ export class AdminController {
   @Post('companies/:companyId/fields')
   @ApiOperation({ summary: 'Crear campo' })
   async createCompanyField(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: AdminCreateFieldDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
       const myIds = await this.svc.getUserCompanyIds(fullUser);
@@ -1033,34 +1100,24 @@ export class AdminController {
   @Patch('fields/:id')
   @ApiOperation({ summary: 'Editar campo' })
   async updateAdminField(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFieldDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const field = await this.svc.prisma.field.findUnique({ where: { id }, select: { companyId: true } });
-      if (!field || !myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
-    }
-    return this.svc.updateField(id, dto);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.updateField(id, dto, fullUser);
   }
 
   @Delete('fields/:id')
   @ApiOperation({ summary: 'Desactivar campo' })
   async deleteAdminField(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const field = await this.svc.prisma.field.findUnique({ where: { id }, select: { companyId: true } });
-      if (!field || !myIds.includes(field.companyId)) throw new ForbiddenException('Sin acceso a este campo');
-    }
-    return this.svc.deleteField(id);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.deleteField(id, fullUser);
   }
 
   // ===================== LOTS =====================
   @Get('fields/:fieldId/lots')
   @ApiOperation({ summary: 'Listar lotes de campo' })
   async fieldLots(@Param('fieldId', ParseUUIDPipe) fieldId: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
       const myIds = await this.svc.getUserCompanyIds(fullUser);
@@ -1073,7 +1130,7 @@ export class AdminController {
   @Post('fields/:fieldId/lots')
   @ApiOperation({ summary: 'Crear lote en campo' })
   async createFieldLot(@Param('fieldId', ParseUUIDPipe) fieldId: string, @Body() dto: AdminCreateLotDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     const field = await this.svc.prisma.field.findUnique({ where: { id: fieldId }, select: { id: true, companyId: true } });
     if (!field) throw new NotFoundException('Campo no encontrado');
     if (!this.svc.isPlatformAdmin(u)) {
@@ -1087,34 +1144,24 @@ export class AdminController {
   @Patch('lots/:id')
   @ApiOperation({ summary: 'Editar lote' })
   async updateAdminLot(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateLotDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const lot = await this.svc.prisma.lot.findUnique({ where: { id }, select: { companyId: true } });
-      if (!lot || !myIds.includes(lot.companyId)) throw new ForbiddenException('Sin acceso a este lote');
-    }
-    return this.svc.updateLot(id, dto);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.updateLot(id, dto, fullUser);
   }
 
   @Delete('lots/:id')
   @ApiOperation({ summary: 'Desactivar lote' })
   async deleteAdminLot(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const lot = await this.svc.prisma.lot.findUnique({ where: { id }, select: { companyId: true } });
-      if (!lot || !myIds.includes(lot.companyId)) throw new ForbiddenException('Sin acceso a este lote');
-    }
-    return this.svc.deleteLot(id);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.deleteLot(id, fullUser);
   }
 
   // ===================== TRUCKS (Transporter) =====================
   @Get('companies/:companyId/trucks')
   @ApiOperation({ summary: 'Listar flota de empresa transportista' })
   async companyTrucks(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
       const myIds = await this.svc.getUserCompanyIds(fullUser);
@@ -1126,7 +1173,7 @@ export class AdminController {
   @Post('companies/:companyId/trucks')
   @ApiOperation({ summary: 'Crear vehículo' })
   async createCompanyTruck(@Param('companyId', ParseUUIDPipe) companyId: string, @Body() dto: AdminCreateTruckDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!this.svc.isPlatformAdmin(u)) {
       const fullUser = await this.svc.resolveFullUser(u);
       const myIds = await this.svc.getUserCompanyIds(fullUser);
@@ -1138,26 +1185,16 @@ export class AdminController {
   @Patch('trucks/:id')
   @ApiOperation({ summary: 'Editar vehículo' })
   async updateAdminTruck(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateAdminTruckDto, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const truck = await this.svc.prisma.truck.findUnique({ where: { id }, select: { companyId: true } });
-      if (!truck || !myIds.includes(truck.companyId)) throw new ForbiddenException('Sin acceso a este vehículo');
-    }
-    return this.svc.updateTruck(id, dto);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.updateTruck(id, dto, fullUser);
   }
 
   @Delete('trucks/:id')
   @ApiOperation({ summary: 'Desactivar vehículo' })
   async deleteAdminTruck(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() u: any) {
-    this.svc.assertCompanyOrPlatformAdmin(u);
-    if (!this.svc.isPlatformAdmin(u)) {
-      const fullUser = await this.svc.resolveFullUser(u);
-      const myIds = await this.svc.getUserCompanyIds(fullUser);
-      const truck = await this.svc.prisma.truck.findUnique({ where: { id }, select: { companyId: true } });
-      if (!truck || !myIds.includes(truck.companyId)) throw new ForbiddenException('Sin acceso a este vehículo');
-    }
-    return this.svc.deleteTruck(id);
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.deleteTruck(id, fullUser);
   }
 }

@@ -6,7 +6,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_RE } from '../common/constants';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches, ValidateIf } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -185,23 +185,27 @@ export class TrucksService {
       if (existingPhone) throw new BadRequestException('Ya existe un usuario con ese teléfono');
     }
 
-    const driver = await this.prisma.user.create({
-      data: {
-        name: body.name.trim(),
-        email,
-        phone: body.phone?.trim() || null,
-        companyId: user.companyId,
-        activeCompanyId: user.companyId,
-        role: 'operator',
-      },
-    });
+    const driver = await this.prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
+        data: {
+          name: body.name.trim(),
+          email,
+          phone: body.phone?.trim() || null,
+          companyId: user.companyId,
+          activeCompanyId: user.companyId,
+          role: 'operator',
+        },
+      });
 
-    await this.prisma.userCompany.create({
-      data: {
-        userId: driver.id,
-        companyId: user.companyId,
-        role: 'chofer',
-      },
+      await tx.userCompany.create({
+        data: {
+          userId: newUser.id,
+          companyId: user.companyId,
+          role: 'chofer',
+        },
+      });
+
+      return newUser;
     });
 
     // Fire-and-forget: send WhatsApp welcome to driver

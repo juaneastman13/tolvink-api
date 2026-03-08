@@ -5,7 +5,7 @@
 
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, HttpCode, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { UUID_RE } from '../common/constants';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsNotEmpty, MaxLength, IsOptional, Matches } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -102,8 +102,12 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
 
     // Scope: users from caller's own companies + companies with freight relationships
     const myCompanyIds = await this.resolveAllCompanyIds(user);
+    // Only consider non-cancelled freights from the last 90 days for tenant scoping
+    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const relatedFreights = await this.prisma.freight.findMany({
       where: {
+        status: { not: 'canceled' },
+        createdAt: { gte: cutoff },
         OR: [
           { originCompanyId: { in: myCompanyIds } },
           { destCompanyId: { in: myCompanyIds } },

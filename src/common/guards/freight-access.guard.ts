@@ -19,8 +19,8 @@ export class FreightAccessGuard implements CanActivate {
     const user = request.user;
     const freightId = request.params.id;
 
-    // Platform admin sees everything
-    if (user.role === 'platform_admin') return true;
+    // Platform admin sees everything (use dbRole from JWT guard DB check)
+    if (user.dbRole === 'platform_admin' || user.role === 'platform_admin') return true;
 
     // User must belong to a company
     if (!user.companyId) {

@@ -91,34 +91,34 @@ enum DocumentStep {
 // ======================== COMPANIES ==================================
 
 model Company {
-  id        String      @id @default(uuid())
-  name      String      @db.VarChar(255)
-  type      CompanyType // Legacy single-type field — kept for backward compat
-  types     Json        @default("[]") @map("company_types") // TODO: migrate to typed enum array, deprecate `type`
-  address   String?
-  phone     String?     @db.VarChar(50)
-  email     String?     @db.VarChar(255)
-  rut       String?     @db.VarChar(20)
-  active    Boolean     @default(true)
-  hasInternalFleet Boolean @default(false) @map("has_internal_fleet")
-  lat       Decimal?    @db.Decimal(10, 6)
-  lng       Decimal?    @db.Decimal(10, 6)
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
+  id               String      @id @default(uuid())
+  name             String      @db.VarChar(255)
+  type             CompanyType // Legacy single-type field — kept for backward compat
+  types            Json        @default("[]") @map("company_types") // TODO: migrate to typed enum array, deprecate `type`
+  address          String?
+  phone            String?     @db.VarChar(50)
+  email            String?     @db.VarChar(255)
+  rut              String?     @db.VarChar(20)
+  active           Boolean     @default(true)
+  hasInternalFleet Boolean     @default(false) @map("has_internal_fleet")
+  lat              Decimal?    @db.Decimal(10, 6)
+  lng              Decimal?    @db.Decimal(10, 6)
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
 
-  users              User[]
-  activeUsers        User[]              @relation("UserActiveCompany")
-  memberships        UserCompany[]
-  branches           Branch[]
-  fields             Field[]
-  lots               Lot[]
-  plants             Plant[]
-  trucks             Truck[]
-  freightsAsOrigin   Freight[]           @relation("FreightOriginCompany")
-  freightsAsDest     Freight[]           @relation("FreightDestCompany")
-  assignments        FreightAssignment[] @relation("AssignmentTransporter")
-  notifications      Notification[]
-  plantAccessGiven     PlantProducerAccess[] @relation("PlantAccessGiven")
+  users                  User[]
+  activeUsers            User[]                @relation("UserActiveCompany")
+  memberships            UserCompany[]
+  branches               Branch[]
+  fields                 Field[]
+  lots                   Lot[]
+  plants                 Plant[]
+  trucks                 Truck[]
+  freightsAsOrigin       Freight[]             @relation("FreightOriginCompany")
+  freightsAsDest         Freight[]             @relation("FreightDestCompany")
+  assignments            FreightAssignment[]   @relation("AssignmentTransporter")
+  notifications          Notification[]
+  plantAccessGiven       PlantProducerAccess[] @relation("PlantAccessGiven")
   producerAccessReceived PlantProducerAccess[] @relation("ProducerAccessReceived")
 
   @@map("companies")
@@ -127,44 +127,46 @@ model Company {
 // ======================== USERS ======================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique @db.VarChar(255)
-  passwordHash String?  @map("password_hash") @db.VarChar(255)
-  name         String   @db.VarChar(255)
-  role         UserRole @default(operator)
-  companyId    String?  @map("company_id")
-  phone        String?  @unique @db.VarChar(50)
-  userTypes    Json     @default("[]") @map("user_types")
-  companyByType Json    @default("{}") @map("company_by_type") // TODO: type as Record<CompanyType, string> — currently untyped Json
-  roleByType   Json    @default("{}") @map("role_by_type")   // TODO: type as Record<CompanyType, UserRole>
-  isSuperAdmin Boolean  @default(false) @map("is_super_admin")
-  active       Boolean  @default(true)
-  lastLogin    DateTime? @map("last_login")
+  id                    String    @id @default(uuid())
+  email                 String    @unique @db.VarChar(255)
+  passwordHash          String?   @map("password_hash") @db.VarChar(255)
+  name                  String    @db.VarChar(255)
+  role                  UserRole  @default(operator)
+  companyId             String?   @map("company_id")
+  phone                 String?   @unique @db.VarChar(50)
+  userTypes             Json      @default("[]") @map("user_types")
+  companyByType         Json      @default("{}") @map("company_by_type") // TODO: type as Record<CompanyType, string> — currently untyped Json
+  roleByType            Json      @default("{}") @map("role_by_type") // TODO: type as Record<CompanyType, UserRole>
+  isSuperAdmin          Boolean   @default(false) @map("is_super_admin")
+  active                Boolean   @default(true)
+  lastLogin             DateTime? @map("last_login")
   onboardingCompletedAt DateTime? @map("onboarding_completed_at")
-  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
-  lockedUntil         DateTime? @map("locked_until")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  failedLoginAttempts   Int       @default(0) @map("failed_login_attempts")
+  lockedUntil           DateTime? @map("locked_until")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
 
-  activeCompanyId String?  @map("active_company_id")
+  activeCompanyId String? @map("active_company_id")
 
-  company            Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  activeCompany      Company?            @relation("UserActiveCompany", fields: [activeCompanyId], references: [id], onDelete: SetNull)
-  memberships        UserCompany[]
-  freightsRequested  Freight[]           @relation("FreightRequestedBy")
-  assignmentsMade    FreightAssignment[] @relation("AssignmentAssignedBy")
-  assignmentsAsDriver FreightAssignment[] @relation("AssignmentDriver")
-  trucksAssigned     Truck[]             @relation("TruckAssignedUser")
-  messagesSent       Message[]
-  auditLogs          AuditLog[]
-  notifications      Notification[]
-  pushSubscriptions  PushSubscription[]
-  refreshTokens      RefreshToken[]
-  producerAccess     PlantProducerAccess[] @relation("ProducerAccessUser")
-  whatsappSessions   WhatsAppSession[]
-  passwordResetCodes PasswordResetCode[]
-  requestedChanges   FreightPendingChange[] @relation("PendingChangeRequester")
-  resolvedChanges    FreightPendingChange[] @relation("PendingChangeResolver")
+  company                    Company?                  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  activeCompany              Company?                  @relation("UserActiveCompany", fields: [activeCompanyId], references: [id], onDelete: SetNull)
+  memberships                UserCompany[]
+  freightsRequested          Freight[]                 @relation("FreightRequestedBy")
+  assignmentsMade            FreightAssignment[]       @relation("AssignmentAssignedBy")
+  assignmentsAsDriver        FreightAssignment[]       @relation("AssignmentDriver")
+  trucksAssigned             Truck[]                   @relation("TruckAssignedUser")
+  messagesSent               Message[]
+  auditLogs                  AuditLog[]
+  notifications              Notification[]
+  pushSubscriptions          PushSubscription[]
+  refreshTokens              RefreshToken[]
+  producerAccess             PlantProducerAccess[]     @relation("ProducerAccessUser")
+  whatsappSessions           WhatsAppSession[]
+  passwordResetCodes         PasswordResetCode[]
+  requestedChanges           FreightPendingChange[]    @relation("PendingChangeRequester")
+  resolvedChanges            FreightPendingChange[]    @relation("PendingChangeResolver")
+  uploadedDocuments          FreightDocument[]         @relation("uploadedDocuments")
+  conversationParticipations ConversationParticipant[] @relation("conversationParticipations")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -242,13 +244,13 @@ model Lot {
 // ======================== PLANTS =====================================
 
 model Plant {
-  id        String  @id @default(uuid())
-  name      String  @db.VarChar(255)
-  companyId String  @map("company_id")
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(255)
+  companyId String   @map("company_id")
   address   String?
-  lat       Decimal @db.Decimal(10, 6)
-  lng       Decimal @db.Decimal(10, 6)
-  active    Boolean @default(true)
+  lat       Decimal  @db.Decimal(10, 6)
+  lng       Decimal  @db.Decimal(10, 6)
+  active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -273,8 +275,8 @@ model Truck {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  assignedUser User?                @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignedUser User?               @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignments  FreightAssignment[]
 
   @@index([companyId])
@@ -314,17 +316,17 @@ model Freight {
   status FreightStatus @default(draft)
 
   // Origin
-  originCompanyId String  @map("origin_company_id")
-  originLotId     String? @map("origin_lot_id")
-  fieldId         String? @map("field_id")
-  originName      String  @db.VarChar(255)
+  originCompanyId String   @map("origin_company_id")
+  originLotId     String?  @map("origin_lot_id")
+  fieldId         String?  @map("field_id")
+  originName      String   @db.VarChar(255)
   originLat       Decimal? @db.Decimal(10, 6)
   originLng       Decimal? @db.Decimal(10, 6)
 
   // Destination
   destCompanyId String?  @map("dest_company_id")
-  destPlantId   String? @map("dest_plant_id")
-  destName      String  @db.VarChar(255)
+  destPlantId   String?  @map("dest_plant_id")
+  destName      String   @db.VarChar(255)
   destLat       Decimal? @db.Decimal(10, 6)
   destLng       Decimal? @db.Decimal(10, 6)
 
@@ -334,27 +336,27 @@ model Freight {
   scheduledAt DateTime? @map("scheduled_at")
 
   // Audit
-  requestedById String   @map("requested_by_id")
+  requestedById String  @map("requested_by_id")
   notes         String?
-  cancelReason  String?  @map("cancel_reason") @db.VarChar(255)
+  cancelReason  String? @map("cancel_reason") @db.VarChar(255)
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  startedAt DateTime? @map("started_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  startedAt  DateTime? @map("started_at")
   finishedAt DateTime? @map("finished_at")
-  loadedAt  DateTime? @map("loaded_at")
+  loadedAt   DateTime? @map("loaded_at")
 
   // Multi-truck support (v6.0)
-  truckCount          Int       @default(1)     @map("truck_count")
-  assignedTruckCount  Int       @default(0)     @map("assigned_truck_count")
-  isMultiTruck        Boolean   @default(false) @map("is_multi_truck")
+  truckCount         Int     @default(1) @map("truck_count")
+  assignedTruckCount Int     @default(0) @map("assigned_truck_count")
+  isMultiTruck       Boolean @default(false) @map("is_multi_truck")
 
   // Own fleet decision (per-freight, set at creation)
   // true = producer chose own fleet, false = delegated to plant, null = N/A or legacy
-  useOwnFleet         Boolean?  @map("use_own_fleet")
+  useOwnFleet Boolean? @map("use_own_fleet")
 
   // Public tracking share token (generated on first share request)
-  shareToken          String?   @unique @map("share_token") @db.VarChar(36)
+  shareToken String? @unique @map("share_token") @db.VarChar(36)
 
   // Cross-confirmations
   transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
@@ -370,14 +372,14 @@ model Freight {
   field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)
   requestedBy   User     @relation("FreightRequestedBy", fields: [requestedById], references: [id])
 
-  items           FreightItem[]
-  assignments     FreightAssignment[]
-  documents       FreightDocument[]
-  conversation    Conversation?       @relation("FreightConversation")
-  auditLogs       AuditLog[]
-  trackingPoints  FreightTracking[]
-  liveLocations   LiveLocation[]
-  pendingChanges  FreightPendingChange[]
+  items          FreightItem[]
+  assignments    FreightAssignment[]
+  documents      FreightDocument[]
+  conversation   Conversation?          @relation("FreightConversation")
+  auditLogs      AuditLog[]
+  trackingPoints FreightTracking[]
+  liveLocations  LiveLocation[]
+  pendingChanges FreightPendingChange[]
 
   @@index([loadDate])
   @@index([fieldId])
@@ -389,18 +391,19 @@ model Freight {
   @@index([status, loadDate])
   @@index([scheduledAt])
   @@index([destName, originName, createdAt])
+  @@index([originLotId])
   @@map("freights")
 }
 
 // ======================== FREIGHT ITEMS ==============================
 
 model FreightItem {
-  id        String    @id @default(uuid())
-  freightId String    @map("freight_id")
-  grain     String    @db.VarChar(50)
-  tons      Decimal   @db.Decimal(10, 2)
+  id        String   @id @default(uuid())
+  freightId String   @map("freight_id")
+  grain     String   @db.VarChar(50)
+  tons      Decimal  @db.Decimal(10, 2)
   notes     String?
-  createdAt DateTime  @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
 
@@ -411,32 +414,32 @@ model FreightItem {
 // ======================== FREIGHT ASSIGNMENTS =========================
 
 model FreightAssignment {
-  id                  String           @id @default(uuid())
-  freightId           String           @map("freight_id")
-  transportCompanyId  String           @map("transport_company_id")
-  status              AssignmentStatus @default(active)
+  id                 String           @id @default(uuid())
+  freightId          String           @map("freight_id")
+  transportCompanyId String           @map("transport_company_id")
+  status             AssignmentStatus @default(active)
 
-  driverId    String?  @map("driver_id")
-  driverName  String?  @map("driver_name") @db.VarChar(255)
-  plate       String?  @db.VarChar(20)
-  truckId     String?  @map("truck_id")
+  driverId   String? @map("driver_id")
+  driverName String? @map("driver_name") @db.VarChar(255)
+  plate      String? @db.VarChar(20)
+  truckId    String? @map("truck_id")
 
-  assignedById String  @map("assigned_by_id")
-  reason String? @db.VarChar(255)
-  queuePosition Int @default(0) @map("queue_position")
+  assignedById  String  @map("assigned_by_id")
+  reason        String? @db.VarChar(255)
+  queuePosition Int     @default(0) @map("queue_position")
 
   // Multi-truck trip lifecycle (v6.0)
-  tripStatus                      TripStatus  @default(pending) @map("trip_status")
-  tripNumber                      Int         @default(1)       @map("trip_number")
-  tons                            Decimal?    @db.Decimal(10, 2)
-  loadedTons                      Decimal?    @map("loaded_tons") @db.Decimal(10, 2)
-  startedAt                       DateTime?   @map("trip_started_at")
-  loadedAt                        DateTime?   @map("trip_loaded_at")
-  finishedAt                      DateTime?   @map("trip_finished_at")
-  transporterLoadedConfirmedAt    DateTime?   @map("trip_transporter_loaded_confirmed_at")
-  producerLoadedConfirmedAt       DateTime?   @map("trip_producer_loaded_confirmed_at")
-  transporterFinishedConfirmedAt  DateTime?   @map("trip_transporter_finished_confirmed_at")
-  plantFinishedConfirmedAt        DateTime?   @map("trip_plant_finished_confirmed_at")
+  tripStatus                     TripStatus @default(pending) @map("trip_status")
+  tripNumber                     Int        @default(1) @map("trip_number")
+  tons                           Decimal?   @db.Decimal(10, 2)
+  loadedTons                     Decimal?   @map("loaded_tons") @db.Decimal(10, 2)
+  startedAt                      DateTime?  @map("trip_started_at")
+  loadedAt                       DateTime?  @map("trip_loaded_at")
+  finishedAt                     DateTime?  @map("trip_finished_at")
+  transporterLoadedConfirmedAt   DateTime?  @map("trip_transporter_loaded_confirmed_at")
+  producerLoadedConfirmedAt      DateTime?  @map("trip_producer_loaded_confirmed_at")
+  transporterFinishedConfirmedAt DateTime?  @map("trip_transporter_finished_confirmed_at")
+  plantFinishedConfirmedAt       DateTime?  @map("trip_plant_finished_confirmed_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -468,8 +471,10 @@ model FreightDocument {
   uploadedById String        @map("uploaded_by_id")
   ocrData      Json?         @map("ocr_data")
   createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  freight    Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  uploadedBy User?   @relation("uploadedDocuments", fields: [uploadedById], references: [id])
 
   @@index([freightId])
   @@index([freightId, step])
@@ -546,8 +551,11 @@ model ConversationParticipant {
   lastReadAt     DateTime? @map("last_read_at")
   pinnedAt       DateTime? @map("pinned_at")
   markedUnread   Boolean   @default(false) @map("marked_unread")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?        @relation("conversationParticipations", fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([conversationId, companyId])
   @@index([companyId])
@@ -579,8 +587,8 @@ model AuditLog {
   entityType String   @map("entity_type") @db.VarChar(30)
   entityId   String   @map("entity_id")
   action     String   @db.VarChar(50)
-  fromValue  String?  @map("from_value") @db.VarChar(50)
-  toValue    String?  @map("to_value") @db.VarChar(50)
+  fromValue  String?  @map("from_value") @db.Text
+  toValue    String?  @map("to_value") @db.Text
   userId     String   @map("user_id")
   freightId  String?  @map("freight_id")
   reason     String?  @db.VarChar(255)
@@ -594,6 +602,7 @@ model AuditLog {
   @@index([userId])
   @@index([createdAt])
   @@index([freightId])
+  @@index([freightId, createdAt])
   @@map("audit_logs")
 }
 
@@ -677,7 +686,7 @@ model RefreshToken {
 model AnalyticsEvent {
   id        String   @id @default(uuid())
   event     String   @db.VarChar(100)
-  data      Json     @default("{}")  // Prisma handles this correctly for PostgreSQL
+  data      Json     @default("{}") // Prisma handles this correctly for PostgreSQL
   userId    String?  @map("user_id")
   sessionId String?  @map("session_id") @db.VarChar(64)
   createdAt DateTime @default(now()) @map("created_at")

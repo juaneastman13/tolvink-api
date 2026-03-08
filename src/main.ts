@@ -83,10 +83,10 @@ async function bootstrap() {
 
   // Body parsing with raw body capture for WhatsApp HMAC-SHA256 verification
   app.use(bodyParser.json({
-    limit: '10mb',
+    limit: '2mb',
     verify: (req: any, _res: any, buf: Buffer) => { req.rawBody = buf; },
   }));
-  app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
+  app.use(bodyParser.urlencoded({ limit: '2mb', extended: true }));
 
   // Cookie parser — for HttpOnly auth cookies
   app.use(cookieParser());
@@ -115,12 +115,12 @@ async function bootstrap() {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
     exposedHeaders: [],
-    maxAge: 86400,
+    maxAge: 7200,
   });
 
   // CSRF protection — validate Origin/Referer on state-changing requests
   // Skip webhooks (Meta WhatsApp) and analytics (fire-and-forget)
-  const csrfSkipPaths = ['/api/whatsapp/', '/api/analytics/'];
+  const csrfSkipPaths = ['/api/whatsapp/webhook', '/api/analytics/event'];
   const allowedOrigins = new Set(corsOrigins);
   app.use((req: any, res: any, next: any) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {

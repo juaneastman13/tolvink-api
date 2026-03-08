@@ -398,9 +398,19 @@ export class FreightsService {
 
   // ======================== FIND ONE =================================
 
-  async findOne(id: string) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id },
+  async findOne(id: string, companyIds?: string[]) {
+    const whereClause: any = { id };
+    // Defense-in-depth: when companyIds provided, ensure the freight belongs to one of the caller's companies
+    if (companyIds && companyIds.length > 0) {
+      whereClause.OR = [
+        { originCompanyId: { in: companyIds } },
+        { destCompanyId: { in: companyIds } },
+        { assignments: { some: { transportCompanyId: { in: companyIds }, status: { in: ['active', 'accepted'] } } } },
+      ];
+    }
+
+    const freight = await this.prisma.freight.findFirst({
+      where: whereClause,
       include: {
         items: true,
         originLot: true,
@@ -536,7 +546,7 @@ export class FreightsService {
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
       this.logger.error(`assign() failed for freight ${freightId}: ${err.message}`, err.stack);
-      throw new BadRequestException('Error al asignar transportista. Intente nuevamente.');
+      throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
 
     // Notify all participants about assignment (transporter gets Aceptar/Rechazar buttons)

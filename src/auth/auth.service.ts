@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
+import { BCRYPT_ROUNDS } from '../common/constants';
 
 // Pre-computed valid bcrypt hash for constant-time comparison against non-existent users
 // Use synchronous hashSync to guarantee DUMMY_HASH is ready before any request
@@ -157,7 +158,7 @@ export class AuthService {
     const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
     if (phoneExists) throw new ConflictException('Email o teléfono ya registrado');
 
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
     // Validate userTypes values
     const validTypes = ['producer', 'plant', 'transporter'];
@@ -258,7 +259,7 @@ export class AuthService {
 
     // Generate 6-digit code
     const code = String(randomInt(100000, 999999));
-    const codeHash = await bcrypt.hash(code, 10);
+    const codeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
 
     await (this.prisma as any).passwordResetCode.create({
       data: {
@@ -376,7 +377,7 @@ export class AuthService {
       throw new UnauthorizedException('Token inválido o expirado');
     }
 
-    const hash = await bcrypt.hash(dto.newPassword, 10);
+    const hash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     await this.prisma.user.update({
       where: { id: user.id },
       data: { passwordHash: hash, failedLoginAttempts: 0, lockedUntil: null },
@@ -415,7 +416,7 @@ export class AuthService {
       throw new BadRequestException('La nueva contraseña debe ser diferente a la actual');
     }
 
-    const hash = await bcrypt.hash(dto.newPassword, 10);
+    const hash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: hash },
