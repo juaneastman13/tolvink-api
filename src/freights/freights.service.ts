@@ -211,9 +211,9 @@ export class FreightsService {
           requestedById: user.sub,
           notes: dto.notes,
           useOwnFleet,
-          truckCount: dto.truckCount || 1,
+          truckCount: Math.max(1, dto.truckCount || 1),
           assignedTruckCount: 0,
-          isMultiTruck: (dto.truckCount || 1) > 1,
+          isMultiTruck: Math.max(1, dto.truckCount || 1) > 1,
           items: {
             create: dto.items.map((i) => ({
               grain: i.grain,
@@ -384,7 +384,8 @@ export class FreightsService {
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
-          documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true, ocrData: true } },
+          // Light include for list — exclude ocrData (large Json blob) to reduce payload
+          documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true, createdAt: true, uploadedById: true } },
           pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
         },
       }),
@@ -1757,6 +1758,7 @@ export class FreightsService {
 
   private async deriveFreightStatus(tx: any, freightId: string): Promise<FreightStatus> {
     const freight: any = await tx.freight.findUnique({ where: { id: freightId }, select: { truckCount: true, status: true, assignedTruckCount: true } });
+    if (!freight) return FreightStatus.pending_assignment;
     const truckCount = freight?.truckCount || 1;
 
     // Monotonic guard helper: never regress freight status below current
@@ -1776,11 +1778,10 @@ export class FreightsService {
       where: { freightId, status: { in: ['active', 'accepted'] } },
       select: { tripStatus: true },
     });
-    // When all assignments are removed, allow regression to pending_assignment
+    // When assignments are lost (canceled/rejected), allow regression to pending_assignment
+    // This handles: all removed, or some canceled reducing below truckCount
     if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
-
-    // If not all truck slots are filled, stay at pending_assignment (but respect monotonic guard)
-    if (assignments.length < truckCount) return applyMonotonicGuard(FreightStatus.pending_assignment);
+    if (assignments.length < truckCount) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
 
     // All slots filled — derive status from the MINIMUM tripStatus across all assignments
     // Status hierarchy: pending < accepted < in_progress < loaded < finished

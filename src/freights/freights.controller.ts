@@ -75,7 +75,8 @@ export class FreightsController {
   @Get(':id')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Detalle de flete' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    // FreightAccessGuard already enforces company-level access; user passed for future defense-in-depth
     return this.service.findOne(id);
   }
 

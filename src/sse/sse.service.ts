@@ -10,6 +10,7 @@ interface SseClient {
 }
 
 const MAX_CLIENTS_PER_USER = 3;
+const MAX_CLIENTS_PER_COMPANY = 50;
 const MAX_CLIENTS_GLOBAL = 500;
 const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
 const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
@@ -100,6 +101,16 @@ export class SseService implements OnModuleDestroy {
       this.logger.log(`SSE evicted oldest client for user=${userId}`);
     }
 
+    // Check per-company limit
+    for (const cid of companyIds) {
+      const coSet = this.byCompany.get(cid);
+      if (coSet && coSet.size >= MAX_CLIENTS_PER_COMPANY) {
+        this.logger.warn(`SSE company limit reached (${MAX_CLIENTS_PER_COMPANY}) for company=${cid}, rejecting user=${userId}`);
+        res.status(503).end();
+        return;
+      }
+    }
+
     const client: SseClient = { userId, companyIds, res, lastActivity: Date.now() };
     this.addToIndex(client);
     this.logger.log(`SSE client connected: user=${userId} (${this.allClients.size} total)`);
@@ -143,24 +154,33 @@ export class SseService implements OnModuleDestroy {
     freightId: string,
     data: { id: string; code: string; status: string },
     _excludeUserId?: string, // kept for API compat, no longer used
+    knownCompanyIds?: string[], // optimization: skip DB query when caller already has company IDs
   ) {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      select: {
-        originCompanyId: true,
-        destCompanyId: true,
-        assignments: {
-          where: { status: { in: ['active', 'accepted'] } },
-          select: { transportCompanyId: true },
-        },
-      },
-    });
-    if (!freight) return;
+    let companyIds: Set<string>;
 
-    const companyIds = new Set<string>();
-    companyIds.add(freight.originCompanyId);
-    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
-    for (const a of freight.assignments) companyIds.add(a.transportCompanyId);
+    if (knownCompanyIds?.length) {
+      // Caller provided company IDs — skip DB query
+      companyIds = new Set(knownCompanyIds);
+    } else {
+      // Fallback: query DB for company IDs
+      const freight = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: {
+          originCompanyId: true,
+          destCompanyId: true,
+          assignments: {
+            where: { status: { in: ['active', 'accepted'] } },
+            select: { transportCompanyId: true },
+          },
+        },
+      });
+      if (!freight) return;
+
+      companyIds = new Set<string>();
+      companyIds.add(freight.originCompanyId);
+      if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
+      for (const a of freight.assignments) companyIds.add(a.transportCompanyId);
+    }
 
     const payload = `event: freight:updated\ndata: ${JSON.stringify(data)}\n\n`;
     const sent = new Set<SseClient>();

@@ -118,13 +118,7 @@ export class AiService implements OnModuleDestroy {
       return { text: 'El asistente IA no está disponible en este momento.' };
     }
 
-    // Per-session lock: prevent concurrent chat() calls from racing on side-effects
-    if (this._chatLocks.has(session.id)) {
-      return { text: 'Estoy procesando tu mensaje anterior, esperá un momento.' };
-    }
-    this._chatLocks.add(session.id);
-
-    // Per-user rate limiting
+    // Per-user rate limiting — check BEFORE acquiring session lock to avoid lock leak
     const now = Date.now();
     const userId = user.id || phone;
     const rateEntry = aiRateMap.get(userId);
@@ -136,6 +130,12 @@ export class AiService implements OnModuleDestroy {
     } else {
       aiRateMap.set(userId, { count: 1, resetAt: now + AI_RATE_LIMIT_WINDOW_MS });
     }
+
+    // Per-session lock: prevent concurrent chat() calls from racing on side-effects
+    if (this._chatLocks.has(session.id)) {
+      return { text: 'Estoy procesando tu mensaje anterior, esperá un momento.' };
+    }
+    this._chatLocks.add(session.id);
     // Cleanup stale entries + hard cap
     for (const [k, v] of aiRateMap) {
       if (now > v.resetAt) aiRateMap.delete(k);
@@ -369,7 +369,9 @@ export class AiService implements OnModuleDestroy {
 
   private buildSystemPrompt(user: any, companyType: string): string {
     const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
-    const today = new Date().toISOString().split('T')[0];
+    // Use Uruguay time (UTC-3, no DST since 2015) for AI date context
+    const nowUY = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const today = nowUY.toISOString().split('T')[0];
 
     // Detect own fleet capability (works for both producers and plants with hasInternalFleet)
     const hasOwnFleet = user.company?.hasInternalFleet ||
@@ -1892,8 +1894,12 @@ FILTROS AVANZADOS:
       );
     }
 
+    // Warn if results were truncated by the 100-record limit
+    const truncated = result.total > 100;
+    const truncationNote = truncated ? ` (mostrando 100 de ${result.total} fletes)` : '';
+
     if (filtered.length === 0) {
-      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
+      return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' + truncationNote });
     }
 
     const STATUS_LABELS: Record<string, string> = {
@@ -1949,6 +1955,8 @@ FILTROS AVANZADOS:
 
       return JSON.stringify({
         total: freights.length,
+        totalInDB: truncated ? result.total : undefined,
+        truncationNote: truncationNote || undefined,
         groupedBy: groupBy,
         groups: summary,
       });
@@ -1957,6 +1965,8 @@ FILTROS AVANZADOS:
     // No grouping — return flat list
     return JSON.stringify({
       total: freights.length,
+      totalInDB: truncated ? result.total : undefined,
+      truncationNote: truncationNote || undefined,
       freights,
     });
   }

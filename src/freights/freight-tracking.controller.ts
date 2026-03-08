@@ -14,8 +14,9 @@ export class FreightTrackingController {
   constructor(private prisma: PrismaService, private freightsService: FreightsService) {}
 
   private validateToken(token: string) {
-    if (!token || token.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(token)) {
-      throw new NotFoundException('Link de seguimiento no válido');
+    // Security: share tokens should be at least 16 chars to prevent brute-force enumeration
+    if (!token || token.length < 16 || token.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(token)) {
+      throw new BadRequestException('Token inválido');
     }
   }
 

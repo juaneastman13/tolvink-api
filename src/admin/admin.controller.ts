@@ -262,6 +262,7 @@ export class AdminService {
 
   // --- Permission helpers ---
   isPlatformAdmin(user: any): boolean {
+    // Quick JWT check — callers doing mutations MUST also call resolveFullUser() for DB verification
     return user.role === 'platform_admin';
   }
 
@@ -275,10 +276,12 @@ export class AdminService {
     return dbUser.role === 'admin';
   }
 
-  assertPlatformAdmin(user: any) {
+  async assertPlatformAdmin(user: any) {
     if (!this.isPlatformAdmin(user)) {
       throw new ForbiddenException('Solo administradores de plataforma');
     }
+    // Verify against DB — JWT claim could be stale
+    await this.resolveFullUser(user);
   }
 
   /** Verify role against DB — not just JWT claims */
@@ -359,6 +362,7 @@ export class AdminService {
         _count: { select: { users: true, branches: true } },
       },
       orderBy: { name: 'asc' },
+      take: 200,
     });
   }
 
@@ -946,7 +950,7 @@ export class AdminController {
   @Get('stats')
   @ApiOperation({ summary: 'Dashboard stats' })
   async stats(@CurrentUser() u: any) {
-    this.svc.assertPlatformAdmin(u);
+    await this.svc.assertPlatformAdmin(u);
     return this.svc.getStats();
   }
 
@@ -970,8 +974,8 @@ export class AdminController {
 
   @Post('companies')
   @ApiOperation({ summary: 'Crear empresa (solo platform_admin)' })
-  createCompany(@Body() dto: CreateCompanyDto, @CurrentUser() u: any) {
-    this.svc.assertPlatformAdmin(u);
+  async createCompany(@Body() dto: CreateCompanyDto, @CurrentUser() u: any) {
+    await this.svc.assertPlatformAdmin(u);
     return this.svc.createCompany(dto);
   }
 
@@ -1039,6 +1043,7 @@ export class AdminController {
   }
 
   @Post('users')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Crear usuario' })
   async createUser(@Body() dto: CreateUserDto, @CurrentUser() u: any) {
     await this.svc.assertCompanyOrPlatformAdmin(u);

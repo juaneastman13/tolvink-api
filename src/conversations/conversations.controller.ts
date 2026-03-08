@@ -41,7 +41,7 @@ interface ParticipantsCache {
   timestamp: number;
 }
 const participantsCache = new Map<string, ParticipantsCache>();
-const PARTICIPANTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const PARTICIPANTS_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes — short TTL for fresher tenant data
 
 @Injectable()
 export class ConversationsService implements OnModuleInit, OnModuleDestroy {
@@ -154,26 +154,32 @@ export class ConversationsService implements OnModuleInit, OnModuleDestroy {
     // Resolve target user and their company
     const targetUser = await this.prisma.user.findUnique({
       where: { id: targetUserId },
-      select: { id: true, companyId: true },
+      select: { id: true, companyId: true, memberships: { where: { active: true }, select: { companyId: true } } },
     });
     if (!targetUser) throw new BadRequestException('Usuario no encontrado');
 
     const allIds = await this.resolveAllCompanyIds(user);
     if (!allIds || allIds.length === 0) throw new ForbiddenException('Sin empresa asignada');
     const myPrimaryId = allIds[0];
+    // Check all target user's companies, not just primary
+    const targetCompanyIds = [
+      targetUser.companyId,
+      ...((targetUser as any).memberships || []).map((m: any) => m.companyId),
+    ].filter((id, i, arr) => id && arr.indexOf(id) === i);
     const targetCompanyId = targetUser.companyId;
 
     // Tenant boundary: target must be in same company or a freight-related company
-    if (!allIds.includes(targetCompanyId)) {
+    const hasSharedCompany = targetCompanyIds.some(id => allIds.includes(id));
+    if (!hasSharedCompany) {
       const relatedFreights = await this.prisma.freight.findFirst({
         where: {
           OR: [
-            { originCompanyId: { in: allIds }, destCompanyId: targetCompanyId },
-            { destCompanyId: { in: allIds }, originCompanyId: targetCompanyId },
-            { originCompanyId: targetCompanyId, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
-            { destCompanyId: targetCompanyId, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
-            { assignments: { some: { transportCompanyId: targetCompanyId, status: { in: ['active', 'accepted'] } } }, originCompanyId: { in: allIds } },
-            { assignments: { some: { transportCompanyId: targetCompanyId, status: { in: ['active', 'accepted'] } } }, destCompanyId: { in: allIds } },
+            { originCompanyId: { in: allIds }, destCompanyId: { in: targetCompanyIds } },
+            { destCompanyId: { in: allIds }, originCompanyId: { in: targetCompanyIds } },
+            { originCompanyId: { in: targetCompanyIds }, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
+            { destCompanyId: { in: targetCompanyIds }, assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
+            { assignments: { some: { transportCompanyId: { in: targetCompanyIds }, status: { in: ['active', 'accepted'] } } }, originCompanyId: { in: allIds } },
+            { assignments: { some: { transportCompanyId: { in: targetCompanyIds }, status: { in: ['active', 'accepted'] } } }, destCompanyId: { in: allIds } },
           ],
         },
         select: { id: true },

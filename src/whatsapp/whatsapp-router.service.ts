@@ -109,10 +109,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
     // Serialize per phone — prevents concurrent AI/session races for same user
-    // Safety: evict oldest entries if map grows too large (leak protection)
-    if (this.phoneLocks.size > this.MAX_PHONE_LOCKS) {
-      const first = this.phoneLocks.keys().next().value;
-      if (first) this.phoneLocks.delete(first);
+    // Safety: reject if pool full (don't evict — could corrupt active sessions)
+    if (this.phoneLocks.size >= this.MAX_PHONE_LOCKS) {
+      this.logger.warn(`Phone lock pool full (${this.MAX_PHONE_LOCKS}), rejecting message from ${phone.slice(-4)}`);
+      return;
     }
     const prev = this.phoneLocks.get(phone) || Promise.resolve();
     let unlock: () => void;
@@ -184,6 +184,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Load session ONCE at the top — reused by multi-company check, flow check, and sub-handlers
+      // NOTE: Session is cached in `cachedSession` to avoid redundant DB queries within this message lifecycle
       let cachedSession = await this.prisma.whatsAppSession.findFirst({
         where: { userId: user.id, expiresAt: { gt: new Date() } },
         orderBy: { updatedAt: 'desc' },
@@ -223,7 +224,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           // Save button/list actions as _pendingAction
           const isButtonAction = type === 'button_reply' && payload.id;
           const pendingData: any = {};
-          if (isOperational) pendingData._pendingMessage = textBody;
+          // Concatenate pending messages instead of overwriting (user may send multiple before selecting company)
+          if (isOperational) pendingData._pendingMessage = sState._pendingMessage ? sState._pendingMessage + '\n' + textBody : textBody;
           if (isButtonAction) pendingData._pendingAction = { id: payload.id, title: payload.title };
           if (Object.keys(pendingData).length > 0 && cachedSession) {
             this.logger.log(`[MultiCo] Saving _pendingMessage="${pendingData._pendingMessage || ''}" to session ${cachedSession.id}`);
@@ -551,7 +553,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     // GPS tracking: save position to FreightTracking for any active freight the user is involved in
     this.saveLocationToActiveFreights(user, latitude, longitude).catch(async (err) => {
-      this.logger.error(`GPS tracking save failed: ${err.message}`);
+      // P2002 = duplicate GPS write (race condition) — silently ignore
+      if (err?.code === 'P2002') return;
+      this.logger.error(`GPS tracking save failed for user ${user.id}: ${err.message}`);
       await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch(() => {});
     });
 

@@ -185,8 +185,8 @@ export class AuthService {
       });
     } catch (err: any) {
       if (err.code === 'P2002') {
-        const field = err.meta?.target?.includes('email') ? 'Email' : 'Teléfono';
-        throw new ConflictException(`${field} ya registrado`);
+        // Generic message to prevent user enumeration (don't reveal which field conflicted)
+        throw new ConflictException('Email o teléfono ya registrado');
       }
       throw err;
     }
@@ -574,16 +574,21 @@ export class AuthService {
     const token = randomBytes(40).toString('hex');
     const tokenHash = this.hashToken(token);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
-    // Limit active refresh tokens per user (max 10)
-    const activeCount = await (this.prisma as any).refreshToken.count({ where: { userId, expiresAt: { gt: new Date() } } });
-    if (activeCount >= 10) {
-      const oldest = await (this.prisma as any).refreshToken.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, take: activeCount - 9, select: { id: true } });
-      if (oldest.length > 0) await (this.prisma as any).refreshToken.deleteMany({ where: { id: { in: oldest.map((t: any) => t.id) } } });
-    }
-    await (this.prisma as any).refreshToken.create({ data: { token: tokenHash, userId, expiresAt } });
-    await (this.prisma as any).refreshToken.deleteMany({
-      where: { userId, expiresAt: { lt: new Date() } },
-    }).catch(e => this.logger.warn(e.message));
+
+    await this.prisma.$transaction(async (tx) => {
+      // Cleanup expired tokens
+      await (tx as any).refreshToken.deleteMany({
+        where: { userId, expiresAt: { lt: new Date() } },
+      });
+      // Limit active refresh tokens per user (max 10)
+      const activeCount = await (tx as any).refreshToken.count({ where: { userId, expiresAt: { gt: new Date() } } });
+      if (activeCount >= 10) {
+        const oldest = await (tx as any).refreshToken.findMany({ where: { userId }, orderBy: { createdAt: 'asc' }, take: activeCount - 9, select: { id: true } });
+        if (oldest.length > 0) await (tx as any).refreshToken.deleteMany({ where: { id: { in: oldest.map((t: any) => t.id) } } });
+      }
+      await (tx as any).refreshToken.create({ data: { token: tokenHash, userId, expiresAt } });
+    });
+
     return token;
   }
 

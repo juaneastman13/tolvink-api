@@ -3,6 +3,19 @@ import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { PrismaService } from '../../database/prisma.service';
 
+// Short-lived in-memory cache for user active/role checks (avoids DB hit per request)
+const userActiveCache = new Map<string, { active: boolean; role: string; ts: number }>();
+const USER_CACHE_TTL = 30_000; // 30 seconds
+const CACHE_CLEANUP_INTERVAL = 5 * 60_000; // 5 minutes
+
+// Periodic cleanup of expired cache entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of userActiveCache) {
+    if (now - v.ts > USER_CACHE_TTL) userActiveCache.delete(k);
+  }
+}, CACHE_CLEANUP_INTERVAL).unref();
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   private readonly logger = new Logger(JwtAuthGuard.name);
@@ -25,19 +38,23 @@ export class JwtAuthGuard implements CanActivate {
       }
       (request as any)['user'] = payload;
 
-      // After JWT validation succeeds, verify user is still active in DB
-      // Use cached result if already checked in this request
-      if (!(request as any)._dbUserChecked) {
+      // After JWT validation, verify user is still active (cached 30s to avoid per-request DB hit)
+      const now = Date.now();
+      const cached = userActiveCache.get(payload.sub);
+      if (cached && now - cached.ts < USER_CACHE_TTL) {
+        if (!cached.active) throw new UnauthorizedException('Usuario desactivado');
+        (request as any).user = { ...(request as any).user, dbRole: cached.role };
+      } else {
         const dbUser = await this.prisma.user.findUnique({
           where: { id: payload.sub },
           select: { active: true, role: true },
         });
         if (!dbUser || !dbUser.active) {
+          userActiveCache.set(payload.sub, { active: false, role: '', ts: now });
           throw new UnauthorizedException('Usuario desactivado');
         }
-        // Attach fresh role from DB to prevent stale JWT role escalation
+        userActiveCache.set(payload.sub, { active: true, role: dbUser.role, ts: now });
         (request as any).user = { ...(request as any).user, dbRole: dbUser.role };
-        (request as any)._dbUserChecked = true;
       }
 
       return true;
@@ -55,4 +72,9 @@ export class JwtAuthGuard implements CanActivate {
     // 2. HttpOnly cookie fallback
     return (request as any).cookies?.accessToken || null;
   }
+}
+
+// Export for cache invalidation (e.g., when deactivating a user)
+export function invalidateUserActiveCache(userId: string) {
+  userActiveCache.delete(userId);
 }
