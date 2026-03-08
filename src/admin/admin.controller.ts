@@ -416,8 +416,8 @@ export class AdminService {
   }
 
   async createBranch(dto: CreateBranchDto) {
-    const company = await this.prisma.company.findUnique({ where: { id: dto.companyId } });
-    if (!company) throw new BadRequestException('Empresa no encontrada');
+    const company = await this.prisma.company.findFirst({ where: { id: dto.companyId, active: true } });
+    if (!company) throw new BadRequestException('Empresa no encontrada o inactiva');
 
     return this.prisma.branch.create({
       data: {
@@ -508,8 +508,8 @@ export class AdminService {
     }
 
     if (dto.companyId) {
-      const c = await this.prisma.company.findUnique({ where: { id: dto.companyId } });
-      if (!c) throw new BadRequestException('Empresa no encontrada');
+      const c = await this.prisma.company.findFirst({ where: { id: dto.companyId, active: true } });
+      if (!c) throw new BadRequestException('Empresa no encontrada o inactiva');
     }
 
     // Use pre-hashed password (internal callers like AI) or hash from plaintext

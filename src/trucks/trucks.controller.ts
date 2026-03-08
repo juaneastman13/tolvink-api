@@ -118,10 +118,13 @@ export class TrucksService {
         targetCompanyId = companyId;
       } else if (user.companyType === 'plant' || (Array.isArray(user.companyTypes) && user.companyTypes.includes('plant'))) {
         // Verify business relationship: active freight assignment or plant-access
+        // Time-bound to last 90 days to prevent perpetual access via old assignments
+        const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
         const hasRelation = await this.prisma.freightAssignment.findFirst({
           where: {
             transportCompanyId: companyId,
             freight: { destCompanyId: user.companyId, status: { notIn: ['canceled'] } },
+            createdAt: { gte: cutoff },
           },
         });
         const hasPlantAccess = await this.prisma.plantProducerAccess.findFirst({
