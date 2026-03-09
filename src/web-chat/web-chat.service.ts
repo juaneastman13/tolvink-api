@@ -79,7 +79,12 @@ export class WebChatService {
     const session = await this.getOrCreateSession(dbUser.id);
     const synUser = buildSyntheticUser(dbUser);
 
-    const result = await this.ai.chat(WEB_PHONE, text, synUser, session);
+    // Stream text deltas to the frontend as Claude generates them
+    const onDelta = (chunk: string, start?: boolean) => {
+      this.sse.emitToUser(dbUser.id, 'ai:chunk', { text: chunk, start: !!start });
+    };
+
+    const result = await this.ai.chat(WEB_PHONE, text, synUser, session, onDelta);
 
     // Handle pending selection (set by AI tools like switch_company)
     const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });

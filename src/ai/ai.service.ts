@@ -113,6 +113,7 @@ export class AiService implements OnModuleDestroy {
     userMessage: string,
     user: any,
     session: any,
+    onDelta?: (chunk: string, start?: boolean) => void,
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
     if (!this.client) {
       return { text: 'El asistente IA no está disponible en este momento.' };
@@ -215,7 +216,7 @@ export class AiService implements OnModuleDestroy {
         }
 
         this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
-        const apiCall = this.client.messages.create({
+        const createParams = {
           model: MODEL_ID,
           max_tokens: MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
@@ -224,14 +225,25 @@ export class AiService implements OnModuleDestroy {
             i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t,
           ) as any,
           messages: currentMessages,
-        });
+        };
+
         // 45s timeout to prevent hanging requests
         let timeoutHandle: ReturnType<typeof setTimeout>;
         const timeout = new Promise((_, reject) => {
           timeoutHandle = setTimeout(() => reject(new Error('Claude API timeout')), 45_000);
         });
         try {
-          response = await Promise.race([apiCall, timeout]) as any;
+          if (onDelta) {
+            // Streaming mode: emit text deltas as they arrive
+            let isFirst = true;
+            const stream = this.client.messages.stream(createParams as any);
+            stream.on('text', (text) => { try { onDelta(text, isFirst); isFirst = false; } catch {} });
+            const streamResult = Promise.resolve(stream.finalMessage());
+            response = await Promise.race([streamResult, timeout]) as any;
+          } else {
+            const apiCall = this.client.messages.create(createParams as any);
+            response = await Promise.race([apiCall, timeout]) as any;
+          }
         } finally {
           clearTimeout(timeoutHandle!);
         }
