@@ -390,7 +390,7 @@ export class AiService implements OnModuleDestroy {
       return { text: finalText, buttons: pendingButtons };
     } catch (e) {
       this._chatSideEffects.delete(session.id);
-      this.logger.error(`Chat error: ${e.message}`, e.stack?.slice(0, 300));
+      this.logger.error(`Chat error [session=${session.id} user=${user.id} company=${user.activeCompanyId}]: ${e.message}`, e.stack?.slice(0, 500));
       return { text: 'Se produjo un inconveniente técnico. Por favor, intente nuevamente o utilice las opciones del menú.' };
     } finally {
       this._chatLocks.delete(session.id);

@@ -1116,11 +1116,18 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         where: { id: freshSess.id },
         data: { flowState: cleanFS },
       });
+      // Re-load session after cleanup so handleAiChat gets fresh flowState
+      const cleanedSess = await this.prisma.whatsAppSession.findUnique({ where: { id: freshSess.id } });
       // Replay button action or text message
-      if (pendingAction) {
-        await this.handleButtonReply(phone, updatedUser, pendingAction.id, pendingAction.title);
-      } else {
-        await this.handleAiChat(phone, updatedUser, pendingMsg, freshSess);
+      try {
+        if (pendingAction) {
+          await this.handleButtonReply(phone, updatedUser, pendingAction.id, pendingAction.title);
+        } else {
+          await this.handleAiChat(phone, updatedUser, pendingMsg, cleanedSess || undefined);
+        }
+      } catch (replayErr: any) {
+        this.logger.error(`[CompanySelection] Replay failed: ${replayErr.message}`, replayErr.stack?.slice(0, 300));
+        await this.wa.sendText(phone, 'Hubo un problema al procesar su mensaje. Por favor, intente nuevamente.');
       }
     } else if (updatedUser) {
       await this.showMainMenu(phone, updatedUser);
