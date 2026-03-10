@@ -1762,11 +1762,25 @@ TERMINOLOGÍA CORRECTA:
         select: { name: true, plants: { where: { active: true }, select: { id: true, name: true }, take: 20 } },
       });
       if (company?.plants && company.plants.length > 0) {
-        return JSON.stringify({
-          error: `La planta "${company.name}" tiene ${company.plants.length} sucursal(es). Debe indicar branchId.`,
-          branches: company.plants.map(b => ({ id: b.id, name: b.name })),
-          IMPORTANT: 'Preguntar al usuario cuál sucursal. Si hay una sola, sugerirla directamente.',
-        });
+        // If only 1 branch, auto-select it
+        if (company.plants.length === 1) {
+          input.branchId = company.plants[0].id;
+        } else {
+          // Send interactive list of branches so user can tap to select
+          const branchItems = company.plants.map((b: any) => ({
+            id: `branch:${b.id}`,
+            title: b.name.slice(0, 24),
+            description: company.name.slice(0, 72),
+          }));
+          return this.storePendingSelection(session, branchItems, {
+            headerText: `🏭 ${company.name} tiene ${company.plants.length} sucursales.\nSeleccione una:`,
+            listButtonLabel: 'Ver sucursales',
+            sectionTitle: 'SUCURSALES',
+          }, 'branch_selection', {
+            _branchSelectionFor: input.destPlantId,
+            branches: company.plants.map(b => ({ id: b.id, name: b.name })),
+          });
+        }
       }
     }
 
