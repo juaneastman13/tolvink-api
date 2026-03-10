@@ -510,8 +510,8 @@ export class FreightsService {
           // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
           const lockRows: any[] = await tx.$queryRaw`
             SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
-            FROM "FreightAssignment" fa
-            JOIN "Freight" f ON f.id = fa."freightId"
+            FROM "freight_assignments" fa
+            JOIN "freights" f ON f.id = fa."freightId"
             WHERE fa."driverId" = ${dto.driverId}::uuid
               AND fa.status IN ('active','accepted')
               AND f.status IN ('assigned','accepted','in_progress','loaded')
@@ -1915,8 +1915,8 @@ export class FreightsService {
             // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
             const lockRows: any[] = await tx.$queryRaw`
               SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
-              FROM "FreightAssignment" fa
-              JOIN "Freight" f ON f.id = fa."freightId"
+              FROM "freight_assignments" fa
+              JOIN "freights" f ON f.id = fa."freightId"
               WHERE fa."driverId" = ${truck.driverId}::uuid
                 AND fa.status IN ('active','accepted')
                 AND f.status IN ('assigned','accepted','in_progress','loaded')
