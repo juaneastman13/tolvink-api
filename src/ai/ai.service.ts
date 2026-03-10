@@ -498,6 +498,7 @@ ANTI-ALUCINACIÓN (CRÍTICO):
 - SOLO afirmar datos de resultados de herramientas. NUNCA inventar códigos, nombres, toneladas, fechas.
 - NUNCA confirmar acción si la herramienta no la ejecutó.
 - NUNCA exponer UUIDs. Solo códigos de flete (ej: F26-LCP.1822).
+- SIEMPRE mostrar el código de flete COMPLETO incluyendo el prefijo (F26-XXX.YYYY). NUNCA recortar ni omitir partes del código.
 
 AUDIO: Interpretar intención (errores fonéticos: "solla"=Soja, "tigo"=Trigo). No resetear contexto activo.
 
@@ -1453,12 +1454,12 @@ TERMINOLOGÍA CORRECTA:
     const dLat = (freight as any).destLat != null ? Number((freight as any).destLat) : null;
     const dLng = (freight as any).destLng != null ? Number((freight as any).destLng) : null;
 
-    // Build map link if coordinates available
+    // Build map link if coordinates available and finite
     let mapLink: string | null = null;
-    if (oLat != null && oLng != null) {
+    if (oLat != null && oLng != null && isFinite(oLat) && isFinite(oLng)) {
       const p = new URLSearchParams();
       p.set('lat', oLat.toFixed(6)); p.set('lng', oLng.toFixed(6)); p.set('n', originName.slice(0, 60));
-      if (dLat != null && dLng != null) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
+      if (dLat != null && dLng != null && isFinite(dLat) && isFinite(dLng)) { p.set('dlat', dLat.toFixed(6)); p.set('dlng', dLng.toFixed(6)); p.set('dn', destName.slice(0, 60)); }
       mapLink = `${APP_URL}/ver-mapa?${p.toString()}`;
     }
 
@@ -1918,10 +1919,16 @@ TERMINOLOGÍA CORRECTA:
           );
           break;
 
-        case 'confirm_loaded':
-          await this.freights.confirmLoaded(params.freightId, synUser, params.tons);
-          result = JSON.stringify({ status: 'loaded', code: params.code, tons: params.tons });
+        case 'confirm_loaded': {
+          const cTons = params.tons != null ? Number(params.tons) : undefined;
+          if (cTons !== undefined && (!isFinite(cTons) || cTons <= 0 || cTons > 200)) {
+            result = JSON.stringify({ error: 'Toneladas inválidas (debe ser entre 0 y 200).' });
+            break;
+          }
+          await this.freights.confirmLoaded(params.freightId, synUser, cTons);
+          result = JSON.stringify({ status: 'loaded', code: params.code, tons: cTons });
           break;
+        }
 
         case 'confirm_finished':
           await this.freights.confirmFinished(params.freightId, synUser);
@@ -1934,9 +1941,7 @@ TERMINOLOGÍA CORRECTA:
           break;
 
         case 'assign_transporter': {
-          // Re-validate caller has access to the plant company
-          const callerCompanies = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
-          if (!callerCompanies.includes(params.plantCompanyId)) {
+          if (!this.canAccessCompany(user, synUser, params.plantCompanyId)) {
             result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
             break;
           }
@@ -1960,8 +1965,7 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'assign_truck_to_trip': {
-          const callerCos2 = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
-          if (!callerCos2.includes(params.plantCompanyId)) {
+          if (!this.canAccessCompany(user, synUser, params.plantCompanyId)) {
             result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
             break;
           }
@@ -1974,8 +1978,7 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'assign_truck_to_freight': {
-          const callerCos3 = [synUser.companyId, ...(user.memberships || []).map((m: any) => m.companyId)].filter(Boolean);
-          if (!callerCos3.includes(params.plantCompanyId)) {
+          if (!this.canAccessCompany(user, synUser, params.plantCompanyId)) {
             result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
             break;
           }
@@ -2174,7 +2177,12 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'confirm_trip_loaded': {
-          await this.freights.confirmTripLoaded(params.freightId, params.assignmentId, synUser, params.loadedTons);
+          const loadedTons = params.loadedTons != null ? Number(params.loadedTons) : undefined;
+          if (loadedTons !== undefined && (!isFinite(loadedTons) || loadedTons <= 0 || loadedTons > 200)) {
+            result = JSON.stringify({ error: 'Toneladas cargadas inválidas (debe ser entre 0 y 200).' });
+            break;
+          }
+          await this.freights.confirmTripLoaded(params.freightId, params.assignmentId, synUser, loadedTons);
           result = JSON.stringify({ status: 'loaded', code: params.code, message: `Carga confirmada para viaje de ${params.code}.` });
           break;
         }
@@ -2192,6 +2200,10 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'update_assignment': {
+          if (!this.canAccessCompany(user, synUser, params.plantCompanyId)) {
+            result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
+            break;
+          }
           const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
           await this.freights.updateAssignment(params.freightId, params.assignmentId, params.dto, plantSyn);
           result = JSON.stringify({ status: 'updated', code: params.code, message: `Viaje de ${params.code} actualizado.` });
@@ -2307,6 +2319,11 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'update_company': {
+          // Re-validate admin permission at confirm time
+          if (!this.isCallerAdminForCompany(user, params.companyId)) {
+            result = JSON.stringify({ error: 'No tiene permisos para actualizar esta empresa.' });
+            break;
+          }
           const coData: any = {};
           if (params.name !== undefined) coData.name = params.name;
           if (params.address !== undefined) coData.address = params.address;
@@ -2320,6 +2337,11 @@ TERMINOLOGÍA CORRECTA:
         }
 
         case 'update_user_admin': {
+          // Re-validate admin permission at confirm time
+          if (!this.isCallerAdminForCompany(user, params.companyId)) {
+            result = JSON.stringify({ error: 'Ya no tenés permisos de administrador para esta empresa.' });
+            break;
+          }
           const uData: any = {};
           if (params.name !== undefined) uData.name = params.name;
           if (params.email !== undefined) uData.email = params.email.toLowerCase().trim();
@@ -2332,17 +2354,20 @@ TERMINOLOGÍA CORRECTA:
           await this.prisma.user.update({ where: { id: params.userId }, data: uData });
           // Sync membership role if role changed
           if (params.role) {
-            const companyId = user.activeCompanyId || user.companyId;
             await this.prisma.userCompany.updateMany({
-              where: { userId: params.userId, companyId },
+              where: { userId: params.userId, companyId: params.companyId },
               data: { role: params.role, active: params.active !== false },
-            }).catch(() => {});
+            }).catch(e => this.logger.warn(`Failed to sync membership for user ${params.userId}: ${e.message}`));
           }
           result = JSON.stringify({ status: 'updated', message: `Usuario "${params.userName}" actualizado.` });
           break;
         }
 
         case 'assign_multi_trucks': {
+          if (!this.canAccessCompany(user, synUser, params.plantCompanyId)) {
+            result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
+            break;
+          }
           const plantSynMulti = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
           await this.freights.assignMulti(params.freightId, { trucks: params.trucks }, plantSynMulti);
           result = JSON.stringify({ status: 'assigned', code: params.code, message: `${params.trucks.length} camiones asignados al flete ${params.code}.` });
@@ -2381,9 +2406,9 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ error: safeMsg });
     }
 
-    // pendingAction already cleared pre-execution (M2). Clean up pendingDocument if attach_document.
+    // pendingAction already cleared by CTE. Clean up pendingDocument if attach_document.
     if (tool === 'attach_document') {
-      const { pendingDocument: _pd, ...finalState } = preExecState;
+      const { pendingDocument: _pd, pendingAction: _pa, _pendingButtons: _pb, ...finalState } = preExecState;
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: { flowState: finalState },
@@ -4195,11 +4220,19 @@ TERMINOLOGÍA CORRECTA:
   }
 
   private resolveProducerCompanyId(user: any): string | null {
+    const isProducer = (m: any) =>
+      m.company?.type === 'producer' ||
+      (Array.isArray(m.company?.types) && m.company.types.includes('producer'));
+
     if (user.memberships?.length > 0) {
-      const pm = user.memberships.find((m: any) =>
-        m.company?.type === 'producer' ||
-        (Array.isArray(m.company?.types) && m.company.types.includes('producer')),
-      );
+      // Prioritize activeCompanyId — the company the user explicitly selected
+      const activeId = user.activeCompanyId;
+      if (activeId) {
+        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && isProducer(m));
+        if (activeMem) return activeMem.companyId;
+      }
+      // Fallback: first producer membership
+      const pm = user.memberships.find(isProducer);
       if (pm) return pm.companyId;
     }
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
@@ -4212,11 +4245,19 @@ TERMINOLOGÍA CORRECTA:
   }
 
   private resolvePlantCompanyId(user: any): string | null {
+    const isPlant = (m: any) =>
+      m.company?.type === 'plant' ||
+      (Array.isArray(m.company?.types) && m.company.types.includes('plant'));
+
     if (user.memberships?.length > 0) {
-      const pm = user.memberships.find((m: any) =>
-        m.company?.type === 'plant' ||
-        (Array.isArray(m.company?.types) && m.company.types.includes('plant')),
-      );
+      // Prioritize activeCompanyId
+      const activeId = user.activeCompanyId;
+      if (activeId) {
+        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && isPlant(m));
+        if (activeMem) return activeMem.companyId;
+      }
+      // Fallback: first plant membership
+      const pm = user.memberships.find(isPlant);
       if (pm) return pm.companyId;
     }
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
@@ -4238,14 +4279,20 @@ TERMINOLOGÍA CORRECTA:
   private isCallerAdminForCompany(user: any, companyId?: string): boolean {
     if (user.isSuperAdmin || user.role === 'platform_admin') return true;
     if (!companyId) {
-      // Fallback: check any membership
-      const memberRoles = (user.memberships || []).map((m: any) => m.role);
+      // Fallback: check any active membership
+      const memberRoles = (user.memberships || []).filter((m: any) => m.active !== false).map((m: any) => m.role);
       return [user.role || '', ...memberRoles].some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r));
     }
     // Scoped: check membership for the specific company
     const membership = (user.memberships || []).find((m: any) => m.companyId === companyId && m.active);
     if (!membership) return false;
     return ['admin', 'gerente'].includes(membership.role);
+  }
+
+  /** Check if caller has access to the given company (any role) */
+  private canAccessCompany(user: any, synUser: any, companyId: string): boolean {
+    const ids = [synUser.companyId, ...(user.memberships || []).filter((m: any) => m.active !== false).map((m: any) => m.companyId)].filter(Boolean);
+    return ids.includes(companyId);
   }
 
   private buildSyntheticUser(dbUser: any): any {
@@ -4516,7 +4563,7 @@ TERMINOLOGÍA CORRECTA:
     if (input.active !== undefined) changes.push(input.active ? 'reactivar' : 'desactivar');
     if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
     return this.stageAction(session, 'update_user_admin', {
-      userId: input.userId, userName: target.name, name: input.name, email: input.email, phone: input.phone, role: input.role, active: input.active,
+      companyId, userId: input.userId, userName: target.name, name: input.name, email: input.email, phone: input.phone, role: input.role, active: input.active,
     }, `Editar usuario "${target.name}": ${changes.join(', ')}`, user);
   }
 
