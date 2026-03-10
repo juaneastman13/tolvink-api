@@ -533,10 +533,13 @@ SIN confirm la acción NO se ejecuta. NUNCA indicar que se ejecutó sin confirma
 Botones CONFIRMAR/CANCELAR se envían automáticamente. No mencionarlos en texto.
 
 CREAR FLETES:
-1. Resolver IDs: search_plants + list_lots/list_fields.
+1. AUTO-RESOLVER NOMBRES: Si el usuario dice "campo El Ombú" o "planta Conaprole", pasar el texto como originName/destName a prepare_freight. El sistema busca automáticamente en campos, lotes y plantas del usuario y resuelve el ID. NO necesitás buscar IDs manualmente con search_plants/list_lots primero.
 2. prepare_freight → resumen → confirm_create_freight al confirmar.
 3. Datos faltantes: pedir SOLO los que faltan.
-4. Ubicación obligatoria para origen/destino custom → generate_location_link.
+4. Si la planta destino tiene SUCURSALES (branches), es OBLIGATORIO indicar cuál. El sistema lo validará y devolverá las opciones.
+5. Si se asigna FLOTA PROPIA (truckId), es OBLIGATORIO indicar chofer (driverId). El chofer puede ser de list_drivers o "self" (= el propio usuario).
+6. DUPLICAR FLETE: Es una copia idéntica. Solo validar la fecha nueva (loadDate). NO pedir reconfirmar datos.
+7. Ubicación obligatoria para origen/destino custom → generate_location_link.
 
 ASIGNAR TRANSPORTISTA:
 - Con flota interna → assign_transporter(transporterCompanyId="own_fleet") directo.
@@ -1112,6 +1115,7 @@ TERMINOLOGÍA CORRECTA:
         destCompany: { select: { id: true, name: true } },
         originLot: { select: { id: true, name: true } },
         destPlant: { select: { id: true, name: true } },
+        assignments: { where: { status: { not: 'rejected' } }, take: 1, select: { truckId: true, driverId: true } },
       },
     });
     if (!freight) return JSON.stringify({ error: `No se encontró el flete ${input.code}` });
@@ -1119,15 +1123,24 @@ TERMINOLOGÍA CORRECTA:
     const item = freight.items?.[0];
     if (!item) return JSON.stringify({ error: 'El flete no tiene items para duplicar.' });
 
+    // Validate only the date — everything else is copied as-is
+    const loadDate = input.loadDate;
+    if (!loadDate || !/^\d{4}-\d{2}-\d{2}$/.test(loadDate)) {
+      return JSON.stringify({ error: 'Debe indicar la fecha de carga (loadDate) en formato YYYY-MM-DD.' });
+    }
+    const parsedDate = new Date(loadDate + 'T12:00:00');
+    if (isNaN(parsedDate.getTime())) {
+      return JSON.stringify({ error: 'Fecha inválida.' });
+    }
+
     const originName = (freight as any).originName || freight.originCompany?.name || 'Origen';
     const destName = (freight as any).destName || freight.destCompany?.name || 'Destino';
+    const loadTime = input.loadTime || (freight as any).loadTime || null;
+    const assignment = (freight as any).assignments?.[0];
 
     const summary = [
-      `Duplicar flete ${freight.code} con nueva fecha`,
-      `Grano: ${(item as any).grain} | Tons: ${(item as any).tons}`,
-      `Origen: ${originName}`,
-      `Destino: ${destName}`,
-      `Fecha: ${input.loadDate}${input.loadTime ? ` ${input.loadTime}` : ((freight as any).loadTime ? ` ${(freight as any).loadTime}` : '')}`,
+      `Duplicar flete ${freight.code} → nueva fecha ${loadDate.split('-').reverse().join('/')}${loadTime ? ` ${loadTime}` : ''}`,
+      `${(item as any).grain} ${(item as any).tons}tn | ${originName} → ${destName}`,
     ].join('\n');
 
     return this.stageAction(session, 'duplicate_freight', {
@@ -1145,9 +1158,11 @@ TERMINOLOGÍA CORRECTA:
         destLng: (freight as any).destLng ? Number((freight as any).destLng) : null,
         notes: (freight as any).notes || null,
         truckCount: (freight as any).truckCount || 1,
+        truckId: assignment?.truckId || null,
+        driverId: assignment?.driverId || null,
       },
-      loadDate: input.loadDate,
-      loadTime: input.loadTime || (freight as any).loadTime || null,
+      loadDate,
+      loadTime,
       originalCode: freight.code,
     }, summary);
   }
@@ -1630,14 +1645,130 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
     }
 
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+
+    // ── AUTO-RESOLVE: destination name → plant ID ──
+    if (!input.destPlantId && input.destName) {
+      if (producerCompanyId) {
+        const accesses = await this.prisma.plantProducerAccess.findMany({
+          where: { producerCompanyId, active: true },
+          select: { plantCompanyId: true },
+        });
+        const plantCompanyIds = [...new Set(accesses.map(a => a.plantCompanyId))];
+        if (plantCompanyIds.length > 0) {
+          const companies = await this.prisma.company.findMany({
+            where: { id: { in: plantCompanyIds }, active: true },
+            select: { id: true, name: true, plants: { where: { active: true }, select: { id: true, name: true } } },
+          });
+          const results = fuzzySearch(input.destName, companies, (c) => c.name, { threshold: 0.45, maxResults: 5 });
+          if (results.length === 1 || classifyFuzzyResult(results) === 'exact') {
+            input.destPlantId = results[0].item.id;
+            input.destName = undefined; // clear — resolved to ID
+          } else if (results.length > 1) {
+            return JSON.stringify({
+              error: `Múltiples plantas coinciden con "${input.destName}": ${results.map(r => r.item.name).join(', ')}. Indique cuál exactamente.`,
+              suggestions: results.map(r => ({ id: r.item.id, name: r.item.name })),
+            });
+          }
+        }
+      }
+    }
+
+    // ── AUTO-RESOLVE: origin name → lot ID ──
+    if (!input.originLotId && input.originName && producerCompanyId) {
+      // Search lots first (more specific), then fields
+      const lots = await this.prisma.lot.findMany({
+        where: { companyId: producerCompanyId, active: true },
+        select: { id: true, name: true, field: { select: { id: true, name: true } } },
+        take: 200,
+      });
+      // Try matching against "field - lot" combined name and lot name alone
+      const lotsWithLabel = lots.map(l => ({ ...l, label: l.field?.name ? `${l.field.name} - ${l.name}` : l.name }));
+      const lotResults = fuzzySearch(input.originName, lotsWithLabel, (l) => l.label, { threshold: 0.45, maxResults: 5 });
+      if (lotResults.length === 0) {
+        // Try matching against just lot name
+        const lotResults2 = fuzzySearch(input.originName, lotsWithLabel, (l) => l.name, { threshold: 0.45, maxResults: 5 });
+        if (lotResults2.length === 1 || classifyFuzzyResult(lotResults2) === 'exact') {
+          input.originLotId = lotResults2[0].item.id;
+          input.originName = undefined;
+        } else if (lotResults2.length > 1) {
+          return JSON.stringify({
+            error: `Múltiples lotes coinciden con "${input.originName}": ${lotResults2.map(r => `${r.item.field?.name || ''} - ${r.item.name}`).join(', ')}. Indique cuál exactamente.`,
+            suggestions: lotResults2.map(r => ({ id: r.item.id, name: r.item.label || r.item.name })),
+          });
+        }
+        // If still no match, try field names — use first lot of matched field
+        if (!input.originLotId) {
+          const fields = await this.prisma.field.findMany({
+            where: { companyId: producerCompanyId, active: true },
+            select: { id: true, name: true, lots: { where: { active: true }, select: { id: true, name: true }, take: 1 } },
+            take: 100,
+          });
+          const fieldResults = fuzzySearch(input.originName, fields, (f) => f.name, { threshold: 0.45, maxResults: 5 });
+          if (fieldResults.length === 1 || classifyFuzzyResult(fieldResults) === 'exact') {
+            const matchedField = fieldResults[0].item;
+            if (matchedField.lots?.[0]) {
+              input.originLotId = matchedField.lots[0].id;
+              input.originName = undefined;
+            } else {
+              return JSON.stringify({ error: `El campo "${matchedField.name}" no tiene lotes activos. Cree un lote primero con create_lot.` });
+            }
+          } else if (fieldResults.length > 1) {
+            return JSON.stringify({
+              error: `Múltiples campos coinciden con "${input.originName}": ${fieldResults.map(r => r.item.name).join(', ')}. Indique cuál exactamente.`,
+              suggestions: fieldResults.map(r => ({ id: r.item.id, name: r.item.name })),
+            });
+          }
+        }
+      } else if (lotResults.length === 1 || classifyFuzzyResult(lotResults) === 'exact') {
+        input.originLotId = lotResults[0].item.id;
+        input.originName = undefined;
+      } else {
+        return JSON.stringify({
+          error: `Múltiples lotes coinciden con "${input.originName}": ${lotResults.map(r => r.item.label).join(', ')}. Indique cuál exactamente.`,
+          suggestions: lotResults.map(r => ({ id: r.item.id, name: r.item.label })),
+        });
+      }
+      // If originName couldn't be resolved, treat as custom origin
+      if (!input.originLotId && input.originName) {
+        input.customOriginName = input.originName;
+      }
+    }
+
+    // ── BRANCH VALIDATION: require branchId if plant has branches ──
+    if (input.destPlantId && !input.branchId) {
+      const company = await this.prisma.company.findUnique({
+        where: { id: input.destPlantId },
+        select: { name: true, plants: { where: { active: true }, select: { id: true, name: true }, take: 20 } },
+      });
+      if (company?.plants && company.plants.length > 0) {
+        return JSON.stringify({
+          error: `La planta "${company.name}" tiene ${company.plants.length} sucursal(es). Debe indicar branchId.`,
+          branches: company.plants.map(b => ({ id: b.id, name: b.name })),
+          IMPORTANT: 'Preguntar al usuario cuál sucursal. Si hay una sola, sugerirla directamente.',
+        });
+      }
+    }
+
+    // ── OWN FLEET: require driverId if truckId is set ──
+    if (input.truckId && !input.driverId) {
+      return JSON.stringify({
+        error: 'Si asigna flota propia (truckId), debe indicar el chofer (driverId). Use "self" si el usuario es el chofer, o list_drivers para obtener choferes disponibles.',
+      });
+    }
+
+    // Resolve driverId "self" → user.id
+    if (input.driverId === 'self') {
+      input.driverId = user.id;
+    }
+
     // Fallback to lastLocation from WhatsApp — only fill the field that needs it (not both)
-    const needsDestLoc = !input.destPlantId && input.destName && (input.customDestLat == null || input.customDestLng == null);
+    const needsDestLoc = !input.destPlantId && (input.destName || input.customOriginName) && (input.customDestLat == null || input.customDestLng == null);
     const needsOriginLoc = !input.originLotId && input.customOriginName && (input.customOriginLat == null || input.customOriginLng == null);
     if (needsDestLoc || needsOriginLoc) {
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const st = (freshSession?.flowState as any) || {};
       if (st.lastLocation) {
-        // Only apply to ONE field — prefer dest if both need it (user must share location twice for both)
         if (needsDestLoc) {
           if (input.customDestLat == null) input.customDestLat = st.lastLocation.lat;
           if (input.customDestLng == null) input.customDestLng = st.lastLocation.lng;
@@ -1678,6 +1809,11 @@ TERMINOLOGÍA CORRECTA:
         destDisplayName = company?.name || destDisplayName;
       }
     }
+    // Append branch name if selected
+    if (input.branchId) {
+      const branch = await this.prisma.plant.findUnique({ where: { id: input.branchId }, select: { name: true } });
+      if (branch) destDisplayName += ` (${branch.name})`;
+    }
 
     let originDisplayName = input.customOriginName || 'Sin origen';
     if (input.originLotId) {
@@ -1688,8 +1824,9 @@ TERMINOLOGÍA CORRECTA:
       if (lot) originDisplayName = lot.field?.name ? `${lot.field.name} - ${lot.name}` : lot.name;
     }
 
-    // Resolve truck name if own fleet — verify ownership
+    // Resolve truck + driver display if own fleet
     let truckDisplay: string | null = null;
+    let driverDisplay: string | null = null;
     if (input.truckId) {
       const truckOwnerCompany = user.activeCompanyId || user.companyId;
       const truck = await this.prisma.truck.findFirst({
@@ -1697,6 +1834,14 @@ TERMINOLOGÍA CORRECTA:
         select: { plate: true, model: true },
       });
       if (truck) truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
+    }
+    if (input.driverId) {
+      if (input.driverId === user.id) {
+        driverDisplay = user.name || 'Yo';
+      } else {
+        const driver = await this.prisma.user.findUnique({ where: { id: input.driverId }, select: { name: true } });
+        driverDisplay = driver?.name || null;
+      }
     }
 
     // Auto-calculate truck count: ~30 tn per truck (standard grain transport)
@@ -1716,6 +1861,7 @@ TERMINOLOGÍA CORRECTA:
       notes: input.notes || null,
     };
     if (truckDisplay) summary.truck = truckDisplay;
+    if (driverDisplay) summary.driver = driverDisplay;
 
     // Use side-effects pattern (merged by chat()) — avoids direct DB write race
     const effects = this._chatSideEffects.get(session.id) || {};
@@ -1784,8 +1930,16 @@ TERMINOLOGÍA CORRECTA:
       notes: pending.notes,
     };
 
-    if (pending.destPlantId) dto.destPlantId = pending.destPlantId;
-    else if (pending.destName) dto.customDestName = pending.destName;
+    // branchId is the actual Plant entity ID (sucursal); destPlantId may be a Company ID
+    if (pending.branchId) {
+      dto.destPlantId = pending.branchId;
+      // Also pass company-level destPlantId for participant resolution
+      if (pending.destPlantId) dto.destCompanyId = pending.destPlantId;
+    } else if (pending.destPlantId) {
+      dto.destPlantId = pending.destPlantId;
+    } else if (pending.destName) {
+      dto.customDestName = pending.destName;
+    }
 
     if (pending.originLotId) {
       dto.originLotId = pending.originLotId;
@@ -1829,9 +1983,12 @@ TERMINOLOGÍA CORRECTA:
       dto.overrideDestLng = pending.customDestLng;
     }
 
-    // Own fleet truck assignment
+    // Own fleet truck + driver assignment
     if (pending.truckId) {
       dto.truckId = pending.truckId;
+    }
+    if (pending.driverId) {
+      dto.driverId = pending.driverId;
     }
 
     this.logger.log(`Creating freight with DTO: ${JSON.stringify(dto).slice(0, 300)}`);
@@ -2104,6 +2261,8 @@ TERMINOLOGÍA CORRECTA:
           else if (orig.customOriginName) createDto.customOriginName = orig.customOriginName;
           if (orig.originLat != null && orig.originLng != null) { createDto.overrideOriginLat = orig.originLat; createDto.overrideOriginLng = orig.originLng; }
           if (orig.destLat != null && orig.destLng != null) { createDto.overrideDestLat = orig.destLat; createDto.overrideDestLng = orig.destLng; }
+          if (orig.truckId) createDto.truckId = orig.truckId;
+          if (orig.driverId) createDto.driverId = orig.driverId;
           const newFreight = await this.freights.create(createDto, producerSynUser);
           result = JSON.stringify({ status: 'duplicated', originalCode: params.originalCode, newCode: (newFreight as any).code, link: `${APP_URL}/freight/${(newFreight as any).id}` });
           break;

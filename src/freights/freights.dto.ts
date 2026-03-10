@@ -125,6 +125,11 @@ export class CreateFreightDto {
   @IsUUID()
   truckId?: string;
 
+  @ApiProperty({ required: false, description: 'ID del chofer asignado (flota propia)' })
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
   @ApiProperty({ required: false, description: 'Decisión explícita: true=flota propia, false=delegar a planta' })
   @IsOptional()
   @IsBoolean()

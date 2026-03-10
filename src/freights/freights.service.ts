@@ -248,6 +248,13 @@ export class FreightsService {
         });
         if (truck) {
           const isMulti = (dto.truckCount || 1) > 1;
+          // Use explicit driverId from DTO if provided, otherwise fall back to truck's assigned user
+          let assignDriverId = truck.assignedUserId || null;
+          let assignDriverName = (truck as any).assignedUser?.name || null;
+          if (dto.driverId) {
+            const driverUser = await tx.user.findUnique({ where: { id: dto.driverId }, select: { id: true, name: true } });
+            if (driverUser) { assignDriverId = driverUser.id; assignDriverName = driverUser.name; }
+          }
           await tx.freightAssignment.create({
             data: {
               freightId: f.id,
@@ -256,8 +263,8 @@ export class FreightsService {
               assignedById: user.sub,
               truckId: truck.id,
               plate: truck.plate,
-              driverId: truck.assignedUserId || null,
-              driverName: (truck as any).assignedUser?.name || null,
+              driverId: assignDriverId,
+              driverName: assignDriverName,
               ...(isMulti ? { tripNumber: 1, tripStatus: 'pending' } : {}),
             },
           });
