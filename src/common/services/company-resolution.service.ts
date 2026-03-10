@@ -80,32 +80,46 @@ export class CompanyResolutionService {
     return result;
   }
 
-  async resolveProducerCompanyId(user: { sub: string; companyId?: string; companyType?: string }): Promise<string | null> {
+  async resolveProducerCompanyId(user: { sub: string; companyId?: string; companyType?: string; activeCompanyId?: string }): Promise<string | null> {
+    const activeId = (user as any).activeCompanyId || user.companyId;
     const cache = this.getCache();
-    const key = `producerId:${user.sub}`;
+    const key = `producerId:${user.sub}:${activeId || ''}`;
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    // Check both type and types[] for multi-type support
-    const pm = memberships.find((m: any) =>
-      m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer'),
-    );
+    const isProducer = (m: any) =>
+      m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer');
+
+    // Prioritize activeCompanyId / companyId if it's a producer
+    if (activeId) {
+      const activeMem = memberships.find((m: any) => m.companyId === activeId && isProducer(m));
+      if (activeMem) { cache?.set(key, activeMem.companyId); return activeMem.companyId; }
+    }
+    // Fallback: first producer membership
+    const pm = memberships.find(isProducer);
     const result = pm?.companyId || null;
 
     cache?.set(key, result);
     return result;
   }
 
-  async resolvePlantCompanyId(user: { sub: string; companyId?: string }): Promise<string | null> {
+  async resolvePlantCompanyId(user: { sub: string; companyId?: string; activeCompanyId?: string }): Promise<string | null> {
+    const activeId = (user as any).activeCompanyId || user.companyId;
     const cache = this.getCache();
-    const key = `plantId:${user.sub}`;
+    const key = `plantId:${user.sub}:${activeId || ''}`;
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    // Check both type and types[] for multi-type support
-    const pm = memberships.find((m: any) =>
-      m.company?.type === 'plant' || this.getCompanyTypes(m.company).includes('plant'),
-    );
+    const isPlant = (m: any) =>
+      m.company?.type === 'plant' || this.getCompanyTypes(m.company).includes('plant');
+
+    // Prioritize activeCompanyId / companyId if it's a plant
+    if (activeId) {
+      const activeMem = memberships.find((m: any) => m.companyId === activeId && isPlant(m));
+      if (activeMem) { cache?.set(key, activeMem.companyId); return activeMem.companyId; }
+    }
+    // Fallback: first plant membership
+    const pm = memberships.find(isPlant);
     const result = pm?.companyId || null;
 
     cache?.set(key, result);
