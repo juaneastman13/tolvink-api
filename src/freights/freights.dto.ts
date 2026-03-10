@@ -346,6 +346,14 @@ export class UpdateFreightDto {
   @MaxLength(2000)
   notes?: string;
 
+  @ApiProperty({ required: false, description: 'Cantidad de camiones necesarios', minimum: 1, maximum: 50 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(50)
+  @Type(() => Number)
+  truckCount?: number;
+
   @ApiProperty({ required: false, description: 'Flota propia (true/false)' })
   @IsOptional()
   @IsBoolean()

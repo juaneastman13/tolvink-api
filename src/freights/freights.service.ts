@@ -1275,7 +1275,7 @@ export class FreightsService {
 
   async updateFreight(
     freightId: string,
-    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; driverId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number },
+    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; driverId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number; truckCount?: number },
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
@@ -1328,6 +1328,19 @@ export class FreightsService {
           throw new ForbiddenException('Solo la empresa de origen puede editar notas');
         }
         data.notes = dto.notes;
+      }
+
+      // --- truckCount: origin company or dest plant, must be >= assigned count ---
+      if (dto.truckCount !== undefined && dto.truckCount !== freight.truckCount) {
+        if (!isOriginCompany && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
+          throw new ForbiddenException('Solo la empresa de origen o destino puede editar la cantidad de camiones');
+        }
+        const assignedCount = (freight as any).assignedTruckCount || freight.assignments.length;
+        if (dto.truckCount < assignedCount) {
+          throw new BadRequestException(`No se puede reducir a ${dto.truckCount} camiones: ya hay ${assignedCount} asignados`);
+        }
+        data.truckCount = dto.truckCount;
+        data.isMultiTruck = dto.truckCount > 1;
       }
 
       // --- useOwnFleet ---
