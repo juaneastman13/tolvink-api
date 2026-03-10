@@ -18,30 +18,14 @@ import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
+import {
+  MAX_HISTORY, MAX_TOOL_LOOPS, AI_SESSION_TIMEOUT_MIN, APP_URL, OWN_FLEET_SHORTCUT,
+  MODEL_ID, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
+  URUGUAY_UTC_OFFSET_MS, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, AUDIO_FILLERS,
+  AI_RATE_LIMIT_WINDOW_MS, AI_RATE_LIMIT_MAX,
+} from './ai.constants';
+import { AI_TOOL_DEFINITIONS } from './ai-tool-definitions';
 
-const MAX_HISTORY = 25;
-const MAX_TOOL_LOOPS = 3;
-const AI_SESSION_TIMEOUT_MIN = 30;
-const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
-const OWN_FLEET_SHORTCUT = 'own_fleet';
-
-// Model configuration — Claude Sonnet 4.6
-// NOTE: Anthropic API supports temperature, top_p, top_k.
-// It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
-// temperature 0.4  → better interpretation of ambiguous messages while keeping operational precision.
-// max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
-const MODEL_ID = 'claude-sonnet-4-6';
-const MODEL_TEMPERATURE = 0.4;
-const MODEL_MAX_TOKENS = 1200;
-const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
-const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
-
-// Audio filler words common in River Plate Spanish voice transcriptions
-const AUDIO_FILLERS = /\b(eh+|ehmm*|emm*|mmm*|a+h+|o sea|digamos|viste)\b[,.]?\s*/gi;
-
-// Per-user AI rate limiting: max 20 messages per 5 minutes
-const AI_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
-const AI_RATE_LIMIT_MAX = 20;
 const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 
 @Injectable()
@@ -56,6 +40,14 @@ export class AiService implements OnModuleDestroy {
   private rateCleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of aiRateMap) { if (now > v.resetAt) aiRateMap.delete(k); }
+    // Hard cap on rate map — evict oldest entries if too large
+    if (aiRateMap.size > 10_000) {
+      const iter = aiRateMap.keys();
+      while (aiRateMap.size > 8_000) {
+        const k = iter.next().value;
+        if (k) aiRateMap.delete(k); else break;
+      }
+    }
     // Clean stale request_location cooldowns (5 min TTL) + hard cap
     for (const [k, v] of this._requestLocationCooldowns) {
       if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
@@ -137,17 +129,8 @@ export class AiService implements OnModuleDestroy {
       return { text: 'Estoy procesando tu mensaje anterior, esperá un momento.' };
     }
     this._chatLocks.add(session.id);
-    // Cleanup stale entries + hard cap
-    for (const [k, v] of aiRateMap) {
-      if (now > v.resetAt) aiRateMap.delete(k);
-    }
-    if (aiRateMap.size > 10_000) {
-      const iter = aiRateMap.keys();
-      while (aiRateMap.size > 8_000) {
-        const k = iter.next().value;
-        if (k) aiRateMap.delete(k); else break;
-      }
-    }
+    // NOTE: rate map cleanup runs in rateCleanupTimer (setInterval) — not here, to avoid
+    // mutations between lock acquisition and try/finally, and to prevent concurrent iteration.
 
     const synUser = this.buildSyntheticUser(user);
     const companyType = this.resolveCompanyType(user);
@@ -420,7 +403,7 @@ export class AiService implements OnModuleDestroy {
 
   private buildSystemPrompt(user: any, companyType: string): string {
     const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
-    const nowUY = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
 
     const hasOwnFleet = user.company?.hasInternalFleet ||
@@ -446,15 +429,15 @@ export class AiService implements OnModuleDestroy {
       roleRestrictions = `\nROL CHOFER (${userRole}): Solo puede aceptar/rechazar/iniciar viajes, confirmar carga/entrega, consultar fletes, tracking y ubicación.
 ACCIONES TÍPICAS DEL CHOFER: "mis fletes" → list_freights(status="accepted"). "ya cargué" → confirm_loaded del flete activo. "ya llegué/descargué" → confirm_finished. "salí del campo" → start_freight.
 PROACTIVO: Si el chofer escribe sin contexto, usar list_freights para mostrar sus fletes asignados/activos ANTES de pedir un código.`;
-    } else if (companyType.includes('producer') && !companyType.includes('plant')) {
+    } else if (AiService.hasType(companyType, 'producer') && !AiService.hasType(companyType, 'plant')) {
       roleRestrictions = `\nROL PRODUCTOR (${userRole}): No usar accept_freight, reject_freight, start_freight.
 ACCIONES TÍPICAS: "quiero mandar soja" → iniciar creación de flete. "cómo van mis fletes" → get_dashboard o summarize_freights. "mis campos" → list_fields.
 PROACTIVO: Ante consultas vagas ("cómo va todo", "novedades"), usar get_dashboard primero. Si pregunta por un flete sin dar código, usar list_freights para mostrar opciones.`;
-    } else if (companyType.includes('plant') && !companyType.includes('producer')) {
+    } else if (AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
       roleRestrictions = `\nROL PLANTA (${userRole}): No usar prepare_freight, create_field, create_lot.
 ACCIONES TÍPICAS: "fletes pendientes" → list_freights(status="pending_assignment"). "asignar transportista" → list_freights + assign_transporter. "autorizar" → authorize_freight.
 PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por fletes sin filtro, mostrar los pendientes de asignación primero.`;
-    } else if (companyType.includes('transporter') && !companyType.includes('plant') && !companyType.includes('producer')) {
+    } else if (AiService.hasType(companyType, 'transporter') && !AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
       roleRestrictions = `\nROL TRANSPORTISTA (${userRole}): No usar prepare_freight, assign_transporter, create_field, create_lot.
 ACCIONES TÍPICAS: "fletes asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.
 PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por un flete sin código, usar list_freights.`;
@@ -661,9 +644,9 @@ TERMINOLOGÍA CORRECTA:
     for (const t of AiService.ANALYTICS_TOOLS) allowed.add(t);
 
     // Role-based additions
-    const isProducer = companyType.includes('producer');
-    const isPlant = companyType.includes('plant');
-    const isTransporter = companyType.includes('transporter');
+    const isProducer = AiService.hasType(companyType, 'producer');
+    const isPlant = AiService.hasType(companyType, 'plant');
+    const isTransporter = AiService.hasType(companyType, 'transporter');
 
     if (isProducer) {
       for (const t of AiService.PRODUCER_TOOLS) allowed.add(t);
@@ -691,754 +674,8 @@ TERMINOLOGÍA CORRECTA:
 
   // ======================== TOOL DEFINITIONS =============================
 
-  private readonly tools = [
-    {
-      name: 'list_freights',
-      description: 'Lista los fletes del usuario como menú interactivo de WhatsApp. Puede filtrar por estado, fecha y grano. Retorna _selectionSent: true — NO reformatear. Para resúmenes/análisis usar summarize_freights.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          status: {
-            type: 'string',
-            enum: ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded', 'finished', 'canceled'],
-            description: 'Filtrar por estado (opcional)',
-          },
-          dateFrom: { type: 'string', description: 'Fecha desde (YYYY-MM-DD). Opcional.' },
-          dateTo: { type: 'string', description: 'Fecha hasta (YYYY-MM-DD). Opcional.' },
-          grain: { type: 'string', description: 'Filtrar por grano (ej: Soja, Trigo). Opcional.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'get_freight_detail',
-      description: 'Detalle completo de un flete por código (ej: F26-LCP.1822). Incluye mapLink con link al mapa Tolvink si hay coordenadas — usarlo siempre que el usuario pregunte por ubicación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'search_plants',
-      description: 'Busca plantas/empresas destino. Envía menú interactivo si hay multiples resultados. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          query: { type: 'string', description: 'Nombre parcial de la planta' },
-        },
-        required: ['query'],
-      },
-    },
-    {
-      name: 'list_lots',
-      description: 'Lista lotes del productor como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'prepare_freight',
-      description: 'Prepara un flete para creación (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, destPlantId o destName, loadDate (YYYY-MM-DD), loadTime (HH:mm). Opcional: originLotId, customOriginName, customOriginLat/Lng, truckId (flota propia), truckCount, notes.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          grain: { type: 'string', enum: ['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] },
-          tons: { type: 'number' },
-          truckCount: { type: 'number', description: 'Se auto-calcula a partir de tons/30 si no se pasa' },
-          destPlantId: { type: 'string', description: 'ID de planta (de search_plants)' },
-          destName: { type: 'string', description: 'Nombre destino si no hay planta' },
-          customDestLat: { type: 'number', description: 'Latitud destino personalizado (de generate_location_link)' },
-          customDestLng: { type: 'number', description: 'Longitud destino personalizado (de generate_location_link)' },
-          originLotId: { type: 'string', description: 'ID de lote (de list_lots o list_fields)' },
-          customOriginName: { type: 'string', description: 'Nombre origen si no hay lote' },
-          customOriginLat: { type: 'number', description: 'Latitud origen personalizado (de generate_location_link)' },
-          customOriginLng: { type: 'number', description: 'Longitud origen personalizado (de generate_location_link)' },
-          truckId: { type: 'string', description: 'ID de camión propio (de list_trucks) para asignar flota propia' },
-          loadDate: { type: 'string', description: 'YYYY-MM-DD' },
-          loadTime: { type: 'string', description: 'HH:mm' },
-          notes: { type: 'string' },
-        },
-        required: ['grain', 'tons', 'loadDate', 'loadTime'],
-      },
-    },
-    {
-      name: 'confirm_create_freight',
-      description: 'OBLIGATORIO: Crea el flete preparado con prepare_freight. Debes llamar esta herramienta cuando el usuario confirme (dice si/dale/confirmar/ok). Sin esta llamada el flete NO se crea.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'confirm_action',
-      description: 'OBLIGATORIO: Ejecuta una acción previamente preparada cuando el usuario confirma (dice si/dale/confirmar/ok). Sin esta llamada la acción NO se ejecuta. NO usar para crear fletes (esos usan confirm_create_freight).',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'accept_freight',
-      description: 'Acepta un flete asignado. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'reject_freight',
-      description: 'Rechaza un flete asignado. Requiere motivo. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          reason: { type: 'string', description: 'Motivo del rechazo' },
-        },
-        required: ['code', 'reason'],
-      },
-    },
-    {
-      name: 'start_freight',
-      description: 'Inicia el viaje de un flete aceptado. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'confirm_loaded',
-      description: 'Confirma carga de un flete. Requiere toneladas reales. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          tons: { type: 'number', description: 'Toneladas cargadas' },
-        },
-        required: ['code', 'tons'],
-      },
-    },
-    {
-      name: 'confirm_finished',
-      description: 'Confirma entrega/recepción de un flete. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'cancel_freight',
-      description: 'Cancela un flete. No se puede si está in_progress o loaded. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          reason: { type: 'string', description: 'Motivo de cancelación' },
-        },
-        required: ['code', 'reason'],
-      },
-    },
-    // ---- Field & Lot management ----
-    {
-      name: 'list_fields',
-      description: 'Lista campos del productor como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'create_field',
-      description: 'Crea un campo (establecimiento). Prepara la acción para confirmación. Si el usuario marcó ubicación con generate_location_link, se usa automáticamente.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          name: { type: 'string', description: 'Nombre del campo' },
-          address: { type: 'string', description: 'Dirección (opcional)' },
-          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicación compartida si no se indica)' },
-          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicación compartida si no se indica)' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'create_lot',
-      description: 'Crea un lote dentro de un campo existente. Prepara la acción para confirmación. Usa list_fields para obtener el fieldId.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          fieldId: { type: 'string', description: 'ID del campo (de list_fields)' },
-          name: { type: 'string', description: 'Nombre del lote' },
-          hectares: { type: 'number', description: 'Hectáreas (opcional)' },
-          lat: { type: 'number', description: 'Latitud (opcional, se usa ubicación compartida si no se indica)' },
-          lng: { type: 'number', description: 'Longitud (opcional, se usa ubicación compartida si no se indica)' },
-        },
-        required: ['fieldId', 'name'],
-      },
-    },
-    // ---- Truck management ----
-    {
-      name: 'list_trucks',
-      description: 'Lista camiones de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'create_truck',
-      description: 'Registra un nuevo camión en la flota de la empresa. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          plate: { type: 'string', description: 'Patente/matrícula del camión (ej: ABC1234)' },
-          model: { type: 'string', description: 'Modelo del camión (opcional)' },
-        },
-        required: ['plate'],
-      },
-    },
-    // ---- User management ----
-    {
-      name: 'create_user',
-      description: 'Crea un nuevo usuario en la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          name: { type: 'string', description: 'Nombre completo' },
-          email: { type: 'string', description: 'Email del usuario' },
-          phone: { type: 'string', description: 'Teléfono (opcional)' },
-          role: { type: 'string', enum: ['admin', 'gerente', 'operario', 'chofer'], description: 'Rol: admin/gerente, operario, o chofer (default: operario)' },
-        },
-        required: ['name', 'email'],
-      },
-    },
-    // ---- Document attachment ----
-    {
-      name: 'attach_document',
-      description: 'USAR CUANDO EL USUARIO INDICA UN CÓDIGO DE FLETE DESPUÉS DE ENVIAR UN ARCHIVO. Adjunta la imagen o documento previamente enviado por WhatsApp al flete indicado. NO usar list_freights — usar esta herramienta directamente con el código. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          step: { type: 'string', enum: ['request', 'assignment', 'load_confirmation', 'delivery_confirmation', 'cancellation'], description: 'Etapa del documento (opcional)' },
-        },
-        required: ['code'],
-      },
-    },
-    // ---- Location picker ----
-    {
-      name: 'generate_location_link',
-      description: 'Genera un link para que el usuario elija una ubicación en el mapa Tolvink. Usalo cuando el usuario necesite marcar una ubicación personalizada (origen, destino, campo, lote). El usuario abre el link, pinea la ubicación, y las coordenadas se guardan automáticamente en la sesión.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          purpose: { type: 'string', enum: ['origin', 'destination', 'field', 'lot'], description: 'Para que es la ubicación' },
-        },
-        required: ['purpose'],
-      },
-    },
-    // ---- Tracking link ----
-    {
-      name: 'generate_tracking_link',
-      description: 'Genera un link público para rastrear un flete en vivo en el mapa Tolvink. Muestra ruta completa (origen → destino) y posición del camión en tiempo real. Solo funciona para fletes activos (no finalizados ni cancelados). El link no expira mientras el flete esté activo.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    // ---- View location on map ----
-    {
-      name: 'generate_map_link',
-      description: 'Genera un link para ver una ubicación en el mapa Tolvink. OBLIGATORIO cuando el usuario pregunta por la ubicación de un campo, lote, planta, origen o destino. Acepta 1 o 2 puntos (origen + destino). NUNCA devolver coordenadas numéricas — siempre usar esta herramienta.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          lat: { type: 'number', description: 'Latitud del punto principal' },
-          lng: { type: 'number', description: 'Longitud del punto principal' },
-          name: { type: 'string', description: 'Nombre del lugar (campo, lote, planta, origen)' },
-          destLat: { type: 'number', description: 'Latitud del destino (opcional, para mostrar ruta)' },
-          destLng: { type: 'number', description: 'Longitud del destino (opcional)' },
-          destName: { type: 'string', description: 'Nombre del destino (opcional)' },
-        },
-        required: ['lat', 'lng', 'name'],
-      },
-    },
-    // ---- Report PDF link ----
-    {
-      name: 'generate_report_link',
-      description: 'Genera un link público para descargar el informe PDF de un flete. Incluye información completa, recorrido, historial de cambios y documentos. Funciona para cualquier flete (incluso finalizados o cancelados). El link no expira.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    // ---- Map & live location ----
-    {
-      name: 'generate_daily_map_link',
-      description: 'Genera un link con un mapa interactivo mostrando todos los fletes del día de la empresa activa del usuario. Los fletes se muestran con marcadores de colores según estado. Usar cuando el usuario quiera ver un panorama general de los fletes del día en el mapa.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'share_live_location',
-      description: 'Genera un link para que el usuario comparta su ubicación en vivo en el mapa de un flete específico. Todos los participantes del flete podrán ver la posición del usuario. Usar cuando el usuario quiera compartir dónde está durante un viaje.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'view_live_locations',
-      description: 'Genera un link para ver las ubicaciones en vivo de todos los participantes de un flete en el mapa. Usar cuando el usuario quiera ver dónde están los involucrados en un flete.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'request_location',
-      description: 'Solicitar a los involucrados de un flete que compartan su ubicación por WhatsApp. Envía un mensaje a los participantes pidiéndoles que envíen su ubicación. Usar cuando alguien pregunta dónde está el chofer o pide ubicación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    // ---- Transporter assignment (plant + producer with own fleet) ----
-    {
-      name: 'list_transporters',
-      description: 'Lista transportistas como menú interactivo. Retorna _selectionSent: true — NO reformatear. Para plantas y productores con flota interna.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'assign_transporter',
-      description: 'Asigna un transportista a un flete. Para plantas y productores con flota interna. Usar transporterCompanyId="own_fleet" para flota interna del productor. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          transporterCompanyId: { type: 'string', description: 'ID de empresa transportista, o "own_fleet" para flota interna del productor' },
-          truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
-          driverId: { type: 'string', description: 'ID del chofer (opcional, de list_drivers)' },
-        },
-        required: ['code', 'transporterCompanyId'],
-      },
-    },
-    {
-      name: 'assign_truck_to_trip',
-      description: 'Asigna o cambia el camión de un viaje existente. Solo para plantas. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          truckId: { type: 'string', description: 'ID del camión (de list_trucks)' },
-          driverId: { type: 'string', description: 'ID del chofer (opcional)' },
-        },
-        required: ['code', 'truckId'],
-      },
-    },
-    {
-      name: 'assign_truck_to_freight',
-      description: 'Asigna un camión adicional a un flete multi-camión que tiene viajes sin asignar. Usar transporterCompanyId="own_fleet" para flota interna. Se llama una vez por cada viaje adicional. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          transporterCompanyId: { type: 'string', description: 'ID empresa o "own_fleet" para flota interna' },
-          truckId: { type: 'string', description: 'ID del camión (opcional, de list_trucks)' },
-          driverId: { type: 'string', description: 'ID del chofer (opcional)' },
-          tons: { type: 'number', description: 'Toneladas para este viaje (opcional)' },
-        },
-        required: ['code', 'transporterCompanyId'],
-      },
-    },
-    // ---- Company team management ----
-    {
-      name: 'list_company_users',
-      description: 'Lista usuarios de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'list_drivers',
-      description: 'Lista choferes de la empresa como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'update_user_role',
-      description: 'Cambia el rol de un usuario de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          userIdentifier: { type: 'string', description: 'Nombre o email del usuario' },
-          newRole: { type: 'string', enum: ['gerente', 'operario', 'chofer'], description: 'Nuevo rol' },
-        },
-        required: ['userIdentifier', 'newRole'],
-      },
-    },
-    {
-      name: 'deactivate_user',
-      description: 'Desactiva un usuario de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          userIdentifier: { type: 'string', description: 'Nombre o email del usuario a desactivar' },
-        },
-        required: ['userIdentifier'],
-      },
-    },
-    {
-      name: 'switch_company',
-      description: 'Cambia la empresa activa del usuario. Sin companyId: lista empresas disponibles. Con companyId: ejecuta el cambio. Usar cuando el usuario quiere operar con otra empresa.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          companyId: { type: 'string', description: 'ID de la empresa destino (opcional, de la lista)' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'summarize_freights',
-      description: 'Resumen analítico de fletes con datos completos para agrupar, contar o analizar. NO muestra menú interactivo — retorna datos en texto para que el asistente genere un resumen organizado. Usar cuando el usuario pide: resumen, reporte, agrupados por, cuántos fletes, estadísticas, análisis. Para seleccionar un flete individual, usar list_freights en su lugar.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          status: {
-            type: 'string',
-            enum: ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded', 'finished', 'canceled'],
-            description: 'Filtrar por estado (opcional)',
-          },
-          groupBy: {
-            type: 'string',
-            enum: ['transporter', 'status', 'grain', 'destination', 'origin'],
-            description: 'Agrupar resultados por este criterio (opcional)',
-          },
-          dateFrom: { type: 'string', description: 'Fecha desde (YYYY-MM-DD). Opcional.' },
-          dateTo: { type: 'string', description: 'Fecha hasta (YYYY-MM-DD). Opcional.' },
-          grain: { type: 'string', description: 'Filtrar por grano (ej: Soja, Trigo). Opcional.' },
-          transporterName: { type: 'string', description: 'Filtrar por nombre de transportista (parcial). Opcional.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'update_freight',
-      description: 'Modifica un flete existente. Puede cambiar fecha, hora, notas, flota propia, planta destino, camión y chofer. Algunos cambios pueden requerir aprobación. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          loadDate: { type: 'string', description: 'Nueva fecha de carga (YYYY-MM-DD). Opcional.' },
-          loadTime: { type: 'string', description: 'Nueva hora de carga (HH:mm). Opcional.' },
-          notes: { type: 'string', description: 'Nuevas notas. Opcional.' },
-          useOwnFleet: { type: 'boolean', description: 'Usar flota propia (true/false). Opcional.' },
-          destPlantId: { type: 'string', description: 'ID de nueva planta destino (de search_plants). Opcional.' },
-          truckId: { type: 'string', description: 'ID de camión propio a asignar (de list_trucks). Opcional.' },
-          driverId: { type: 'string', description: 'ID del chofer (de list_drivers). Opcional. Usar "self" para "yo soy el chofer".' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'duplicate_freight',
-      description: 'Duplica un flete existente con una nueva fecha de carga. Copia grano, toneladas, origen, destino y notas. Solo productores. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete original, ej: F26-LCP.1822' },
-          loadDate: { type: 'string', description: 'Fecha de carga para el nuevo flete (YYYY-MM-DD)' },
-          loadTime: { type: 'string', description: 'Hora de carga (HH:mm). Si no se indica, se copia del original.' },
-        },
-        required: ['code', 'loadDate'],
-      },
-    },
-    {
-      name: 'list_documents',
-      description: 'Lista los documentos adjuntos de un flete (fotos, carta de porte, etc). Retorna datos en texto, NO menú interactivo.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'freight_history',
-      description: 'Muestra el historial completo de un flete: quién hizo qué y cuándo (creación, asignaciones, cambios de estado, cancelaciones). Retorna datos en texto.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'get_dashboard',
-      description: 'Resumen ejecutivo de la empresa: fletes por estado, toneladas del mes, completados vs cancelados. Usar cuando el usuario pide "cómo estamos", "resumen general", "dashboard", "estado de la empresa".',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'update_field',
-      description: 'Modifica un campo existente (dirección y ubicación). Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          fieldName: { type: 'string', description: 'Nombre del campo a modificar' },
-          address: { type: 'string', description: 'Nueva dirección. Opcional.' },
-          lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
-          lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
-        },
-        required: ['fieldName'],
-      },
-    },
-    {
-      name: 'update_lot',
-      description: 'Modifica un lote existente (hectáreas y ubicación). Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          lotName: { type: 'string', description: 'Nombre del lote a modificar' },
-          hectares: { type: 'number', description: 'Nuevas hectáreas. Opcional.' },
-          lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
-          lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
-        },
-        required: ['lotName'],
-      },
-    },
-    {
-      name: 'reactivate_user',
-      description: 'Reactiva un usuario previamente desactivado de la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          userIdentifier: { type: 'string', description: 'Nombre o email del usuario a reactivar' },
-        },
-        required: ['userIdentifier'],
-      },
-    },
-    {
-      name: 'authorize_freight',
-      description: 'Autoriza un flete con flota propia. Solo plantas. Solo en estado assigned. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'approve_pending_change',
-      description: 'Aprueba un cambio pendiente en un flete (cambio de planta destino o flota propia). Solo la empresa aprobadora puede hacerlo. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          changeId: { type: 'string', description: 'ID del cambio pendiente. Si no se indica, se usa el primer cambio pendiente del flete.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'reject_pending_change',
-      description: 'Rechaza un cambio pendiente en un flete. Solo la empresa aprobadora puede hacerlo. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          changeId: { type: 'string', description: 'ID del cambio pendiente. Si no se indica, se usa el primer cambio pendiente del flete.' },
-          reason: { type: 'string', description: 'Motivo del rechazo. Opcional.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'respond_trip',
-      description: 'Acepta o rechaza un viaje/asignación específica de un flete multi-camión. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-          action: { type: 'string', enum: ['accepted', 'rejected'], description: 'Aceptar o rechazar' },
-          reason: { type: 'string', description: 'Motivo del rechazo. Requerido si action=rejected.' },
-        },
-        required: ['code', 'action'],
-      },
-    },
-    {
-      name: 'start_trip',
-      description: 'Inicia un viaje específico de un flete. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'confirm_trip_loaded',
-      description: 'Confirma la carga de un viaje específico. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-          loadedTons: { type: 'number', description: 'Toneladas reales cargadas. Opcional.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'confirm_trip_finished',
-      description: 'Confirma la entrega de un viaje específico. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'cancel_assignment',
-      description: 'Cancela una asignación de camión específica en un flete multi-camión. Solo plantas. Requiere motivo. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-          reason: { type: 'string', description: 'Motivo de la cancelación.' },
-        },
-        required: ['code', 'reason'],
-      },
-    },
-    {
-      name: 'update_assignment',
-      description: 'Edita una asignación existente (cambiar transportista, camión, chofer o toneladas). Solo plantas. Solo viajes pendientes o aceptados. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
-          assignmentId: { type: 'string', description: 'ID de la asignación. Opcional si hay un solo viaje.' },
-          transporterCompanyId: { type: 'string', description: 'Nuevo transportista (de list_transporters). Opcional.' },
-          truckId: { type: 'string', description: 'Nuevo camión (de list_trucks). Opcional.' },
-          driverId: { type: 'string', description: 'Nuevo chofer (de list_drivers). Opcional.' },
-          tons: { type: 'number', description: 'Nuevas toneladas asignadas. Opcional.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'create_driver',
-      description: 'Registra un nuevo chofer para la empresa. Solo admin/gerente. Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          name: { type: 'string', description: 'Nombre completo del chofer' },
-          phone: { type: 'string', description: 'Teléfono del chofer (09XXXXXXX). Opcional.' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'update_profile',
-      description: 'Modifica el perfil del usuario actual (nombre, email, teléfono). Prepara la acción para confirmación.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          name: { type: 'string', description: 'Nuevo nombre. Opcional.' },
-          email: { type: 'string', description: 'Nuevo email. Opcional.' },
-          phone: { type: 'string', description: 'Nuevo teléfono (09XXXXXXX). Opcional.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'generate_batch_report_link',
-      description: 'Genera un enlace a la pantalla de reportes de la web con filtros pre-aplicados. El usuario puede descargar PDF o Excel desde ahí.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          status: { type: 'string', description: 'Filtro de estado: all, solicitado, en_curso, finalizados, cancelados. Opcional.' },
-          dateFrom: { type: 'string', description: 'Fecha desde (YYYY-MM-DD). Opcional.' },
-          dateTo: { type: 'string', description: 'Fecha hasta (YYYY-MM-DD). Opcional.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'ocr_analyze',
-      description: 'Analiza una imagen de documento (carta de porte, remito, ticket de pesaje) y extrae datos estructurados usando OCR. Útil cuando el usuario envía una foto de un documento y quiere extraer la información. Requiere la URL del documento previamente subido.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          url: { type: 'string', description: 'URL pública de la imagen en Supabase Storage' },
-          docType: {
-            type: 'string',
-            enum: ['carta_porte', 'remito', 'pesaje', 'general'],
-            description: 'Tipo de documento. Si no se sabe, usar "general" para detección automática.',
-          },
-        },
-        required: ['url'],
-      },
-    },
-  ];
+  private readonly tools = AI_TOOL_DEFINITIONS;
+
 
   // ======================== TOOL EXECUTION ===============================
 
@@ -1586,18 +823,12 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
     }
 
-    const STATUS_SHORT: Record<string, string> = {
-      pending_assignment: 'Pend. asig.', assigned: 'Asignado', accepted: 'Aceptado',
-      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
-      canceled: 'Cancelado', rejected: 'Rechazado',
-    };
-
     const items = filtered.map((f: any) => {
       const grain = f.items?.[0]?.grain || 'N/A';
       const tons = f.items?.[0]?.tons || 0;
       const origin = f.originName || f.originCompany?.name || '?';
       const dest = f.destName || f.destCompany?.name || '?';
-      const status = STATUS_SHORT[f.status] || f.status;
+      const status = FREIGHT_STATUS_SHORT[f.status] || f.status;
       return {
         id: `freight:${f.id}`,
         title: `${f.code} | ${grain} ${tons}tn`.slice(0, 24),
@@ -1605,7 +836,7 @@ TERMINOLOGÍA CORRECTA:
       };
     });
 
-    const statusLabel = input.status ? ` (${STATUS_SHORT[input.status] || input.status})` : '';
+    const statusLabel = input.status ? ` (${FREIGHT_STATUS_SHORT[input.status] || input.status})` : '';
     return this.storePendingSelection(session, items, {
       headerText: `📦 ${filtered.length} flete${filtered.length !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
       listButtonLabel: 'Ver fletes',
@@ -1644,18 +875,12 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' + truncationNote });
     }
 
-    const STATUS_LABELS: Record<string, string> = {
-      pending_assignment: 'Pend. asignación', assigned: 'Asignado', accepted: 'Aceptado',
-      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
-      canceled: 'Cancelado', rejected: 'Rechazado',
-    };
-
     // Build flat freight records
     const freights = filtered.map((f: any) => {
       const assignment = f.assignments?.[0];
       return {
         code: f.code,
-        status: STATUS_LABELS[f.status] || f.status,
+        status: FREIGHT_STATUS_LABELS[f.status] || f.status,
         statusRaw: f.status,
         grain: f.items?.[0]?.grain || 'N/A',
         tons: f.items?.[0]?.tons || 0,
@@ -1974,14 +1199,8 @@ TERMINOLOGÍA CORRECTA:
       }),
     ]);
 
-    const STATUS_LABELS: Record<string, string> = {
-      pending_assignment: 'Pend. asignación', assigned: 'Asignado', accepted: 'Aceptado',
-      in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
-      canceled: 'Cancelado', rejected: 'Rechazado',
-    };
-
     const statusSummary = byStatus.map((s: any) => ({
-      status: STATUS_LABELS[s.status] || s.status,
+      status: FREIGHT_STATUS_LABELS[s.status] || s.status,
       count: s._count,
     }));
 
@@ -2780,7 +1999,7 @@ TERMINOLOGÍA CORRECTA:
 
         case 'create_user': {
           // Generate random password at confirm time — never stored in session
-          const randomPwd = require('crypto').randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
+          const randomPwd = crypto.randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
           const pwdHash = await bcryptAi.hash(randomPwd, 10);
           const newUser = await this.adminService.createUser(params.dto, pwdHash);
           result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email, role: params.roleLabel } });
@@ -3500,9 +2719,9 @@ TERMINOLOGÍA CORRECTA:
     if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
 
     const companyType = this.resolveCompanyType(user);
-    const role = companyType.includes('chofer') ? 'chofer'
-      : companyType.includes('transporter') ? 'transporter'
-      : companyType.includes('plant') ? 'plant' : 'producer';
+    const role = AiService.hasType(companyType, 'chofer') ? 'chofer'
+      : AiService.hasType(companyType, 'transporter') ? 'transporter'
+      : AiService.hasType(companyType, 'plant') ? 'plant' : 'producer';
 
     const token = createSignedToken(
       { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario', purpose: 'live_location' },
@@ -3771,7 +2990,7 @@ TERMINOLOGÍA CORRECTA:
   // ---- list_transporters ----
   private async toolListTransporters(user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant') && !companyType.includes('producer')) {
+    if (!AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden listar transportistas.' });
     }
 
@@ -3855,9 +3074,9 @@ TERMINOLOGÍA CORRECTA:
   // ---- assign_transporter ----
   private async toolAssignTransporter(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    const isPlant = companyType.includes('plant');
+    const isPlant = AiService.hasType(companyType, 'plant');
     const isOwnFleetInput = input.transporterCompanyId === OWN_FLEET_SHORTCUT;
-    const isProducerWithOwnFleet = companyType.includes('producer') && isOwnFleetInput;
+    const isProducerWithOwnFleet = AiService.hasType(companyType, 'producer') && isOwnFleetInput;
     if (!isPlant && !isProducerWithOwnFleet) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productores con flota propia pueden asignar transportistas.' });
     }
@@ -3906,7 +3125,7 @@ TERMINOLOGÍA CORRECTA:
   // ---- assign_truck_to_trip ----
   private async toolAssignTruckToTrip(input: any, user: any, synUser: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
+    if (!AiService.hasType(companyType, 'plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
     }
 
@@ -3952,8 +3171,8 @@ TERMINOLOGÍA CORRECTA:
   private async toolAssignTruckToFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
     // Only plants or producers with own fleet can assign additional trucks
     const companyType = this.resolveCompanyType(user);
-    const isPlant = companyType.includes('plant');
-    const isProducerOwnFleet = companyType.includes('producer') && input.transporterCompanyId === OWN_FLEET_SHORTCUT;
+    const isPlant = AiService.hasType(companyType, 'plant');
+    const isProducerOwnFleet = AiService.hasType(companyType, 'producer') && input.transporterCompanyId === OWN_FLEET_SHORTCUT;
     if (!isPlant && !isProducerOwnFleet) {
       return JSON.stringify({ error: 'Solo plantas o productores con flota propia pueden asignar camiones adicionales.' });
     }
@@ -3987,7 +3206,7 @@ TERMINOLOGÍA CORRECTA:
 
     // Resolve plantCompanyId for the assignment call (reuse companyType from above)
     let plantCompanyId: string;
-    if (companyType.includes('plant')) {
+    if (AiService.hasType(companyType, 'plant')) {
       plantCompanyId = this.resolvePlantCompanyId(user);
     } else {
       plantCompanyId = freight.destCompanyId || userCompanyId;
@@ -4363,6 +3582,13 @@ TERMINOLOGÍA CORRECTA:
       }
     }
 
+    // Guardrail: if trimming removed everything, keep at least the last user message
+    if (trimmed.length === 0 && messages.length > 0) {
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && (!Array.isArray(m.content) || !m.content.some((b: any) => b.type === 'tool_result')));
+      if (lastUserMsg) return [lastUserMsg];
+      return messages.slice(-1);
+    }
+
     return trimmed;
   }
 
@@ -4411,7 +3637,7 @@ TERMINOLOGÍA CORRECTA:
   // ---- authorize_freight ----
   private async toolAuthorizeFreight(input: any, user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
+    if (!AiService.hasType(companyType, 'plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden autorizar fletes.' });
     }
     const result = await this.resolveFreightWithAccess(input.code, user);
@@ -4572,7 +3798,7 @@ TERMINOLOGÍA CORRECTA:
   // ---- cancel_assignment ----
   private async toolCancelAssignment(input: any, user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
+    if (!AiService.hasType(companyType, 'plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden cancelar asignaciones.' });
     }
     const res = await this.resolveAssignment(input.code, input.assignmentId, user);
@@ -4587,7 +3813,7 @@ TERMINOLOGÍA CORRECTA:
   // ---- update_assignment ----
   private async toolUpdateAssignment(input: any, user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!companyType.includes('plant')) {
+    if (!AiService.hasType(companyType, 'plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
     }
     const res = await this.resolveAssignment(input.code, input.assignmentId, user);
@@ -4656,29 +3882,20 @@ TERMINOLOGÍA CORRECTA:
       return { error: 'Código de flete requerido.' };
     }
 
+    // Pre-compute user companies for access control (used by both exact and fuzzy paths)
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).filter((m: any) => m.active).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+
     // Try exact match first
-    let freight: any = await this.prisma.freight.findFirst({
-      where: { code: code.toUpperCase() },
-      select: {
-        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
-      },
-    });
+    let freight: any = await this.findFreightByCode(code.toUpperCase());
 
     // Fuzzy fallback: try partial code match (e.g. "1822" matches "F26-LCP.1822")
+    // Scoped to user's companies to prevent freight code enumeration
     if (!freight) {
       const sanitized = code.replace(/[^a-zA-Z0-9.\-]/g, '').toUpperCase();
       if (sanitized.length >= 3) {
-        const candidates = await this.prisma.freight.findMany({
-          where: { code: { contains: sanitized, mode: 'insensitive' } },
-          select: {
-            id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-            isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-            assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
-          },
-          take: 5,
-        });
+        const candidates = await this.findFreightsByCodePattern(sanitized, allUserCompanies, user.id);
         if (candidates.length === 1) {
           freight = candidates[0];
         } else if (candidates.length > 1) {
@@ -4692,9 +3909,6 @@ TERMINOLOGÍA CORRECTA:
     const ACCESS_DENIED = `No se encontró el flete ${code} o no tiene acceso.`;
     if (!freight) return { error: ACCESS_DENIED };
 
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).filter((m: any) => m.active).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
     const freightCompanies = [
       freight.originCompanyId, freight.destCompanyId,
       ...(freight.assignments || []).map((a: any) => a.transportCompanyId),
@@ -4711,12 +3925,46 @@ TERMINOLOGÍA CORRECTA:
     return { freight };
   }
 
+  /** Find freight by exact code — single source of truth for the select shape */
+  private async findFreightByCode(code: string) {
+    return this.prisma.freight.findFirst({
+      where: { code },
+      select: {
+        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
+        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
+      },
+    });
+  }
+
+  /** Find freights by partial code pattern — scoped to user's companies + driver assignments */
+  private async findFreightsByCodePattern(pattern: string, userCompanyIds: string[], userId: string) {
+    return this.prisma.freight.findMany({
+      where: {
+        code: { contains: pattern, mode: 'insensitive' },
+        OR: [
+          { originCompanyId: { in: userCompanyIds } },
+          { destCompanyId: { in: userCompanyIds } },
+          { assignments: { some: { transportCompanyId: { in: userCompanyIds } } } },
+          { assignments: { some: { driverId: userId } } },
+        ],
+      },
+      select: {
+        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
+        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
+      },
+      take: 5,
+    });
+  }
+
   // ---- ocr_analyze ----
   private async toolOcrAnalyze(input: any, user: any, session: any): Promise<string> {
     const url = input.url;
     if (!url) {
-      // Try to use pendingDocument URL from session
-      const state = (session.flowState as any) || {};
+      // Try to use pendingDocument URL from fresh session (not stale object)
+      const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+      const state = (freshSession?.flowState as any) || {};
       const pending = state.pendingDocument;
       if (!pending?.url) {
         return JSON.stringify({ error: 'Se necesita la URL del documento. Pedile al usuario que envíe una foto primero.' });
@@ -4778,6 +4026,11 @@ TERMINOLOGÍA CORRECTA:
     if (user.company?.type === 'plant') return user.companyId;
     // No fallback — only plant companies allowed
     return null;
+  }
+
+  /** Exact match for company type in comma-separated string (prevents substring false positives) */
+  private static hasType(companyType: string, type: string): boolean {
+    return companyType === type || companyType.split(',').some(t => t.trim() === type);
   }
 
   /** Check if caller is admin/gerente — scoped to specific company when provided */
