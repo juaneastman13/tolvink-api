@@ -56,10 +56,12 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
   {
     name: 'list_lots',
-    description: 'Lista lotes del productor como menú interactivo. Retorna _selectionSent: true — NO reformatear.',
+    description: 'Lista lotes del productor como menú interactivo seleccionable. Retorna _selectionSent: true — NO reformatear. Usar SIEMPRE que el usuario deba elegir un lote (nunca listar lotes como texto plano).',
     input_schema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        fieldId: { type: 'string', description: 'Filtrar lotes de un campo específico (UUID). Si se omite, muestra todos los lotes.' },
+      },
       required: [],
     },
   },

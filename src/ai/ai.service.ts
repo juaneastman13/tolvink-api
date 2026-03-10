@@ -522,7 +522,10 @@ UBICACIONES:
 - Sin coordenadas NO crear campo/lote/origen/destino personalizado.
 
 LISTAS Y SELECCIÓN:
-- _selectionSent:true → lista YA enviada como menú interactivo. NO reformatear la lista. Agregar frase contextual breve (ej: "Tiene 3 fletes pendientes. Seleccione uno para ver detalle.").
+- _selectionSent:true → lista YA enviada como menú interactivo. NO reformatear la lista. Agregar frase contextual breve según la situación:
+  - Creando flete y faltan datos → "¿Desde qué campo sale la carga?" / "Seleccione el lote de origen:"
+  - Consulta general → "Seleccione uno para ver detalles."
+  - SIEMPRE adaptar el texto al contexto de la conversación.
 - Resúmenes/análisis/estadísticas → summarize_freights (NO list_freights).
 - list_freights es SOLO para selección individual.
 
@@ -547,6 +550,7 @@ CREAR FLETES:
 4. Si la planta destino tiene SUCURSALES (branches), es OBLIGATORIO indicar cuál. El sistema lo validará y devolverá las opciones.
 5. Si se asigna FLOTA PROPIA (truckId), es OBLIGATORIO indicar chofer (driverId). El chofer puede ser de list_drivers o "self" (= el propio usuario).
 6. DUPLICAR FLETE: Es una copia idéntica. Solo validar la fecha nueva (loadDate). NO pedir reconfirmar datos.
+7. SELECCIÓN DE LOTE: Cuando el usuario necesita elegir un lote, SIEMPRE usar list_lots (con fieldId si ya sabés el campo). NUNCA listar lotes como texto plano — deben ser menú interactivo seleccionable.
 7. Ubicación obligatoria para origen/destino custom → generate_location_link.
 
 ASIGNAR TRANSPORTISTA:
@@ -787,7 +791,7 @@ TERMINOLOGÍA CORRECTA:
         case 'list_freights': return await this.toolListFreights(synUser, input, session);
         case 'get_freight_detail': return await this.toolGetFreightDetail(input, user, session);
         case 'search_plants': return await this.toolSearchPlants(input, user, session);
-        case 'list_lots': return await this.toolListLots(user, session);
+        case 'list_lots': return await this.toolListLots(user, session, input);
         case 'prepare_freight': return await this.toolPrepareFreight(input, user, session);
         case 'confirm_create_freight': return await this.toolConfirmCreateFreight(user, synUser, session);
         case 'confirm_action': return await this.toolConfirmAction(user, synUser, session);
@@ -1592,14 +1596,17 @@ TERMINOLOGÍA CORRECTA:
   }
 
   // ---- list_lots ----
-  private async toolListLots(user: any, session: any): Promise<string> {
+  private async toolListLots(user: any, session: any, input?: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No es productor', lots: [] });
     }
 
+    const where: any = { companyId: producerCompanyId, active: true };
+    if (input?.fieldId) where.fieldId = input.fieldId;
+
     const lots = await this.prisma.lot.findMany({
-      where: { companyId: producerCompanyId, active: true },
+      where,
       include: { field: { select: { id: true, name: true, lat: true, lng: true } } },
       take: 100,
     });
@@ -1627,8 +1634,13 @@ TERMINOLOGÍA CORRECTA:
       return { id: l.id, name: l.name, fieldName: l.field?.name || null, mapLink };
     });
 
+    const fieldName = input?.fieldId && lots[0]?.field?.name ? lots[0].field.name : null;
+    const headerText = fieldName
+      ? `🗺️ Lotes de ${fieldName}.\nSeleccione uno:`
+      : '🗺️ Lotes registrados.\nSeleccione uno:';
+
     return this.storePendingSelection(session, items, {
-      headerText: '🗺️ Lotes registrados.\nSeleccione uno para ver detalles:',
+      headerText,
       listButtonLabel: 'Ver lotes',
       sectionTitle: 'LOTES',
     }, 'lot_info', { lots: lotsData });
@@ -2711,7 +2723,7 @@ TERMINOLOGÍA CORRECTA:
     });
 
     return this.storePendingSelection(session, items, {
-      headerText: '🌾 Campos registrados.\nSeleccione uno para ver detalles:',
+      headerText: '🌾 Campos registrados.\nSeleccione uno:',
       listButtonLabel: 'Ver campos',
       sectionTitle: 'CAMPOS',
     }, 'field_info', { fields: fieldsData });
