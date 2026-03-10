@@ -126,7 +126,7 @@ export class AiService implements OnModuleDestroy {
 
     // Per-session lock: prevent concurrent chat() calls from racing on side-effects
     if (this._chatLocks.has(session.id)) {
-      return { text: 'Estoy procesando tu mensaje anterior, esperá un momento.' };
+      return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
     }
     this._chatLocks.add(session.id);
     // NOTE: rate map cleanup runs in rateCleanupTimer (setInterval) — not here, to avoid
@@ -406,42 +406,54 @@ export class AiService implements OnModuleDestroy {
     const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
 
-    const hasOwnFleet = user.company?.hasInternalFleet ||
-      user.memberships?.some((m: any) => m.company?.hasInternalFleet);
-    const ownFleetNote = hasOwnFleet
-      ? `\nFLOTA INTERNA: Tiene flota propia. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne?" Si sí → assign_transporter con transporterCompanyId="own_fleet".`
-      : '';
-
     const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
     const activeCoId = user.activeCompanyId || user.companyId;
     const activeMem = activeMemberships.find((m: any) => m.companyId === activeCoId);
     const activeCoName = this.sanitizeForPrompt(activeMem?.company?.name || user.company?.name || '');
+
+    // Check own fleet for the ACTIVE company only (not all memberships)
+    const hasOwnFleet = activeMem?.company?.hasInternalFleet ||
+      (!activeMem && user.company?.hasInternalFleet);
+    const ownFleetNote = hasOwnFleet
+      ? `\nFLOTA INTERNA: Tiene flota propia. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne?" Si sí → assign_transporter con transporterCompanyId="own_fleet".`
+      : '';
     const multiCompanyNote = activeMemberships.length > 1
-      ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${activeMemberships.length} empresas. Usar switch_company para cambiar.`
+      ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${activeMemberships.length} empresas. Usar switch_company SOLO si el usuario pide cambiar. NO pedir que seleccione empresa si ya está operando correctamente.`
       : '';
 
     const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
     const userRole = isChofer ? 'chofer' :
       (['admin', 'platform_admin'].includes(user.role) ? 'admin' :
       user.role === 'gerente' ? 'gerente' : 'operario');
-    let roleRestrictions = '';
+    const isAdmin = ['admin', 'platform_admin', 'gerente'].includes(userRole);
+
+    // Build role restrictions — handles dual types (producer,plant) with additive blocks
+    const roleParts: string[] = [];
     if (isChofer) {
-      roleRestrictions = `\nROL CHOFER (${userRole}): Solo puede aceptar/rechazar/iniciar viajes, confirmar carga/entrega, consultar fletes, tracking y ubicación.
+      roleParts.push(`ROL CHOFER (${userRole}): Solo puede aceptar/rechazar/iniciar viajes, confirmar carga/entrega, consultar fletes, tracking y ubicación.
 ACCIONES TÍPICAS DEL CHOFER: "mis fletes" → list_freights(status="accepted"). "ya cargué" → confirm_loaded del flete activo. "ya llegué/descargué" → confirm_finished. "salí del campo" → start_freight.
-PROACTIVO: Si el chofer escribe sin contexto, usar list_freights para mostrar sus fletes asignados/activos ANTES de pedir un código.`;
-    } else if (AiService.hasType(companyType, 'producer') && !AiService.hasType(companyType, 'plant')) {
-      roleRestrictions = `\nROL PRODUCTOR (${userRole}): No usar accept_freight, reject_freight, start_freight.
-ACCIONES TÍPICAS: "quiero mandar soja" → iniciar creación de flete. "cómo van mis fletes" → get_dashboard o summarize_freights. "mis campos" → list_fields.
-PROACTIVO: Ante consultas vagas ("cómo va todo", "novedades"), usar get_dashboard primero. Si pregunta por un flete sin dar código, usar list_freights para mostrar opciones.`;
-    } else if (AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
-      roleRestrictions = `\nROL PLANTA (${userRole}): No usar prepare_freight, create_field, create_lot.
-ACCIONES TÍPICAS: "fletes pendientes" → list_freights(status="pending_assignment"). "asignar transportista" → list_freights + assign_transporter. "autorizar" → authorize_freight.
-PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por fletes sin filtro, mostrar los pendientes de asignación primero.`;
-    } else if (AiService.hasType(companyType, 'transporter') && !AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
-      roleRestrictions = `\nROL TRANSPORTISTA (${userRole}): No usar prepare_freight, assign_transporter, create_field, create_lot.
-ACCIONES TÍPICAS: "fletes asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.
-PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por un flete sin código, usar list_freights.`;
+MULTI-CAMIÓN: Si el flete tiene varios viajes (trips), las acciones aplican al trip del chofer. Usar respond_trip, start_trip, confirm_trip_loaded, confirm_trip_finished para viajes individuales.
+PROACTIVO: Si el chofer escribe sin contexto, usar list_freights para mostrar sus fletes asignados/activos ANTES de pedir un código.`);
+    } else {
+      if (AiService.hasType(companyType, 'producer')) {
+        roleParts.push(`ROL PRODUCTOR (${userRole}): Puede crear fletes, gestionar campos/lotes, ver dashboard.
+ACCIONES TÍPICAS: "quiero mandar soja" → iniciar creación de flete. "cómo van mis fletes" → get_dashboard o summarize_freights. "mis campos" → list_fields. "cancelar flete" → cancel_freight.`);
+      }
+      if (AiService.hasType(companyType, 'plant')) {
+        roleParts.push(`ROL PLANTA (${userRole}): Puede asignar transportistas, autorizar fletes, gestionar pendientes.
+ACCIONES TÍPICAS: "fletes pendientes" → list_freights(status="pending_assignment"). "asignar transportista" → list_freights + assign_transporter. "autorizar" → authorize_freight.`);
+      }
+      if (AiService.hasType(companyType, 'transporter')) {
+        roleParts.push(`ROL TRANSPORTISTA (${userRole}): Puede aceptar/rechazar fletes, gestionar camiones y choferes.
+ACCIONES TÍPICAS: "fletes asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
+      }
+      if (roleParts.length === 0) {
+        roleParts.push(`ROL OPERARIO (${userRole}): Puede consultar fletes y dashboard.`);
+      }
     }
+    roleParts.push(`PROACTIVO: Ante consultas vagas ("cómo va todo", "novedades", "hola, cómo están mis fletes"), usar get_dashboard primero. Si pregunta por un flete sin dar código, usar list_freights para mostrar opciones.`);
+
+    const roleRestrictions = '\n' + roleParts.join('\n');
 
     return `Asistente de Tolvink — plataforma de gestión de fletes de granos y cargas del agro.
 USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today} | Uruguay (UTC-3)${ownFleetNote}${multiCompanyNote}${roleRestrictions}
@@ -449,35 +461,37 @@ USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today} | Uruguay (UTC-3)${o
 IDENTIDAD: "Capataz digital" — claro, directo, profesional, lenguaje del campo.
 - Tratamiento de USTED. PROHIBIDO tuteo/voseo/coloquialismos (dale, bárbaro, jaja).
 - Respuestas cortas y accionables. Sin disclaimers, sin tecnicismos, sin *negritas*.
-- No mencionar herramientas ni estados internos del sistema.
+- No mencionar nombres de herramientas ni estados internos del sistema al usuario.
 - Incorrecto: "El flete pasó a estado in_progress." Correcto: "El camión ya salió del campo."
-- Ante saludos sin solicitud → responder SOLO con menú de presentación.
 - No saludar si ya lo hizo. No repetir información ya confirmada.
 
-EMOJIS (máx 2/msg, SOLO al INICIO de línea como bullet):
+SALUDO INICIAL: Ante un saludo sin solicitud concreta (solo "hola", "buenas"), responder con:
+"Buenos días/tardes ${name}. ¿En qué puedo ayudarle?" seguido de 3-4 opciones breves relevantes al rol.
+Si el saludo incluye una consulta ("hola, cómo van mis fletes"), resolver la consulta directamente con get_dashboard o list_freights.
+
+EMOJIS: Usar como bullets al inicio de línea para datos/acciones. Permitidos hasta 1 por línea de datos:
 🌾Campo 🗺️Lote 🚛Viaje 📦Carga 📍Origen/Destino 📅Fecha 🕒Hora 👤Transportista
 🏢Empresa ✅Confirmado ⚠️Advertencia ⛔Denegado ❌Error ⏳Pendiente
-
-FORMATO: Una acción/dato por línea. URLs directas (no markdown). Sin separadores visuales (────, ═══).
 Ejemplo:
 ✅ Flete creado
 📦 Soja — 90 toneladas
 🗺️ Lote 5 — Campo El Ombú
 📅 15 marzo — 08:00
 
+FORMATO: Una acción/dato por línea. URLs como texto plano (no [texto](url)). No usar separadores como ──── o ═══.
+
 BÚSQUEDA PROACTIVA (CRÍTICO):
-- NUNCA pedir un código de flete si se puede buscar automáticamente. Usar list_freights o get_freight_detail.
-- "mis fletes" / "cómo van" / consulta vaga → get_dashboard o list_freights con filtro apropiado al rol.
-- "el flete de soja" → list_freights(grain="Soja") para encontrarlo, NO pedir código.
-- "quiero rechazar" sin código → list_freights(status="assigned") para mostrar opciones.
-- Si el usuario da información parcial (grano, destino, fecha), usarla como filtro en list_freights/summarize_freights.
-- Solo pedir código si hay ambigüedad DESPUÉS de buscar.
+- NUNCA pedir un código de flete si se puede buscar automáticamente.
+- Si el usuario da un código directamente → get_freight_detail DIRECTO, no buscar.
+- Sin código → usar list_freights o summarize_freights con filtros (grano, estado, fecha, destino).
+- "el flete de soja" → list_freights(grain="Soja"). "quiero rechazar" → list_freights(status="assigned").
+- Solo pedir código si hay ambigüedad real DESPUÉS de buscar y obtener múltiples resultados.
 
 CONTEXTO CONVERSACIONAL:
 - Mantener hilo. Resolver "eso", "el flete", "ese campo" del historial reciente.
 - FLETE ACTIVO: al consultar/seleccionar un flete, queda activo para acciones posteriores. No re-pedir código.
-- Se pierde al: seleccionar otro flete, switch_company, o expirar sesión.
-- Datos faltantes: 1→preguntar ese dato; 2+→listar todos en bullets.
+- Se pierde al: seleccionar otro flete, switch_company, o expirar sesión. Preguntas no relacionadas ("¿cuántos camiones tengo?") NO pierden el flete activo.
+- Datos faltantes: 1→preguntar ese dato puntual; 2+→listar todos en bullets.
 - Fechas en UTC-3. "a las 8" = 08:00. Formatos: "15/3", "mañana", "el lunes".
 
 ANTI-ALUCINACIÓN (CRÍTICO):
@@ -485,35 +499,37 @@ ANTI-ALUCINACIÓN (CRÍTICO):
 - NUNCA confirmar acción si la herramienta no la ejecutó.
 - NUNCA exponer UUIDs. Solo códigos de flete (ej: F26-LCP.1822).
 
-AUDIO: Interpretar intención (errores fonéticos: "solla"=Soja). No resetear contexto activo.
+AUDIO: Interpretar intención (errores fonéticos: "solla"=Soja, "tigo"=Trigo). No resetear contexto activo.
 
 IMÁGENES/DOCUMENTOS:
 - Archivo ya descargado. Si hay flete activo → attach_document directo. Si no → preguntar código.
 - Código de flete + archivo pendiente → attach_document DIRECTO (no list_freights).
+- OCR: Si el usuario envía foto de remito/pesaje/carta de porte → ocr_analyze para extraer datos. Si hay flete activo, ofrecer adjuntar.
 
-UBICACIONES (PRIORITARIO):
-- PROHIBIDO mostrar coordenadas, enlaces a Google Maps, datos técnicos.
-- Con mapLink → frase breve + link. Sin mapLink → "Ubicación no disponible."
-- Para marcar ubicación → generate_location_link. ÚNICA vía válida (no WhatsApp, no texto manual).
+UBICACIONES:
+- No mostrar coordenadas crudas ni enlaces a Google Maps a choferes/operarios.${isAdmin ? ' Admins y gerentes pueden solicitar coordenadas explícitamente.' : ''}
+- Con mapLink → frase breve + link Tolvink. Sin mapLink → "Ubicación no disponible."
+- Para marcar ubicación → generate_location_link. ÚNICA vía válida.
 - Sin coordenadas NO crear campo/lote/origen/destino personalizado.
 
 LISTAS Y SELECCIÓN:
-- _selectionSent:true → lista YA enviada como menú. NO reformatear. Solo "Seleccione uno."
+- _selectionSent:true → lista YA enviada como menú interactivo. NO reformatear la lista. Agregar frase contextual breve (ej: "Tiene 3 fletes pendientes. Seleccione uno para ver detalle.").
 - Resúmenes/análisis/estadísticas → summarize_freights (NO list_freights).
 - list_freights es SOLO para selección individual.
 
-ESTADOS (traducir SIEMPRE):
-draft→"Borrador" | pending_assignment→"Pendiente de asignación" | assigned→"Esperando aceptación"
-accepted→"Confirmado" | in_progress→"En camino" | loaded→"Cargado" | finished→"Finalizado" | canceled→"Cancelado"
+ESTADOS (traducir SIEMPRE al español):
+draft→"Borrador" | pending_assignment→"Pendiente de asignación" | assigned→"Asignado"
+accepted→"Aceptado" | in_progress→"En camino" | loaded→"Cargado" | finished→"Finalizado"
+canceled→"Cancelado" | rejected→"Rechazado"
 
 PRODUCTOS: Soja, Maíz, Trigo, Girasol, Sorgo, Cebada, Otros (con nombre). Unidades: toneladas (default), cantidad, metros, m³.
 
 CONFIRMACIÓN DE ACCIONES (CRÍTICO):
-Toda acción crítica usa patrón de 2 etapas:
-1. Herramienta PREPARA la acción → mostrar resumen.
-2. Usuario confirma → llamar confirm_action (o confirm_create_freight para fletes).
-SIN confirm_action/confirm_create_freight la acción NO se ejecuta. NUNCA indicar que se ejecutó sin llamarla.
-Botones CONFIRMAR/CANCELAR se envían automáticamente. No mencionarlos.
+Toda acción que modifica datos usa patrón de 2 etapas:
+1. Herramienta PREPARA la acción → mostrar resumen al usuario.
+2. Usuario confirma → llamar confirm_action (o confirm_create_freight para fletes nuevos).
+SIN confirm la acción NO se ejecuta. NUNCA indicar que se ejecutó sin confirmar.
+Botones CONFIRMAR/CANCELAR se envían automáticamente. No mencionarlos en texto.
 
 CREAR FLETES:
 1. Resolver IDs: search_plants + list_lots/list_fields.
@@ -530,6 +546,8 @@ FLOTA PROPIA (flujo): assigned → planta autoriza (authorize_freight) → accep
 
 DOBLE CONFIRMACIÓN: Carga y entrega requieren confirmación de AMBAS partes. Si solo una confirmó, informar que falta la otra.
 
+RECHAZO: Si un transportista rechaza un flete → informar al usuario y sugerir reasignar con list_transporters.
+
 COLA DE CHOFERES: Solo posición 1 puede ejecutar acciones.
 
 SEGUIMIENTO: generate_tracking_link (vivo), generate_report_link (PDF), generate_daily_map_link (mapa del día).
@@ -539,15 +557,19 @@ EQUIPO (admin/gerente): update_user_role, deactivate_user, reactivate_user → c
 
 MODIFICACIONES: update_freight valida internamente — SIEMPRE llamar. Para cambiar planta→search_plants, camión→list_trucks, chofer→list_drivers.
 
+ERRORES DE HERRAMIENTAS: Traducir a lenguaje claro y accionable. Ejemplos:
+- "NOT_FOUND" → "No se encontró el flete. ¿Puede verificar el código?"
+- "UNAUTHORIZED" → "No tiene permisos para esta acción."
+- "VALIDATION_ERROR" → explicar qué dato es incorrecto y qué se espera.
+- Borradores → "Puede completarlo desde la plataforma web."
 CHAT INTERNO: Derivar a web: ${APP_URL}
-ERRORES: Traducir a lenguaje claro. Borradores → "Puede completarlo desde la plataforma web."
 
 LINKS A LA APP (usar cuando corresponda):
 - Plataforma web: ${APP_URL}
 - Ver flete específico: el link viene en el campo "link" de get_freight_detail. SIEMPRE incluirlo al mostrar detalle.
 - Mapa del día: generate_daily_map_link. Incluir cuando el usuario pregunte panorama general.
 - Reporte PDF: generate_report_link. Ofrecer cuando el usuario necesite documentación formal.
-- Ante "quiero hacer esto desde la app" o funcionalidad no disponible por WhatsApp → derivar con link directo.
+- Ante funcionalidad no disponible por WhatsApp → derivar con link directo.
 
 TERMINOLOGÍA CORRECTA:
 - Documento de transporte: "remito" (NO "carta de porte").
@@ -576,14 +598,17 @@ TERMINOLOGÍA CORRECTA:
   private static readonly PRODUCER_TOOLS = new Set([
     'prepare_freight', 'list_lots', 'list_fields', 'create_field', 'create_lot',
     'search_plants', 'list_trucks', 'create_truck', 'generate_location_link',
-    'duplicate_freight', 'update_field', 'update_lot',
+    'duplicate_freight', 'update_field', 'update_lot', 'cancel_freight',
+    'list_enabled_plants',
   ]);
 
   // PLANT: Assignment & management tools
   private static readonly PLANT_TOOLS = new Set([
     'search_plants', 'list_transporters', 'assign_transporter', 'assign_truck_to_trip',
     'assign_truck_to_freight', 'list_trucks', 'list_drivers', 'authorize_freight',
-    'cancel_assignment', 'update_assignment',
+    'cancel_assignment', 'update_assignment', 'cancel_freight',
+    'assign_multi_trucks', 'view_driver_queue', 'reorder_driver_queue',
+    'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
   ]);
 
   // TRANSPORTER: Trip & freight response tools
@@ -591,6 +616,7 @@ TERMINOLOGÍA CORRECTA:
     'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
     'confirm_finished', 'respond_trip', 'start_trip', 'confirm_trip_loaded',
     'confirm_trip_finished', 'list_trucks', 'list_drivers',
+    'deactivate_truck', 'deactivate_driver',
   ]);
 
   // TRACKING & MAPS: Available when user may need location/tracking features
@@ -604,12 +630,16 @@ TERMINOLOGÍA CORRECTA:
   private static readonly ANALYTICS_TOOLS = new Set([
     'get_dashboard', 'list_documents', 'freight_history', 'update_freight',
     'attach_document', 'ocr_analyze', 'generate_batch_report_link',
+    'delete_document', 'save_ocr_data',
   ]);
 
   // ADMIN: Only for admin/gerente roles
   private static readonly ADMIN_TOOLS = new Set([
     'create_user', 'update_user_role', 'deactivate_user', 'reactivate_user',
     'list_company_users', 'list_drivers', 'create_driver',
+    'update_truck', 'deactivate_truck', 'deactivate_driver',
+    'list_branches', 'create_branch', 'update_branch', 'delete_branch',
+    'update_company', 'update_user_admin',
   ]);
 
   // MULTI-COMPANY: Only when user has multiple memberships
@@ -801,6 +831,25 @@ TERMINOLOGÍA CORRECTA:
         case 'update_profile': return await this.toolUpdateProfile(input, user, session);
         case 'generate_batch_report_link': return await this.toolGenerateBatchReportLink(input, user);
         case 'ocr_analyze': return await this.toolOcrAnalyze(input, user, session);
+        // --- New tools: admin & management ---
+        case 'delete_document': return await this.toolDeleteDocument(input, user, session);
+        case 'save_ocr_data': return await this.toolSaveOcrData(input, user, session);
+        case 'deactivate_truck': return await this.toolDeactivateTruck(input, user, session);
+        case 'update_truck': return await this.toolUpdateTruck(input, user, session);
+        case 'deactivate_driver': return await this.toolDeactivateDriver(input, user, session);
+        case 'list_enabled_plants': return await this.toolListEnabledPlants(user);
+        case 'list_enabled_producers': return await this.toolListEnabledProducers(user);
+        case 'grant_producer_access': return await this.toolGrantProducerAccess(input, user, session);
+        case 'revoke_producer_access': return await this.toolRevokeProducerAccess(input, user, session);
+        case 'list_branches': return await this.toolListBranches(user);
+        case 'create_branch': return await this.toolCreateBranch(input, user, session);
+        case 'update_branch': return await this.toolUpdateBranch(input, user, session);
+        case 'delete_branch': return await this.toolDeleteBranch(input, user, session);
+        case 'update_company': return await this.toolUpdateCompany(input, user, session);
+        case 'update_user_admin': return await this.toolUpdateUserAdmin(input, user, session);
+        case 'assign_multi_trucks': return await this.toolAssignMultiTrucks(input, user, session);
+        case 'view_driver_queue': return await this.toolViewDriverQueue(input, user);
+        case 'reorder_driver_queue': return await this.toolReorderDriverQueue(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
     }
   }
@@ -2006,7 +2055,7 @@ TERMINOLOGÍA CORRECTA:
           // Send password reset link instead of plaintext password (C1: never send passwords via WhatsApp)
           if (params.dto?.phone) {
             const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-            this.wa.sendText(params.dto.phone, `¡Bienvenido a Tolvink! Tu cuenta fue creada.\n\nPara configurar tu contraseña, ingresá a:\n${frontendUrl}/reset-password\n\nUsá tu email o teléfono para identificarte.`).catch(e => this.logger.warn(`Failed to send welcome WA to ${params.dto.phone}: ${e.message}`));
+            this.wa.sendText(params.dto.phone, `Bienvenido a Tolvink. Su cuenta fue creada.\n\nPara configurar su contraseña, ingrese a:\n${frontendUrl}/reset-password\n\nUse su email o teléfono para identificarse.`).catch(e => this.logger.warn(`Failed to send welcome WA to ${params.dto.phone}: ${e.message}`));
           }
           break;
         }
@@ -2167,6 +2216,142 @@ TERMINOLOGÍA CORRECTA:
           if (params.name) dto.name = params.name;
           await this.adminService.updateSelf(params.userId, dto);
           result = JSON.stringify({ status: 'updated', message: 'Perfil actualizado exitosamente.' });
+          break;
+        }
+
+        // --- New confirm_action handlers ---
+
+        case 'delete_document': {
+          await this.prisma.freightDocument.delete({ where: { id: params.documentId } });
+          result = JSON.stringify({ status: 'deleted', code: params.code, message: `Documento "${params.docName}" eliminado del flete ${params.code}.` });
+          break;
+        }
+
+        case 'save_ocr_data': {
+          await this.prisma.freightDocument.update({
+            where: { id: params.documentId },
+            data: { ocrData: params.ocrData },
+          });
+          result = JSON.stringify({ status: 'saved', code: params.code, message: `Datos OCR guardados en documento "${params.docName}" del flete ${params.code}.` });
+          break;
+        }
+
+        case 'deactivate_truck': {
+          await this.prisma.truck.update({ where: { id: params.truckId }, data: { active: false } });
+          result = JSON.stringify({ status: 'deactivated', message: `Camión ${params.plate} desactivado.` });
+          break;
+        }
+
+        case 'update_truck': {
+          const truckData: any = {};
+          if (params.plate) truckData.plate = params.plate;
+          if (params.brand !== undefined) truckData.brand = params.brand;
+          if (params.model !== undefined) truckData.model = params.model;
+          if (params.capacity !== undefined) truckData.capacity = params.capacity;
+          await this.prisma.truck.update({ where: { id: params.truckId }, data: truckData });
+          result = JSON.stringify({ status: 'updated', message: `Camión actualizado.` });
+          break;
+        }
+
+        case 'deactivate_driver': {
+          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
+          result = JSON.stringify({ status: 'deactivated', message: `Chofer ${params.driverName || ''} desactivado.` });
+          break;
+        }
+
+        case 'grant_producer_access': {
+          const existing = await this.prisma.plantProducerAccess.findFirst({
+            where: { plantCompanyId: params.plantCompanyId, producerCompanyId: params.producerCompanyId, producerUserId: params.producerUserId || null },
+          });
+          if (existing) {
+            await this.prisma.plantProducerAccess.update({ where: { id: existing.id }, data: { active: true } });
+          } else {
+            await this.prisma.plantProducerAccess.create({
+              data: { plantCompanyId: params.plantCompanyId, producerCompanyId: params.producerCompanyId, producerUserId: params.producerUserId || null },
+            });
+          }
+          result = JSON.stringify({ status: 'granted', message: `Productor "${params.producerName}" habilitado.` });
+          break;
+        }
+
+        case 'revoke_producer_access': {
+          await this.prisma.plantProducerAccess.update({ where: { id: params.accessId }, data: { active: false } });
+          result = JSON.stringify({ status: 'revoked', message: `Acceso del productor "${params.producerName}" revocado.` });
+          break;
+        }
+
+        case 'create_branch': {
+          await this.prisma.branch.create({
+            data: { name: params.name, companyId: params.companyId, address: params.address, reference: params.reference, lat: params.lat, lng: params.lng },
+          });
+          result = JSON.stringify({ status: 'created', message: `Sucursal "${params.name}" creada.` });
+          break;
+        }
+
+        case 'update_branch': {
+          const brData: any = {};
+          if (params.name !== undefined) brData.name = params.name;
+          if (params.address !== undefined) brData.address = params.address;
+          if (params.reference !== undefined) brData.reference = params.reference;
+          if (params.lat !== undefined) brData.lat = params.lat;
+          if (params.lng !== undefined) brData.lng = params.lng;
+          await this.prisma.branch.update({ where: { id: params.branchId }, data: brData });
+          result = JSON.stringify({ status: 'updated', message: `Sucursal actualizada.` });
+          break;
+        }
+
+        case 'delete_branch': {
+          await this.prisma.branch.update({ where: { id: params.branchId }, data: { active: false } });
+          result = JSON.stringify({ status: 'deactivated', message: `Sucursal "${params.branchName}" desactivada.` });
+          break;
+        }
+
+        case 'update_company': {
+          const coData: any = {};
+          if (params.name !== undefined) coData.name = params.name;
+          if (params.address !== undefined) coData.address = params.address;
+          if (params.phone !== undefined) coData.phone = params.phone;
+          if (params.email !== undefined) coData.email = params.email;
+          if (params.lat !== undefined) coData.lat = params.lat;
+          if (params.lng !== undefined) coData.lng = params.lng;
+          await this.prisma.company.update({ where: { id: params.companyId }, data: coData });
+          result = JSON.stringify({ status: 'updated', message: 'Datos de la empresa actualizados.' });
+          break;
+        }
+
+        case 'update_user_admin': {
+          const uData: any = {};
+          if (params.name !== undefined) uData.name = params.name;
+          if (params.email !== undefined) uData.email = params.email.toLowerCase().trim();
+          if (params.phone !== undefined) uData.phone = params.phone;
+          if (params.active !== undefined) uData.active = params.active;
+          if (params.role !== undefined) {
+            const roleMap: Record<string, string> = { admin: 'admin', gerente: 'admin', operario: 'operator', chofer: 'operator' };
+            uData.role = roleMap[params.role] || 'operator';
+          }
+          await this.prisma.user.update({ where: { id: params.userId }, data: uData });
+          // Sync membership role if role changed
+          if (params.role) {
+            const companyId = user.activeCompanyId || user.companyId;
+            await this.prisma.userCompany.updateMany({
+              where: { userId: params.userId, companyId },
+              data: { role: params.role, active: params.active !== false },
+            }).catch(() => {});
+          }
+          result = JSON.stringify({ status: 'updated', message: `Usuario "${params.userName}" actualizado.` });
+          break;
+        }
+
+        case 'assign_multi_trucks': {
+          const plantSynMulti = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          await this.freights.assignMulti(params.freightId, { trucks: params.trucks }, plantSynMulti);
+          result = JSON.stringify({ status: 'assigned', code: params.code, message: `${params.trucks.length} camiones asignados al flete ${params.code}.` });
+          break;
+        }
+
+        case 'reorder_driver_queue': {
+          await this.freights.reorderDriverQueue(params.driverId, params.orderedFreightIds, synUser);
+          result = JSON.stringify({ status: 'reordered', message: `Cola de ${params.driverName} reordenada (${params.orderedFreightIds.length} fletes).` });
           break;
         }
 
@@ -2863,7 +3048,7 @@ TERMINOLOGÍA CORRECTA:
     }
 
     const requesterName = user.name?.split(' ')[0] || 'Un participante';
-    const msg = `*Solicitud de ubicación*\n${requesterName} solicita tu ubicación para el flete ${freight.code} (${freight.originName} \u2192 ${freight.destName}).\n\nEnvia tu ubicación en este chat (adjuntar \u2192 Ubicación).`;
+    const msg = `*Solicitud de ubicación*\n${requesterName} solicita su ubicación para el flete ${freight.code} (${freight.originName} → ${freight.destName}).\n\nEnvíe su ubicación en este chat (adjuntar → Ubicación).`;
 
     let sent = 0;
     for (const [, target] of allTargets) {
@@ -3240,7 +3425,7 @@ TERMINOLOGÍA CORRECTA:
     else if (user.companyId) companyIds.push(user.companyId);
 
     if (companyIds.length === 0) {
-      return JSON.stringify({ error: 'No se encontró tu empresa.', users: [] });
+      return JSON.stringify({ error: 'No se encontró su empresa.', users: [] });
     }
 
     const memberships = await this.prisma.userCompany.findMany({
@@ -3980,15 +4165,31 @@ TERMINOLOGÍA CORRECTA:
     }
   }
 
+  /**
+   * Resolve the company type for the ACTIVE company.
+   * If the user has multiple memberships, prioritize the active company's type
+   * so the prompt and tool filter reflect what the user is currently operating as.
+   */
   private resolveCompanyType(user: any): string {
+    const activeCoId = user.activeCompanyId || user.companyId;
+
+    // 1. If we know the active company, find its type from memberships
+    if (activeCoId && user.memberships?.length > 0) {
+      const activeMem = user.memberships.find((m: any) => m.companyId === activeCoId);
+      if (activeMem?.company?.type) return activeMem.company.type;
+    }
+
+    // 2. Fallback: userTypes (legacy)
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
     if (userTypes.length > 0) return userTypes.join(', ');
+
+    // 3. Fallback: direct company
     if (user.company?.type) return user.company.type;
+
+    // 4. Fallback: first membership
     if (user.memberships?.length > 0) {
-      const types = user.memberships
-        .map((m: any) => m.company?.type)
-        .filter(Boolean);
-      return types.join(', ') || 'unknown';
+      const firstType = user.memberships.find((m: any) => m.company?.type)?.company?.type;
+      if (firstType) return firstType;
     }
     return 'unknown';
   }
@@ -4049,5 +4250,320 @@ TERMINOLOGÍA CORRECTA:
 
   private buildSyntheticUser(dbUser: any): any {
     return buildSyntheticUser(dbUser);
+  }
+
+  // ======================== NEW TOOL HANDLERS ==============================
+
+  // ---- delete_document ----
+  private async toolDeleteDocument(input: any, user: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+    const doc = await this.prisma.freightDocument.findFirst({
+      where: { id: input.documentId, freightId: freight.id },
+      select: { id: true, name: true, type: true },
+    });
+    if (!doc) return JSON.stringify({ error: `No se encontró el documento ${input.documentId} en el flete ${freight.code}.` });
+    return this.stageAction(session, 'delete_document', {
+      freightId: freight.id, documentId: doc.id, code: freight.code, docName: doc.name || doc.type,
+    }, `Eliminar documento "${doc.name || doc.type}" del flete ${freight.code}`, user);
+  }
+
+  // ---- save_ocr_data ----
+  private async toolSaveOcrData(input: any, user: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+    const doc = await this.prisma.freightDocument.findFirst({
+      where: { id: input.documentId, freightId: freight.id },
+      select: { id: true, name: true },
+    });
+    if (!doc) return JSON.stringify({ error: `No se encontró el documento en el flete ${freight.code}.` });
+    if (!input.ocrData || typeof input.ocrData !== 'object') return JSON.stringify({ error: 'ocrData debe ser un objeto JSON.' });
+    return this.stageAction(session, 'save_ocr_data', {
+      freightId: freight.id, documentId: doc.id, code: freight.code, ocrData: input.ocrData, docName: doc.name,
+    }, `Guardar datos OCR en documento "${doc.name}" del flete ${freight.code}`, user);
+  }
+
+  // ---- deactivate_truck ----
+  private async toolDeactivateTruck(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: input.truckId, companyId, active: true },
+      select: { id: true, plate: true, model: true },
+    });
+    if (!truck) return JSON.stringify({ error: 'Camión no encontrado o no pertenece a su empresa.' });
+    const activeAssignments = await this.prisma.freightAssignment.count({
+      where: { truckId: truck.id, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
+    });
+    if (activeAssignments > 0) return JSON.stringify({ error: `El camión tiene ${activeAssignments} viaje(s) activo(s). Cancele o finalice antes de desactivar.` });
+    const display = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
+    return this.stageAction(session, 'deactivate_truck', { truckId: truck.id, plate: truck.plate }, `Desactivar camión ${display}`, user);
+  }
+
+  // ---- update_truck ----
+  private async toolUpdateTruck(input: any, user: any, session: any): Promise<string> {
+    if (!this.isCallerAdminForCompany(user, user.activeCompanyId || user.companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden editar camiones.' });
+    }
+    const companyId = user.activeCompanyId || user.companyId;
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: input.truckId, companyId, active: true },
+      select: { id: true, plate: true, model: true, brand: true, capacity: true },
+    });
+    if (!truck) return JSON.stringify({ error: 'Camión no encontrado o no pertenece a su empresa.' });
+    const changes: string[] = [];
+    if (input.plate) {
+      const normalized = input.plate.trim().toUpperCase();
+      const dup = await this.prisma.truck.findFirst({ where: { plate: normalized, id: { not: truck.id }, active: true } });
+      if (dup) return JSON.stringify({ error: `La patente ${normalized} ya está registrada en otro camión.` });
+      changes.push(`patente: ${truck.plate} → ${normalized}`);
+    }
+    if (input.brand) changes.push(`marca: ${input.brand}`);
+    if (input.model) changes.push(`modelo: ${input.model}`);
+    if (input.capacity) changes.push(`capacidad: ${input.capacity} ton`);
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
+    return this.stageAction(session, 'update_truck', {
+      truckId: truck.id, plate: input.plate?.trim().toUpperCase(), brand: input.brand, model: input.model, capacity: input.capacity,
+    }, `Editar camión ${truck.plate}: ${changes.join(', ')}`, user);
+  }
+
+  // ---- deactivate_driver ----
+  private async toolDeactivateDriver(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    const membership = await this.prisma.userCompany.findFirst({
+      where: { userId: input.driverId, companyId, role: 'chofer', active: true },
+      include: { user: { select: { name: true } } },
+    });
+    if (!membership) return JSON.stringify({ error: 'Chofer no encontrado en su empresa.' });
+    const activeAssignments = await this.prisma.freightAssignment.count({
+      where: { driverId: input.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
+    });
+    if (activeAssignments > 0) return JSON.stringify({ error: `El chofer tiene ${activeAssignments} viaje(s) activo(s). Cancele o finalice antes de desactivar.` });
+    return this.stageAction(session, 'deactivate_driver', {
+      driverId: input.driverId, membershipId: membership.id, driverName: (membership as any).user?.name,
+    }, `Desactivar chofer ${(membership as any).user?.name || input.driverId}`, user);
+  }
+
+  // ---- list_enabled_plants ----
+  private async toolListEnabledPlants(user: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa productora.' });
+    const accesses = await this.prisma.plantProducerAccess.findMany({
+      where: { producerCompanyId, active: true },
+      include: { plantCompany: { select: { id: true, name: true, address: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (accesses.length === 0) return JSON.stringify({ total: 0, message: 'No hay plantas habilitadas.' });
+    const plants = accesses.map((a: any) => ({
+      id: a.plantCompany?.id, name: a.plantCompany?.name, address: a.plantCompany?.address,
+    }));
+    return JSON.stringify({ total: plants.length, plants });
+  }
+
+  // ---- list_enabled_producers ----
+  private async toolListEnabledProducers(user: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!AiService.hasType(companyType, 'plant')) return JSON.stringify({ error: 'Solo plantas pueden ver productores habilitados.' });
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    if (!plantCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa planta.' });
+    const accesses = await this.prisma.plantProducerAccess.findMany({
+      where: { plantCompanyId, active: true },
+      include: {
+        producerCompany: { select: { id: true, name: true, email: true } },
+        producerUser: { select: { id: true, name: true, phone: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (accesses.length === 0) return JSON.stringify({ total: 0, message: 'No hay productores habilitados.' });
+    const producers = accesses.map((a: any) => ({
+      accessId: a.id,
+      companyName: a.producerCompany?.name, companyId: a.producerCompany?.id,
+      userName: a.producerUser?.name, userPhone: a.producerUser?.phone,
+    }));
+    return JSON.stringify({ total: producers.length, producers });
+  }
+
+  // ---- grant_producer_access ----
+  private async toolGrantProducerAccess(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!AiService.hasType(companyType, 'plant')) return JSON.stringify({ error: 'Solo plantas pueden habilitar productores.' });
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    if (!plantCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa planta.' });
+    const producerCo = await this.prisma.company.findFirst({
+      where: { id: input.producerCompanyId, active: true },
+      select: { id: true, name: true, type: true },
+    });
+    if (!producerCo) return JSON.stringify({ error: 'Empresa productora no encontrada.' });
+    if (producerCo.type !== 'producer' && producerCo.type !== 'transporter') return JSON.stringify({ error: 'La empresa debe ser de tipo productor o transportista.' });
+    return this.stageAction(session, 'grant_producer_access', {
+      plantCompanyId, producerCompanyId: input.producerCompanyId, producerUserId: input.producerUserId,
+      producerName: producerCo.name,
+    }, `Habilitar productor "${producerCo.name}" en la planta`, user);
+  }
+
+  // ---- revoke_producer_access ----
+  private async toolRevokeProducerAccess(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!AiService.hasType(companyType, 'plant')) return JSON.stringify({ error: 'Solo plantas pueden revocar accesos.' });
+    const plantCompanyId = this.resolvePlantCompanyId(user);
+    const access = await this.prisma.plantProducerAccess.findFirst({
+      where: { id: input.accessId, active: true, ...(plantCompanyId ? { plantCompanyId } : {}) },
+      include: { producerCompany: { select: { name: true } } },
+    });
+    if (!access) return JSON.stringify({ error: 'Acceso no encontrado.' });
+    return this.stageAction(session, 'revoke_producer_access', {
+      accessId: input.accessId, producerName: (access as any).producerCompany?.name,
+    }, `Revocar acceso del productor "${(access as any).producerCompany?.name}"`, user);
+  }
+
+  // ---- list_branches ----
+  private async toolListBranches(user: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar su empresa.' });
+    const branches = await this.prisma.branch.findMany({
+      where: { companyId, active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, address: true, reference: true },
+    });
+    if (branches.length === 0) return JSON.stringify({ total: 0, message: 'No hay sucursales registradas.' });
+    return JSON.stringify({ total: branches.length, branches });
+  }
+
+  // ---- create_branch ----
+  private async toolCreateBranch(input: any, user: any, session: any): Promise<string> {
+    if (!this.isCallerAdminForCompany(user, user.activeCompanyId || user.companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden crear sucursales.' });
+    }
+    if (!input.name?.trim()) return JSON.stringify({ error: 'El nombre de la sucursal es obligatorio.' });
+    const companyId = user.activeCompanyId || user.companyId;
+    return this.stageAction(session, 'create_branch', {
+      companyId, name: input.name.trim(), address: input.address, reference: input.reference, lat: input.lat, lng: input.lng,
+    }, `Crear sucursal "${input.name.trim()}"`, user);
+  }
+
+  // ---- update_branch ----
+  private async toolUpdateBranch(input: any, user: any, session: any): Promise<string> {
+    if (!this.isCallerAdminForCompany(user, user.activeCompanyId || user.companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden editar sucursales.' });
+    }
+    const companyId = user.activeCompanyId || user.companyId;
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: input.branchId, companyId, active: true },
+      select: { id: true, name: true },
+    });
+    if (!branch) return JSON.stringify({ error: 'Sucursal no encontrada.' });
+    const changes: string[] = [];
+    if (input.name) changes.push(`nombre: ${input.name}`);
+    if (input.address) changes.push(`dirección: ${input.address}`);
+    if (input.reference) changes.push(`referencia: ${input.reference}`);
+    if (input.lat != null || input.lng != null) changes.push('ubicación');
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
+    return this.stageAction(session, 'update_branch', {
+      branchId: branch.id, name: input.name, address: input.address, reference: input.reference, lat: input.lat, lng: input.lng,
+    }, `Editar sucursal "${branch.name}": ${changes.join(', ')}`, user);
+  }
+
+  // ---- delete_branch ----
+  private async toolDeleteBranch(input: any, user: any, session: any): Promise<string> {
+    if (!this.isCallerAdminForCompany(user, user.activeCompanyId || user.companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden eliminar sucursales.' });
+    }
+    const companyId = user.activeCompanyId || user.companyId;
+    const branch = await this.prisma.branch.findFirst({
+      where: { id: input.branchId, companyId, active: true },
+      select: { id: true, name: true },
+    });
+    if (!branch) return JSON.stringify({ error: 'Sucursal no encontrada.' });
+    return this.stageAction(session, 'delete_branch', { branchId: branch.id, branchName: branch.name },
+      `Desactivar sucursal "${branch.name}"`, user);
+  }
+
+  // ---- update_company ----
+  private async toolUpdateCompany(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden editar la empresa.' });
+    }
+    const changes: string[] = [];
+    if (input.name) changes.push(`nombre: ${input.name}`);
+    if (input.address) changes.push(`dirección: ${input.address}`);
+    if (input.phone) changes.push(`teléfono: ${input.phone}`);
+    if (input.email) changes.push(`email: ${input.email}`);
+    if (input.lat != null || input.lng != null) changes.push('ubicación');
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
+    return this.stageAction(session, 'update_company', {
+      companyId, name: input.name, address: input.address, phone: input.phone, email: input.email, lat: input.lat, lng: input.lng,
+    }, `Editar empresa: ${changes.join(', ')}`, user);
+  }
+
+  // ---- update_user_admin ----
+  private async toolUpdateUserAdmin(input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!this.isCallerAdminForCompany(user, companyId)) {
+      return JSON.stringify({ error: 'Solo admin/gerente pueden editar usuarios.' });
+    }
+    const target = await this.prisma.user.findUnique({ where: { id: input.userId }, select: { id: true, name: true, email: true } });
+    if (!target) return JSON.stringify({ error: 'Usuario no encontrado.' });
+    // Verify target belongs to caller's company
+    const targetMem = await this.prisma.userCompany.findFirst({ where: { userId: input.userId, companyId } });
+    if (!targetMem) return JSON.stringify({ error: 'El usuario no pertenece a su empresa.' });
+    const changes: string[] = [];
+    if (input.name) changes.push(`nombre: ${input.name}`);
+    if (input.email) changes.push(`email: ${input.email}`);
+    if (input.phone) changes.push(`teléfono: ${input.phone}`);
+    if (input.role) changes.push(`rol: ${input.role}`);
+    if (input.active !== undefined) changes.push(input.active ? 'reactivar' : 'desactivar');
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
+    return this.stageAction(session, 'update_user_admin', {
+      userId: input.userId, userName: target.name, name: input.name, email: input.email, phone: input.phone, role: input.role, active: input.active,
+    }, `Editar usuario "${target.name}": ${changes.join(', ')}`, user);
+  }
+
+  // ---- assign_multi_trucks ----
+  private async toolAssignMultiTrucks(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!AiService.hasType(companyType, 'plant')) return JSON.stringify({ error: 'Solo plantas pueden asignar múltiples camiones.' });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+    if (!Array.isArray(input.trucks) || input.trucks.length === 0) return JSON.stringify({ error: 'Debe indicar al menos un camión.' });
+    const summary = input.trucks.map((t: any, i: number) => `#${i + 1}: transportista=${t.transportCompanyId}${t.tons ? ` (${t.tons}t)` : ''}`).join(', ');
+    return this.stageAction(session, 'assign_multi_trucks', {
+      freightId: freight.id, code: freight.code, trucks: input.trucks,
+      plantCompanyId: this.resolvePlantCompanyId(user),
+    }, `Asignar ${input.trucks.length} camiones al flete ${freight.code}: ${summary}`, user);
+  }
+
+  // ---- view_driver_queue ----
+  private async toolViewDriverQueue(input: any, user: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    // Verify driver belongs to a company the user has access to
+    const driver = await this.prisma.user.findUnique({ where: { id: input.driverId }, select: { id: true, name: true } });
+    if (!driver) return JSON.stringify({ error: 'Chofer no encontrado.' });
+    const synUser = this.buildSyntheticUser(user);
+    try {
+      const queue = await this.freights.getDriverQueue(input.driverId, synUser);
+      if (!queue || (Array.isArray(queue) && queue.length === 0)) return JSON.stringify({ total: 0, message: `${driver.name} no tiene fletes en cola.` });
+      return JSON.stringify({ driverName: driver.name, queue });
+    } catch (e: any) {
+      return JSON.stringify({ error: e.message || 'Error al consultar cola del chofer.' });
+    }
+  }
+
+  // ---- reorder_driver_queue ----
+  private async toolReorderDriverQueue(input: any, user: any, session: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!AiService.hasType(companyType, 'plant') && !['admin', 'platform_admin'].includes(user.role)) {
+      return JSON.stringify({ error: 'Solo plantas y admin pueden reordenar la cola.' });
+    }
+    const driver = await this.prisma.user.findUnique({ where: { id: input.driverId }, select: { name: true } });
+    if (!driver) return JSON.stringify({ error: 'Chofer no encontrado.' });
+    if (!Array.isArray(input.orderedFreightIds) || input.orderedFreightIds.length === 0) {
+      return JSON.stringify({ error: 'Debe indicar al menos un ID de flete.' });
+    }
+    return this.stageAction(session, 'reorder_driver_queue', {
+      driverId: input.driverId, driverName: driver.name, orderedFreightIds: input.orderedFreightIds,
+    }, `Reordenar cola de ${driver.name} (${input.orderedFreightIds.length} fletes)`, user);
   }
 }

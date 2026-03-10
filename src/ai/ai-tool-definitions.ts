@@ -655,4 +655,256 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ['url'],
     },
   },
+
+  // ======================== NEW TOOLS — Admin & Management ========================
+
+  // --- Documents ---
+  {
+    name: 'delete_document',
+    description: 'Elimina un documento/foto adjunto a un flete. Requiere código del flete y el ID del documento (obtenido de list_documents). Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete, ej: F26-LCP.1822' },
+        documentId: { type: 'string', description: 'ID del documento a eliminar (UUID obtenido de list_documents)' },
+      },
+      required: ['code', 'documentId'],
+    },
+  },
+  {
+    name: 'save_ocr_data',
+    description: 'Guarda los datos extraídos por OCR en un documento de flete. Usar después de ocr_analyze cuando el usuario confirma que los datos son correctos. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete' },
+        documentId: { type: 'string', description: 'ID del documento (UUID)' },
+        ocrData: { type: 'object', description: 'Datos OCR estructurados (resultado de ocr_analyze)' },
+      },
+      required: ['code', 'documentId', 'ocrData'],
+    },
+  },
+
+  // --- Trucks & Drivers ---
+  {
+    name: 'deactivate_truck',
+    description: 'Desactiva un camión de la flota. No se puede si tiene viajes activos. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        truckId: { type: 'string', description: 'ID del camión (UUID, obtenido de list_trucks)' },
+      },
+      required: ['truckId'],
+    },
+  },
+  {
+    name: 'update_truck',
+    description: 'Edita los datos de un camión (patente, marca, modelo, capacidad). Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        truckId: { type: 'string', description: 'ID del camión (UUID)' },
+        plate: { type: 'string', description: 'Nueva patente (se normaliza a mayúsculas). Opcional.' },
+        brand: { type: 'string', description: 'Marca del camión. Opcional.' },
+        model: { type: 'string', description: 'Modelo del camión. Opcional.' },
+        capacity: { type: 'number', description: 'Capacidad en toneladas. Opcional.' },
+      },
+      required: ['truckId'],
+    },
+  },
+  {
+    name: 'deactivate_driver',
+    description: 'Desactiva un chofer de la empresa. No se puede si tiene viajes activos. Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        driverId: { type: 'string', description: 'ID del chofer (UUID, obtenido de list_drivers)' },
+      },
+      required: ['driverId'],
+    },
+  },
+
+  // --- Plant Access ---
+  {
+    name: 'list_enabled_plants',
+    description: 'Lista las plantas habilitadas para el productor. Muestra qué plantas puede usar como destino de fletes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'list_enabled_producers',
+    description: 'Lista los productores habilitados en la planta. Solo plantas. Muestra qué productores pueden enviar fletes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'grant_producer_access',
+    description: 'Habilita un productor para operar con la planta. Solo plantas y admin. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        producerCompanyId: { type: 'string', description: 'ID de la empresa productora (UUID). Usar search_plants para buscar.' },
+        producerUserId: { type: 'string', description: 'ID del usuario productor específico (opcional, si no se indica se habilita toda la empresa).' },
+      },
+      required: ['producerCompanyId'],
+    },
+  },
+  {
+    name: 'revoke_producer_access',
+    description: 'Revoca el acceso de un productor a la planta. Solo plantas y admin. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        accessId: { type: 'string', description: 'ID del registro de acceso (UUID, obtenido de list_enabled_producers)' },
+      },
+      required: ['accessId'],
+    },
+  },
+
+  // --- Branches ---
+  {
+    name: 'list_branches',
+    description: 'Lista las sucursales de la empresa activa. Muestra nombre, dirección y referencia.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'create_branch',
+    description: 'Crea una sucursal para la empresa activa. Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Nombre de la sucursal' },
+        address: { type: 'string', description: 'Dirección. Opcional.' },
+        reference: { type: 'string', description: 'Referencia (ej: "Ruta 2 km 135"). Opcional.' },
+        lat: { type: 'number', description: 'Latitud. Opcional (usar generate_location_link para obtener).' },
+        lng: { type: 'number', description: 'Longitud. Opcional.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_branch',
+    description: 'Edita una sucursal existente. Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        branchId: { type: 'string', description: 'ID de la sucursal (UUID, obtenido de list_branches)' },
+        name: { type: 'string', description: 'Nuevo nombre. Opcional.' },
+        address: { type: 'string', description: 'Nueva dirección. Opcional.' },
+        reference: { type: 'string', description: 'Nueva referencia. Opcional.' },
+        lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
+        lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
+      },
+      required: ['branchId'],
+    },
+  },
+  {
+    name: 'delete_branch',
+    description: 'Desactiva una sucursal. Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        branchId: { type: 'string', description: 'ID de la sucursal (UUID)' },
+      },
+      required: ['branchId'],
+    },
+  },
+
+  // --- Company & User Admin ---
+  {
+    name: 'update_company',
+    description: 'Edita datos de la empresa activa (nombre, dirección, teléfono, email, ubicación). Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Nuevo nombre. Opcional.' },
+        address: { type: 'string', description: 'Nueva dirección. Opcional.' },
+        phone: { type: 'string', description: 'Nuevo teléfono. Opcional.' },
+        email: { type: 'string', description: 'Nuevo email. Opcional.' },
+        lat: { type: 'number', description: 'Nueva latitud. Opcional.' },
+        lng: { type: 'number', description: 'Nueva longitud. Opcional.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'update_user_admin',
+    description: 'Edita un usuario de la empresa (nombre, email, teléfono, rol, estado activo). Solo admin/gerente. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        userId: { type: 'string', description: 'ID del usuario (UUID, obtenido de list_company_users)' },
+        name: { type: 'string', description: 'Nuevo nombre. Opcional.' },
+        email: { type: 'string', description: 'Nuevo email. Opcional.' },
+        phone: { type: 'string', description: 'Nuevo teléfono. Opcional.' },
+        role: { type: 'string', enum: ['admin', 'operario', 'chofer'], description: 'Nuevo rol. Opcional.' },
+        active: { type: 'boolean', description: 'Activar/desactivar usuario. Opcional.' },
+      },
+      required: ['userId'],
+    },
+  },
+
+  // --- Freight Extras ---
+  {
+    name: 'assign_multi_trucks',
+    description: 'Asigna múltiples camiones a un flete de una sola vez. Solo plantas. Cada camión requiere transporterCompanyId. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete' },
+        trucks: {
+          type: 'array',
+          description: 'Lista de camiones a asignar',
+          items: {
+            type: 'object',
+            properties: {
+              transportCompanyId: { type: 'string', description: 'ID empresa transportista (UUID)' },
+              truckId: { type: 'string', description: 'ID del camión (opcional)' },
+              driverId: { type: 'string', description: 'ID del chofer (opcional)' },
+              tons: { type: 'number', description: 'Toneladas para este camión (opcional)' },
+            },
+            required: ['transportCompanyId'],
+          },
+        },
+      },
+      required: ['code', 'trucks'],
+    },
+  },
+  {
+    name: 'view_driver_queue',
+    description: 'Muestra la cola de fletes asignados a un chofer, en orden de prioridad. Útil para ver qué fletes tiene pendientes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        driverId: { type: 'string', description: 'ID del chofer (UUID, obtenido de list_drivers)' },
+      },
+      required: ['driverId'],
+    },
+  },
+  {
+    name: 'reorder_driver_queue',
+    description: 'Reordena la cola de fletes de un chofer. Solo plantas y admin. Enviar los IDs de fletes en el orden deseado. Prepara la acción para confirmación.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        driverId: { type: 'string', description: 'ID del chofer (UUID)' },
+        orderedFreightIds: {
+          type: 'array',
+          description: 'IDs de fletes en el orden deseado',
+          items: { type: 'string' },
+        },
+      },
+      required: ['driverId', 'orderedFreightIds'],
+    },
+  },
 ];
