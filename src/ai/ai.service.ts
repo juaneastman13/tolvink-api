@@ -183,9 +183,27 @@ export class AiService implements OnModuleDestroy {
     }
 
     // Inject active context (survives message trimming) — sanitized to prevent injection
-    if (state.activeContext?.lastFreightCode && !state.pendingDocument) {
+    if (state.activeContext && !state.pendingDocument) {
       const ac = state.activeContext;
-      messageToSend = `[Contexto activo: último flete consultado ${this.sanitizeForPrompt(ac.lastFreightCode)} — ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}]\n\n${messageToSend}`;
+      const parts: string[] = [];
+      if (ac.lastFreightCode) {
+        parts.push(`último flete: ${this.sanitizeForPrompt(ac.lastFreightCode)} — ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}`);
+      }
+      if (ac.lastAction) {
+        parts.push(`última acción: ${this.sanitizeForPrompt(ac.lastAction)}`);
+      }
+      if (ac.lastSearchFilter) {
+        parts.push(`último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}`);
+      }
+      if (parts.length > 0) {
+        messageToSend = `[Contexto activo: ${parts.join('. ')}]\n\n${messageToSend}`;
+      }
+    }
+
+    // Inject pending action context so AI knows there's an unconfirmed operation
+    if (state.pendingAction) {
+      const pa = state.pendingAction;
+      messageToSend = `[Sistema: hay una acción pendiente de confirmación: ${this.sanitizeForPrompt(pa.summary || pa.tool || '')}. Si el usuario confirma → confirm_action. Si cancela o cambia de tema → ignorar la acción pendiente.]\n\n${messageToSend}`;
     }
 
     // Add user message
@@ -298,6 +316,27 @@ export class AiService implements OnModuleDestroy {
         }
       }
 
+      // If loop exhausted while AI still wanted to call tools, provide graceful fallback
+      if (response.stop_reason === 'tool_use' && loopCount >= MAX_TOOL_LOOPS) {
+        this.logger.warn(`Tool loop exhausted at ${MAX_TOOL_LOOPS} iterations — AI wanted more tool calls`);
+        // Extract any partial text the AI produced alongside the tool_use
+        const partialText = response.content
+          .filter((b: any) => b.type === 'text')
+          .map((b: any) => b.text)
+          .join('\n')
+          .trim();
+        if (partialText) {
+          // Use the partial text as the response
+          response = { ...response, stop_reason: 'end_turn', content: [{ type: 'text', text: partialText }] };
+        } else {
+          // No text at all — the AI was mid-operation, provide a helpful message
+          const activeCtx = state.activeContext?.lastFreightCode
+            ? ` sobre el flete ${state.activeContext.lastFreightCode}`
+            : '';
+          response = { ...response, stop_reason: 'end_turn', content: [{ type: 'text', text: `La operación${activeCtx} requiere más pasos de los que puedo completar en una sola interacción. Por favor, intente con un pedido más específico o utilice la plataforma web: ${APP_URL}` }] };
+        }
+      }
+
       // Extract text response
       const textBlocks = response.content.filter((b: any) => b.type === 'text');
       let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No se pudo procesar el mensaje.';
@@ -399,15 +438,26 @@ export class AiService implements OnModuleDestroy {
       : '';
 
     const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
+    const userRole = isChofer ? 'chofer' :
+      (['admin', 'platform_admin'].includes(user.role) ? 'admin' :
+      user.role === 'gerente' ? 'gerente' : 'operario');
     let roleRestrictions = '';
     if (isChofer) {
-      roleRestrictions = '\nROL CHOFER: Solo puede aceptar/rechazar/iniciar viajes, confirmar carga/entrega, consultar fletes, tracking y ubicación.';
+      roleRestrictions = `\nROL CHOFER (${userRole}): Solo puede aceptar/rechazar/iniciar viajes, confirmar carga/entrega, consultar fletes, tracking y ubicación.
+ACCIONES TÍPICAS DEL CHOFER: "mis fletes" → list_freights(status="accepted"). "ya cargué" → confirm_loaded del flete activo. "ya llegué/descargué" → confirm_finished. "salí del campo" → start_freight.
+PROACTIVO: Si el chofer escribe sin contexto, usar list_freights para mostrar sus fletes asignados/activos ANTES de pedir un código.`;
     } else if (companyType.includes('producer') && !companyType.includes('plant')) {
-      roleRestrictions = '\nROL PRODUCTOR: No usar accept_freight, reject_freight, start_freight.';
+      roleRestrictions = `\nROL PRODUCTOR (${userRole}): No usar accept_freight, reject_freight, start_freight.
+ACCIONES TÍPICAS: "quiero mandar soja" → iniciar creación de flete. "cómo van mis fletes" → get_dashboard o summarize_freights. "mis campos" → list_fields.
+PROACTIVO: Ante consultas vagas ("cómo va todo", "novedades"), usar get_dashboard primero. Si pregunta por un flete sin dar código, usar list_freights para mostrar opciones.`;
     } else if (companyType.includes('plant') && !companyType.includes('producer')) {
-      roleRestrictions = '\nROL PLANTA: No usar prepare_freight, create_field, create_lot.';
+      roleRestrictions = `\nROL PLANTA (${userRole}): No usar prepare_freight, create_field, create_lot.
+ACCIONES TÍPICAS: "fletes pendientes" → list_freights(status="pending_assignment"). "asignar transportista" → list_freights + assign_transporter. "autorizar" → authorize_freight.
+PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por fletes sin filtro, mostrar los pendientes de asignación primero.`;
     } else if (companyType.includes('transporter') && !companyType.includes('plant') && !companyType.includes('producer')) {
-      roleRestrictions = '\nROL TRANSPORTISTA: No usar prepare_freight, assign_transporter, create_field, create_lot.';
+      roleRestrictions = `\nROL TRANSPORTISTA (${userRole}): No usar prepare_freight, assign_transporter, create_field, create_lot.
+ACCIONES TÍPICAS: "fletes asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.
+PROACTIVO: Ante consultas vagas, usar get_dashboard. Si pregunta por un flete sin código, usar list_freights.`;
     }
 
     return `Asistente de Tolvink — plataforma de gestión de fletes de granos y cargas del agro.
@@ -431,6 +481,14 @@ Ejemplo:
 📦 Soja — 90 toneladas
 🗺️ Lote 5 — Campo El Ombú
 📅 15 marzo — 08:00
+
+BÚSQUEDA PROACTIVA (CRÍTICO):
+- NUNCA pedir un código de flete si se puede buscar automáticamente. Usar list_freights o get_freight_detail.
+- "mis fletes" / "cómo van" / consulta vaga → get_dashboard o list_freights con filtro apropiado al rol.
+- "el flete de soja" → list_freights(grain="Soja") para encontrarlo, NO pedir código.
+- "quiero rechazar" sin código → list_freights(status="assigned") para mostrar opciones.
+- Si el usuario da información parcial (grano, destino, fecha), usarla como filtro en list_freights/summarize_freights.
+- Solo pedir código si hay ambigüedad DESPUÉS de buscar.
 
 CONTEXTO CONVERSACIONAL:
 - Mantener hilo. Resolver "eso", "el flete", "ese campo" del historial reciente.
@@ -500,7 +558,18 @@ MODIFICACIONES: update_freight valida internamente — SIEMPRE llamar. Para camb
 
 CHAT INTERNO: Derivar a web: ${APP_URL}
 ERRORES: Traducir a lenguaje claro. Borradores → "Puede completarlo desde la plataforma web."
-Plataforma web: ${APP_URL}`;
+
+LINKS A LA APP (usar cuando corresponda):
+- Plataforma web: ${APP_URL}
+- Ver flete específico: el link viene en el campo "link" de get_freight_detail. SIEMPRE incluirlo al mostrar detalle.
+- Mapa del día: generate_daily_map_link. Incluir cuando el usuario pregunte panorama general.
+- Reporte PDF: generate_report_link. Ofrecer cuando el usuario necesite documentación formal.
+- Ante "quiero hacer esto desde la app" o funcionalidad no disponible por WhatsApp → derivar con link directo.
+
+TERMINOLOGÍA CORRECTA:
+- Documento de transporte: "remito" (NO "carta de porte").
+- Viaje: usar "viaje" o "flete" según contexto. "Trip" es interno, no mencionarlo.
+- Empresa tipo: "productor", "planta", "transportista". NO usar "producer/plant/transporter".`;
   }
 
   // ======================== CONTEXT-BASED TOOL FILTERING ==================
@@ -1373,6 +1442,19 @@ Plataforma web: ${APP_URL}`;
 
   // ======================== TOOL EXECUTION ===============================
 
+  // Tools that represent completed actions — track in activeContext.lastAction
+  private static readonly ACTION_TOOLS = new Set([
+    'confirm_action', 'confirm_create_freight', 'accept_freight', 'reject_freight',
+    'start_freight', 'confirm_loaded', 'confirm_finished', 'cancel_freight',
+    'assign_transporter', 'authorize_freight', 'create_field', 'create_lot',
+    'create_truck', 'create_user', 'update_freight', 'duplicate_freight',
+  ]);
+
+  // Tools that search/filter — track in activeContext.lastSearchFilter
+  private static readonly SEARCH_TOOLS = new Set([
+    'list_freights', 'summarize_freights',
+  ]);
+
   private async executeTool(
     toolName: string,
     input: any,
@@ -1381,6 +1463,47 @@ Plataforma web: ${APP_URL}`;
     session: any,
   ): Promise<string> {
     try {
+      // Track search filters in active context
+      if (AiService.SEARCH_TOOLS.has(toolName) && session?.id) {
+        const filterParts: string[] = [];
+        if (input.status) filterParts.push(`estado=${input.status}`);
+        if (input.grain) filterParts.push(`grano=${input.grain}`);
+        if (input.dateFrom) filterParts.push(`desde=${input.dateFrom}`);
+        if (input.dateTo) filterParts.push(`hasta=${input.dateTo}`);
+        if (filterParts.length > 0) {
+          this.updateActiveContext(session.id, { lastSearchFilter: filterParts.join(', ') });
+        }
+      }
+
+      const result = await this._executeToolInner(toolName, input, user, synUser, session);
+
+      // Track completed actions in active context
+      if (AiService.ACTION_TOOLS.has(toolName) && session?.id) {
+        const code = input.code || '';
+        this.updateActiveContext(session.id, { lastAction: `${toolName}${code ? ` (${code})` : ''}` });
+      }
+
+      return result;
+    } catch (e) {
+      this.logger.error(`Tool ${toolName} error: ${e.message}`);
+      const SAFE_PATTERNS = [
+        /no (se )?encontr/i, /no tiene acceso/i, /no se puede/i, /solo.*pueden/i,
+        /no.*permiso/i, /ya existe/i, /no pertenec/i, /flete.*no/i, /campo.*no/i,
+        /lote.*no/i, /camión.*no/i, /código.*requerido/i, /inválid/i,
+      ];
+      const isSafe = SAFE_PATTERNS.some(p => p.test(e.message || ''));
+      const safeMsg = isSafe ? e.message : 'Error al procesar la solicitud.';
+      return JSON.stringify({ error: safeMsg });
+    }
+  }
+
+  private async _executeToolInner(
+    toolName: string,
+    input: any,
+    user: any,
+    synUser: any,
+    session: any,
+  ): Promise<string> {
       switch (toolName) {
         case 'list_freights': return await this.toolListFreights(synUser, input, session);
         case 'get_freight_detail': return await this.toolGetFreightDetail(input, user, session);
@@ -1442,18 +1565,6 @@ Plataforma web: ${APP_URL}`;
         case 'generate_batch_report_link': return await this.toolGenerateBatchReportLink(input, user);
         case 'ocr_analyze': return await this.toolOcrAnalyze(input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
-      }
-    } catch (e) {
-      this.logger.error(`Tool ${toolName} error: ${e.message}`);
-      // Don't leak raw error messages to AI/user — explicit safe-pattern allowlist
-      const SAFE_PATTERNS = [
-        /no (se )?encontr/i, /no tiene acceso/i, /no se puede/i, /solo.*pueden/i,
-        /no.*permiso/i, /ya existe/i, /no pertenec/i, /flete.*no/i, /campo.*no/i,
-        /lote.*no/i, /camión.*no/i, /código.*requerido/i, /inválid/i,
-      ];
-      const isSafe = SAFE_PATTERNS.some(p => p.test(e.message || ''));
-      const safeMsg = isSafe ? e.message : 'Error al procesar la solicitud.';
-      return JSON.stringify({ error: safeMsg });
     }
   }
 
@@ -4544,7 +4655,9 @@ Plataforma web: ${APP_URL}`;
     if (!code || typeof code !== 'string') {
       return { error: 'Código de flete requerido.' };
     }
-    const freight = await this.prisma.freight.findFirst({
+
+    // Try exact match first
+    let freight: any = await this.prisma.freight.findFirst({
       where: { code: code.toUpperCase() },
       select: {
         id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
@@ -4552,6 +4665,29 @@ Plataforma web: ${APP_URL}`;
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
       },
     });
+
+    // Fuzzy fallback: try partial code match (e.g. "1822" matches "F26-LCP.1822")
+    if (!freight) {
+      const sanitized = code.replace(/[^a-zA-Z0-9.\-]/g, '').toUpperCase();
+      if (sanitized.length >= 3) {
+        const candidates = await this.prisma.freight.findMany({
+          where: { code: { contains: sanitized, mode: 'insensitive' } },
+          select: {
+            id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
+            isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
+            assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
+          },
+          take: 5,
+        });
+        if (candidates.length === 1) {
+          freight = candidates[0];
+        } else if (candidates.length > 1) {
+          const codes = candidates.map((c: any) => c.code).join(', ');
+          return { error: `Se encontraron varios fletes que coinciden con "${code}": ${codes}. Indique el código completo.` };
+        }
+      }
+    }
+
     // Unified error message prevents freight code enumeration
     const ACCESS_DENIED = `No se encontró el flete ${code} o no tiene acceso.`;
     if (!freight) return { error: ACCESS_DENIED };
@@ -4561,16 +4697,16 @@ Plataforma web: ${APP_URL}`;
     const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
     const freightCompanies = [
       freight.originCompanyId, freight.destCompanyId,
-      ...freight.assignments.map((a: any) => a.transportCompanyId),
+      ...(freight.assignments || []).map((a: any) => a.transportCompanyId),
     ].filter(Boolean);
-    const isDriver = freight.assignments.some((a: any) => a.driverId === user.id);
+    const isDriver = (freight.assignments || []).some((a: any) => a.driverId === user.id);
     const isCompanyUser = allUserCompanies.some((c: string) => freightCompanies.includes(c));
     if (!isDriver && !isCompanyUser) {
       return { error: ACCESS_DENIED };
     }
     // Drivers without company access only see their own assignment
     if (isDriver && !isCompanyUser) {
-      freight.assignments = freight.assignments.filter((a: any) => a.driverId === user.id);
+      freight.assignments = (freight.assignments || []).filter((a: any) => a.driverId === user.id);
     }
     return { freight };
   }
