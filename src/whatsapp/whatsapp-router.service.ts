@@ -194,10 +194,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
       if (activeMemberships.length > 1) {
         const sState = (cachedSession?.flowState as any) || {};
-        const dbCompanyId = user.activeCompanyId || user.companyId;
+        // WhatsApp session tracks its own selectedCompanyId independently from the app.
+        // Only require re-confirmation if the session has no company selected yet.
         const isConfirmed = sState.companyConfirmed === true
           && sState.selectedCompanyId
-          && sState.selectedCompanyId === dbCompanyId;
+          && activeMemberships.some((m: any) => m.companyId === sState.selectedCompanyId);
 
         if (!isConfirmed) {
           // Let company selection list replies through
@@ -1052,20 +1053,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Update DB (same as web switchCompany — but do NOT invalidate refresh tokens)
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { activeCompanyId: companyId },
-    });
+    // NOTE: Do NOT update activeCompanyId in DB here. WhatsApp company selection
+    // is session-scoped (stored in flowState.selectedCompanyId). Updating the DB
+    // would desync the web app, which reads activeCompanyId from the JWT/DB.
+    // The AI service reads selectedCompanyId from the session when creating freights.
 
     // Audit log (fire-and-forget)
     this.prisma.auditLog.create({
       data: {
         entityType: 'user', entityId: user.id,
-        action: 'switch_company',
+        action: 'whatsapp_company_selected',
         fromValue: user.activeCompanyId || user.companyId || undefined,
         toValue: companyId, userId: user.id,
-        metadata: { source: 'whatsapp' },
+        metadata: { source: 'whatsapp', sessionScoped: true },
       },
     }).catch(e => this.logger.warn(`Audit log failed: ${e.message}`));
 

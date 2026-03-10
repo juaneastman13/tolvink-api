@@ -132,6 +132,14 @@ export class AiService implements OnModuleDestroy {
     // NOTE: rate map cleanup runs in rateCleanupTimer (setInterval) — not here, to avoid
     // mutations between lock acquisition and try/finally, and to prevent concurrent iteration.
 
+    // WhatsApp session may have a selectedCompanyId different from user.activeCompanyId
+    // (WhatsApp company selection is session-scoped to avoid desyncing the web app).
+    const sessionState = (session?.flowState as any) || {};
+    const sessionCompanyId = sessionState.selectedCompanyId;
+    if (sessionCompanyId && sessionCompanyId !== user.activeCompanyId) {
+      user.activeCompanyId = sessionCompanyId;
+    }
+
     const synUser = this.buildSyntheticUser(user);
     const companyType = this.resolveCompanyType(user);
     const systemPrompt = this.buildSystemPrompt(user, companyType);
@@ -1911,7 +1919,14 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ error: 'No hay un flete pendiente de confirmación. Primero usa prepare_freight.' });
     }
 
-    const producerCompanyId = this.resolveProducerCompanyId(user);
+    // Use the company selected in the WhatsApp session (if available) to ensure
+    // the freight is created for the same company the user confirmed in WhatsApp.
+    // This prevents desync when the user switches companies in WhatsApp but the
+    // app still shows a different activeCompanyId.
+    const sessionCompanyId = oldState.selectedCompanyId || user.activeCompanyId;
+    const producerCompanyId = sessionCompanyId
+      ? this.resolveProducerCompanyIdForCompany(user, sessionCompanyId)
+      : this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No se encontró una empresa productora asociada a su usuario. Verifique con su administrador.' });
     }
@@ -2245,7 +2260,10 @@ TERMINOLOGÍA CORRECTA:
 
         case 'duplicate_freight': {
           const orig = params.originalFreight;
-          const producerCompanyId = this.resolveProducerCompanyId(user);
+          const dupSessionCompanyId = oldState.selectedCompanyId || user.activeCompanyId;
+          const producerCompanyId = dupSessionCompanyId
+            ? this.resolveProducerCompanyIdForCompany(user, dupSessionCompanyId)
+            : this.resolveProducerCompanyId(user);
           const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
           const createDto: any = {
             items: [{ grain: orig.grain, tons: orig.tons }],
@@ -3823,25 +3841,19 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ error: 'No pertenece a esa empresa.' });
     }
 
-    // Perform the switch in DB
+    // NOTE: Do NOT update activeCompanyId in DB — WhatsApp company selection is
+    // session-scoped to avoid desyncing the web app. The selected company is stored
+    // in flowState.selectedCompanyId and read by freight creation tools.
     const oldCompanyId = user.activeCompanyId || user.companyId;
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { activeCompanyId: input.companyId },
-    });
-
-    // Invalidate web sessions: refresh tokens carry old companyId
-    this.prisma.refreshToken.deleteMany({ where: { userId: user.id } })
-      .catch((err: any) => this.logger.warn(`Failed to inválidate refresh tokens: ${err.message}`));
 
     // Audit log (fire-and-forget)
     this.prisma.auditLog.create({
       data: {
         entityType: 'user', entityId: user.id,
-        action: 'switch_company',
+        action: 'whatsapp_company_selected',
         fromValue: oldCompanyId || undefined,
         toValue: input.companyId, userId: user.id,
-        metadata: { source: 'whatsapp_ai' },
+        metadata: { source: 'whatsapp_ai', sessionScoped: true },
       },
     }).catch((err: any) => this.logger.warn(`Audit log failed: ${err.message}`));
 
@@ -4378,20 +4390,35 @@ TERMINOLOGÍA CORRECTA:
     return 'unknown';
   }
 
-  private resolveProducerCompanyId(user: any): string | null {
-    const isProducer = (m: any) =>
-      m.company?.type === 'producer' ||
+  private static isProducerMembership(m: any): boolean {
+    return m.company?.type === 'producer' ||
       (Array.isArray(m.company?.types) && m.company.types.includes('producer'));
+  }
 
+  /**
+   * Resolve producer company for a specific target companyId.
+   * Used when the WhatsApp session has a selectedCompanyId that should take priority.
+   * Falls back to generic resolution if the target isn't a valid producer.
+   */
+  private resolveProducerCompanyIdForCompany(user: any, targetCompanyId: string): string | null {
+    if (user.memberships?.length > 0) {
+      const targetMem = user.memberships.find((m: any) => m.companyId === targetCompanyId && AiService.isProducerMembership(m));
+      if (targetMem) return targetMem.companyId;
+    }
+    // Target isn't a producer — fall back to generic resolution
+    return this.resolveProducerCompanyId(user);
+  }
+
+  private resolveProducerCompanyId(user: any): string | null {
     if (user.memberships?.length > 0) {
       // Prioritize activeCompanyId — the company the user explicitly selected
       const activeId = user.activeCompanyId;
       if (activeId) {
-        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && isProducer(m));
+        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && AiService.isProducerMembership(m));
         if (activeMem) return activeMem.companyId;
       }
       // Fallback: first producer membership
-      const pm = user.memberships.find(isProducer);
+      const pm = user.memberships.find(AiService.isProducerMembership);
       if (pm) return pm.companyId;
     }
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
