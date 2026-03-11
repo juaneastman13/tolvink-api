@@ -6,6 +6,13 @@ import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import * as webpush from 'web-push';
 import { NotificationType } from '@prisma/client';
 
+/** Max push subscriptions per user to prevent unbounded queries */
+const MAX_PUSH_SUBS = 10;
+/** Batch size for cleanup deletes to avoid long-running locks */
+const CLEANUP_BATCH = 5000;
+/** Small delay between WhatsApp sends to avoid Meta rate limits */
+const WA_SEND_DELAY_MS = 100;
+
 @Injectable()
 export class NotificationService implements OnModuleDestroy {
   private readonly logger = new Logger(NotificationService.name);
@@ -41,17 +48,47 @@ export class NotificationService implements OnModuleDestroy {
     }
   }
 
-  /** Remove read notifications older than 30 days and tracking points older than 90 days */
+  /** Remove read notifications older than 30 days and tracking points older than 90 days (batched) */
   private async cleanupOldRecords() {
     try {
       const notifCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const trackingCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const [notifResult, trackResult] = await Promise.all([
-        this.prisma.notification.deleteMany({ where: { read: true, createdAt: { lt: notifCutoff } } }),
-        this.prisma.freightTracking.deleteMany({ where: { createdAt: { lt: trackingCutoff } } }),
-      ]);
-      if (notifResult.count > 0 || trackResult.count > 0) {
-        this.logger.log(`Cleanup: removed ${notifResult.count} old notifications, ${trackResult.count} old tracking points`);
+
+      // Batch delete to avoid long-running locks on large tables
+      let totalNotifs = 0;
+      let totalTracking = 0;
+      let batch: number;
+
+      // Notifications cleanup (batched)
+      do {
+        const ids = await this.prisma.notification.findMany({
+          where: { read: true, createdAt: { lt: notifCutoff } },
+          select: { id: true },
+          take: CLEANUP_BATCH,
+        });
+        if (ids.length === 0) break;
+        batch = (await this.prisma.notification.deleteMany({
+          where: { id: { in: ids.map(n => n.id) } },
+        })).count;
+        totalNotifs += batch;
+      } while (batch >= CLEANUP_BATCH);
+
+      // Tracking cleanup (batched)
+      do {
+        const ids = await this.prisma.freightTracking.findMany({
+          where: { createdAt: { lt: trackingCutoff } },
+          select: { id: true },
+          take: CLEANUP_BATCH,
+        });
+        if (ids.length === 0) break;
+        batch = (await this.prisma.freightTracking.deleteMany({
+          where: { id: { in: ids.map(t => t.id) } },
+        })).count;
+        totalTracking += batch;
+      } while (batch >= CLEANUP_BATCH);
+
+      if (totalNotifs > 0 || totalTracking > 0) {
+        this.logger.log(`Cleanup: removed ${totalNotifs} old notifications, ${totalTracking} old tracking points`);
       }
     } catch (e) {
       this.logger.warn(`Cleanup failed: ${e.message}`);
@@ -112,13 +149,11 @@ export class NotificationService implements OnModuleDestroy {
     excludeUserId?: string,
     actionRecipient = false,
   ) {
+    // Only include users with ACTIVE membership in this company (not legacy companyId alone)
     const users = await this.prisma.user.findMany({
       where: {
         active: true,
-        OR: [
-          { companyId },
-          { memberships: { some: { companyId, active: true } } },
-        ],
+        memberships: { some: { companyId, active: true } },
       },
       select: { id: true, phone: true },
     });
@@ -136,14 +171,37 @@ export class NotificationService implements OnModuleDestroy {
       data: userIds.map(userId => ({ userId, type, title, body, entityId, companyId })),
     });
 
-    // Fire-and-forget: push + SSE + WhatsApp per user (non-blocking)
+    // Fire-and-forget: push + SSE per user (non-blocking)
     for (const uid of userIds) {
       this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
         .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
-      const phone = userMap.get(uid) || null;
-      this.sendWhatsAppDirect(uid, phone, type, title, body, entityId, actionRecipient)
-        .catch((e) => this.logger.error(`WhatsApp send failed for user ${uid}: ${e.message}`));
       this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
+    }
+
+    // WhatsApp: send with small delay between messages to avoid Meta rate limits
+    this.sendWhatsAppBatch(userIds, userMap, type, title, body, entityId, actionRecipient)
+      .catch((e) => this.logger.error(`WhatsApp batch send failed: ${e.message}`));
+  }
+
+  /** Send WhatsApp notifications with throttling to avoid Meta rate limits */
+  private async sendWhatsAppBatch(
+    userIds: string[],
+    userMap: Map<string, string | null>,
+    type: NotificationType,
+    title: string,
+    body: string,
+    entityId?: string,
+    actionRecipient = false,
+  ) {
+    for (let i = 0; i < userIds.length; i++) {
+      const uid = userIds[i];
+      const phone = userMap.get(uid) || null;
+      await this.sendWhatsAppDirect(uid, phone, type, title, body, entityId, actionRecipient)
+        .catch((e) => this.logger.error(`WhatsApp send failed for user ${uid}: ${e.message}`));
+      // Small delay between sends (skip after last)
+      if (i < userIds.length - 1 && WA_SEND_DELAY_MS > 0) {
+        await new Promise(r => setTimeout(r, WA_SEND_DELAY_MS));
+      }
     }
   }
 
@@ -236,7 +294,7 @@ export class NotificationService implements OnModuleDestroy {
 
   /**
    * Get WhatsApp buttons for a notification.
-   * actionRecipient=true → include action buttons (Aceptar, Confirmar, etc.)
+   * actionRecipient=true → action buttons (Aceptar, Confirmar, Reasignar, etc.)
    * actionRecipient=false → only "Ver detalle" (informational)
    */
   private getWhatsAppButtons(type: NotificationType, entityId?: string, actionRecipient = false): Array<{ id: string; title: string }> {
@@ -253,7 +311,7 @@ export class NotificationService implements OnModuleDestroy {
           ];
         case 'freight_loaded':
           return [
-            { id: `confirm_loaded:${entityId}`, title: 'Confirmar carga' },
+            { id: `confirm_loaded:${entityId}`, title: 'Confirmar' },
             { id: `detail:${entityId}`, title: 'Ver detalle' },
           ];
         case 'freight_confirmed':
@@ -261,14 +319,20 @@ export class NotificationService implements OnModuleDestroy {
             { id: `confirm_finished:${entityId}`, title: 'Confirmar entrega' },
             { id: `detail:${entityId}`, title: 'Ver detalle' },
           ];
+        // Rejection: only the counterpart (producer/plant) gets Reasignar
+        case 'freight_rejected':
+          return [
+            { id: `reassign:${entityId}`, title: 'Reasignar' },
+            { id: `detail:${entityId}`, title: 'Ver detalle' },
+          ];
       }
     }
 
-    // Informational: "Ver detalle" only (or nothing for rejections/cancellations)
+    // Informational: "Ver detalle" only (or nothing for cancellations)
     switch (type) {
       case 'freight_rejected':
+        // Non-action recipients (the transporter who rejected) just see detail
         return [
-          { id: `reassign:${entityId}`, title: 'Reasignar' },
           { id: `detail:${entityId}`, title: 'Ver detalle' },
         ];
       case 'freight_canceled':
@@ -285,7 +349,11 @@ export class NotificationService implements OnModuleDestroy {
   private async sendPush(userId: string, payload: { title: string; body: string; url?: string }) {
     if (!this.pushEnabled) return;
 
-    const subs = await this.prisma.pushSubscription.findMany({ where: { userId } });
+    const subs = await this.prisma.pushSubscription.findMany({
+      where: { userId },
+      take: MAX_PUSH_SUBS,
+      orderBy: { createdAt: 'desc' },
+    });
     if (subs.length === 0) return;
 
     // Send all push notifications in parallel (not sequential)
