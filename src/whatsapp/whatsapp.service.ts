@@ -33,6 +33,11 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   private readonly accessToken: string | undefined;
   private readonly enabled: boolean;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private reminderTimer: ReturnType<typeof setInterval> | null = null;
+  private dailySummaryTimer: ReturnType<typeof setInterval> | null = null;
+  /** Track sent reminders: key = `${freightId}:${status}`, value = timestamp */
+  private readonly sentReminders = new Map<string, number>();
+  private lastSummaryDate: string | null = null;
 
   constructor(
     private config: ConfigService,
@@ -53,10 +58,20 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     // Cleanup expired sessions and refresh tokens every 30 minutes
     this.cleanupInterval = setInterval(() => this.cleanupExpired(), 30 * 60 * 1000);
     this.logger.log('Session/token cleanup scheduler started (every 30 min)');
+
+    // Stale freight reminders every 15 minutes
+    this.reminderTimer = setInterval(() => this.checkStaleFreights().catch(e => this.logger.error('Reminder check failed', e.stack)), 15 * 60_000);
+    this.logger.log('Stale freight reminder scheduler started (every 15 min)');
+
+    // Daily summary check every 60 seconds
+    this.dailySummaryTimer = setInterval(() => this.checkDailySummary().catch(e => this.logger.error('Daily summary check failed', e.stack)), 60_000);
+    this.logger.log('Daily summary scheduler started (every 60s)');
   }
 
   onModuleDestroy() {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+    if (this.reminderTimer) clearInterval(this.reminderTimer);
+    if (this.dailySummaryTimer) clearInterval(this.dailySummaryTimer);
   }
 
   private async cleanupExpired() {
@@ -116,6 +131,223 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);
     }
+  }
+
+  // ======================== STALE FREIGHT REMINDERS =======================
+
+  private async checkStaleFreights() {
+    if (!this.enabled) return;
+
+    const now = new Date();
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+
+    // Purge expired reminder entries (older than 4 hours)
+    for (const [key, ts] of this.sentReminders) {
+      if (now.getTime() - ts > FOUR_HOURS) this.sentReminders.delete(key);
+    }
+
+    // 1. Freights stuck in "assigned" for >2 hours with active assignments
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const staleAssigned = await this.prisma.freight.findMany({
+      where: {
+        status: 'assigned',
+        updatedAt: { lt: twoHoursAgo },
+        assignments: { some: { status: 'active' } },
+      },
+      include: {
+        items: { take: 1 },
+        assignments: {
+          where: { status: 'active' },
+          include: {
+            transportCompany: { select: { id: true } },
+          },
+        },
+      },
+      take: 50,
+    });
+
+    for (const freight of staleAssigned) {
+      const key = `${freight.id}:assigned`;
+      if (this.sentReminders.has(key)) continue;
+
+      const grain = freight.items[0]?.grain || 'N/A';
+      const tons = freight.items[0]?.tons || '0';
+      const date = freight.loadDate ? new Date(freight.loadDate).toISOString().split('T')[0] : 'N/A';
+      const message = `⏰ Recordatorio: Tiene un flete pendiente de aceptar.\n📦 ${freight.code}: ${grain} ${tons}tn\n🗓️ ${date}\nResponda desde el menú o escriba el código del flete.`;
+
+      // Find transporter company users with phone numbers
+      const transporterCompanyIds = [...new Set(freight.assignments.map(a => a.transportCompanyId))];
+      const users = await this.prisma.user.findMany({
+        where: {
+          active: true,
+          phone: { not: null },
+          OR: [
+            { companyId: { in: transporterCompanyIds } },
+            { memberships: { some: { companyId: { in: transporterCompanyIds }, active: true } } },
+          ],
+        },
+        select: { phone: true },
+      });
+
+      for (const u of users) {
+        if (u.phone) {
+          this.sendText(u.phone, message).catch(e => this.logger.warn(`Reminder send failed: ${e.message}`));
+        }
+      }
+
+      this.sentReminders.set(key, now.getTime());
+    }
+
+    // 2. Freights stuck in "accepted" for >1 hour where nobody started the trip
+    const oneHourAgo = new Date(now.getTime() - 1 * 60 * 60 * 1000);
+    const staleAccepted = await this.prisma.freight.findMany({
+      where: {
+        status: 'accepted',
+        updatedAt: { lt: oneHourAgo },
+      },
+      include: {
+        items: { take: 1 },
+        assignments: {
+          where: { status: 'accepted' },
+          include: {
+            driver: { select: { phone: true } },
+          },
+        },
+      },
+      take: 50,
+    });
+
+    for (const freight of staleAccepted) {
+      const key = `${freight.id}:accepted`;
+      if (this.sentReminders.has(key)) continue;
+
+      const grain = freight.items[0]?.grain || 'N/A';
+      const tons = freight.items[0]?.tons || '0';
+      const date = freight.loadDate ? new Date(freight.loadDate).toISOString().split('T')[0] : 'N/A';
+      const message = `⏰ Recordatorio: Tiene un flete aceptado sin iniciar.\n📦 ${freight.code}: ${grain} ${tons}tn\n🗓️ ${date}`;
+
+      for (const assignment of freight.assignments) {
+        const driverPhone = assignment.driver?.phone;
+        if (driverPhone) {
+          this.sendText(driverPhone, message).catch(e => this.logger.warn(`Reminder send failed: ${e.message}`));
+        }
+      }
+
+      this.sentReminders.set(key, now.getTime());
+    }
+
+    const total = staleAssigned.length + staleAccepted.length;
+    if (total > 0) {
+      this.logger.log(`Stale freight check: ${staleAssigned.length} assigned, ${staleAccepted.length} accepted reminders processed`);
+    }
+  }
+
+  // ======================== DAILY SUMMARY ================================
+
+  private async checkDailySummary() {
+    if (!this.enabled) return;
+
+    // Check if it's 10:00 AM Uruguay time (UTC-3)
+    const uyTime = new Date().toLocaleString('en-US', { timeZone: 'America/Montevideo' });
+    const uyDate = new Date(uyTime);
+    const hour = uyDate.getHours();
+    const minute = uyDate.getMinutes();
+    const todayStr = uyDate.toISOString().split('T')[0];
+
+    // Only send at 10:00 AM (allow 1 minute window)
+    if (hour !== 10 || minute > 0) return;
+
+    // Only send once per day
+    if (this.lastSummaryDate === todayStr) return;
+    this.lastSummaryDate = todayStr;
+
+    this.logger.log('Sending daily summary messages...');
+
+    // Get today's date range in UTC
+    const todayStart = new Date(todayStr + 'T00:00:00-03:00');
+    const todayEnd = new Date(todayStr + 'T23:59:59-03:00');
+
+    // Get all active users with phone numbers and their company memberships
+    const users = await this.prisma.user.findMany({
+      where: { active: true, phone: { not: null } },
+      select: {
+        id: true,
+        phone: true,
+        companyId: true,
+        company: { select: { id: true, type: true } },
+        memberships: {
+          where: { active: true },
+          select: { companyId: true, company: { select: { id: true, type: true } } },
+        },
+      },
+      take: 500,
+    });
+
+    for (const user of users) {
+      try {
+        // Collect all companies and their types
+        const companies: { id: string; type: string }[] = [];
+        if (user.company) companies.push({ id: user.company.id, type: user.company.type || '' });
+        for (const m of user.memberships) {
+          if (m.company) companies.push({ id: m.company.id, type: m.company.type || '' });
+        }
+
+        // Producer summary
+        const producerCompanies = companies.filter(c => c.type.includes('producer'));
+        if (producerCompanies.length > 0) {
+          const producerIds = producerCompanies.map(c => c.id);
+          const freights = await this.prisma.freight.findMany({
+            where: {
+              originCompanyId: { in: producerIds },
+              loadDate: { gte: todayStart, lte: todayEnd },
+              status: { not: 'canceled' },
+            },
+            select: { status: true },
+          });
+
+          if (freights.length > 0) {
+            const total = freights.length;
+            const pending = freights.filter(f => f.status === 'pending_assignment').length;
+            const assigned = freights.filter(f => f.status === 'assigned').length;
+            const accepted = freights.filter(f => f.status === 'accepted').length;
+            const inProgress = freights.filter(f => ['in_progress', 'loaded'].includes(f.status)).length;
+
+            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes programados para hoy\n⏳ ${pending} pendientes de asignar\n🚛 ${assigned} asignados\n✅ ${accepted} aceptados\n🚀 ${inProgress} en camino`;
+            this.sendText(user.phone!, message).catch(e => this.logger.warn(`Summary send failed: ${e.message}`));
+          }
+        }
+
+        // Transporter summary
+        const transporterCompanies = companies.filter(c => c.type.includes('transporter'));
+        if (transporterCompanies.length > 0) {
+          const transporterIds = transporterCompanies.map(c => c.id);
+          const assignments = await this.prisma.freightAssignment.findMany({
+            where: {
+              transportCompanyId: { in: transporterIds },
+              freight: {
+                loadDate: { gte: todayStart, lte: todayEnd },
+                status: { not: 'canceled' },
+              },
+            },
+            select: { status: true },
+          });
+
+          if (assignments.length > 0) {
+            const total = assignments.length;
+            const pending = assignments.filter(a => a.status === 'active').length;
+            const accepted = assignments.filter(a => a.status === 'accepted').length;
+            const inProgress = assignments.filter(a => ['accepted'].includes(a.status)).length;
+
+            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes asignados\n⏳ ${pending} pendientes de responder\n✅ ${accepted} aceptados\n🚀 ${inProgress} en camino`;
+            this.sendText(user.phone!, message).catch(e => this.logger.warn(`Summary send failed: ${e.message}`));
+          }
+        }
+      } catch (e) {
+        this.logger.warn(`Daily summary failed for user ${user.id}: ${e.message}`);
+      }
+    }
+
+    this.logger.log('Daily summary messages sent');
   }
 
   isEnabled(): boolean {

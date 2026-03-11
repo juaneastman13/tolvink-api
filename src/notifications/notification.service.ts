@@ -267,6 +267,10 @@ export class NotificationService implements OnModuleDestroy {
     // Informational: "Ver detalle" only (or nothing for rejections/cancellations)
     switch (type) {
       case 'freight_rejected':
+        return [
+          { id: `reassign:${entityId}`, title: 'Reasignar' },
+          { id: `detail:${entityId}`, title: 'Ver detalle' },
+        ];
       case 'freight_canceled':
         return [];
       default:

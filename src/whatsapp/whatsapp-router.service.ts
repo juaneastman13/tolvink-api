@@ -847,7 +847,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const synUser = this.buildSyntheticUser(user);
 
     // Access check for freight actions
-    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel'];
+    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel', 'reassign'];
     if (freightActions.includes(action) && entityId) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: entityId },
@@ -898,6 +898,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         case 'cancel': {
           // Start cancel flow (needs reason)
           await this.flow.startFlow('cancel_freight', phone, user, { freightId: entityId });
+          break;
+        }
+        case 'reassign': {
+          // Fetch freight code to send a synthetic AI message for reassignment
+          const reassignFreight = await this.prisma.freight.findUnique({
+            where: { id: entityId },
+            select: { code: true },
+          });
+          if (reassignFreight) {
+            await this.handleAiChat(phone, user, `Quiero asignar un transportista al flete ${reassignFreight.code}`);
+          } else {
+            await this.wa.sendText(phone, 'Flete no encontrado.');
+          }
           break;
         }
         case 'detail': {

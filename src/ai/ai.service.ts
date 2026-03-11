@@ -1567,6 +1567,22 @@ TERMINOLOGÍA CORRECTA:
       actions.push({ id: 'action:duplicate', title: '📋 Duplicar flete', description: 'Crear copia con nueva fecha' });
     }
 
+    // Fetch last rejection info if freight is pending_assignment
+    let lastRejection: { transporter: string; reason: string } | undefined;
+    if (freight.status === 'pending_assignment') {
+      const rejectedAssignment = await this.prisma.freightAssignment.findFirst({
+        where: { freightId: freight.id, status: 'rejected' },
+        orderBy: { updatedAt: 'desc' },
+        include: { transportCompany: { select: { name: true } } },
+      });
+      if (rejectedAssignment) {
+        lastRejection = {
+          transporter: rejectedAssignment.transportCompany?.name || 'Desconocido',
+          reason: rejectedAssignment.reason || 'Sin motivo',
+        };
+      }
+    }
+
     // Store actions list as pending selection if there are any
     if (actions.length > 0 && session?.id) {
       const effects = this._chatSideEffects.get(session.id) || {};
@@ -1603,6 +1619,7 @@ TERMINOLOGÍA CORRECTA:
           }))
         : undefined,
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
+      lastRejection: lastRejection || undefined,
       link: `${APP_URL}/freight/${freight.id}`,
       mapLink,
       _selectionSent: actions.length > 0,
@@ -2269,7 +2286,7 @@ TERMINOLOGÍA CORRECTA:
 
         case 'reject_freight':
           await this.freights.respond(params.freightId, { action: 'rejected', reason: params.reason } as any, synUser);
-          result = JSON.stringify({ status: 'rejected', code: params.code });
+          result = JSON.stringify({ status: 'rejected', code: params.code, reason: params.reason, hint: 'El flete vuelve a estado sin asignar. Puede sugerir reasignar a otro transportista.' });
           break;
 
         case 'start_freight':
