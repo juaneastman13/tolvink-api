@@ -59,13 +59,13 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     this.cleanupInterval = setInterval(() => this.cleanupExpired(), 30 * 60 * 1000);
     this.logger.log('Session/token cleanup scheduler started (every 30 min)');
 
-    // Stale freight reminders every 15 minutes
-    this.reminderTimer = setInterval(() => this.checkStaleFreights().catch(e => this.logger.error('Reminder check failed', e.stack)), 15 * 60_000);
-    this.logger.log('Stale freight reminder scheduler started (every 15 min)');
+    // Stale freight reminders — DISABLED during testing phase
+    // this.reminderTimer = setInterval(() => this.checkStaleFreights().catch(e => this.logger.error('Reminder check failed', e.stack)), 15 * 60_000);
+    // this.logger.log('Stale freight reminder scheduler started (every 15 min)');
 
-    // Daily summary check every 60 seconds
-    this.dailySummaryTimer = setInterval(() => this.checkDailySummary().catch(e => this.logger.error('Daily summary check failed', e.stack)), 60_000);
-    this.logger.log('Daily summary scheduler started (every 60s)');
+    // Daily summary — DISABLED during testing phase
+    // this.dailySummaryTimer = setInterval(() => this.checkDailySummary().catch(e => this.logger.error('Daily summary check failed', e.stack)), 60_000);
+    // this.logger.log('Daily summary scheduler started (every 60s)');
   }
 
   onModuleDestroy() {
