@@ -137,7 +137,13 @@ export class AiService implements OnModuleDestroy {
     const sessionState = (session?.flowState as any) || {};
     const sessionCompanyId = sessionState.selectedCompanyId;
     if (sessionCompanyId && sessionCompanyId !== user.activeCompanyId) {
-      user.activeCompanyId = sessionCompanyId;
+      // Validate that sessionCompanyId is a company the user actually belongs to
+      const isMember = (user.memberships || []).some((m: any) => m.companyId === sessionCompanyId && m.active !== false);
+      if (isMember) {
+        user.activeCompanyId = sessionCompanyId;
+      } else {
+        this.logger.warn(`Session selectedCompanyId ${sessionCompanyId} not in user ${user.id} memberships — ignoring`);
+      }
     }
 
     const synUser = this.buildSyntheticUser(user);
@@ -1176,6 +1182,7 @@ TERMINOLOGÍA CORRECTA:
       loadDate,
       loadTime,
       originalCode: freight.code,
+      _sessionCompanyId: user.activeCompanyId || user.companyId,
     }, summary);
   }
 
@@ -1899,7 +1906,10 @@ TERMINOLOGÍA CORRECTA:
 
     // Use side-effects pattern (merged by chat()) — avoids direct DB write race
     const effects = this._chatSideEffects.get(session.id) || {};
-    effects.pendingFreight = { ...input, truckCount };
+    // Store sessionCompanyId so confirm_create_freight uses the same company context
+    // even if the user switches company between prepare and confirm.
+    const prepareCompanyId = user.activeCompanyId || user.companyId;
+    effects.pendingFreight = { ...input, truckCount, _sessionCompanyId: prepareCompanyId };
     effects._pendingButtons = [
       { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
       { id: 'ai_cancel_freight', title: 'CANCELAR' },
@@ -1945,13 +1955,13 @@ TERMINOLOGÍA CORRECTA:
       return JSON.stringify({ error: 'No hay un flete pendiente de confirmación. Primero usa prepare_freight.' });
     }
 
-    // Use the company selected in the WhatsApp session (if available) to ensure
-    // the freight is created for the same company the user confirmed in WhatsApp.
-    // This prevents desync when the user switches companies in WhatsApp but the
-    // app still shows a different activeCompanyId.
-    const sessionCompanyId = oldState.selectedCompanyId || user.activeCompanyId;
-    const producerCompanyId = sessionCompanyId
-      ? this.resolveProducerCompanyIdForCompany(user, sessionCompanyId)
+    // Use the company context captured at prepare time (_sessionCompanyId) to ensure
+    // the freight is created for the same company the user was operating as when they
+    // prepared the freight — even if they switched companies between prepare and confirm.
+    // Falls back to current session/user company if _sessionCompanyId isn't available.
+    const targetCompanyId = pending._sessionCompanyId || oldState.selectedCompanyId || user.activeCompanyId;
+    const producerCompanyId = targetCompanyId
+      ? this.resolveProducerCompanyIdForCompany(user, targetCompanyId)
       : this.resolveProducerCompanyId(user);
     if (!producerCompanyId) {
       return JSON.stringify({ error: 'No se encontró una empresa productora asociada a su usuario. Verifique con su administrador.' });
@@ -2286,9 +2296,10 @@ TERMINOLOGÍA CORRECTA:
 
         case 'duplicate_freight': {
           const orig = params.originalFreight;
-          const dupSessionCompanyId = oldState.selectedCompanyId || user.activeCompanyId;
-          const producerCompanyId = dupSessionCompanyId
-            ? this.resolveProducerCompanyIdForCompany(user, dupSessionCompanyId)
+          // Use the company captured at stage time, fall back to session/user
+          const dupTargetCompanyId = params._sessionCompanyId || oldState.selectedCompanyId || user.activeCompanyId;
+          const producerCompanyId = dupTargetCompanyId
+            ? this.resolveProducerCompanyIdForCompany(user, dupTargetCompanyId)
             : this.resolveProducerCompanyId(user);
           const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
           const createDto: any = {
