@@ -554,12 +554,18 @@ Botones CONFIRMAR/CANCELAR se envían automáticamente. No mencionarlos en texto
 CREAR FLETES:
 1. AUTO-RESOLVER NOMBRES: Si el usuario dice "campo El Ombú" o "planta Conaprole", pasar el texto como originName/destName a prepare_freight. El sistema busca automáticamente en campos, lotes y plantas del usuario y resuelve el ID. NO necesitás buscar IDs manualmente con search_plants/list_lots primero.
 2. prepare_freight → resumen → confirm_create_freight al confirmar.
-3. Datos faltantes: pedir SOLO los que faltan.
-4. Si la planta destino tiene SUCURSALES (branches), es OBLIGATORIO indicar cuál. El sistema lo validará y devolverá las opciones.
-5. FLOTA PROPIA: Si el usuario quiere usar su flota, pasar useOwnFleet=true en prepare_freight. El sistema mostrará automáticamente la lista de camiones para seleccionar, y luego la lista de choferes. NO necesitás buscar truckId/driverId manualmente — el flujo interactivo los resuelve.
-6. DUPLICAR FLETE: Es una copia idéntica. Solo validar la fecha nueva (loadDate). NO pedir reconfirmar datos.
-7. SELECCIÓN DE LOTE: Cuando el usuario necesita elegir un lote, SIEMPRE usar list_lots (con fieldId si ya sabés el campo). NUNCA listar lotes como texto plano — deben ser menú interactivo seleccionable.
-7. Ubicación obligatoria para origen/destino custom → generate_location_link.
+3. Datos faltantes: pedir SOLO los que faltan. El sistema mostrará listas interactivas automáticamente para lotes, sucursales, camiones y choferes.
+   Al solicitar los datos del flete, SIEMPRE agregar: "Si desea indicar un origen o destino personalizado en el mapa, solicite el link para marcar ubicaciones."
+4. LOTE OBLIGATORIO: El lote de origen es OBLIGATORIO. Si el usuario no lo indicó, el sistema mostrará automáticamente la lista de lotes para seleccionar. NO preguntar como texto — el sistema envía la lista interactiva.
+5. SUCURSAL OBLIGATORIA: Si la planta destino tiene sucursales, es OBLIGATORIO seleccionar una. El sistema lo valida y muestra la lista automáticamente.
+6. CANTIDAD DE CAMIONES: El usuario DEBE indicar cuántos camiones necesita (truckCount). Si no lo dijo, PREGUNTARLE antes de llamar prepare_freight.
+7. FLOTA PROPIA vs DELEGAR: Es OBLIGATORIO indicar si usa flota propia o delega a la planta. Preguntarle al usuario si no lo indicó. Opciones:
+   a) Flota propia → useOwnFleet=true. El sistema muestra lista de camiones y luego choferes automáticamente.
+   b) Delegar a planta → useOwnFleet=false (default). La planta asigna después.
+   c) MIXTO: El usuario puede usar parte flota propia y parte delegar. Indicar useOwnFleet=true para asignar SU camión + completar el resto delegando.
+8. DUPLICAR FLETE: Es una copia idéntica. Solo validar la fecha nueva (loadDate). NO pedir reconfirmar datos.
+9. UBICACIÓN EN MAPA: Si el origen o destino no están registrados, informar al usuario: "Si desea indicar el origen o destino en el mapa, puedo generar un link para marcar la ubicación." → generate_location_link con purpose "origin" o "destination".
+10. Ubicación obligatoria para origen/destino custom → generate_location_link.
 
 ASIGNAR TRANSPORTISTA:
 - Con flota interna → assign_transporter(transporterCompanyId="own_fleet") directo.
@@ -1799,6 +1805,34 @@ TERMINOLOGÍA CORRECTA:
       }
     }
 
+    // ── ORIGIN LOT IS MANDATORY ──
+    // If no originLotId and no originName, show interactive lot list
+    if (!input.originLotId && !input.originName && !input.customOriginName && producerCompanyId) {
+      const allLots = await this.prisma.lot.findMany({
+        where: { companyId: producerCompanyId, active: true },
+        select: { id: true, name: true, field: { select: { id: true, name: true } } },
+        take: 200,
+      });
+      if (allLots.length === 0) {
+        return JSON.stringify({ error: 'No hay lotes registrados. Cree un campo y lote primero con create_field / create_lot.' });
+      }
+      if (allLots.length === 1) {
+        // Auto-select the only lot
+        input.originLotId = allLots[0].id;
+      } else {
+        const lotItems = allLots.map(l => ({
+          id: `lot:${l.id}`,
+          title: (l.name || 'Sin nombre').slice(0, 24),
+          description: (l.field?.name || 'Sin campo').slice(0, 72),
+        }));
+        return this.storePendingSelection(session, lotItems, {
+          headerText: '📍 ¿Desde qué lote sale la carga?\nSeleccione el origen:',
+          listButtonLabel: 'Ver lotes',
+          sectionTitle: 'LOTES',
+        }, 'lot_resolve', { ambiguity: 'origin_lot', _prepareInput: input });
+      }
+    }
+
     // ── AUTO-RESOLVE: origin name → lot ID ──
     if (!input.originLotId && input.originName && producerCompanyId) {
       // Search lots first (more specific), then fields
@@ -1905,6 +1939,13 @@ TERMINOLOGÍA CORRECTA:
           });
         }
       }
+    }
+
+    // ── FLEET DECISION IS MANDATORY ──
+    if (input.useOwnFleet === undefined || input.useOwnFleet === null) {
+      return JSON.stringify({
+        error: 'Debe indicar si usa flota propia (useOwnFleet=true) o delega los camiones a la planta (useOwnFleet=false). Pregúntele al usuario.',
+      });
     }
 
     // ── OWN FLEET: require truck + driver when useOwnFleet is set ──
@@ -2056,10 +2097,11 @@ TERMINOLOGÍA CORRECTA:
       }
     }
 
-    // Auto-calculate truck count: ~30 tn per truck (standard grain transport)
-    const tons = Number(input.tons);
-    const autoTruckCount = Math.max(1, Math.ceil(tons / 30));
-    const truckCount = input.truckCount || autoTruckCount;
+    // Truck count is mandatory — user must specify
+    if (!input.truckCount || isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1) {
+      return JSON.stringify({ error: 'Debe indicar la cantidad de camiones (truckCount). Pregúntele al usuario cuántos camiones necesita.' });
+    }
+    const truckCount = Number(input.truckCount);
 
     const dateFormatted = input.loadDate.split('-').reverse().join('/');
     const summary: any = {
@@ -2072,6 +2114,7 @@ TERMINOLOGÍA CORRECTA:
       time: input.loadTime,
       notes: input.notes || null,
     };
+    summary.fleet = input.useOwnFleet ? 'Flota propia' : 'Delegado a planta';
     if (truckDisplay) summary.truck = truckDisplay;
     if (driverDisplay) summary.driver = driverDisplay;
 

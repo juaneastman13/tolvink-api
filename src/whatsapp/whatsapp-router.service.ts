@@ -1019,7 +1019,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       };
       const msg = ACTION_MESSAGES[id] || `Acción: ${title || id}`;
       await this.handleAiChat(phone, user, msg);
-    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve'].includes(type)) {
+    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'branch', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve', 'branch_selection'].includes(type)) {
       // Generic AI list selection — feed back to AI as synthetic message (sanitize to prevent injection)
       const safeTitle = (title || '').replace(/[\[\]\x00-\x1f]/g, '').slice(0, 50);
       const safeId = (id || '').replace(/[^\w\-.:]/g, '').slice(0, 80);
