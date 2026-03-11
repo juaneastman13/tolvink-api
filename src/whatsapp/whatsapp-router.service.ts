@@ -986,6 +986,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.handleCompanySelection(phone, user, id);
     } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
+    } else if (type === 'action') {
+      // Freight action selected from get_freight_detail actions list
+      const ACTION_MESSAGES: Record<string, string> = {
+        assign: 'Quiero asignar un transportista a este flete',
+        accept: 'Acepto este flete',
+        reject: 'Quiero rechazar este flete',
+        authorize: 'Quiero autorizar este flete',
+        start: 'Quiero iniciar el viaje',
+        confirm_loaded: 'Confirmo la carga',
+        confirm_finished: 'Confirmo la entrega',
+        cancel: 'Quiero cancelar este flete',
+        edit: 'Quiero editar este flete',
+        tracking: 'Quiero ver la ubicación',
+        duplicate: 'Quiero duplicar este flete',
+      };
+      const msg = ACTION_MESSAGES[id] || `Acción: ${title || id}`;
+      await this.handleAiChat(phone, user, msg);
     } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve'].includes(type)) {
       // Generic AI list selection — feed back to AI as synthetic message (sanitize to prevent injection)
       const safeTitle = (title || '').replace(/[\[\]\x00-\x1f]/g, '').slice(0, 50);
@@ -1148,6 +1165,25 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       case 'freight_selection':
         await this.showFreightDetail(phone, user, id);
         break;
+      case 'freight_actions': {
+        // User selected an action from the freight detail actions list
+        const ACTION_MESSAGES: Record<string, string> = {
+          assign: 'Quiero asignar un transportista a este flete',
+          accept: 'Acepto este flete',
+          reject: 'Quiero rechazar este flete',
+          authorize: 'Quiero autorizar este flete',
+          start: 'Quiero iniciar el viaje',
+          confirm_loaded: 'Confirmo la carga',
+          confirm_finished: 'Confirmo la entrega',
+          cancel: 'Quiero cancelar este flete',
+          edit: 'Quiero editar este flete',
+          tracking: 'Quiero ver la ubicación',
+          duplicate: 'Quiero duplicar este flete',
+        };
+        const msg = ACTION_MESSAGES[id] || `Acción: ${item.title || id}`;
+        await this.handleAiChat(phone, user, msg);
+        break;
+      }
       default:
         // Generic: feed selection back to AI as synthetic user message
         await this.handleAiChat(phone, user, `[Seleccionó: ${item.title} (id: ${id})]`);

@@ -1510,6 +1510,79 @@ TERMINOLOGÍA CORRECTA:
       });
     }
 
+    // ── Build available actions based on user role + freight status ──
+    const isOriginCompany = allUserCompanies.includes(freight.originCompanyId);
+    const isDestCompany = allUserCompanies.includes(freight.destCompanyId || '');
+    const isTransporter = freight.assignments.some((a: any) => allUserCompanies.includes(a.transportCompanyId));
+    const isDriver = freight.assignments.some((a: any) => a.driverId === (user.id || user.sub));
+    const isOwnFleet = (freight as any).useOwnFleet === true;
+    const status = freight.status as string;
+    const companyType = this.resolveCompanyType(user);
+    const hasAssignment = freight.assignments.length > 0;
+
+    const actions: { id: string; title: string; description: string }[] = [];
+
+    // pending_assignment
+    if (status === 'pending_assignment') {
+      if (isDestCompany) actions.push({ id: 'action:assign', title: '🚛 Asignar transportista', description: 'Asignar camión al flete' });
+      if (isOriginCompany) actions.push({ id: 'action:cancel', title: '❌ Cancelar flete', description: 'Cancelar este flete' });
+    }
+    // assigned
+    if (status === 'assigned') {
+      if (isTransporter || isDriver) {
+        actions.push({ id: 'action:accept', title: '✅ Aceptar flete', description: 'Aceptar la asignación' });
+        actions.push({ id: 'action:reject', title: '🚫 Rechazar flete', description: 'Rechazar la asignación' });
+      }
+      if (isDestCompany && isOwnFleet) actions.push({ id: 'action:authorize', title: '🔑 Autorizar flete', description: 'Autorizar flota propia' });
+      if (isOriginCompany || isDestCompany) actions.push({ id: 'action:cancel', title: '❌ Cancelar flete', description: 'Cancelar este flete' });
+    }
+    // accepted
+    if (status === 'accepted') {
+      if (isTransporter || isDriver || (isOriginCompany && isOwnFleet)) {
+        actions.push({ id: 'action:start', title: '🚀 Iniciar viaje', description: 'Comenzar el transporte' });
+      }
+      if (isOriginCompany || isDestCompany) actions.push({ id: 'action:cancel', title: '❌ Cancelar flete', description: 'Cancelar este flete' });
+    }
+    // in_progress
+    if (status === 'in_progress') {
+      if (isTransporter || isDriver || isOriginCompany) {
+        actions.push({ id: 'action:confirm_loaded', title: '📦 Confirmar carga', description: 'Confirmar que se cargó' });
+      }
+    }
+    // loaded
+    if (status === 'loaded') {
+      if (isTransporter || isDestCompany) {
+        actions.push({ id: 'action:confirm_finished', title: '🏁 Confirmar entrega', description: 'Confirmar que se entregó' });
+      }
+    }
+    // Common actions for non-terminal statuses
+    if (!['finished', 'canceled'].includes(status)) {
+      if (isOriginCompany || isDestCompany) {
+        actions.push({ id: 'action:edit', title: '✏️ Editar flete', description: 'Modificar datos del flete' });
+      }
+    }
+    // Always available (non-terminal)
+    if (!['canceled'].includes(status)) {
+      actions.push({ id: 'action:tracking', title: '📍 Ver ubicación', description: 'Enlace de seguimiento' });
+      actions.push({ id: 'action:duplicate', title: '📋 Duplicar flete', description: 'Crear copia con nueva fecha' });
+    }
+
+    // Store actions list as pending selection if there are any
+    if (actions.length > 0 && session?.id) {
+      const effects = this._chatSideEffects.get(session.id) || {};
+      effects._pendingSelection = {
+        items: actions,
+        config: {
+          headerText: `⚡ Acciones para ${freight.code}:`,
+          listButtonLabel: 'Acciones',
+          sectionTitle: 'ACCIONES DISPONIBLES',
+        },
+        purpose: 'freight_actions',
+      };
+      effects._ts = effects._ts || Date.now();
+      this._chatSideEffects.set(session.id, effects);
+    }
+
     return JSON.stringify({
       code: freight.code,
       status: freight.status,
@@ -1521,7 +1594,6 @@ TERMINOLOGÍA CORRECTA:
       transporter: assignment?.transportCompany?.name || 'Sin asignar',
       driver: assignment?.driver?.name || null,
       truck: assignment?.truck?.plate || null,
-      // Include all assignments for multi-truck freights
       assignments: freight.assignments.length > 1
         ? freight.assignments.map((a: any) => ({
             transporter: a.transportCompany?.name || null,
@@ -1530,10 +1602,11 @@ TERMINOLOGÍA CORRECTA:
             tripStatus: a.tripStatus || null,
           }))
         : undefined,
-      // Hide internal notes from pure transporters/drivers
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       link: `${APP_URL}/freight/${freight.id}`,
       mapLink,
+      _selectionSent: actions.length > 0,
+      availableActions: actions.map(a => a.title),
     });
   }
 
