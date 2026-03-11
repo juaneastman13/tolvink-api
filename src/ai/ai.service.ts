@@ -528,12 +528,14 @@ UBICACIONES:
 - Sin coordenadas NO crear campo/lote/origen/destino personalizado.
 
 LISTAS Y SELECCIÓN:
-- _selectionSent:true → lista YA enviada como menú interactivo. NO reformatear la lista. Agregar frase contextual breve según la situación:
-  - Creando flete y faltan datos → "¿Desde qué campo sale la carga?" / "Seleccione el lote de origen:"
-  - Consulta general → "Seleccione uno para ver detalles."
-  - SIEMPRE adaptar el texto al contexto de la conversación.
+- _selectionSent:true → lista YA enviada como menú interactivo. NO repetir los ítems de la lista. Agregar SOLO una frase contextual breve según la acción en curso:
+  - Creando flete, faltan datos → "¿Desde qué campo sale la carga?" / "Seleccione el lote de origen:" / "Seleccione la planta destino:"
+  - Asignando camión/chofer → "Seleccione el camión para asignar:" / "Seleccione el chofer:"
+  - Consulta general → "Estos son sus campos registrados." / "Estos son sus fletes."
+  - SIEMPRE adaptar el texto al contexto. NUNCA usar "para ver detalles" genérico.
 - Resúmenes/análisis/estadísticas → summarize_freights (NO list_freights).
 - list_freights es SOLO para selección individual.
+- Toda lista de opciones DEBE enviarse como menú interactivo seleccionable (list_fields, list_lots, list_trucks, list_drivers, etc.). NUNCA enviar opciones como texto plano para que el usuario escriba.
 
 ESTADOS (traducir SIEMPRE al español):
 draft→"Borrador" | pending_assignment→"Pendiente de asignación" | assigned→"Asignado"
@@ -909,7 +911,7 @@ TERMINOLOGÍA CORRECTA:
 
     const statusLabel = input.status ? ` (${FREIGHT_STATUS_SHORT[input.status] || input.status})` : '';
     return this.storePendingSelection(session, items, {
-      headerText: `📦 ${filtered.length} flete${filtered.length !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno para ver detalles:`,
+      headerText: `📦 ${filtered.length} flete${filtered.length !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno:`,
       listButtonLabel: 'Ver fletes',
       sectionTitle: 'FLETES',
     }, 'freight_selection');
@@ -1692,10 +1694,16 @@ TERMINOLOGÍA CORRECTA:
             input.destPlantId = results[0].item.id;
             input.destName = undefined; // clear — resolved to ID
           } else if (results.length > 1) {
-            return JSON.stringify({
-              error: `Múltiples plantas coinciden con "${input.destName}": ${results.map(r => r.item.name).join(', ')}. Indique cuál exactamente.`,
-              suggestions: results.map(r => ({ id: r.item.id, name: r.item.name })),
-            });
+            const plantItems = results.map(r => ({
+              id: `plant_resolve:${r.item.id}`,
+              title: r.item.name.slice(0, 24),
+              description: (r.item.plants?.length ? `${r.item.plants.length} sucursal(es)` : '').slice(0, 72),
+            }));
+            return this.storePendingSelection(session, plantItems, {
+              headerText: `🏢 Varias plantas coinciden con "${input.destName}".\nSeleccione el destino:`,
+              listButtonLabel: 'Ver plantas',
+              sectionTitle: 'PLANTAS',
+            }, 'plant_resolve', { ambiguity: 'dest_plant', query: input.destName });
           }
         }
       }
@@ -1719,10 +1727,16 @@ TERMINOLOGÍA CORRECTA:
           input.originLotId = lotResults2[0].item.id;
           input.originName = undefined;
         } else if (lotResults2.length > 1) {
-          return JSON.stringify({
-            error: `Múltiples lotes coinciden con "${input.originName}": ${lotResults2.map(r => `${r.item.field?.name || ''} - ${r.item.name}`).join(', ')}. Indique cuál exactamente.`,
-            suggestions: lotResults2.map(r => ({ id: r.item.id, name: r.item.label || r.item.name })),
-          });
+          const lotItems2 = lotResults2.map(r => ({
+            id: `lot:${r.item.id}`,
+            title: (r.item.name || 'Sin nombre').slice(0, 24),
+            description: (r.item.field?.name || 'Sin campo').slice(0, 72),
+          }));
+          return this.storePendingSelection(session, lotItems2, {
+            headerText: `📍 Varios lotes coinciden con "${input.originName}".\nSeleccione el origen:`,
+            listButtonLabel: 'Ver lotes',
+            sectionTitle: 'LOTES',
+          }, 'lot_resolve', { ambiguity: 'origin_lot', query: input.originName });
         }
         // If still no match, try field names — use first lot of matched field
         if (!input.originLotId) {
@@ -1741,20 +1755,32 @@ TERMINOLOGÍA CORRECTA:
               return JSON.stringify({ error: `El campo "${matchedField.name}" no tiene lotes activos. Cree un lote primero con create_lot.` });
             }
           } else if (fieldResults.length > 1) {
-            return JSON.stringify({
-              error: `Múltiples campos coinciden con "${input.originName}": ${fieldResults.map(r => r.item.name).join(', ')}. Indique cuál exactamente.`,
-              suggestions: fieldResults.map(r => ({ id: r.item.id, name: r.item.name })),
-            });
+            const fieldItems = fieldResults.map(r => ({
+              id: `field:${r.item.id}`,
+              title: (r.item.name || 'Sin nombre').slice(0, 24),
+              description: `${r.item.lots?.length || 0} lote(s)`.slice(0, 72),
+            }));
+            return this.storePendingSelection(session, fieldItems, {
+              headerText: `🌾 Varios campos coinciden con "${input.originName}".\nSeleccione el origen:`,
+              listButtonLabel: 'Ver campos',
+              sectionTitle: 'CAMPOS',
+            }, 'field_resolve', { ambiguity: 'origin_field', query: input.originName });
           }
         }
       } else if (lotResults.length === 1 || classifyFuzzyResult(lotResults) === 'exact') {
         input.originLotId = lotResults[0].item.id;
         input.originName = undefined;
       } else {
-        return JSON.stringify({
-          error: `Múltiples lotes coinciden con "${input.originName}": ${lotResults.map(r => r.item.label).join(', ')}. Indique cuál exactamente.`,
-          suggestions: lotResults.map(r => ({ id: r.item.id, name: r.item.label })),
-        });
+        const lotItemsMain = lotResults.map(r => ({
+          id: `lot:${r.item.id}`,
+          title: (r.item.name || 'Sin nombre').slice(0, 24),
+          description: (r.item.field?.name || 'Sin campo').slice(0, 72),
+        }));
+        return this.storePendingSelection(session, lotItemsMain, {
+          headerText: `📍 Varios lotes coinciden con "${input.originName}".\nSeleccione el origen:`,
+          listButtonLabel: 'Ver lotes',
+          sectionTitle: 'LOTES',
+        }, 'lot_resolve', { ambiguity: 'origin_lot', query: input.originName });
       }
       // If originName couldn't be resolved, treat as custom origin
       if (!input.originLotId && input.originName) {
@@ -2841,7 +2867,7 @@ TERMINOLOGÍA CORRECTA:
     }));
 
     return this.storePendingSelection(session, items, {
-      headerText: '🚛 Camiones registrados.\nSeleccione uno para ver detalles:',
+      headerText: '🚛 Camiones registrados.\nSeleccione uno:',
       listButtonLabel: 'Ver camiones',
       sectionTitle: 'CAMIONES',
     }, 'truck_info');
@@ -3696,7 +3722,7 @@ TERMINOLOGÍA CORRECTA:
     }));
 
     return this.storePendingSelection(session, items, {
-      headerText: '👤 Usuarios de la empresa.\nSeleccione uno para ver detalles:',
+      headerText: '👤 Usuarios de la empresa.\nSeleccione uno:',
       listButtonLabel: 'Ver usuarios',
       sectionTitle: 'USUARIOS',
     }, 'user_info', { users: usersData });
@@ -3737,7 +3763,7 @@ TERMINOLOGÍA CORRECTA:
     });
 
     return this.storePendingSelection(session, items, {
-      headerText: '👤 Choferes registrados.\nSeleccione uno para ver detalles:',
+      headerText: '👤 Choferes registrados.\nSeleccione uno:',
       listButtonLabel: 'Ver choferes',
       sectionTitle: 'CHOFERES',
     }, 'driver_info', { drivers: driversData });
