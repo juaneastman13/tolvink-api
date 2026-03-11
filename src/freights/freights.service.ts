@@ -1985,15 +1985,22 @@ export class FreightsService {
 
   async cancelAssignment(freightId: string, assignmentId: string, reason: string, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
-    if (!isPlant) throw new ForbiddenException('Solo la planta puede cancelar asignaciones');
+    const isProducer = await this.hasCompanyType(user, 'producer');
+    if (!isPlant && !isProducer) throw new ForbiddenException('Solo la planta o productor pueden cancelar asignaciones');
 
     const allIdsCa = await this.resolveAllCompanyIds(user);
 
     const { result, freight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
-      if (!freight.destCompanyId || !allIdsCa.includes(freight.destCompanyId)) {
+      // Plants: must be dest company. Producers: must be origin company.
+      const isDestCompany = freight.destCompanyId && allIdsCa.includes(freight.destCompanyId);
+      const isOriginCompany = allIdsCa.includes(freight.originCompanyId);
+      if (isPlant && !isDestCompany) {
         throw new ForbiddenException('Solo la planta destino puede cancelar asignaciones');
+      }
+      if (isProducer && !isPlant && !isOriginCompany) {
+        throw new ForbiddenException('Solo el productor de origen puede cancelar asignaciones de su flota');
       }
       if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint cancel');
 

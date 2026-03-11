@@ -408,7 +408,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
   {
     name: 'update_freight',
-    description: 'Modifica un flete existente. Puede cambiar fecha, hora, notas, flota propia, planta destino, camión y chofer. Algunos cambios pueden requerir aprobación. Prepara la acción para confirmación.',
+    description: 'Modifica un flete existente. Puede cambiar fecha, hora, notas, flota propia, planta destino, camión, chofer y cantidad de camiones. Algunos cambios pueden requerir aprobación. Prepara la acción para confirmación.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -420,6 +420,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
         destPlantId: { type: 'string', description: 'ID de nueva planta destino (de search_plants). Opcional.' },
         truckId: { type: 'string', description: 'ID de camión propio a asignar (de list_trucks). Opcional.' },
         driverId: { type: 'string', description: 'ID del chofer (de list_drivers). Opcional. Usar "self" para "yo soy el chofer".' },
+        truckCount: { type: 'number', description: 'Nueva cantidad de camiones. Debe ser >= camiones ya asignados. Opcional.' },
       },
       required: ['code'],
     },

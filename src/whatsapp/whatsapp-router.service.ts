@@ -850,7 +850,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const synUser = this.buildSyntheticUser(user);
 
     // Access check for freight actions
-    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel', 'reassign'];
+    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel', 'reassign', 'add_truck', 'remove_truck'];
     if (freightActions.includes(action) && entityId) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: entityId },
@@ -941,6 +941,24 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           await this.handleAiChat(phone, user, 'Ubicación confirmada.');
           break;
         }
+        case 'add_truck': {
+          const addFreight = await this.prisma.freight.findUnique({ where: { id: entityId }, select: { code: true } });
+          if (addFreight) {
+            await this.handleAiChat(phone, user, `Quiero agregar un camión al flete ${addFreight.code}`);
+          } else {
+            await this.wa.sendText(phone, 'Flete no encontrado.');
+          }
+          break;
+        }
+        case 'remove_truck': {
+          const rmFreight = await this.prisma.freight.findUnique({ where: { id: entityId }, select: { code: true } });
+          if (rmFreight) {
+            await this.handleAiChat(phone, user, `Quiero quitar un camión del flete ${rmFreight.code}`);
+          } else {
+            await this.wa.sendText(phone, 'Flete no encontrado.');
+          }
+          break;
+        }
         case 'ai_confirm_freight': {
           // User pressed "CONFIRMAR" on freight summary → forward to AI as confirmation
           await this.handleAiChat(phone, user, 'Confirmar.');
@@ -1016,10 +1034,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         edit: 'Quiero editar este flete',
         tracking: 'Quiero ver la ubicación',
         duplicate: 'Quiero duplicar este flete',
+        add_truck: 'Quiero agregar un camión a este flete',
+        remove_truck: 'Quiero quitar un camión de este flete',
       };
       const msg = ACTION_MESSAGES[id] || `Acción: ${title || id}`;
       await this.handleAiChat(phone, user, msg);
-    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'branch', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve', 'branch_selection'].includes(type)) {
+    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'branch', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve', 'branch_selection', 'assignment'].includes(type)) {
       // Generic AI list selection — feed back to AI as synthetic message (sanitize to prevent injection)
       const safeTitle = (title || '').replace(/[\[\]\x00-\x1f]/g, '').slice(0, 50);
       const safeId = (id || '').replace(/[^\w\-.:]/g, '').slice(0, 80);

@@ -585,6 +585,15 @@ UBICACIÓN VIVA: share_live_location, view_live_locations, request_location.
 
 EQUIPO (admin/gerente): update_user_role, deactivate_user, reactivate_user → confirm_action.
 
+GESTIÓN DE CAMIONES EN FLETES ACTIVOS:
+- AGREGAR CAMIONES: Primero aumentar truckCount con update_freight(code, truckCount=nuevoTotal). Luego preguntar: "¿Flota propia o delegar a planta?"
+  · Flota propia → assign_truck_to_freight(code, transporterCompanyId="own_fleet") → el sistema muestra lista de camiones y choferes automáticamente.
+  · Delegar → solo aumentar truckCount, la planta asigna después.
+- ELIMINAR CAMIONES: Dos opciones según si hay camión asignado:
+  · Con camión asignado → Mostrar lista de asignaciones activas (de get_freight_detail) para que el usuario elija cuál cancelar → cancel_assignment(code, assignmentId, reason). Luego reducir truckCount con update_freight.
+  · Sin camión asignado (slots vacíos) → Solo reducir truckCount con update_freight(code, truckCount=nuevoTotal).
+- IMPORTANTE: Siempre mostrar listas interactivas para seleccionar camiones, choferes y asignaciones a cancelar. Nunca pedir IDs por texto.
+
 MODIFICACIONES: update_freight valida internamente — SIEMPRE llamar. Para cambiar planta→search_plants, camión→list_trucks, chofer→list_drivers.
 
 ERRORES DE HERRAMIENTAS: Traducir a lenguaje claro y accionable. Ejemplos:
@@ -629,7 +638,8 @@ TERMINOLOGÍA CORRECTA:
     'prepare_freight', 'list_lots', 'list_fields', 'create_field', 'create_lot',
     'search_plants', 'list_trucks', 'create_truck', 'generate_location_link',
     'duplicate_freight', 'update_field', 'update_lot', 'cancel_freight',
-    'list_enabled_plants',
+    'list_enabled_plants', 'assign_truck_to_freight', 'cancel_assignment',
+    'list_drivers',
   ]);
 
   // PLANT: Assignment & management tools
@@ -1118,8 +1128,34 @@ TERMINOLOGÍA CORRECTA:
       }
     }
 
+    // --- truckCount: origin or dest company, must be >= assigned count ---
+    if (input.truckCount !== undefined) {
+      const newCount = Number(input.truckCount);
+      if (isNaN(newCount) || newCount < 1) {
+        return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
+      }
+      const canEditCount = ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded'].includes(freight.status);
+      if (!canEditCount) {
+        return JSON.stringify({ error: `Cantidad de camiones solo se puede modificar en estados activos. Estado actual: "${freight.status}".` });
+      }
+      const currentAssigned = (freight as any).assignedTruckCount || 0;
+      if (newCount < currentAssigned) {
+        return JSON.stringify({ error: `No se puede reducir a ${newCount} camiones: ya hay ${currentAssigned} asignados. Primero cancele asignaciones con cancel_assignment.` });
+      }
+      const currentCount = (freight as any).truckCount || 1;
+      if (newCount !== currentCount) {
+        dto.truckCount = newCount;
+        const diff = newCount - currentCount;
+        if (diff > 0) {
+          changes.push(`Camiones: ${currentCount} → ${newCount} (+${diff})`);
+        } else {
+          changes.push(`Camiones: ${currentCount} → ${newCount} (${diff})`);
+        }
+      }
+    }
+
     if (changes.length === 0) {
-      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: loadDate, loadTime, notes, useOwnFleet, destPlantId, truckId, driverId.' });
+      return JSON.stringify({ error: 'No se indicaron campos a modificar. Puede cambiar: loadDate, loadTime, notes, useOwnFleet, destPlantId, truckId, driverId, truckCount.' });
     }
 
     return this.stageAction(session, 'update_freight', {
@@ -1565,6 +1601,11 @@ TERMINOLOGÍA CORRECTA:
     if (!['finished', 'canceled'].includes(status)) {
       if (isOriginCompany || isDestCompany) {
         actions.push({ id: 'action:edit', title: '✏️ Editar flete', description: 'Modificar datos del flete' });
+        actions.push({ id: 'action:add_truck', title: '➕ Agregar camión', description: 'Agregar un camión al flete' });
+        const truckCountVal = (freight as any).truckCount || 1;
+        if (truckCountVal > 1 || freight.assignments.length > 0) {
+          actions.push({ id: 'action:remove_truck', title: '➖ Quitar camión', description: 'Quitar un camión del flete' });
+        }
       }
     }
     // Always available (non-terminal)
@@ -1616,14 +1657,17 @@ TERMINOLOGÍA CORRECTA:
       transporter: assignment?.transportCompany?.name || 'Sin asignar',
       driver: assignment?.driver?.name || null,
       truck: assignment?.truck?.plate || null,
-      assignments: freight.assignments.length > 1
-        ? freight.assignments.map((a: any) => ({
-            transporter: a.transportCompany?.name || null,
-            driver: a.driver?.name || null,
-            truck: a.truck?.plate || null,
-            tripStatus: a.tripStatus || null,
-          }))
-        : undefined,
+      truckCount: (freight as any).truckCount || 1,
+      assignedTruckCount: freight.assignments.length,
+      assignments: freight.assignments.map((a: any) => ({
+          id: a.id,
+          tripNumber: a.tripNumber || null,
+          transporter: a.transportCompany?.name || null,
+          transportCompanyId: a.transportCompanyId || null,
+          driver: a.driver?.name || null,
+          truck: a.truck?.plate || null,
+          tripStatus: a.tripStatus || null,
+        })),
       notes: isOriginOrDest ? ((freight as any).notes || null) : null,
       lastRejection: lastRejection || undefined,
       link: `${APP_URL}/freight/${freight.id}`,
@@ -4349,7 +4393,7 @@ TERMINOLOGÍA CORRECTA:
   }
 
   // ---- resolveAssignment helper ----
-  private async resolveAssignment(code: string, assignmentId: string | undefined, user: any): Promise<{ freight?: any; assignment?: any; error?: string }> {
+  private async resolveAssignment(code: string, assignmentId: string | undefined, user: any, session?: any): Promise<{ freight?: any; assignment?: any; error?: string }> {
     const result = await this.resolveFreightWithAccess(code, user);
     if (result.error) return { error: result.error };
     const freight = result.freight;
@@ -4360,14 +4404,28 @@ TERMINOLOGÍA CORRECTA:
       return { freight, assignment: a };
     }
     if (freight.assignments.length === 1) return { freight, assignment: freight.assignments[0] };
+    // Multiple assignments → show interactive selection list if session available
+    if (session?.id) {
+      const items = freight.assignments.map((a: any) => ({
+        id: `assignment:${a.id}`,
+        title: `#${a.tripNumber || '?'} ${a.truck?.plate || 'Sin camión'}`,
+        description: `${a.driver?.name || 'Sin chofer'} — ${a.tripStatus || 'pendiente'}`,
+      }));
+      this.storePendingSelection(session.id, items, {
+        headerText: `${freight.code} tiene ${freight.assignments.length} viajes.\nSeleccione cuál:`,
+        listButtonLabel: 'Ver viajes',
+        sectionTitle: 'VIAJES ASIGNADOS',
+      }, 'assignment_selection');
+      return { error: `_selectionSent` };
+    }
     const list = freight.assignments.map((a: any) => `- ${a.id}: ${a.truck?.plate || 'sin camión'} (${a.driver?.name || 'sin chofer'}) — ${a.tripStatus || 'sin estado'}`).join('\n');
     return { error: `El flete ${code} tiene ${freight.assignments.length} viajes. Indique el assignmentId. Viajes:\n${list}` };
   }
 
   // ---- respond_trip ----
   private async toolRespondTrip(input: any, user: any, session: any): Promise<string> {
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) { if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje.' }); return JSON.stringify({ error: res.error }); }
     const { freight, assignment } = res;
     if (assignment.tripStatus !== 'pending') {
       return JSON.stringify({ error: `El viaje ya está en estado "${assignment.tripStatus}". Solo se puede aceptar/rechazar en "pending".` });
@@ -4386,8 +4444,8 @@ TERMINOLOGÍA CORRECTA:
 
   // ---- start_trip ----
   private async toolStartTrip(input: any, user: any, session: any): Promise<string> {
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) { if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje.' }); return JSON.stringify({ error: res.error }); }
     const { freight, assignment } = res;
     if (assignment.tripStatus !== 'accepted') {
       return JSON.stringify({ error: `El viaje debe estar "accepted" para iniciarlo. Estado actual: "${assignment.tripStatus}".` });
@@ -4400,8 +4458,8 @@ TERMINOLOGÍA CORRECTA:
 
   // ---- confirm_trip_loaded ----
   private async toolConfirmTripLoaded(input: any, user: any, session: any): Promise<string> {
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) { if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje.' }); return JSON.stringify({ error: res.error }); }
     const { freight, assignment } = res;
     if (assignment.tripStatus !== 'in_progress') {
       return JSON.stringify({ error: `El viaje debe estar "in_progress" para confirmar carga. Estado actual: "${assignment.tripStatus}".` });
@@ -4415,8 +4473,8 @@ TERMINOLOGÍA CORRECTA:
 
   // ---- confirm_trip_finished ----
   private async toolConfirmTripFinished(input: any, user: any, session: any): Promise<string> {
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) { if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje.' }); return JSON.stringify({ error: res.error }); }
     const { freight, assignment } = res;
     if (assignment.tripStatus !== 'loaded') {
       return JSON.stringify({ error: `El viaje debe estar "loaded" para confirmar entrega. Estado actual: "${assignment.tripStatus}".` });
@@ -4430,12 +4488,24 @@ TERMINOLOGÍA CORRECTA:
   // ---- cancel_assignment ----
   private async toolCancelAssignment(input: any, user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
-    if (!AiService.hasType(companyType, 'plant')) {
-      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden cancelar asignaciones.' });
+    const isPlant = AiService.hasType(companyType, 'plant');
+    const isProducer = AiService.hasType(companyType, 'producer');
+    if (!isPlant && !isProducer) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden cancelar asignaciones.' });
     }
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) {
+      if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje a cancelar.' });
+      return JSON.stringify({ error: res.error });
+    }
     const { freight, assignment } = res;
+    // Producers can only cancel own-fleet assignments
+    if (isProducer && !isPlant) {
+      const userCompanyId = user.activeCompanyId || user.companyId;
+      if (assignment.transportCompanyId !== userCompanyId) {
+        return JSON.stringify({ error: 'Solo puede cancelar asignaciones de su propia flota. Para asignaciones de otros transportistas, contacte a la planta.' });
+      }
+    }
     const tripInfo = `${assignment.truck?.plate || 'sin camión'} — ${assignment.driver?.name || 'sin chofer'}`;
     return this.stageAction(session, 'cancel_assignment', {
       freightId: freight.id, assignmentId: assignment.id, code: freight.code, reason: input.reason, tripInfo,
@@ -4448,8 +4518,8 @@ TERMINOLOGÍA CORRECTA:
     if (!AiService.hasType(companyType, 'plant')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden editar asignaciones.' });
     }
-    const res = await this.resolveAssignment(input.code, input.assignmentId, user);
-    if (res.error) return JSON.stringify({ error: res.error });
+    const res = await this.resolveAssignment(input.code, input.assignmentId, user, session);
+    if (res.error) { if (res.error === '_selectionSent') return JSON.stringify({ _selectionSent: true, message: 'Seleccione el viaje a editar.' }); return JSON.stringify({ error: res.error }); }
     const { freight, assignment } = res;
     if (!['pending', 'accepted'].includes(assignment.tripStatus || '')) {
       return JSON.stringify({ error: `Solo se pueden editar viajes en estado "pending" o "accepted". Estado actual: "${assignment.tripStatus}".` });
@@ -4564,7 +4634,7 @@ TERMINOLOGÍA CORRECTA:
       select: {
         id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
         isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, tripNumber: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
       },
     });
   }
@@ -4584,7 +4654,7 @@ TERMINOLOGÍA CORRECTA:
       select: {
         id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
         isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, tripNumber: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
       },
       take: 5,
     });
