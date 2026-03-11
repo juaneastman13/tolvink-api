@@ -306,7 +306,7 @@ export class FreightsService {
 
   // ======================== LIST (multi-tenant) =======================
 
-  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string; dateFrom?: string; dateTo?: string; grain?: string }) {
+  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string; dateFrom?: string; dateTo?: string; grain?: string; search?: string }) {
     const limit = Math.min(query.limit || 20, 100);
 
     const where: any = {};
@@ -359,6 +359,30 @@ export class FreightsService {
       where.items = { some: { grain: { contains: query.grain, mode: 'insensitive' } } };
     }
 
+    if (query.search) {
+      const s = query.search;
+      const searchConditions: any[] = [
+        { code: { contains: s, mode: 'insensitive' } },
+        { originName: { contains: s, mode: 'insensitive' } },
+        { destName: { contains: s, mode: 'insensitive' } },
+        { items: { some: { grain: { contains: s, mode: 'insensitive' } } } },
+        { originCompany: { name: { contains: s, mode: 'insensitive' } } },
+        { destCompany: { name: { contains: s, mode: 'insensitive' } } },
+        { field: { name: { contains: s, mode: 'insensitive' } } },
+        { requestedBy: { name: { contains: s, mode: 'insensitive' } } },
+        { assignments: { some: { transportCompany: { name: { contains: s, mode: 'insensitive' } } } } },
+        { assignments: { some: { driver: { name: { contains: s, mode: 'insensitive' } } } } },
+        { assignments: { some: { truck: { plate: { contains: s, mode: 'insensitive' } } } } },
+      ];
+      // Combine with existing where.OR (company scoping) using AND
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, { OR: searchConditions }];
+        delete where.OR;
+      } else {
+        where.OR = searchConditions;
+      }
+    }
+
     // Cursor-based pagination (preferred) or offset-based (legacy)
     const paginationArgs: any = { take: limit, orderBy: [{ destName: 'asc' }, { originName: 'asc' }, { createdAt: 'desc' }] };
     if (query.cursor) {
@@ -406,7 +430,7 @@ export class FreightsService {
 
   // ======================== FIND ONE =================================
 
-  async findOne(id: string, companyIds?: string[]) {
+  async findOne(id: string, companyIds?: string[], currentUser?: any) {
     const whereClause: any = { id };
     // Defense-in-depth: when companyIds provided, ensure the freight belongs to one of the caller's companies
     if (companyIds && companyIds.length > 0) {
@@ -443,6 +467,31 @@ export class FreightsService {
     });
 
     if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    // Mark unseen assignments as "seen" when the transporter/driver views the freight
+    if (currentUser) {
+      const userCompanyIds = currentUser.companies
+        ? currentUser.companies.map((c: any) => c.companyId || c.id).filter(Boolean)
+        : currentUser.companyId ? [currentUser.companyId] : [];
+      const unseenIds = freight.assignments
+        .filter((a: any) =>
+          !a.seenAt &&
+          a.status === 'active' &&
+          (userCompanyIds.includes(a.transportCompanyId) || a.driverId === currentUser.id || a.driverId === currentUser.sub)
+        )
+        .map((a: any) => a.id);
+      if (unseenIds.length > 0) {
+        this.prisma.freightAssignment.updateMany({
+          where: { id: { in: unseenIds } },
+          data: { seenAt: new Date() },
+        }).catch(() => {}); // fire-and-forget, don't block the response
+        // Update in-memory response too
+        for (const a of freight.assignments) {
+          if (unseenIds.includes(a.id)) (a as any).seenAt = new Date();
+        }
+      }
+    }
+
     return freight;
   }
 

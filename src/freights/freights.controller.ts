@@ -29,12 +29,14 @@ export class FreightsController {
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'company', required: false, description: 'Filter to a specific company (activeCompanyId)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Free-text search across code, grain, origin, destination, transporter, driver, plate' })
   findAll(
     @CurrentUser() user: any,
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('company') company?: string,
+    @Query('search') search?: string,
   ) {
     const parsedPage = page ? Math.min(Math.max(1, parseInt(page) || 1), 200) : undefined;
     const parsedLimit = limit ? Math.min(Math.max(1, parseInt(limit) || 20), 50) : undefined;
@@ -43,6 +45,7 @@ export class FreightsController {
       page: Number.isFinite(parsedPage) ? parsedPage : undefined,
       limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       company,
+      search: search?.trim() || undefined,
     });
   }
 
@@ -76,8 +79,8 @@ export class FreightsController {
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Detalle de flete' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    // FreightAccessGuard already enforces company-level access; user passed for future defense-in-depth
-    return this.service.findOne(id);
+    // FreightAccessGuard already enforces company-level access; user passed to mark assignments as seen
+    return this.service.findOne(id, undefined, user);
   }
 
   @Post(':id/assign')
