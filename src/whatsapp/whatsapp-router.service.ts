@@ -443,6 +443,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
+      // Show "typing" indicator so user sees the bot is working
+      this.wa.sendTypingIndicator(phone).catch(() => {});
+
       const result = await this.ai.chat(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;

@@ -549,6 +549,32 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ======================== TYPING INDICATOR ===============================
+
+  /** Send "typing" indicator so user sees the bot is composing a response */
+  async sendTypingIndicator(phone: string): Promise<void> {
+    if (!this.enabled || !phone) return;
+    try {
+      await fetch(`${META_API}/${this.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: this.normalizePhone(phone),
+          type: 'reaction',
+          status: 'typing',
+        }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch (e) {
+      this.logger.debug(`Typing indicator failed: ${e.message}`);
+    }
+  }
+
   // ======================== DOWNLOAD MEDIA =================================
 
   async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
