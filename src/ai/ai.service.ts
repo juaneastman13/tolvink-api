@@ -4411,7 +4411,7 @@ TERMINOLOGÍA CORRECTA:
         title: `#${a.tripNumber || '?'} ${a.truck?.plate || 'Sin camión'}`,
         description: `${a.driver?.name || 'Sin chofer'} — ${a.tripStatus || 'pendiente'}`,
       }));
-      this.storePendingSelection(session.id, items, {
+      this.storePendingSelection(session, items, {
         headerText: `${freight.code} tiene ${freight.assignments.length} viajes.\nSeleccione cuál:`,
         listButtonLabel: 'Ver viajes',
         sectionTitle: 'VIAJES ASIGNADOS',

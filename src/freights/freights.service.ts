@@ -1289,6 +1289,8 @@ export class FreightsService {
         include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
+      // Compute actual assigned count from active assignments (not stale field)
+      const actualAssignedCount = freight.assignments.length;
       if (['finished', 'canceled'].includes(freight.status)) {
         throw new BadRequestException('No se puede editar un flete finalizado o cancelado');
       }
@@ -1335,9 +1337,8 @@ export class FreightsService {
         if (!isOriginCompany && (!freight.destCompanyId || !allIds.includes(freight.destCompanyId))) {
           throw new ForbiddenException('Solo la empresa de origen o destino puede editar la cantidad de camiones');
         }
-        const assignedCount = (freight as any).assignedTruckCount || freight.assignments.length;
-        if (dto.truckCount < assignedCount) {
-          throw new BadRequestException(`No se puede reducir a ${dto.truckCount} camiones: ya hay ${assignedCount} asignados`);
+        if (dto.truckCount < actualAssignedCount) {
+          throw new BadRequestException(`No se puede reducir a ${dto.truckCount} camiones: ya hay ${actualAssignedCount} asignados`);
         }
         data.truckCount = dto.truckCount;
         data.isMultiTruck = dto.truckCount > 1;
@@ -2008,6 +2009,14 @@ export class FreightsService {
         where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
       });
       if (!assignment) throw new NotFoundException('Asignación no encontrada o ya cancelada');
+
+      // Producers can only cancel their own-fleet assignments
+      if (isProducer && !isPlant) {
+        const isOwnFleetAssignment = assignment.transportCompanyId === freight.originCompanyId;
+        if (!isOwnFleetAssignment) {
+          throw new ForbiddenException('Solo puede cancelar asignaciones de su propia flota');
+        }
+      }
 
       await (tx.freightAssignment as any).update({
         where: { id: assignmentId },

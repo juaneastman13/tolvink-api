@@ -565,8 +565,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           messaging_product: 'whatsapp',
           recipient_type: 'individual',
           to: this.normalizePhone(phone),
-          type: 'reaction',
-          status: 'typing',
+          typing_action: 'typing',
         }),
         signal: AbortSignal.timeout(5_000),
       });
