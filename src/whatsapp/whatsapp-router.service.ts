@@ -986,7 +986,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.handleCompanySelection(phone, user, id);
     } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
-    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant'].includes(type)) {
+    } else if (['lot', 'field', 'truck', 'transporter', 'user', 'driver', 'plant', 'ownfleet_truck', 'ownfleet_driver', 'plant_resolve', 'lot_resolve', 'field_resolve'].includes(type)) {
       // Generic AI list selection — feed back to AI as synthetic message (sanitize to prevent injection)
       const safeTitle = (title || '').replace(/[\[\]\x00-\x1f]/g, '').slice(0, 50);
       const safeId = (id || '').replace(/[^\w\-.:]/g, '').slice(0, 80);

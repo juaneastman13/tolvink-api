@@ -67,7 +67,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
   {
     name: 'prepare_freight',
-    description: 'Prepara un flete para creación (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, loadDate (YYYY-MM-DD), loadTime (HH:mm). Destino: destPlantId O destName (auto-resuelve texto contra plantas habilitadas). Origen: originLotId O originName (auto-resuelve contra campos/lotes del productor). Si planta tiene sucursales → branchId OBLIGATORIO. Si truckId (flota propia) → driverId OBLIGATORIO ("self" = yo).',
+    description: 'Prepara un flete para creación (NO lo crea). Devuelve resumen para confirmar. Necesita: grain, tons, loadDate (YYYY-MM-DD), loadTime (HH:mm). Destino: destPlantId O destName (auto-resuelve texto contra plantas habilitadas). Origen: originLotId O originName (auto-resuelve contra campos/lotes del productor). Si planta tiene sucursales → branchId OBLIGATORIO. Si flota propia → pasar useOwnFleet=true (el sistema muestra listas interactivas de camiones y choferes).',
     input_schema: {
       type: 'object' as const,
       properties: {

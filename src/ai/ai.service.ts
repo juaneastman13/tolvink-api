@@ -556,7 +556,7 @@ CREAR FLETES:
 2. prepare_freight → resumen → confirm_create_freight al confirmar.
 3. Datos faltantes: pedir SOLO los que faltan.
 4. Si la planta destino tiene SUCURSALES (branches), es OBLIGATORIO indicar cuál. El sistema lo validará y devolverá las opciones.
-5. Si se asigna FLOTA PROPIA (truckId), es OBLIGATORIO indicar chofer (driverId). El chofer puede ser de list_drivers o "self" (= el propio usuario).
+5. FLOTA PROPIA: Si el usuario quiere usar su flota, pasar useOwnFleet=true en prepare_freight. El sistema mostrará automáticamente la lista de camiones para seleccionar, y luego la lista de choferes. NO necesitás buscar truckId/driverId manualmente — el flujo interactivo los resuelve.
 6. DUPLICAR FLETE: Es una copia idéntica. Solo validar la fecha nueva (loadDate). NO pedir reconfirmar datos.
 7. SELECCIÓN DE LOTE: Cuando el usuario necesita elegir un lote, SIEMPRE usar list_lots (con fieldId si ya sabés el campo). NUNCA listar lotes como texto plano — deben ser menú interactivo seleccionable.
 7. Ubicación obligatoria para origen/destino custom → generate_location_link.
@@ -1817,11 +1817,66 @@ TERMINOLOGÍA CORRECTA:
       }
     }
 
-    // ── OWN FLEET: require driverId if truckId is set ──
-    if (input.truckId && !input.driverId) {
-      return JSON.stringify({
-        error: 'Si asigna flota propia (truckId), debe indicar el chofer (driverId). Use "self" si el usuario es el chofer, o list_drivers para obtener choferes disponibles.',
+    // ── OWN FLEET: require truck + driver when useOwnFleet is set ──
+    if (input.useOwnFleet && !input.truckId) {
+      // Show interactive truck list so user can select
+      const truckOwnerCompany = user.activeCompanyId || user.companyId;
+      const trucks = await this.prisma.truck.findMany({
+        where: { companyId: truckOwnerCompany, active: true },
+        include: { assignedUser: { select: { name: true } } },
+        take: 50,
       });
+      if (trucks.length === 0) {
+        return JSON.stringify({ error: 'No hay camiones registrados para su flota. Registre uno primero con create_truck.' });
+      }
+      const truckItems = trucks.map((t: any) => ({
+        id: `ownfleet_truck:${t.id}`,
+        title: (t.plate || '').toUpperCase().slice(0, 24),
+        description: `${[t.brand, t.model].filter(Boolean).join(' ')}${t.assignedUser?.name ? ' · ' + t.assignedUser.name : ''}`.slice(0, 72) || 'Sin detalle',
+      }));
+      return this.storePendingSelection(session, truckItems, {
+        headerText: '🚛 Seleccione el camión para el flete:',
+        listButtonLabel: 'Ver camiones',
+        sectionTitle: 'CAMIONES',
+      }, 'ownfleet_truck_select', { _ownFleetPrepare: input });
+    }
+    if (input.truckId && !input.driverId) {
+      // Show interactive driver list so user can select
+      const driverCompany = user.activeCompanyId || user.companyId;
+      const driverMembers = await this.prisma.userCompany.findMany({
+        where: { companyId: driverCompany, active: true, role: 'chofer' },
+        include: { user: { select: { id: true, name: true } } },
+        take: 50,
+      });
+      const driverItems: { id: string; title: string; description: string }[] = [];
+      // Add "Yo" option if the user could be the driver
+      driverItems.push({ id: `ownfleet_driver:self`, title: (user.name || 'Yo').slice(0, 24), description: 'Yo mismo como chofer' });
+      // Add company drivers
+      const truckForDriver = await this.prisma.truck.findMany({
+        where: { companyId: driverCompany, active: true, assignedUserId: { not: null } },
+        select: { assignedUserId: true, plate: true, model: true },
+      });
+      const truckByDriverId = new Map(truckForDriver.map(t => [t.assignedUserId, t]));
+      for (const m of driverMembers) {
+        if (m.user.id === user.id) continue; // already added as "Yo"
+        const dt = truckByDriverId.get(m.user.id);
+        const truckLabel = dt ? (dt.model ? `${dt.plate} (${dt.model})` : dt.plate) : 'Sin camión asignado';
+        driverItems.push({
+          id: `ownfleet_driver:${m.user.id}`,
+          title: (m.user.name || 'Sin nombre').slice(0, 24),
+          description: truckLabel.slice(0, 72),
+        });
+      }
+      if (driverItems.length === 1 && driverItems[0].id === 'ownfleet_driver:self') {
+        // Only option is "self" — auto-assign
+        input.driverId = 'self';
+      } else {
+        return this.storePendingSelection(session, driverItems, {
+          headerText: '👤 Seleccione el chofer para el flete:',
+          listButtonLabel: 'Ver choferes',
+          sectionTitle: 'CHOFERES',
+        }, 'ownfleet_driver_select', { _ownFleetPrepare: input });
+      }
     }
 
     // Resolve driverId "self" → user.id
