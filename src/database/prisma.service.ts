@@ -9,8 +9,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const url = process.env.DATABASE_URL || '';
     const sep = url.includes('?') ? '&' : '?';
     const params: string[] = [];
-    if (!url.includes('connection_limit')) params.push('connection_limit=10');
-    if (!url.includes('pool_timeout')) params.push('pool_timeout=10');
+    if (!url.includes('connection_limit')) params.push('connection_limit=20');
+    if (!url.includes('pool_timeout')) params.push('pool_timeout=30');
     if (!url.includes('pgbouncer')) params.push('pgbouncer=true');
     const poolUrl = params.length > 0 ? `${url}${sep}${params.join('&')}` : url;
     super({
