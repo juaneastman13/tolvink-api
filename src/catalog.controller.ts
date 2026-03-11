@@ -347,4 +347,20 @@ export class CatalogController implements OnModuleDestroy {
       }).slice(s, s + t).map(c => ({ id: c.id, name: c.name, address: c.address, phone: c.phone }));
     });
   }
+
+  @Get('all')
+  @ApiOperation({ summary: 'Catálogo consolidado — plants, branches, lots, transport-companies en un solo request' })
+  async all(@CurrentUser() user: any) {
+    const key = `all:${user.sub}:${user.companyId}:${user.role}`;
+
+    return this.cached(key, async () => {
+      const [plants, branches, lots, transportCompanies] = await Promise.all([
+        this.plants(user),
+        this.branches(user),
+        this.lots(user),
+        this.transportCompanies(user),
+      ]);
+      return { plants, branches, lots, transportCompanies };
+    });
+  }
 }

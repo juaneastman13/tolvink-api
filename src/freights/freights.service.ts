@@ -419,7 +419,7 @@ export class FreightsService {
         where,
         ...paginationArgs,
         include: {
-          items: true,
+          items: { select: { id: true, grain: true, tons: true } },
           originLot: { select: { id: true, name: true } },
           field: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
@@ -438,7 +438,7 @@ export class FreightsService {
           },
           // Light include for list — exclude ocrData (large Json blob) to reduce payload
           documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true, createdAt: true, uploadedById: true } },
-          pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
+          pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true } },
         },
       }),
       this.prisma.freight.count({ where }),
