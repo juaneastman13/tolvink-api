@@ -30,6 +30,11 @@ export class FreightsController {
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'company', required: false, description: 'Filter to a specific company (activeCompanyId)' })
   @ApiQuery({ name: 'search', required: false, description: 'Free-text search across code, grain, origin, destination, transporter, driver, plate' })
+  @ApiQuery({ name: 'destName', required: false, description: 'Filter by destination name (contains, case-insensitive)' })
+  @ApiQuery({ name: 'originCompany', required: false, description: 'Filter by origin company name (contains, case-insensitive)' })
+  @ApiQuery({ name: 'transporter', required: false, description: 'Filter by transporter company name (contains, case-insensitive)' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'Filter by load date >= (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'Filter by load date <= (YYYY-MM-DD)' })
   findAll(
     @CurrentUser() user: any,
     @Query('status') status?: string,
@@ -37,6 +42,11 @@ export class FreightsController {
     @Query('limit') limit?: string,
     @Query('company') company?: string,
     @Query('search') search?: string,
+    @Query('destName') destName?: string,
+    @Query('originCompany') originCompany?: string,
+    @Query('transporter') transporter?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     const parsedPage = page ? Math.min(Math.max(1, parseInt(page) || 1), 200) : undefined;
     const parsedLimit = limit ? Math.min(Math.max(1, parseInt(limit) || 20), 50) : undefined;
@@ -46,6 +56,11 @@ export class FreightsController {
       limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       company,
       search: search?.trim() || undefined,
+      destName: destName?.trim() || undefined,
+      originCompany: originCompany?.trim() || undefined,
+      transporter: transporter?.trim() || undefined,
+      dateFrom: dateFrom?.trim() || undefined,
+      dateTo: dateTo?.trim() || undefined,
     });
   }
 

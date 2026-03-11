@@ -306,7 +306,7 @@ export class FreightsService {
 
   // ======================== LIST (multi-tenant) =======================
 
-  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string; dateFrom?: string; dateTo?: string; grain?: string; search?: string }) {
+  async findAll(user: any, query: { status?: string; page?: number; limit?: number; company?: string; cursor?: string; dateFrom?: string; dateTo?: string; grain?: string; search?: string; destName?: string; originCompany?: string; transporter?: string }) {
     const limit = Math.min(query.limit || 20, 100);
 
     const where: any = {};
@@ -357,6 +357,21 @@ export class FreightsService {
     }
     if (query.grain) {
       where.items = { some: { grain: { contains: query.grain, mode: 'insensitive' } } };
+    }
+    if (query.destName) {
+      where.destName = { contains: query.destName, mode: 'insensitive' };
+    }
+    if (query.originCompany) {
+      where.originCompany = { ...where.originCompany, name: { contains: query.originCompany, mode: 'insensitive' } };
+    }
+    if (query.transporter) {
+      // Helper to safely append an AND condition
+      const addAnd = (cond: any) => {
+        if (where.AND) { where.AND.push(cond); }
+        else if (where.OR) { where.AND = [{ OR: where.OR }, cond]; delete where.OR; }
+        else { Object.assign(where, cond); }
+      };
+      addAnd({ assignments: { some: { transportCompany: { name: { contains: query.transporter, mode: 'insensitive' } }, status: { in: ['active', 'accepted'] } } } });
     }
 
     if (query.search) {
