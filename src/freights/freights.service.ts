@@ -339,6 +339,9 @@ export class FreightsService {
       ];
     }
 
+    // Capture company-scoped where before adding filters (for status counts)
+    const companyWhere: any = where.OR ? { OR: [...where.OR] } : {};
+
     if (query.status) {
       if (!Object.values(FreightStatus).includes(query.status as FreightStatus)) {
         throw new BadRequestException(`Estado inválido: ${query.status}`);
@@ -408,7 +411,7 @@ export class FreightsService {
       paginationArgs.skip = (page - 1) * limit;
     }
 
-    const [freights, total] = await Promise.all([
+    const [freights, total, statusGroupBy] = await Promise.all([
       this.prisma.freight.findMany({
         where,
         ...paginationArgs,
@@ -436,11 +439,15 @@ export class FreightsService {
         },
       }),
       this.prisma.freight.count({ where }),
+      this.prisma.freight.groupBy({ by: ['status'], where: companyWhere, _count: { _all: true } }),
     ]);
+
+    const statusCounts: Record<string, number> = {};
+    for (const row of statusGroupBy) { statusCounts[row.status] = row._count._all; }
 
     const page = query.page || 1;
     const nextCursor = freights.length === limit ? freights[freights.length - 1]?.id : undefined;
-    return { data: freights, total, page, limit, pages: Math.ceil(total / limit), nextCursor };
+    return { data: freights, total, page, limit, pages: Math.ceil(total / limit), nextCursor, statusCounts };
   }
 
   // ======================== FIND ONE =================================
