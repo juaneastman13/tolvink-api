@@ -441,7 +441,6 @@ model FreightAssignment {
   transporterFinishedConfirmedAt DateTime?  @map("trip_transporter_finished_confirmed_at")
   plantFinishedConfirmedAt       DateTime?  @map("trip_plant_finished_confirmed_at")
 
-  seenAt    DateTime? @map("seen_at")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 

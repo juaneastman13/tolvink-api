@@ -483,30 +483,6 @@ export class FreightsService {
 
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
-    // Mark unseen assignments as "seen" when the transporter/driver views the freight
-    if (currentUser) {
-      const userCompanyIds = currentUser.companies
-        ? currentUser.companies.map((c: any) => c.companyId || c.id).filter(Boolean)
-        : currentUser.companyId ? [currentUser.companyId] : [];
-      const unseenIds = freight.assignments
-        .filter((a: any) =>
-          !a.seenAt &&
-          a.status === 'active' &&
-          (userCompanyIds.includes(a.transportCompanyId) || a.driverId === currentUser.id || a.driverId === currentUser.sub)
-        )
-        .map((a: any) => a.id);
-      if (unseenIds.length > 0) {
-        this.prisma.freightAssignment.updateMany({
-          where: { id: { in: unseenIds } },
-          data: { seenAt: new Date() },
-        }).catch(() => {}); // fire-and-forget, don't block the response
-        // Update in-memory response too
-        for (const a of freight.assignments) {
-          if (unseenIds.includes(a.id)) (a as any).seenAt = new Date();
-        }
-      }
-    }
-
     return freight;
   }
 
