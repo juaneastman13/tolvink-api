@@ -26,18 +26,27 @@ export class CompanyResolutionService {
     return arr;
   }
 
-  /** Shared: fetch memberships with company type once per request */
+  /** Shared: fetch memberships with company type once per request.
+   *  Deduplicates concurrent calls within the same request (e.g. parallel catalog sub-calls). */
   private async getMemberships(userId: string): Promise<any[]> {
     const cache = this.getCache();
     const key = `memberships:${userId}`;
     if (cache?.has(key)) return cache.get(key);
 
-    const memberships = await (this.prisma as any).userCompany.findMany({
+    // Store the promise so parallel callers within the same request await the same query
+    const promiseKey = `_p:${key}`;
+    if (cache?.has(promiseKey)) return cache.get(promiseKey);
+
+    const promise = (this.prisma as any).userCompany.findMany({
       where: { userId, active: true },
       include: { company: { select: { id: true, type: true, types: true } } },
+    }).then((memberships: any[]) => {
+      cache?.set(key, memberships);
+      cache?.delete(promiseKey);
+      return memberships;
     });
-    cache?.set(key, memberships);
-    return memberships;
+    cache?.set(promiseKey, promise);
+    return promise;
   }
 
   async resolveAllCompanyIds(user: { sub: string; companyId?: string; companyByType?: any }): Promise<string[]> {

@@ -414,7 +414,7 @@ export class FreightsService {
       paginationArgs.skip = (page - 1) * limit;
     }
 
-    const [freights, total] = await Promise.all([
+    const [freights, total, statusGroupBy] = await Promise.all([
       this.prisma.freight.findMany({
         where,
         ...paginationArgs,
@@ -442,10 +442,9 @@ export class FreightsService {
         },
       }),
       this.prisma.freight.count({ where }),
+      this.prisma.freight.groupBy({ by: ['status'], where: companyWhere, _count: { _all: true } }),
     ]);
 
-    // Run groupBy sequentially (after main queries) to reduce connection pool pressure
-    const statusGroupBy = await this.prisma.freight.groupBy({ by: ['status'], where: companyWhere, _count: { _all: true } });
     const statusCounts: Record<string, number> = {};
     for (const row of statusGroupBy) { statusCounts[row.status] = row._count._all; }
 
