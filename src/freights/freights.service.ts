@@ -343,10 +343,13 @@ export class FreightsService {
     const companyWhere: any = where.OR ? { OR: [...where.OR] } : {};
 
     if (query.status) {
-      if (!Object.values(FreightStatus).includes(query.status as FreightStatus)) {
-        throw new BadRequestException(`Estado inválido: ${query.status}`);
+      const statuses = query.status.split(',').map(s => s.trim());
+      for (const s of statuses) {
+        if (!Object.values(FreightStatus).includes(s as FreightStatus)) {
+          throw new BadRequestException(`Estado inválido: ${s}`);
+        }
       }
-      where.status = query.status;
+      where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
     }
     if (query.dateFrom || query.dateTo) {
       where.loadDate = {};
