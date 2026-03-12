@@ -13,6 +13,40 @@ import { randomInt } from 'crypto';
 export class FreightsService {
   private readonly logger = new Logger(FreightsService.name);
 
+  // In-memory cache for statusCounts groupBy (30s TTL, keyed by serialized company WHERE)
+  private statusCountsCache = new Map<string, { data: Record<string, number>; ts: number }>();
+  private static readonly STATUS_COUNTS_TTL = 30_000; // 30 seconds
+
+  /** Invalidate all cached status counts (called after any freight mutation) */
+  invalidateStatusCounts() {
+    this.statusCountsCache.clear();
+  }
+
+  /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs */
+  private broadcastAndInvalidate(freightId: string, data: any, excludeUserId?: string) {
+    this.invalidateStatusCounts();
+    this.refreshParticipantIds(freightId).catch(e => this.logger.error('refreshParticipantIds failed', e.message));
+    this.sse.broadcastFreightUpdate(freightId, data, excludeUserId)
+      .catch(e => this.logger.error('Async side-effect failed', e.message));
+  }
+
+  private async getCachedStatusCounts(companyWhere: any): Promise<Record<string, number>> {
+    const key = JSON.stringify(companyWhere);
+    const cached = this.statusCountsCache.get(key);
+    if (cached && Date.now() - cached.ts < FreightsService.STATUS_COUNTS_TTL) {
+      return cached.data;
+    }
+    const statusGroupBy = await this.prisma.freight.groupBy({
+      by: ['status'],
+      where: companyWhere,
+      _count: { _all: true },
+    });
+    const statusCounts: Record<string, number> = {};
+    for (const row of statusGroupBy) { statusCounts[row.status] = row._count._all; }
+    this.statusCountsCache.set(key, { data: statusCounts, ts: Date.now() });
+    return statusCounts;
+  }
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
@@ -38,6 +72,34 @@ export class FreightsService {
   private resolveCompanyType(user: any) { return this.companyRes.resolveCompanyType(user); }
   private hasCompanyType(user: any, type: string) { return this.companyRes.hasCompanyType(user, type); }
   private resolveAllCompanyIds(user: any) { return this.companyRes.resolveAllCompanyIds(user); }
+
+  /** Recompute and persist the participantCompanyIds denormalized array.
+   *  Called after any mutation that changes freight participants (create, assign, cancel assignment). */
+  async refreshParticipantIds(freightId: string, tx?: any) {
+    const db = tx || this.prisma;
+    const freight = await db.freight.findUnique({
+      where: { id: freightId },
+      select: {
+        originCompanyId: true,
+        destCompanyId: true,
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          select: { transportCompanyId: true },
+        },
+      },
+    });
+    if (!freight) return;
+    const ids = new Set<string>();
+    if (freight.originCompanyId) ids.add(freight.originCompanyId);
+    if (freight.destCompanyId) ids.add(freight.destCompanyId);
+    for (const a of freight.assignments) {
+      if (a.transportCompanyId) ids.add(a.transportCompanyId);
+    }
+    await db.freight.update({
+      where: { id: freightId },
+      data: { participantCompanyIds: [...ids] },
+    });
+  }
 
   // Helper: verify a chofer is the assigned driver for a freight
   private async assertDriverAccess(freightId: string, userId: string) {
@@ -73,7 +135,7 @@ export class FreightsService {
     for (const cid of companyIds) {
       const isAction = actionCompanyIds?.has(cid) ?? false;
       this.notifications.notifyCompany(cid, type, title, body, freight.id, excludeUserId, isAction)
-        .catch(e => this.logger.error('Async side-effect failed', e.message));
+        ;
     }
   }
 
@@ -299,7 +361,7 @@ export class FreightsService {
     );
 
     // SSE: notify all involved parties
-    this.sse.broadcastFreightUpdate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub);
 
     return freight;
   }
@@ -317,17 +379,10 @@ export class FreightsService {
         ? [query.company]
         : allIds;
 
+      // Use materialized participantCompanyIds for fast filtering (GIN index).
+      // Also include driver-level access via assignments for choferes.
       where.OR = [
-        { originCompanyId: { in: filterIds } },
-        { destCompanyId: { in: filterIds } },
-        {
-          assignments: {
-            some: {
-              transportCompanyId: { in: filterIds },
-              status: { in: ['active', 'accepted'] },
-            },
-          },
-        },
+        { participantCompanyIds: { hasSome: filterIds } },
         {
           assignments: {
             some: {
@@ -414,7 +469,7 @@ export class FreightsService {
       paginationArgs.skip = (page - 1) * limit;
     }
 
-    const [freights, total, statusGroupBy] = await Promise.all([
+    const [freights, total, statusCounts] = await Promise.all([
       this.prisma.freight.findMany({
         where,
         ...paginationArgs,
@@ -439,11 +494,8 @@ export class FreightsService {
         },
       }),
       this.prisma.freight.count({ where }),
-      this.prisma.freight.groupBy({ by: ['status'], where: companyWhere, _count: { _all: true } }),
+      this.getCachedStatusCounts(companyWhere),
     ]);
-
-    const statusCounts: Record<string, number> = {};
-    for (const row of statusGroupBy) { statusCounts[row.status] = row._count._all; }
 
     const page = query.page || 1;
     const nextCursor = freights.length === limit ? freights[freights.length - 1]?.id : undefined;
@@ -453,40 +505,49 @@ export class FreightsService {
   // ======================== FIND ONE =================================
 
   async findOne(id: string, companyIds?: string[], currentUser?: any) {
-    const whereClause: any = { id };
-    // Defense-in-depth: when companyIds provided, ensure the freight belongs to one of the caller's companies
-    if (companyIds && companyIds.length > 0) {
-      whereClause.OR = [
-        { originCompanyId: { in: companyIds } },
-        { destCompanyId: { in: companyIds } },
-        { assignments: { some: { transportCompanyId: { in: companyIds }, status: { in: ['active', 'accepted'] } } } },
-      ];
-    }
+    // When companyIds are provided (direct service calls), add company scoping.
+    // When called from controller with FreightAccessGuard, companyIds is undefined
+    // and access was already verified — use findUnique (faster, uses PK index).
+    const useCompanyScoping = companyIds && companyIds.length > 0;
 
-    const freight = await this.prisma.freight.findFirst({
-      where: whereClause,
-      include: {
-        items: true,
-        originLot: true,
-        destPlant: true,
-        field: { select: { id: true, name: true } },
-        originCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
-        destCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
-        requestedBy: { select: { id: true, name: true } },
-        assignments: {
-          orderBy: { createdAt: 'desc' },
-          include: {
-            transportCompany: { select: { id: true, name: true } },
-            assignedBy: { select: { id: true, name: true } },
-            driver: { select: { id: true, name: true } },
-            truck: { select: { id: true, plate: true, model: true } },
-          },
+    const includeClause = {
+      items: true,
+      originLot: true,
+      destPlant: true,
+      field: { select: { id: true, name: true } },
+      originCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
+      destCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
+      requestedBy: { select: { id: true, name: true } },
+      assignments: {
+        orderBy: { createdAt: 'desc' as const },
+        include: {
+          transportCompany: { select: { id: true, name: true } },
+          assignedBy: { select: { id: true, name: true } },
+          driver: { select: { id: true, name: true } },
+          truck: { select: { id: true, plate: true, model: true } },
         },
-        documents: { orderBy: { createdAt: 'desc' }, take: 20 },
-        conversation: { select: { id: true } },
-        pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
       },
-    });
+      documents: { orderBy: { createdAt: 'desc' as const }, take: 20 },
+      conversation: { select: { id: true } },
+      pendingChanges: { where: { status: 'pending' as const }, select: { id: true, changeType: true, fromValue: true, toValue: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true, requestedBy: { select: { name: true } } } },
+    };
+
+    const freight = useCompanyScoping
+      ? await this.prisma.freight.findFirst({
+          where: {
+            id,
+            OR: [
+              { originCompanyId: { in: companyIds } },
+              { destCompanyId: { in: companyIds } },
+              { assignments: { some: { transportCompanyId: { in: companyIds }, status: { in: ['active', 'accepted'] } } } },
+            ],
+          },
+          include: includeClause,
+        })
+      : await this.prisma.freight.findUnique({
+          where: { id },
+          include: includeClause,
+        });
 
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
@@ -512,6 +573,28 @@ export class FreightsService {
             transportCompany: { select: { id: true, name: true } },
             driver: { select: { id: true, name: true, phone: true } },
             truck: { select: { id: true, plate: true, model: true } },
+          },
+        },
+      },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    return freight;
+  }
+
+  /** Fetch only the "extra" detail fields not included in list/summary responses */
+  async findOneDetailExtra(id: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        documents: { orderBy: { createdAt: 'desc' as const }, take: 20 },
+        conversation: { select: { id: true } },
+        pendingChanges: {
+          where: { status: 'pending' },
+          select: {
+            id: true, changeType: true, fromValue: true, toValue: true,
+            requestedById: true, approverCompanyId: true, status: true,
+            createdAt: true, requestedBy: { select: { name: true } },
           },
         },
       },
@@ -655,11 +738,11 @@ export class FreightsService {
         'Te asignaron un flete',
         `${result.freight.code} → ${result.freight.destName || 'destino'}`,
         freightId,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      );
     }
 
-    // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    // SSE (also refreshes participantCompanyIds)
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub);
 
     return result.updated;
   }
@@ -733,7 +816,7 @@ export class FreightsService {
       );
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'pending_assignment' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'pending_assignment' }, user.sub);
 
       return result.updated;
     }
@@ -829,11 +912,11 @@ export class FreightsService {
         'Te asignaron un flete',
         `${acceptResult.freight.code} → ${acceptResult.freight.destName || 'destino'}`,
         freightId,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      );
     }
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: acceptResult.freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: acceptResult.freight.code, status: 'accepted' }, user.sub);
 
     return acceptResult.updated;
   }
@@ -908,7 +991,7 @@ export class FreightsService {
     );
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: 'in_progress' }, user.sub);
 
     return startResult;
   }
@@ -1037,7 +1120,7 @@ export class FreightsService {
         loadedActionIds,
       );
 
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: loadedResult.freight.code, status: loadedResult.updated.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: loadedResult.freight.code, status: loadedResult.updated.status }, user.sub);
 
       return loadedResult.updated;
     }
@@ -1114,7 +1197,7 @@ export class FreightsService {
       );
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: tFinishResult.freight.code, status: tFinishResult.plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: tFinishResult.freight.code, status: tFinishResult.plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub);
 
       return tFinishResult.updated;
     }
@@ -1182,7 +1265,7 @@ export class FreightsService {
       );
 
       // SSE
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: pFinishResult.freight.code, status: pFinishResult.transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: pFinishResult.freight.code, status: pFinishResult.transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub);
 
       return pFinishResult.updated;
     }
@@ -1256,7 +1339,7 @@ export class FreightsService {
     );
 
     // SSE
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: cancelResult.freight.code, status: 'canceled' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: cancelResult.freight.code, status: 'canceled' }, user.sub);
 
     return cancelResult.updated;
   }
@@ -1318,7 +1401,7 @@ export class FreightsService {
       user.sub,
     );
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub);
 
     return updated;
   }
@@ -1581,7 +1664,7 @@ export class FreightsService {
         await tx.auditLog.create({
           data: { entityType: 'freight', entityId: freightId, action: 'updated', userId: user.sub, freightId, metadata: data },
         }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
-        this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
+        this.broadcastAndInvalidate(freightId, { id: updated.id, code: updated.code, status: updated.status });
         return { ...updated, pendingChangeCreated };
       }
 
@@ -1665,7 +1748,7 @@ export class FreightsService {
         user.sub,
       );
 
-      this.sse.broadcastFreightUpdate(freightId, { id: updated.id, code: updated.code, status: updated.status }).catch(() => {});
+      this.broadcastAndInvalidate(freightId, { id: updated.id, code: updated.code, status: updated.status });
       return updated;
     });
   }
@@ -2050,7 +2133,7 @@ export class FreightsService {
       user.sub,
       multiActionIds,
     );
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub);
     return result.updated;
   }
 
@@ -2134,11 +2217,11 @@ export class FreightsService {
           `${freight.code}: ${reason || 'Cancelado por planta'}`,
           freightId,
           user.sub,
-        ).catch(e => this.logger.error('Async side-effect failed', e.message));
+        );
       }
     }
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub);
     return result;
   }
 
@@ -2252,10 +2335,10 @@ export class FreightsService {
         `${freshFreight.code}: se actualizó tu asignación`,
         freightId,
         user.sub,
-      ).catch(e => this.logger.error('Async side-effect failed', e.message));
+      );
     }
 
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freshFreight.code, status: freshFreight.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freshFreight.code, status: freshFreight.status }, user.sub);
     return updated;
   }
 
@@ -2340,7 +2423,7 @@ export class FreightsService {
         `${rejectFreight.code}: ${dto.reason}`,
         user.sub,
       );
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: rejectFreight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: rejectFreight.code, status: result.status }, user.sub);
       return result;
     }
 
@@ -2425,7 +2508,7 @@ export class FreightsService {
       `${acceptFreight.code} fue aceptado por el transportista`,
       user.sub,
     );
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: acceptFreight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: acceptFreight.code, status: result.status }, user.sub);
     return result;
   }
 
@@ -2491,7 +2574,7 @@ export class FreightsService {
       `${freight.code} — Camión #${assignment.tripNumber} inició viaje`,
       user.sub,
     );
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: result.status }, user.sub);
     return result;
   }
 
@@ -2588,7 +2671,7 @@ export class FreightsService {
         user.sub,
         tripLoadedActionIds,
       );
-      this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+      this.broadcastAndInvalidate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub);
       return result;
     }
 
@@ -2711,7 +2794,7 @@ export class FreightsService {
       bothConfirmed ? NotificationType.freight_finished : NotificationType.freight_confirmed,
       tripTitle, tripBody, user.sub, tripActionIds,
     );
-    this.sse.broadcastFreightUpdate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub).catch(e => this.logger.error('Async side-effect failed', e.message));
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub);
     return result;
   }
 

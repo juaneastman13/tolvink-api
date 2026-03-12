@@ -355,6 +355,10 @@ model Freight {
   // true = producer chose own fleet, false = delegated to plant, null = N/A or legacy
   useOwnFleet Boolean? @map("use_own_fleet")
 
+  // Materialized participant company IDs for fast multi-tenant filtering
+  // Contains: originCompanyId, destCompanyId, and all active assignment transportCompanyIds
+  participantCompanyIds String[] @default([]) @map("participant_company_ids")
+
   // Public tracking share token (generated on first share request)
   shareToken String? @unique @map("share_token") @db.VarChar(36)
 
@@ -394,6 +398,7 @@ model Freight {
   @@index([originLotId])
   @@index([originCompanyId, status, loadDate])
   @@index([destCompanyId, status, loadDate])
+  @@index([participantCompanyIds], type: Gin)
   @@map("freights")
 }
 

@@ -97,6 +97,13 @@ export class FreightsController {
     return this.service.findOneSummary(id);
   }
 
+  @Get(':id/detail-extra')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Solo documentos, conversación y cambios pendientes (complemento del listado)' })
+  findOneDetailExtra(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.findOneDetailExtra(id);
+  }
+
   @Get(':id')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Detalle de flete' })

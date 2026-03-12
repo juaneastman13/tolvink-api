@@ -54,8 +54,10 @@ export class FreightAccessGuard implements CanActivate {
       throw new ForbiddenException('Tu empresa no participa en este flete');
     }
 
-    // Attach freight context to request for downstream use
+    // Attach freight context and resolved company IDs to request for downstream use
+    // This avoids re-querying resolveAllCompanyIds in the service layer
     request.freightAccess = { isOrigin, isDest, isTransporter };
+    request.resolvedCompanyIds = allIds;
 
     return true;
   }
