@@ -303,7 +303,11 @@ export class FieldsService {
 
   // ── Import from Google Maps shared list URL ────────────────────
 
-  async importGoogleList(url: string) {
+  async importGoogleList(rawUrl: string) {
+    // Extract URL from pasted text (e.g. "Nombre · Autorhttps://maps.app.goo.gl/...")
+    const urlMatch = rawUrl.match(/https?:\/\/[^\s]+/);
+    const url = urlMatch ? urlMatch[0] : rawUrl.trim();
+
     // Validate domain
     let parsed: URL;
     try { parsed = new URL(url); } catch { throw new BadRequestException('URL inválida'); }
