@@ -14,11 +14,14 @@ import OpenAI from 'openai';
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const WEB_PHONE = 'web'; // Distinguishes web sessions from WhatsApp
 const MAX_AUDIO_BYTES = 24 * 1024 * 1024; // 24MB (Whisper limit ~25MB)
+const USER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 @Injectable()
 export class WebChatService {
   private readonly logger = new Logger(WebChatService.name);
   private openai: OpenAI | null = null;
+  // In-memory cache for user data to avoid repeated DB queries within a chat session
+  private userCache = new Map<string, { data: any; expiresAt: number }>();
 
   constructor(
     private prisma: PrismaService,
@@ -32,9 +35,13 @@ export class WebChatService {
     }
   }
 
-  /** Load full DB user with company/membership data (same pattern as WhatsApp router) */
+  /** Load full DB user with company/membership data (cached for 5 min) */
   private async loadFullUser(userId: string) {
-    return this.prisma.user.findUnique({
+    const now = Date.now();
+    const cached = this.userCache.get(userId);
+    if (cached && now < cached.expiresAt) return cached.data;
+
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
         company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } },
@@ -44,6 +51,16 @@ export class WebChatService {
         },
       },
     });
+    if (user) {
+      this.userCache.set(userId, { data: user, expiresAt: now + USER_CACHE_TTL_MS });
+      // Evict old entries if cache grows too large
+      if (this.userCache.size > 500) {
+        for (const [k, v] of this.userCache) {
+          if (now > v.expiresAt) this.userCache.delete(k);
+        }
+      }
+    }
+    return user;
   }
 
   /** Find or create an AI session for the web channel */
@@ -74,9 +91,15 @@ export class WebChatService {
     return session;
   }
 
-  /** Shared: call AI, handle _pendingSelection, emit response via SSE */
+  /** Shared: call AI, handle _pendingSelection, emit response via SSE (fetches own session) */
   private async processAndEmit(dbUser: any, text: string): Promise<void> {
+    this.sse.emitToUser(dbUser.id, 'ai:thinking', {});
     const session = await this.getOrCreateSession(dbUser.id);
+    return this.processAndEmitWithSession(dbUser, text, session);
+  }
+
+  /** Core: call AI with pre-fetched session, handle _pendingSelection, emit response via SSE */
+  private async processAndEmitWithSession(dbUser: any, text: string, session: any): Promise<void> {
     const synUser = buildSyntheticUser(dbUser);
 
     // Stream text deltas to the frontend as Claude generates them
@@ -129,11 +152,25 @@ export class WebChatService {
 
   /** Process a text message from the web chat */
   async handleTextMessage(jwtUser: any, text: string): Promise<void> {
-    const dbUser = await this.validateUser(jwtUser);
-    if (!dbUser) return;
+    // Emit thinking ASAP — before any DB queries
+    this.sse.emitToUser(jwtUser.sub, 'ai:thinking', {});
+
+    // Parallel: load user + find/create session at the same time
+    const [dbUser, session] = await Promise.all([
+      this.loadFullUser(jwtUser.sub),
+      this.getOrCreateSession(jwtUser.sub),
+    ]);
+
+    if (!dbUser || !dbUser.active) {
+      this.sse.emitToUser(jwtUser.sub, 'ai:response', {
+        text: 'Tu cuenta no se encuentra activa.',
+        error: true,
+      });
+      return;
+    }
 
     try {
-      await this.processAndEmit(dbUser, text);
+      await this.processAndEmitWithSession(dbUser, text, session);
     } catch (e) {
       this.logger.error(`Web chat error for user=${dbUser.id}: ${e.message}`, e.stack?.slice(0, 300));
       this.sse.emitToUser(dbUser.id, 'ai:response', {

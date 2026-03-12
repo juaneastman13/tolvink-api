@@ -20,7 +20,7 @@ import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
 import {
   MAX_HISTORY, MAX_TOOL_LOOPS, AI_SESSION_TIMEOUT_MIN, APP_URL, OWN_FLEET_SHORTCUT,
-  MODEL_ID, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
+  MODEL_ID, MODEL_ID_FAST, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
   URUGUAY_UTC_OFFSET_MS, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, AUDIO_FILLERS,
   AI_RATE_LIMIT_WINDOW_MS, AI_RATE_LIMIT_MAX,
 } from './ai.constants';
@@ -96,6 +96,35 @@ export class AiService implements OnModuleDestroy {
 
   isEnabled(): boolean {
     return !!this.client;
+  }
+
+  // ======================== MODEL SELECTION ==============================
+
+  /** Classify message complexity to pick the right model.
+   *  Simple queries → Haiku (faster). Complex queries → Sonnet (smarter). */
+  private selectModel(message: string, hasHistory: boolean): string {
+    const lower = message.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Simple patterns: greetings, status checks, confirmations, short queries
+    const simplePatterns = [
+      /^(hola|buenas|buen dia|buenos dias|hey|che)\b/,
+      /^(si|no|ok|dale|listo|perfecto|gracias|confirmo|cancelo)\b/,
+      /\b(estado|status)\b.{0,20}\b(flete|flt)/,
+      /^(mis fletes|fletes pendientes|pendientes)/,
+      /^(resumen del dia|resumen diario)/,
+      /\b(como (van|estan|esta)|que hay de nuevo)\b/,
+    ];
+    // Complex patterns: creation, analysis, multi-step operations
+    const complexPatterns = [
+      /\b(crear|creat|nuevo flete|solicitar|agendar)\b/,
+      /\b(analiz|compar|recomiend|optimiz|reporte detallado)\b/,
+      /\b(cambiar empresa|switch|modificar)\b/,
+      /\b(adjunt|document|archivo)\b/,
+    ];
+    if (complexPatterns.some(p => p.test(lower))) return MODEL_ID;
+    if (!hasHistory && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
+    if (message.length < 40 && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
+    // Default to Sonnet for anything ambiguous
+    return MODEL_ID;
   }
 
   // ======================== MAIN CHAT METHOD =============================
@@ -220,6 +249,12 @@ export class AiService implements OnModuleDestroy {
     // Filter tools by role — don't expose admin/mutation tools to unauthorized roles
     const filteredTools = this.getFilteredTools(user, companyType, isWeb);
 
+    // Select model based on message complexity (Haiku for simple, Sonnet for complex)
+    const selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
+    if (selectedModel !== MODEL_ID) {
+      this.logger.log(`Using fast model (${selectedModel}) for simple query`);
+    }
+
     // Global timeout for entire tool execution loop (H1: prevent hanging)
     const loopDeadline = Date.now() + 90_000; // 90s max for all loops
 
@@ -231,9 +266,11 @@ export class AiService implements OnModuleDestroy {
           break;
         }
 
-        this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
+        // Use fast model only on first loop; tool-result loops need full reasoning
+        const modelForLoop = loopCount === 1 ? selectedModel : MODEL_ID;
+        this.logger.log(`Sending to Claude (loop ${loopCount}, model=${modelForLoop}), messages: ${currentMessages.length}`);
         const createParams = {
-          model: MODEL_ID,
+          model: modelForLoop,
           max_tokens: isWeb ? 2400 : MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],

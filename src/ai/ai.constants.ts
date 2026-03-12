@@ -15,6 +15,7 @@ export const OWN_FLEET_SHORTCUT = 'own_fleet';
 // temperature 0.4  → better interpretation of ambiguous messages while keeping operational precision.
 // max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
 export const MODEL_ID = 'claude-sonnet-4-6';
+export const MODEL_ID_FAST = 'claude-haiku-4-5-20251001';
 export const MODEL_TEMPERATURE = 0.4;
 export const MODEL_MAX_TOKENS = 1200;
 export const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
