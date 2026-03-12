@@ -419,7 +419,7 @@ export class FreightsService {
         where,
         ...paginationArgs,
         include: {
-          items: { select: { id: true, grain: true, tons: true, unit: true, amount: true, productTypeOther: true } },
+          items: { select: { id: true, grain: true, tons: true } },
           originLot: { select: { id: true, name: true } },
           field: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
@@ -498,7 +498,7 @@ export class FreightsService {
     const freight = await this.prisma.freight.findUnique({
       where: { id },
       include: {
-        items: { select: { id: true, grain: true, tons: true, unit: true, amount: true, productTypeOther: true } },
+        items: { select: { id: true, grain: true, tons: true } },
         originLot: { select: { id: true, name: true } },
         field: { select: { id: true, name: true } },
         destPlant: { select: { id: true, name: true } },
