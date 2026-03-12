@@ -127,26 +127,41 @@ export class FieldsService {
   // ── Google Maps Link Import ──────────────────────────────────────
 
   /**
-   * Resolve a short Google Maps URL to get the final URL with coordinates.
-   * Follows redirects: maps.app.goo.gl → google.com/maps/place/.../@lat,lng,...
+   * Resolve a Google Maps share URL to extract coordinates.
+   * Follows redirects and parses the HTML response for the staticmap center= parameter.
    */
   private async resolveGoogleLink(shortUrl: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null } | null> {
     try {
-      // Follow redirects to get the final URL
-      const res = await fetch(shortUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
-      const finalUrl = res.url;
+      const res = await fetch(shortUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
+      const html = await res.text();
 
-      // Extract coords from @lat,lng pattern in final URL
-      const coordMatch = finalUrl.match(/@(-?[\d.]+),(-?[\d.]+)/);
-      if (!coordMatch) return null;
+      // Strategy 1: Extract from staticmap meta tag — center=lat%2Clng
+      const centerMatch = html.match(/center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/);
+      let lat: number, lng: number;
+      if (centerMatch) {
+        lat = parseFloat(centerMatch[1]);
+        lng = parseFloat(centerMatch[2]);
+      } else {
+        // Strategy 2: Extract from @lat,lng in final URL
+        const urlMatch = res.url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (!urlMatch) return null;
+        lat = parseFloat(urlMatch[1]);
+        lng = parseFloat(urlMatch[2]);
+      }
 
-      const lat = parseFloat(coordMatch[1]);
-      const lng = parseFloat(coordMatch[2]);
       if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
 
-      // Extract place name from /place/Name/ in URL
-      const placeMatch = finalUrl.match(/\/place\/([^/@]+)/);
-      const urlName = placeMatch ? decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')) : null;
+      // Try to extract place name from /place/Name/ in URL
+      const placeMatch = res.url.match(/\/place\/([^/@]+)/);
+      let urlName = placeMatch ? decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')) : null;
+
+      // Fallback: extract from og:title or <title> in HTML
+      if (!urlName) {
+        const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
+        if (ogMatch && ogMatch[1] !== 'Google Maps') {
+          urlName = ogMatch[1];
+        }
+      }
 
       return {
         name: urlName,
