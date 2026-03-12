@@ -432,7 +432,7 @@ export class FreightsService {
             orderBy: { createdAt: 'asc' },
             include: {
               transportCompany: { select: { id: true, name: true } },
-              driver: { select: { id: true, name: true } },
+              driver: { select: { id: true, name: true, phone: true } },
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
@@ -510,7 +510,7 @@ export class FreightsService {
           orderBy: { createdAt: 'asc' as const },
           include: {
             transportCompany: { select: { id: true, name: true } },
-            driver: { select: { id: true, name: true } },
+            driver: { select: { id: true, name: true, phone: true } },
             truck: { select: { id: true, plate: true, model: true } },
           },
         },
