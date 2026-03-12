@@ -7,17 +7,16 @@ CREATE INDEX "freights_participant_company_ids_idx" ON "freights" USING GIN ("pa
 -- Backfill: compute participantCompanyIds from existing data
 UPDATE "freights" f
 SET "participant_company_ids" = (
-  SELECT ARRAY(
-    SELECT DISTINCT unnest(
-      ARRAY[f."origin_company_id", f."dest_company_id"]
-      || COALESCE(
-        (SELECT array_agg(DISTINCT fa."transport_company_id")
-         FROM "freight_assignments" fa
-         WHERE fa."freight_id" = f."id"
-           AND fa."status" IN ('active', 'accepted')),
-        '{}'
-      )
-    ) AS cid
-    WHERE cid IS NOT NULL
-  )
+  SELECT COALESCE(array_agg(DISTINCT cid), '{}')
+  FROM unnest(
+    ARRAY[f."origin_company_id", f."dest_company_id"]
+    || COALESCE(
+      (SELECT array_agg(DISTINCT fa."transport_company_id")
+       FROM "freight_assignments" fa
+       WHERE fa."freight_id" = f."id"
+         AND fa."status" IN ('active', 'accepted')),
+      '{}'
+    )
+  ) AS cid
+  WHERE cid IS NOT NULL
 );
