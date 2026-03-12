@@ -1,12 +1,11 @@
-import { Controller, Get, Post, Patch, Param, Body, UseGuards, UseInterceptors, UploadedFile, ParseUUIDPipe, BadRequestException } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -75,28 +74,16 @@ export class FieldsController {
     return this.service.updateLot(user, fieldId, lotId, dto);
   }
 
-  // ── Google Takeout Import ──────────────────────────────────────────
+  // ── Google Maps Link Import ──────────────────────────────────────
 
-  @Post('import-takeout')
+  @Post('import-links')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('producer')
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Parsear ZIP de Google Takeout y devolver ubicaciones' })
-  @UseInterceptors(FileInterceptor('file', {
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-    fileFilter: (_req, file, cb) => {
-      if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname?.endsWith('.zip')) {
-        cb(null, true);
-      } else {
-        cb(new BadRequestException('Solo se aceptan archivos .zip'), false);
-      }
-    },
-  }))
-  importTakeout(
-    @UploadedFile() file: Express.Multer.File,
+  @ApiOperation({ summary: 'Parsear links de Google Maps compartidos y devolver ubicaciones' })
+  importLinks(
+    @Body() dto: ImportParseLinksDto,
   ) {
-    if (!file || !file.buffer) throw new BadRequestException('Archivo requerido');
-    return this.service.parseTakeoutZip(file.buffer);
+    return this.service.parseGoogleLinks(dto.text);
   }
 
   @Post('import-confirm')

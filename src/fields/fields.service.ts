@@ -2,7 +2,6 @@ import { Injectable, NotFoundException, ForbiddenException, BadRequestException 
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
-import * as AdmZip from 'adm-zip';
 
 @Injectable()
 export class FieldsService {
@@ -125,74 +124,91 @@ export class FieldsService {
     });
   }
 
-  // ── Google Takeout Import ──────────────────────────────────────────
+  // ── Google Maps Link Import ──────────────────────────────────────
 
-  async parseTakeoutZip(buffer: Buffer) {
-    let zip: AdmZip;
+  /**
+   * Resolve a short Google Maps URL to get the final URL with coordinates.
+   * Follows redirects: maps.app.goo.gl → google.com/maps/place/.../@lat,lng,...
+   */
+  private async resolveGoogleLink(shortUrl: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null } | null> {
     try {
-      zip = new AdmZip(buffer);
-    } catch {
-      throw new BadRequestException('El archivo no es un ZIP válido');
-    }
+      // Follow redirects to get the final URL
+      const res = await fetch(shortUrl, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
+      const finalUrl = res.url;
 
-    // Find the GeoJSON file inside the ZIP
-    const entries = zip.getEntries();
-    let geoJson: any = null;
-    for (const entry of entries) {
-      if (entry.isDirectory || !entry.entryName.endsWith('.json')) continue;
-      try {
-        const content = JSON.parse(entry.getData().toString('utf8'));
-        if (content?.type === 'FeatureCollection' && Array.isArray(content.features)) {
-          geoJson = content;
+      // Extract coords from @lat,lng pattern in final URL
+      const coordMatch = finalUrl.match(/@(-?[\d.]+),(-?[\d.]+)/);
+      if (!coordMatch) return null;
+
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
+
+      // Extract place name from /place/Name/ in URL
+      const placeMatch = finalUrl.match(/\/place\/([^/@]+)/);
+      const urlName = placeMatch ? decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')) : null;
+
+      return {
+        name: urlName,
+        lat: Math.round(lat * 1e6) / 1e6,
+        lng: Math.round(lng * 1e6) / 1e6,
+        address: null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async parseGoogleLinks(text: string) {
+    // Extract all Google Maps short links from pasted text
+    const urlRegex = /https?:\/\/maps\.app\.goo\.gl\/[A-Za-z0-9_-]+[^\s)}\]>"]*/g;
+    const lines = text.split('\n').map(l => l.trim());
+
+    // Build entries: for each URL, look at the preceding non-empty line as potential name
+    const entries: { url: string; contextName: string | null }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const urls = lines[i].match(urlRegex);
+      if (!urls) continue;
+      for (const url of urls) {
+        // Check preceding non-empty line for a name (e.g. "Toma agua · Juan Eastman")
+        let contextName: string | null = null;
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = lines[j];
+          if (!prev) continue;
+          if (urlRegex.test(prev)) break; // another URL, stop
+          // Take the first part before " · " (author separator)
+          contextName = prev.split('·')[0].trim() || prev.trim();
           break;
         }
-      } catch { /* not valid JSON, skip */ }
+        entries.push({ url: url.replace(/[?&]g_st=[^&\s]*/g, ''), contextName });
+      }
     }
 
-    if (!geoJson) {
-      throw new BadRequestException('No se encontró un archivo GeoJSON de ubicaciones guardadas dentro del ZIP');
+    if (entries.length === 0) {
+      throw new BadRequestException('No se encontraron links de Google Maps en el texto pegado');
+    }
+    if (entries.length > 50) {
+      throw new BadRequestException('Máximo 50 links por importación');
     }
 
+    // Resolve all URLs in parallel (with concurrency limit)
+    const BATCH = 5;
     const parsed: any[] = [];
     let discarded = 0;
 
-    for (const feature of geoJson.features) {
-      const props = feature.properties || {};
-      const geom = feature.geometry || {};
-      const coords = geom.coordinates || [0, 0]; // GeoJSON: [lng, lat]
-
-      if (props.location) {
-        // Variant 1: has location object with real coordinates
-        const lat = coords[1];
-        const lng = coords[0];
-        if (lat === 0 && lng === 0) { discarded++; continue; }
+    for (let i = 0; i < entries.length; i += BATCH) {
+      const batch = entries.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(e => this.resolveGoogleLink(e.url)));
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (!result) { discarded++; continue; }
+        const entry = batch[j];
         parsed.push({
-          name: props.location.name || 'Ubicación sin nombre',
-          address: props.location.address || null,
-          lat: Math.round(lat * 1e6) / 1e6,
-          lng: Math.round(lng * 1e6) / 1e6,
-          date: props.date || null,
-          countryCode: props.location.country_code || null,
+          name: entry.contextName || result.name || 'Ubicación sin nombre',
+          address: result.address,
+          lat: result.lat,
+          lng: result.lng,
         });
-      } else {
-        // Variant 2: no location, try to extract coords from google_maps_url
-        const url = props.google_maps_url || '';
-        const match = url.match(/[?&]q=(-?[\d.]+),(-?[\d.]+)/);
-        if (match) {
-          const lat = parseFloat(match[1]);
-          const lng = parseFloat(match[2]);
-          if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) { discarded++; continue; }
-          parsed.push({
-            name: 'Ubicación sin nombre',
-            address: `${lat}, ${lng}`,
-            lat: Math.round(lat * 1e6) / 1e6,
-            lng: Math.round(lng * 1e6) / 1e6,
-            date: props.date || null,
-            countryCode: null,
-          });
-        } else {
-          discarded++;
-        }
       }
     }
 

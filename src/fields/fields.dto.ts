@@ -110,7 +110,15 @@ export class UpdateLotDto {
   lng?: number;
 }
 
-// ── Import from Google Takeout ─────────────────────────────────────
+// ── Import from Google Maps links ──────────────────────────────────
+
+export class ImportParseLinksDto {
+  @ApiProperty({ description: 'Texto pegado con links de Google Maps' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50000)
+  text: string;
+}
 
 export class ImportLocationDto {
   @ApiProperty()
