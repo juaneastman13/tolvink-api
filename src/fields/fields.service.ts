@@ -137,10 +137,15 @@ export class FieldsService {
   async getPois(user: any) {
     const companyIds = await this.resolveAllProducerCompanyIds(user);
     if (companyIds.length === 0) return [];
-    return this.prisma.poi.findMany({
-      where: { companyId: { in: companyIds }, active: true },
-      orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
-    });
+    try {
+      return await this.prisma.poi.findMany({
+        where: { companyId: { in: companyIds }, active: true },
+        orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
+      });
+    } catch (err) {
+      this.logger.warn('getPois failed (table may not exist yet): ' + err.message);
+      return [];
+    }
   }
 
   async createPoi(user: any, dto: CreatePoiDto) {
