@@ -21,6 +21,40 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.connectWithRetry();
+    await this.ensurePoisTable();
+  }
+
+  /** Create pois table if it doesn't exist — fallback for when prisma migrate deploy doesn't run */
+  private async ensurePoisTable(): Promise<void> {
+    try {
+      await this.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "pois" (
+          "id" TEXT NOT NULL,
+          "name" VARCHAR(255) NOT NULL,
+          "company_id" TEXT NOT NULL,
+          "address" TEXT,
+          "lat" DECIMAL(10,6) NOT NULL,
+          "lng" DECIMAL(10,6) NOT NULL,
+          "comments" TEXT,
+          "active" BOOLEAN NOT NULL DEFAULT true,
+          "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updated_at" TIMESTAMP(3) NOT NULL,
+          CONSTRAINT "pois_pkey" PRIMARY KEY ("id")
+        )
+      `);
+      await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "pois_company_id_idx" ON "pois"("company_id")`);
+      await this.$executeRawUnsafe(`
+        DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pois_company_id_fkey') THEN
+            ALTER TABLE "pois" ADD CONSTRAINT "pois_company_id_fkey"
+              FOREIGN KEY ("company_id") REFERENCES "companies"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+          END IF;
+        END $$
+      `);
+      this.logger.log('ensurePoisTable: pois table ready');
+    } catch (err) {
+      this.logger.warn('ensurePoisTable failed: ' + err.message);
+    }
   }
 
   async onModuleDestroy() {
