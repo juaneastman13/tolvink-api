@@ -147,7 +147,7 @@ export class FieldsService {
       // Strategy A: Check if this is a saved-places list (entitylist/getlist URL in HTML)
       const listUrlMatch = html.match(/entitylist\/getlist\?[^"'\s]+/);
       if (listUrlMatch) {
-        const listLocations = await this.resolveGoogleList(listUrlMatch[0]);
+        const { locations: listLocations } = await this.resolveGoogleList(listUrlMatch[0]);
         if (listLocations.length > 0) return listLocations;
       }
 
@@ -193,7 +193,7 @@ export class FieldsService {
   /**
    * Fetch all locations from a Google Maps saved-places list via the entitylist/getlist endpoint.
    */
-  private async resolveGoogleList(getlistPath: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null }[]> {
+  private async resolveGoogleList(getlistPath: string): Promise<{ locations: { name: string | null; lat: number; lng: number; address: string | null }[]; listName: string | null }> {
     try {
       // Unescape HTML entities (&amp; → &) and build full URL
       const cleanPath = getlistPath.replace(/&amp;/g, '&');
@@ -206,8 +206,13 @@ export class FieldsService {
       body = body.replace(/^\)\]\}'/, '').trim();
 
       const data = JSON.parse(body);
-      const items = data?.[8];
-      if (!Array.isArray(items)) return [];
+      // Items can be at data[0][8] (wrapped) or data[8] (flat)
+      const root = Array.isArray(data?.[0]) ? data[0] : data;
+      const items = root?.[8];
+      if (!Array.isArray(items)) return { locations: [], listName: null };
+
+      // List name at root[4]
+      const listName = typeof root?.[4] === 'string' ? root[4] : null;
 
       const locations: { name: string | null; lat: number; lng: number; address: string | null }[] = [];
       for (const item of items) {
@@ -233,9 +238,9 @@ export class FieldsService {
           // Skip malformed items
         }
       }
-      return locations;
+      return { locations, listName };
     } catch {
-      return [];
+      return { locations: [], listName: null };
     }
   }
 
@@ -330,13 +335,15 @@ export class FieldsService {
     const listUrlMatch = html.match(/entitylist\/getlist\?[^"'\s]+/);
     if (listUrlMatch) {
       this.logger.log(`[import-list] Found entitylist/getlist URL, fetching list data...`);
-      const listLocations = await this.resolveGoogleList(listUrlMatch[0]);
+      const { locations: listLocations, listName: apiListName } = await this.resolveGoogleList(listUrlMatch[0]);
       if (listLocations.length > 0) {
         this.logger.log(`[import-list] Extracted ${listLocations.length} locations via entitylist/getlist`);
-        // Try to extract list name from og:title or page title
-        let listName: string | null = null;
-        const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
-        if (ogMatch && ogMatch[1] !== 'Google Maps') listName = ogMatch[1];
+        // Use list name from API response, fallback to og:title
+        let listName = apiListName;
+        if (!listName) {
+          const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
+          if (ogMatch && ogMatch[1] !== 'Google Maps') listName = ogMatch[1];
+        }
         return { listName, parsed: listLocations.map(l => ({ ...l, name: l.name || 'Ubicación sin nombre' })), total: listLocations.length, discarded: 0, warning: null };
       }
     }
