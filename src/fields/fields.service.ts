@@ -127,29 +127,37 @@ export class FieldsService {
   // ── Google Maps Link Import ──────────────────────────────────────
 
   /**
-   * Resolve a Google Maps share URL to extract coordinates.
-   * Follows redirects and parses the HTML response for the staticmap center= parameter.
+   * Resolve a Google Maps share URL.
+   * Supports both single-location links and saved-places lists (multiple locations).
+   * For lists, fetches the entitylist/getlist endpoint to extract all places.
    */
-  private async resolveGoogleLink(shortUrl: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null } | null> {
+  private async resolveGoogleLink(shortUrl: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null }[]> {
     try {
       const res = await fetch(shortUrl, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
       const html = await res.text();
 
-      // Strategy 1: Extract from staticmap meta tag — center=lat%2Clng
+      // Strategy A: Check if this is a saved-places list (entitylist/getlist URL in HTML)
+      const listUrlMatch = html.match(/entitylist\/getlist\?[^"'\s]+/);
+      if (listUrlMatch) {
+        const listLocations = await this.resolveGoogleList(listUrlMatch[0]);
+        if (listLocations.length > 0) return listLocations;
+      }
+
+      // Strategy B: Single location — extract from staticmap meta tag
       const centerMatch = html.match(/center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/);
       let lat: number, lng: number;
       if (centerMatch) {
         lat = parseFloat(centerMatch[1]);
         lng = parseFloat(centerMatch[2]);
       } else {
-        // Strategy 2: Extract from @lat,lng in final URL
+        // Fallback: extract from @lat,lng in final URL
         const urlMatch = res.url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-        if (!urlMatch) return null;
+        if (!urlMatch) return [];
         lat = parseFloat(urlMatch[1]);
         lng = parseFloat(urlMatch[2]);
       }
 
-      if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
+      if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return [];
 
       // Try to extract place name from /place/Name/ in URL
       const placeMatch = res.url.match(/\/place\/([^/@]+)/);
@@ -163,14 +171,63 @@ export class FieldsService {
         }
       }
 
-      return {
+      return [{
         name: urlName,
         lat: Math.round(lat * 1e6) / 1e6,
         lng: Math.round(lng * 1e6) / 1e6,
         address: null,
-      };
+      }];
     } catch {
-      return null;
+      return [];
+    }
+  }
+
+  /**
+   * Fetch all locations from a Google Maps saved-places list via the entitylist/getlist endpoint.
+   */
+  private async resolveGoogleList(getlistPath: string): Promise<{ name: string | null; lat: number; lng: number; address: string | null }[]> {
+    try {
+      // Unescape HTML entities (&amp; → &) and build full URL
+      const cleanPath = getlistPath.replace(/&amp;/g, '&');
+      const url = cleanPath.startsWith('http') ? cleanPath : `https://www.google.com/maps/preview/${cleanPath}`;
+
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      let body = await res.text();
+
+      // Strip XSSI prefix )]}'
+      body = body.replace(/^\)\]\}'/, '').trim();
+
+      const data = JSON.parse(body);
+      const items = data?.[8];
+      if (!Array.isArray(items)) return [];
+
+      const locations: { name: string | null; lat: number; lng: number; address: string | null }[] = [];
+      for (const item of items) {
+        try {
+          const coords = item?.[1]?.[5];
+          if (!coords) continue;
+          const lat = coords[2];
+          const lng = coords[3];
+          if (typeof lat !== 'number' || typeof lng !== 'number') continue;
+          if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
+
+          // Custom name at [3], fallback type at [2], address at [1][4]
+          const customName = item[3] || item[2] || null;
+          const address = item[1]?.[4] || null;
+
+          locations.push({
+            name: customName,
+            lat: Math.round(lat * 1e6) / 1e6,
+            lng: Math.round(lng * 1e6) / 1e6,
+            address: typeof address === 'string' ? address : null,
+          });
+        } catch {
+          // Skip malformed items
+        }
+      }
+      return locations;
+    } catch {
+      return [];
     }
   }
 
@@ -185,13 +242,11 @@ export class FieldsService {
       const urls = lines[i].match(urlRegex);
       if (!urls) continue;
       for (const url of urls) {
-        // Check preceding non-empty line for a name (e.g. "Toma agua · Juan Eastman")
         let contextName: string | null = null;
         for (let j = i - 1; j >= 0; j--) {
           const prev = lines[j];
           if (!prev) continue;
-          if (urlRegex.test(prev)) break; // another URL, stop
-          // Take the first part before " · " (author separator)
+          if (urlRegex.test(prev)) break;
           contextName = prev.split('·')[0].trim() || prev.trim();
           break;
         }
@@ -207,6 +262,7 @@ export class FieldsService {
     }
 
     // Resolve all URLs in parallel (with concurrency limit)
+    // Each link may return multiple locations (saved-places lists)
     const BATCH = 5;
     const parsed: any[] = [];
     let discarded = 0;
@@ -215,15 +271,17 @@ export class FieldsService {
       const batch = entries.slice(i, i + BATCH);
       const results = await Promise.all(batch.map(e => this.resolveGoogleLink(e.url)));
       for (let j = 0; j < results.length; j++) {
-        const result = results[j];
-        if (!result) { discarded++; continue; }
+        const locations = results[j];
+        if (locations.length === 0) { discarded++; continue; }
         const entry = batch[j];
-        parsed.push({
-          name: entry.contextName || result.name || 'Ubicación sin nombre',
-          address: result.address,
-          lat: result.lat,
-          lng: result.lng,
-        });
+        for (const loc of locations) {
+          parsed.push({
+            name: loc.name || entry.contextName || 'Ubicación sin nombre',
+            address: loc.address,
+            lat: loc.lat,
+            lng: loc.lng,
+          });
+        }
       }
     }
 
