@@ -185,6 +185,39 @@ export class CreatePoiDto {
   comments?: string;
 }
 
+export class UpdatePoiDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-90) @Max(90)
+  lat?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(-180) @Max(180)
+  lng?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comments?: string;
+}
+
 export class ImportGoogleListDto {
   @ApiProperty({ description: 'URL de lista compartida de Google Maps' })
   @IsString()

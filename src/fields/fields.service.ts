@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, UnprocessableEntityException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto, UpdatePoiDto } from './fields.dto';
 
 const GMAPS_DOMAINS = ['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com'];
 const BROWSER_HEADERS = {
@@ -142,15 +142,18 @@ export class FieldsService {
         where: { companyId: { in: companyIds }, active: true },
         orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
       });
-    } catch (err) {
-      this.logger.warn('getPois failed (table may not exist yet): ' + err.message);
-      return [];
+    } catch (err: any) {
+      if (err?.code === 'P2021' || err?.message?.includes('does not exist')) {
+        this.logger.warn('getPois: pois table not found, returning empty');
+        return [];
+      }
+      throw err;
     }
   }
 
   async createPoi(user: any, dto: CreatePoiDto) {
     const companyId = await this.resolveProducerCompanyId(user);
-    return this.prisma.poi.create({
+    const poi = await this.prisma.poi.create({
       data: {
         name: dto.name,
         companyId,
@@ -159,6 +162,41 @@ export class FieldsService {
         lng: dto.lng,
         comments: dto.comments || null,
       },
+    });
+    this.logger.log(`createPoi: created "${dto.name}" (id=${poi.id}) for company ${companyId}`);
+    return poi;
+  }
+
+  async updatePoi(user: any, poiId: string, dto: UpdatePoiDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId: { in: companyIds }, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+    const updated = await this.prisma.poi.update({
+      where: { id: poiId },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.address !== undefined && { address: dto.address || null }),
+        ...(dto.lat !== undefined && { lat: dto.lat }),
+        ...(dto.lng !== undefined && { lng: dto.lng }),
+        ...(dto.comments !== undefined && { comments: dto.comments || null }),
+      },
+    });
+    this.logger.log(`updatePoi: updated "${updated.name}" (id=${poiId})`);
+    return updated;
+  }
+
+  async deletePoi(user: any, poiId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId: { in: companyIds }, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+    this.logger.log(`deletePoi: soft-deleting "${poi.name}" (id=${poiId})`);
+    return this.prisma.poi.update({
+      where: { id: poiId },
+      data: { active: false },
     });
   }
 
@@ -572,7 +610,7 @@ export class FieldsService {
         // Add to existing array so subsequent items in this batch also deduplicate
         existing.push({ name: loc.name, lat: loc.lat as any, lng: loc.lng as any });
       } catch (err) {
-        errors.push(`Error al crear "${loc.name}": ${err.message}`);
+        errors.push(`Error al crear "${loc.name}"`);
       }
     }
 

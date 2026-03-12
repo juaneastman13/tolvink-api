@@ -5,7 +5,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto, UpdatePoiDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -88,6 +88,29 @@ export class FieldsController {
   @ApiOperation({ summary: 'Crear una ubicación de interés' })
   createPoi(@CurrentUser() user: any, @Body() dto: CreatePoiDto) {
     return this.service.createPoi(user, dto);
+  }
+
+  @Patch('pois/:poiId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Editar una ubicación de interés' })
+  updatePoi(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+    @Body() dto: UpdatePoiDto,
+  ) {
+    return this.service.updatePoi(user, poiId, dto);
+  }
+
+  @Patch('pois/:poiId/delete')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Eliminar una ubicación de interés (soft delete)' })
+  deletePoi(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+  ) {
+    return this.service.deletePoi(user, poiId);
   }
 
   // ── Google Maps Link Import ──────────────────────────────────────
