@@ -112,6 +112,7 @@ model Company {
   branches               Branch[]
   fields                 Field[]
   lots                   Lot[]
+  pois                   Poi[]
   plants                 Plant[]
   trucks                 Truck[]
   freightsAsOrigin       Freight[]             @relation("FreightOriginCompany")
@@ -239,6 +240,26 @@ model Lot {
   @@index([companyId])
   @@index([fieldId])
   @@map("lots")
+}
+
+// ======================== POINTS OF INTEREST =========================
+
+model Poi {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(255)
+  companyId String   @map("company_id")
+  address   String?
+  lat       Decimal  @db.Decimal(10, 6)
+  lng       Decimal  @db.Decimal(10, 6)
+  comments  String?  @db.Text
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("pois")
 }
 
 // ======================== PLANTS =====================================

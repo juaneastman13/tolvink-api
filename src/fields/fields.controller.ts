@@ -5,7 +5,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -72,6 +72,22 @@ export class FieldsController {
     @Body() dto: UpdateLotDto,
   ) {
     return this.service.updateLot(user, fieldId, lotId, dto);
+  }
+
+  // ── Points of Interest ──────────────────────────────────────────
+
+  @Get('pois')
+  @ApiOperation({ summary: 'Listar ubicaciones de interés del usuario' })
+  getPois(@CurrentUser() user: any) {
+    return this.service.getPois(user);
+  }
+
+  @Post('pois')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Crear una ubicación de interés' })
+  createPoi(@CurrentUser() user: any, @Body() dto: CreatePoiDto) {
+    return this.service.createPoi(user, dto);
   }
 
   // ── Google Maps Link Import ──────────────────────────────────────

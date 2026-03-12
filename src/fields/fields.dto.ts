@@ -153,6 +153,38 @@ export class ImportConfirmDto {
   locations: ImportLocationDto[];
 }
 
+// ── Points of Interest ────────────────────────────────────────────
+
+export class CreatePoiDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  name: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(-90) @Max(90)
+  lat: number;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(-180) @Max(180)
+  lng: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comments?: string;
+}
+
 export class ImportGoogleListDto {
   @ApiProperty({ description: 'URL de lista compartida de Google Maps' })
   @IsString()

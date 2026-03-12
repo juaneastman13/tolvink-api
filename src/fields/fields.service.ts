@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, UnprocessableEntityException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto } from './fields.dto';
 
 const GMAPS_DOMAINS = ['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com'];
 const BROWSER_HEADERS = {
@@ -129,6 +129,31 @@ export class FieldsService {
     return this.prisma.lot.update({
       where: { id: lotId },
       data,
+    });
+  }
+
+  // ── Points of Interest ──────────────────────────────────────────
+
+  async getPois(user: any) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    if (companyIds.length === 0) return [];
+    return this.prisma.poi.findMany({
+      where: { companyId: { in: companyIds }, active: true },
+      orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createPoi(user: any, dto: CreatePoiDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
+    return this.prisma.poi.create({
+      data: {
+        name: dto.name,
+        companyId,
+        address: dto.address || null,
+        lat: dto.lat,
+        lng: dto.lng,
+        comments: dto.comments || null,
+      },
     });
   }
 
