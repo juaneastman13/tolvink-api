@@ -5,7 +5,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -75,6 +75,14 @@ export class FieldsController {
   }
 
   // ── Google Maps Link Import ──────────────────────────────────────
+
+  @Post('import-google-list')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Parsear link de lista compartida de Google Maps y devolver ubicaciones' })
+  importGoogleList(@Body() dto: ImportGoogleListDto) {
+    return this.service.importGoogleList(dto.url);
+  }
 
   @Post('import-links')
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -152,3 +152,11 @@ export class ImportConfirmDto {
   @Type(() => ImportLocationDto)
   locations: ImportLocationDto[];
 }
+
+export class ImportGoogleListDto {
+  @ApiProperty({ description: 'URL de lista compartida de Google Maps' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  url: string;
+}

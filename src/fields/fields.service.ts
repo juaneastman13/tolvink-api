@@ -1,10 +1,18 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, UnprocessableEntityException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
 
+const GMAPS_DOMAINS = ['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com'];
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept-Language': 'es-UY,es;q=0.9,en;q=0.8',
+};
+
 @Injectable()
 export class FieldsService {
+  private readonly logger = new Logger(FieldsService.name);
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
@@ -286,6 +294,195 @@ export class FieldsService {
     }
 
     return { parsed, discarded };
+  }
+
+  // ── Import from Google Maps shared list URL ────────────────────
+
+  async importGoogleList(url: string) {
+    // Validate domain
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new BadRequestException('URL inválida'); }
+    if (!GMAPS_DOMAINS.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
+      throw new BadRequestException('La URL no es un link válido de Google Maps');
+    }
+
+    this.logger.log(`[import-list] Resolving URL: ${url}`);
+
+    // Step 1: Follow redirects to get the expanded URL
+    let expandedUrl: string;
+    let html: string;
+    try {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(15000),
+      });
+      expandedUrl = res.url;
+      html = await res.text();
+    } catch (err) {
+      this.logger.error(`[import-list] Failed to fetch URL: ${err.message}`);
+      throw new UnprocessableEntityException('No se pudo acceder al link de Google Maps. Verificá que sea un link válido.');
+    }
+
+    this.logger.log(`[import-list] Expanded URL: ${expandedUrl}`);
+
+    // Strategy A: entitylist/getlist endpoint (saved-places lists)
+    const listUrlMatch = html.match(/entitylist\/getlist\?[^"'\s]+/);
+    if (listUrlMatch) {
+      this.logger.log(`[import-list] Found entitylist/getlist URL, fetching list data...`);
+      const listLocations = await this.resolveGoogleList(listUrlMatch[0]);
+      if (listLocations.length > 0) {
+        this.logger.log(`[import-list] Extracted ${listLocations.length} locations via entitylist/getlist`);
+        // Try to extract list name from og:title or page title
+        let listName: string | null = null;
+        const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
+        if (ogMatch && ogMatch[1] !== 'Google Maps') listName = ogMatch[1];
+        return { listName, parsed: listLocations.map(l => ({ ...l, name: l.name || 'Ubicación sin nombre' })), total: listLocations.length, discarded: 0, warning: null };
+      }
+    }
+
+    // Strategy B: Extract data= parameter and fetch the list page
+    const dataMatch = expandedUrl.match(/[?&]data=([^&]+)/) || html.match(/data=([^"&\s]+)/);
+    if (dataMatch) {
+      this.logger.log(`[import-list] Found data= parameter, fetching list page...`);
+      try {
+        const dataUrl = `https://www.google.com/maps/@/data=${dataMatch[1]}?ucbcb=1`;
+        const dataRes = await fetch(dataUrl, {
+          headers: BROWSER_HEADERS,
+          signal: AbortSignal.timeout(15000),
+        });
+        const dataHtml = await dataRes.text();
+        const locations = this.parseLocationsFromHtml(dataHtml);
+        if (locations.length > 0) {
+          this.logger.log(`[import-list] Extracted ${locations.length} locations via data= page`);
+          let listName: string | null = null;
+          const ogMatch = dataHtml.match(/property="og:title"\s+content="([^"]+)"/);
+          if (ogMatch && ogMatch[1] !== 'Google Maps') listName = ogMatch[1];
+          return { listName, parsed: locations, total: locations.length, discarded: 0, warning: null };
+        }
+      } catch (err) {
+        this.logger.warn(`[import-list] data= page fetch failed: ${err.message}`);
+      }
+    }
+
+    // Strategy C: Parse the initial HTML response directly
+    this.logger.log(`[import-list] Trying direct HTML parse...`);
+    const directLocations = this.parseLocationsFromHtml(html);
+    if (directLocations.length > 0) {
+      this.logger.log(`[import-list] Extracted ${directLocations.length} locations from direct HTML`);
+      let listName: string | null = null;
+      const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
+      if (ogMatch && ogMatch[1] !== 'Google Maps') listName = ogMatch[1];
+      return { listName, parsed: directLocations, total: directLocations.length, discarded: 0, warning: null };
+    }
+
+    // Strategy D: Single location fallback (staticmap / @lat,lng)
+    const singleLoc = this.parseSingleLocation(html, expandedUrl);
+    if (singleLoc) {
+      this.logger.log(`[import-list] Extracted single location fallback`);
+      return { listName: null, parsed: [singleLoc], total: 1, discarded: 0, warning: 'Se encontró una sola ubicación. ¿Es un link de lista o de un lugar individual?' };
+    }
+
+    this.logger.warn(`[import-list] No locations found in URL`);
+    throw new UnprocessableEntityException('No se pudieron extraer ubicaciones de este link. Verificá que sea un link de lista compartida de Google Maps.');
+  }
+
+  /**
+   * Parse locations from Google Maps HTML/JS using coordinate regex.
+   * Looks for [null,null,lat,lng] patterns and extracts nearby names.
+   */
+  private parseLocationsFromHtml(html: string): { name: string; lat: number; lng: number; address: string | null }[] {
+    const coordRegex = /\[null,null,(-?\d+\.\d+),(-?\d+\.\d+)\]/g;
+    const locations: { name: string; lat: number; lng: number; address: string | null }[] = [];
+    const seen = new Set<string>();
+    let match: RegExpExecArray | null;
+    let idx = 0;
+
+    while ((match = coordRegex.exec(html)) !== null) {
+      const lat = parseFloat(match[1]);
+      const lng = parseFloat(match[2]);
+      if (isNaN(lat) || isNaN(lng)) continue;
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+      if (lat === 0 && lng === 0) continue;
+
+      // Deduplicate by rounding to ~1m precision
+      const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      // Extract name from surrounding text
+      let name: string | null = null;
+      // Look backwards from the match for a quoted string (escaped or regular)
+      const before = html.substring(Math.max(0, match.index - 500), match.index);
+      // Try escaped quotes first: \"Name\"
+      const escapedQuotes = [...before.matchAll(/\\"([^"\\]{1,200})\\"/g)];
+      if (escapedQuotes.length > 0) {
+        const candidate = escapedQuotes[escapedQuotes.length - 1][1];
+        if (candidate && candidate.length > 1 && !/^[\d\s.,-]+$/.test(candidate)) {
+          name = this.htmlUnescape(candidate);
+        }
+      }
+      // Try regular quotes
+      if (!name) {
+        const regularQuotes = [...before.matchAll(/"([^"]{1,200})"/g)];
+        if (regularQuotes.length > 0) {
+          const candidate = regularQuotes[regularQuotes.length - 1][1];
+          if (candidate && candidate.length > 1 && !/^[\d\s.,-]+$/.test(candidate) && !candidate.includes('null')) {
+            name = this.htmlUnescape(candidate);
+          }
+        }
+      }
+
+      idx++;
+      locations.push({
+        name: name || `Ubicación ${idx}`,
+        lat: Math.round(lat * 1e6) / 1e6,
+        lng: Math.round(lng * 1e6) / 1e6,
+        address: null,
+      });
+    }
+
+    this.logger.log(`[import-list] Regex found ${locations.length} coordinate matches (${seen.size} unique)`);
+    return locations;
+  }
+
+  private parseSingleLocation(html: string, finalUrl: string): { name: string; lat: number; lng: number; address: string | null } | null {
+    const centerMatch = html.match(/center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/);
+    let lat: number, lng: number;
+    if (centerMatch) {
+      lat = parseFloat(centerMatch[1]);
+      lng = parseFloat(centerMatch[2]);
+    } else {
+      const urlMatch = finalUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+      if (!urlMatch) return null;
+      lat = parseFloat(urlMatch[1]);
+      lng = parseFloat(urlMatch[2]);
+    }
+    if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
+
+    const placeMatch = finalUrl.match(/\/place\/([^/@]+)/);
+    let name = placeMatch ? decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')) : null;
+    if (!name) {
+      const ogMatch = html.match(/property="og:title"\s+content="([^"]+)"/);
+      if (ogMatch && ogMatch[1] !== 'Google Maps') name = ogMatch[1];
+    }
+
+    return {
+      name: name || 'Ubicación sin nombre',
+      lat: Math.round(lat * 1e6) / 1e6,
+      lng: Math.round(lng * 1e6) / 1e6,
+      address: null,
+    };
+  }
+
+  private htmlUnescape(str: string): string {
+    return str
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
   }
 
   async importConfirm(user: any, dto: ImportConfirmDto) {
