@@ -1,5 +1,6 @@
-import { IsString, IsOptional, IsNumber, MinLength, Min, Max, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsArray, ValidateNested, ArrayMaxSize, MinLength, Min, Max, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 
 export class CreateFieldDto {
   @ApiProperty()
@@ -107,4 +108,39 @@ export class UpdateLotDto {
   @IsNumber()
   @Min(-180) @Max(180)
   lng?: number;
+}
+
+// ── Import from Google Takeout ─────────────────────────────────────
+
+export class ImportLocationDto {
+  @ApiProperty()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  name: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(-90) @Max(90)
+  lat: number;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(-180) @Max(180)
+  lng: number;
+}
+
+export class ImportConfirmDto {
+  @ApiProperty({ type: [ImportLocationDto] })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => ImportLocationDto)
+  locations: ImportLocationDto[];
 }

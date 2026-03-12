@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
+import * as AdmZip from 'adm-zip';
 
 @Injectable()
 export class FieldsService {
@@ -122,5 +123,132 @@ export class FieldsService {
       where: { id: lotId },
       data,
     });
+  }
+
+  // ── Google Takeout Import ──────────────────────────────────────────
+
+  async parseTakeoutZip(buffer: Buffer) {
+    let zip: AdmZip;
+    try {
+      zip = new AdmZip(buffer);
+    } catch {
+      throw new BadRequestException('El archivo no es un ZIP válido');
+    }
+
+    // Find the GeoJSON file inside the ZIP
+    const entries = zip.getEntries();
+    let geoJson: any = null;
+    for (const entry of entries) {
+      if (entry.isDirectory || !entry.entryName.endsWith('.json')) continue;
+      try {
+        const content = JSON.parse(entry.getData().toString('utf8'));
+        if (content?.type === 'FeatureCollection' && Array.isArray(content.features)) {
+          geoJson = content;
+          break;
+        }
+      } catch { /* not valid JSON, skip */ }
+    }
+
+    if (!geoJson) {
+      throw new BadRequestException('No se encontró un archivo GeoJSON de ubicaciones guardadas dentro del ZIP');
+    }
+
+    const parsed: any[] = [];
+    let discarded = 0;
+
+    for (const feature of geoJson.features) {
+      const props = feature.properties || {};
+      const geom = feature.geometry || {};
+      const coords = geom.coordinates || [0, 0]; // GeoJSON: [lng, lat]
+
+      if (props.location) {
+        // Variant 1: has location object with real coordinates
+        const lat = coords[1];
+        const lng = coords[0];
+        if (lat === 0 && lng === 0) { discarded++; continue; }
+        parsed.push({
+          name: props.location.name || 'Ubicación sin nombre',
+          address: props.location.address || null,
+          lat: Math.round(lat * 1e6) / 1e6,
+          lng: Math.round(lng * 1e6) / 1e6,
+          date: props.date || null,
+          countryCode: props.location.country_code || null,
+        });
+      } else {
+        // Variant 2: no location, try to extract coords from google_maps_url
+        const url = props.google_maps_url || '';
+        const match = url.match(/[?&]q=(-?[\d.]+),(-?[\d.]+)/);
+        if (match) {
+          const lat = parseFloat(match[1]);
+          const lng = parseFloat(match[2]);
+          if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) { discarded++; continue; }
+          parsed.push({
+            name: 'Ubicación sin nombre',
+            address: `${lat}, ${lng}`,
+            lat: Math.round(lat * 1e6) / 1e6,
+            lng: Math.round(lng * 1e6) / 1e6,
+            date: props.date || null,
+            countryCode: null,
+          });
+        } else {
+          discarded++;
+        }
+      }
+    }
+
+    return { parsed, discarded };
+  }
+
+  async importConfirm(user: any, dto: ImportConfirmDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
+    const locations = dto.locations;
+
+    if (locations.length === 0) {
+      throw new BadRequestException('No hay ubicaciones para importar');
+    }
+
+    // Fetch existing fields to check for near-duplicates (< 100m)
+    const existing = await this.prisma.field.findMany({
+      where: { companyId, active: true },
+      select: { name: true, lat: true, lng: true },
+    });
+
+    const created: string[] = [];
+    const errors: string[] = [];
+
+    for (const loc of locations) {
+      // Check near-duplicate: same name + < 100m distance
+      const isDuplicate = existing.some(e => {
+        if (e.name !== loc.name) return false;
+        if (e.lat == null || e.lng == null) return false;
+        const dLat = (Number(e.lat) - loc.lat) * 111320;
+        const dLng = (Number(e.lng) - loc.lng) * 111320 * Math.cos(loc.lat * Math.PI / 180);
+        return Math.sqrt(dLat * dLat + dLng * dLng) < 100;
+      });
+
+      if (isDuplicate) {
+        errors.push(`"${loc.name}" ya existe con coordenadas similares`);
+        continue;
+      }
+
+      try {
+        await this.prisma.field.create({
+          data: {
+            name: loc.name,
+            companyId,
+            address: loc.address || null,
+            lat: loc.lat,
+            lng: loc.lng,
+          },
+        });
+        created.push(loc.name);
+        // Add to existing array so subsequent items in this batch also deduplicate
+        existing.push({ name: loc.name, lat: loc.lat as any, lng: loc.lng as any });
+      } catch (err) {
+        errors.push(`Error al crear "${loc.name}": ${err.message}`);
+      }
+    }
+
+    return { created: created.length, errors };
   }
 }

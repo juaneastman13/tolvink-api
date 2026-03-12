@@ -1,11 +1,12 @@
-import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseUUIDPipe } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Param, Body, UseGuards, UseInterceptors, UploadedFile, ParseUUIDPipe, BadRequestException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -72,5 +73,40 @@ export class FieldsController {
     @Body() dto: UpdateLotDto,
   ) {
     return this.service.updateLot(user, fieldId, lotId, dto);
+  }
+
+  // ── Google Takeout Import ──────────────────────────────────────────
+
+  @Post('import-takeout')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Parsear ZIP de Google Takeout y devolver ubicaciones' })
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+    fileFilter: (_req, file, cb) => {
+      if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname?.endsWith('.zip')) {
+        cb(null, true);
+      } else {
+        cb(new BadRequestException('Solo se aceptan archivos .zip'), false);
+      }
+    },
+  }))
+  importTakeout(
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file || !file.buffer) throw new BadRequestException('Archivo requerido');
+    return this.service.parseTakeoutZip(file.buffer);
+  }
+
+  @Post('import-confirm')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Confirmar e importar ubicaciones como campos' })
+  importConfirm(
+    @CurrentUser() user: any,
+    @Body() dto: ImportConfirmDto,
+  ) {
+    return this.service.importConfirm(user, dto);
   }
 }
