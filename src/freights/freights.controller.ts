@@ -90,6 +90,13 @@ export class FreightsController {
     return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
   }
 
+  @Get(':id/summary')
+  @UseGuards(FreightAccessGuard)
+  @ApiOperation({ summary: 'Resumen liviano de flete (sin documentos, pendingChanges, historial completo)' })
+  findOneSummary(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.findOneSummary(id);
+  }
+
   @Get(':id')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Detalle de flete' })

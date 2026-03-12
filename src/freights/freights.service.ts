@@ -419,26 +419,23 @@ export class FreightsService {
         where,
         ...paginationArgs,
         include: {
-          items: { select: { id: true, grain: true, tons: true } },
+          items: { select: { id: true, grain: true, tons: true, unit: true, amount: true, productTypeOther: true } },
           originLot: { select: { id: true, name: true } },
           field: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
           originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
           destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
           requestedBy: { select: { id: true, name: true } },
-          conversation: { select: { id: true } },
+          // Light mode: omit documents, pendingChanges, conversation — loaded on-demand in detail view
           assignments: {
             where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
             orderBy: { createdAt: 'asc' },
             include: {
               transportCompany: { select: { id: true, name: true } },
-              driver: { select: { id: true, name: true, phone: true } },
+              driver: { select: { id: true, name: true } },
               truck: { select: { id: true, plate: true, model: true } },
             },
           },
-          // Light include for list — exclude ocrData (large Json blob) to reduce payload
-          documents: { orderBy: { createdAt: 'desc' }, take: 5, select: { id: true, name: true, url: true, type: true, step: true, createdAt: true, uploadedById: true } },
-          pendingChanges: { where: { status: 'pending' }, select: { id: true, changeType: true, requestedById: true, approverCompanyId: true, status: true, createdAt: true } },
         },
       }),
       this.prisma.freight.count({ where }),
@@ -493,6 +490,33 @@ export class FreightsService {
 
     if (!freight) throw new NotFoundException('Flete no encontrado');
 
+    return freight;
+  }
+
+  /** Light single-freight fetch (same shape as findAll items) — used for SSE refresh without full detail overhead */
+  async findOneSummary(id: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id },
+      include: {
+        items: { select: { id: true, grain: true, tons: true, unit: true, amount: true, productTypeOther: true } },
+        originLot: { select: { id: true, name: true } },
+        field: { select: { id: true, name: true } },
+        destPlant: { select: { id: true, name: true } },
+        originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+        destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+        requestedBy: { select: { id: true, name: true } },
+        assignments: {
+          where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
+          orderBy: { createdAt: 'asc' as const },
+          include: {
+            transportCompany: { select: { id: true, name: true } },
+            driver: { select: { id: true, name: true } },
+            truck: { select: { id: true, plate: true, model: true } },
+          },
+        },
+      },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
     return freight;
   }
 
