@@ -106,7 +106,7 @@ export class AiService implements OnModuleDestroy {
     user: any,
     session: any,
     onDelta?: (chunk: string, start?: boolean) => void,
-  ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
+  ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }>; navigate?: { screen: string; freightId?: string } }> {
     if (!this.client) {
       return { text: 'El asistente IA no está disponible en este momento.' };
     }
@@ -148,7 +148,8 @@ export class AiService implements OnModuleDestroy {
 
     const synUser = this.buildSyntheticUser(user);
     const companyType = this.resolveCompanyType(user);
-    const systemPrompt = this.buildSystemPrompt(user, companyType);
+    const isWeb = phone === 'web';
+    const systemPrompt = this.buildSystemPrompt(user, companyType, isWeb);
 
     // Cap message length to prevent context window abuse (5000 chars max)
     const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
@@ -217,7 +218,7 @@ export class AiService implements OnModuleDestroy {
     this._chatSideEffects.delete(session.id);
 
     // Filter tools by role — don't expose admin/mutation tools to unauthorized roles
-    const filteredTools = this.getFilteredTools(user, companyType);
+    const filteredTools = this.getFilteredTools(user, companyType, isWeb);
 
     // Global timeout for entire tool execution loop (H1: prevent hanging)
     const loopDeadline = Date.now() + 90_000; // 90s max for all loops
@@ -233,7 +234,7 @@ export class AiService implements OnModuleDestroy {
         this.logger.log(`Sending to Claude (loop ${loopCount}), messages: ${currentMessages.length}`);
         const createParams = {
           model: MODEL_ID,
-          max_tokens: MODEL_MAX_TOKENS,
+          max_tokens: isWeb ? 2400 : MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           tools: filteredTools.map((t, i, arr) =>
@@ -274,6 +275,7 @@ export class AiService implements OnModuleDestroy {
             'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers', 'summarize_freights',
             'list_documents', 'freight_history', 'get_dashboard',
             'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
+            'navigate_app',
           ]);
 
           const toolBlocks = response.content.filter((b: any) => b.type === 'tool_use');
@@ -339,7 +341,7 @@ export class AiService implements OnModuleDestroy {
       let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No se pudo procesar el mensaje.';
 
       // Post-process: validate quality, strip UUIDs, enforce length
-      finalText = this.validateResponse(finalText);
+      finalText = this.validateResponse(finalText, isWeb);
 
       // Save updated history — reload session first to preserve tool-written state (e.g. pendingFreight)
       currentMessages.push({ role: 'assistant', content: response.content });
@@ -356,7 +358,7 @@ export class AiService implements OnModuleDestroy {
       // Extract pending buttons: side-effects take priority over DB state
       const pendingButtons = sideEffects._pendingButtons || latestState._pendingButtons || undefined;
       const { _pendingButtons: _dbBtns, ...cleanState } = latestState;
-      const { _pendingButtons: _seBtns, _clearAiMessages, activeContext: seActiveContext, ...otherSideEffects } = sideEffects;
+      const { _pendingButtons: _seBtns, _clearAiMessages, activeContext: seActiveContext, _navigate, ...otherSideEffects } = sideEffects;
 
       // Merge activeContext: DB state + side-effects
       const mergedActiveContext = seActiveContext
@@ -393,7 +395,7 @@ export class AiService implements OnModuleDestroy {
         data: updateData,
       });
 
-      return { text: finalText, buttons: pendingButtons };
+      return { text: finalText, buttons: pendingButtons, navigate: _navigate };
     } catch (e) {
       this._chatSideEffects.delete(session.id);
       this.logger.error(`Chat error [session=${session.id} user=${user.id} company=${user.activeCompanyId}]: ${e.message}`, e.stack?.slice(0, 500));
@@ -415,7 +417,7 @@ export class AiService implements OnModuleDestroy {
       .slice(0, 100);
   }
 
-  private buildSystemPrompt(user: any, companyType: string): string {
+  private buildSystemPrompt(user: any, companyType: string, isWeb = false): string {
     const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
     const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
@@ -474,7 +476,7 @@ USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today} | Uruguay (UTC-3)${o
 
 IDENTIDAD: "Capataz digital" — claro, directo, profesional, lenguaje del campo.
 - Tratamiento de USTED. PROHIBIDO tuteo/voseo/coloquialismos (dale, bárbaro, jaja).
-- Respuestas cortas y accionables. Sin disclaimers, sin tecnicismos, sin *negritas*.
+- Respuestas cortas y accionables. Sin disclaimers, sin tecnicismos${isWeb ? '.' : ', sin *negritas*.'}
 - No mencionar nombres de herramientas ni estados internos del sistema al usuario.
 - Incorrecto: "El flete pasó a estado in_progress." Correcto: "El camión ya salió del campo."
 - No saludar si ya lo hizo. No repetir información ya confirmada.
@@ -492,7 +494,7 @@ Ejemplo:
 🗺️ Lote 5 — Campo El Ombú
 📅 15 marzo — 08:00
 
-FORMATO: Una acción/dato por línea. URLs como texto plano (no [texto](url)). No usar separadores como ──── o ═══.
+FORMATO: Una acción/dato por línea.${isWeb ? ' Podés usar **negrita** para resaltar datos clave y listas con viñetas.' : ' URLs como texto plano (no [texto](url)).'} No usar separadores como ──── o ═══.
 
 BÚSQUEDA PROACTIVA (CRÍTICO):
 - NUNCA pedir un código de flete si se puede buscar automáticamente.
@@ -524,7 +526,7 @@ IMÁGENES/DOCUMENTOS:
 UBICACIONES:
 - No mostrar coordenadas crudas ni enlaces a Google Maps a choferes/operarios.${isAdmin ? ' Admins y gerentes pueden solicitar coordenadas explícitamente.' : ''}
 - Con mapLink → frase breve + link Tolvink. Sin mapLink → "Ubicación no disponible."
-- Para marcar ubicación → generate_location_link. ÚNICA vía válida.
+- Para marcar ubicación → generate_location_link.${isWeb ? ' En la web, el mapa se abre inline en el chat.' : ' ÚNICA vía válida.'}
 - Sin coordenadas NO crear campo/lote/origen/destino personalizado.
 
 LISTAS Y SELECCIÓN:
@@ -608,12 +610,20 @@ LINKS A LA APP (usar cuando corresponda):
 - Ver flete específico: el link viene en el campo "link" de get_freight_detail. SIEMPRE incluirlo al mostrar detalle.
 - Mapa del día: generate_daily_map_link. Incluir cuando el usuario pregunte panorama general.
 - Reporte PDF: generate_report_link. Ofrecer cuando el usuario necesite documentación formal.
-- Ante funcionalidad no disponible por WhatsApp → derivar con link directo.
+- ${isWeb ? 'Ante acciones de navegación (ver flete, crear flete, ir a reportes, etc.) → usar navigate_app para llevar al usuario a la pantalla correcta.' : 'Ante funcionalidad no disponible por WhatsApp → derivar con link directo.'}
 
 TERMINOLOGÍA CORRECTA:
 - Documento de transporte: "remito" (NO "carta de porte").
 - Viaje: usar "viaje" o "flete" según contexto. "Trip" es interno, no mencionarlo.
-- Empresa tipo: "productor", "planta", "transportista". NO usar "producer/plant/transporter".`;
+- Empresa tipo: "productor", "planta", "transportista". NO usar "producer/plant/transporter".${isWeb ? `
+
+NAVEGACIÓN IN-APP (solo web):
+- Usar navigate_app para llevar al usuario a pantallas de la app. Pantallas: home, list, new (crear flete), detail (ver flete), calendar, reports, fields, trucks, menu, chats.
+- Ejemplo: usuario dice "quiero ver el flete F26-LCP.1822" → get_freight_detail + navigate_app(screen="detail", freightId=UUID).
+- Ejemplo: "quiero crear un flete" → navigate_app(screen="new") y luego guiar normalmente.
+- Ejemplo: "ver calendario" → navigate_app(screen="calendar").
+- SIEMPRE navegar cuando la acción tiene sentido visual (ver detalle, crear, listar). NO navegar para consultas de datos simples que se responden en el chat.
+- navigate_app NO reemplaza las herramientas de datos — usarlo ADEMÁS de la respuesta informativa.` : ''}`;
   }
 
   // ======================== CONTEXT-BASED TOOL FILTERING ==================
@@ -692,7 +702,7 @@ TERMINOLOGÍA CORRECTA:
     'approve_pending_change', 'reject_pending_change',
   ]);
 
-  private getFilteredTools(user: any, companyType: string): any[] {
+  private getFilteredTools(user: any, companyType: string, isWeb = false): any[] {
     const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
     const isAdmin = ['admin', 'platform_admin', 'gerente'].includes(user.role) ||
       (user.memberships || []).some((m: any) => ['admin', 'gerente'].includes(m.role) && m.active);
@@ -738,6 +748,9 @@ TERMINOLOGÍA CORRECTA:
     if (hasMultiCompany) {
       for (const t of AiService.MULTI_COMPANY_TOOLS) allowed.add(t);
     }
+
+    // Web-only tools
+    if (isWeb) allowed.add('navigate_app');
 
     return this.tools.filter(t => allowed.has(t.name));
   }
@@ -890,6 +903,7 @@ TERMINOLOGÍA CORRECTA:
         case 'assign_multi_trucks': return await this.toolAssignMultiTrucks(input, user, session);
         case 'view_driver_queue': return await this.toolViewDriverQueue(input, user);
         case 'reorder_driver_queue': return await this.toolReorderDriverQueue(input, user, session);
+        case 'navigate_app': return this.toolNavigateApp(input, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
     }
   }
@@ -3190,6 +3204,15 @@ TERMINOLOGÍA CORRECTA:
   // ======================== LOCATION PICKER TOOL ==========================
 
   // ---- generate_location_link ----
+  private toolNavigateApp(input: any, session: any): string {
+    const { screen, freightId } = input;
+    const effects = this._chatSideEffects.get(session.id) || {};
+    effects._navigate = { screen, freightId: freightId || undefined };
+    effects._ts = effects._ts || Date.now();
+    this._chatSideEffects.set(session.id, effects);
+    return JSON.stringify({ status: 'ok', navigated: screen });
+  }
+
   private toolGenerateLocationLink(input: any, session: any): string {
     const token = crypto.randomUUID();
     const purposeLabel = (input.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
@@ -4193,7 +4216,7 @@ TERMINOLOGÍA CORRECTA:
   // ======================== RESPONSE VALIDATION ===========================
 
   /** Post-process AI response: strip UUIDs, enforce length, quality check */
-  private validateResponse(text: string): string {
+  private validateResponse(text: string, isWeb = false): string {
     // 1. Strip UUID patterns that may have leaked through
     //    BUT preserve UUIDs inside URLs (e.g. pick-location?token=UUID)
     const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -4203,9 +4226,9 @@ TERMINOLOGÍA CORRECTA:
       return '[ID interno]';
     });
 
-    // 2. Enforce max length for WhatsApp-friendly responses
+    // 2. Enforce max length for WhatsApp-friendly responses (skip for web — no char limit)
     //    Exception: freight lists (contain freight codes) are allowed to be longer
-    if (clean.length > MAX_RESPONSE_CHARS && !/F\d{2}-[A-Z]{3}\.\d{4}|FLT-\d{4,}/i.test(clean)) {
+    if (!isWeb && clean.length > MAX_RESPONSE_CHARS && !/F\d{2}-[A-Z]{3}\.\d{4}|FLT-\d{4,}/i.test(clean)) {
       // Find a natural break point (newline or sentence end)
       const lineBreak = clean.lastIndexOf('\n', MAX_RESPONSE_CHARS);
       if (lineBreak > MAX_RESPONSE_CHARS * 0.5) {

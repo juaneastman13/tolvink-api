@@ -102,6 +102,7 @@ export class WebChatService {
       this.sse.emitToUser(dbUser.id, 'ai:response', {
         text: result.text,
         buttons: selButtons,
+        navigate: result.navigate || undefined,
       });
       return;
     }
@@ -109,6 +110,7 @@ export class WebChatService {
     this.sse.emitToUser(dbUser.id, 'ai:response', {
       text: result.text,
       buttons: result.buttons || [],
+      navigate: result.navigate || undefined,
     });
   }
 

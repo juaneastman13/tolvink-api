@@ -914,4 +914,21 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ['driverId', 'orderedFreightIds'],
     },
   },
+  // ======================== NAVEGACIÓN IN-APP (web only) ==================
+  {
+    name: 'navigate_app',
+    description: 'Navegar al usuario a una pantalla de la app web. Solo disponible en canal web.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        screen: {
+          type: 'string',
+          description: 'Pantalla destino: home, list, new, detail, calendar, reports, fields, trucks, menu, chats',
+          enum: ['home', 'list', 'new', 'detail', 'calendar', 'reports', 'fields', 'trucks', 'menu', 'chats'],
+        },
+        freightId: { type: 'string', description: 'UUID del flete (solo para screen=detail)' },
+      },
+      required: ['screen'],
+    },
+  },
 ];
