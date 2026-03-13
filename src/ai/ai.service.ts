@@ -673,14 +673,14 @@ NAVEGACIÓN (web):
 
         // Recent freights (last 5 active)
         const recentFreights = await this.prisma.freight.findMany({
-          where: { companyId: activeCoId, status: { notIn: ['canceled', 'draft'] } },
-          select: { code: true, status: true, grain: true },
+          where: { participantCompanyIds: { has: activeCoId }, status: { notIn: ['canceled', 'draft'] } },
+          select: { code: true, status: true, items: { select: { grain: true }, take: 1 } },
           orderBy: { createdAt: 'desc' },
           take: 5,
         });
         if (recentFreights.length > 0) {
           const fList = recentFreights.map(f =>
-            `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.grain})`
+            `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.items[0]?.grain || '-'})`
           ).join(', ');
           proactiveLines.push(`Últimos fletes: ${fList}`);
         }
