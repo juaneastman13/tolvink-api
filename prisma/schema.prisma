@@ -167,6 +167,7 @@ model User {
   requestedChanges           FreightPendingChange[]    @relation("PendingChangeRequester")
   resolvedChanges            FreightPendingChange[]    @relation("PendingChangeResolver")
   uploadedDocuments          FreightDocument[]         @relation("uploadedDocuments")
+  weighTicketsRegistered     WeighTicket[]             @relation("WeighTicketRegisteredBy")
   conversationParticipations ConversationParticipant[] @relation("conversationParticipations")
 
   @@index([companyId])
@@ -400,6 +401,7 @@ model Freight {
   items          FreightItem[]
   assignments    FreightAssignment[]
   documents      FreightDocument[]
+  weighTickets   WeighTicket[]
   conversation   Conversation?          @relation("FreightConversation")
   auditLogs      AuditLog[]
   trackingPoints FreightTracking[]
@@ -477,6 +479,7 @@ model FreightAssignment {
   assignedBy       User    @relation("AssignmentAssignedBy", fields: [assignedById], references: [id])
   driver           User?   @relation("AssignmentDriver", fields: [driverId], references: [id])
   truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
+  weighTickets     WeighTicket[]
 
   @@index([freightId])
   @@index([freightId, tripStatus])
@@ -508,6 +511,41 @@ model FreightDocument {
   @@index([freightId, step])
   @@index([uploadedById])
   @@map("freight_documents")
+}
+
+// ======================== WEIGH TICKETS ===============================
+
+model WeighTicket {
+  id             String   @id @default(uuid())
+  freightId      String   @map("freight_id")
+  assignmentId   String?  @map("assignment_id")
+  type           String   @default("destination") @db.VarChar(20) // "origin" | "destination"
+  ticketNumber   String?  @map("ticket_number") @db.VarChar(100)
+  grossWeight    Decimal? @map("gross_weight") @db.Decimal(10, 2)
+  tareWeight     Decimal? @map("tare_weight") @db.Decimal(10, 2)
+  netWeight      Decimal? @map("net_weight") @db.Decimal(10, 2)
+  humidity       Decimal? @db.Decimal(5, 2)
+  impurities     Decimal? @db.Decimal(5, 2)
+  dockage        Decimal? @db.Decimal(10, 2)
+  temperature    Decimal? @db.Decimal(5, 2)
+  observations   String?  @db.Text
+  photoUrl       String?  @map("photo_url") @db.VarChar(500)
+  ocrData        Json?    @map("ocr_data")
+  ocrConfidence  Decimal? @map("ocr_confidence") @db.Decimal(3, 2)
+  registeredById String   @map("registered_by_id")
+  registeredAt   DateTime @default(now()) @map("registered_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  freight      Freight            @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  assignment   FreightAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  registeredBy User               @relation("WeighTicketRegisteredBy", fields: [registeredById], references: [id])
+
+  @@index([freightId])
+  @@index([assignmentId])
+  @@index([ticketNumber])
+  @@index([freightId, assignmentId, type])
+  @@map("weigh_tickets")
 }
 
 // ======================== FREIGHT TRACKING ============================

@@ -19,6 +19,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { SseModule } from './sse/sse.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { OcrModule } from './ocr/ocr.module';
+import { WeighTicketsModule } from './weigh-tickets/weigh-tickets.module';
 import { WebChatModule } from './web-chat/web-chat.module';
 
 @Module({
@@ -38,6 +39,7 @@ import { WebChatModule } from './web-chat/web-chat.module';
     SseModule,
     WhatsAppModule,
     OcrModule,
+    WeighTicketsModule,
     WebChatModule,
   ],
   controllers: [
