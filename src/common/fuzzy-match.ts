@@ -47,9 +47,12 @@ const STOP_WORDS = new Set([
   'al', 'en', 'y', 'o', 'a', 'por',
 ]);
 
+/** Business suffixes stripped during normalization */
+const BUSINESS_SUFFIXES = ['s.a.', 's.r.l.', 'ltda', 'ltda.', 'sa', 'srl'];
+
 /**
  * Normalize text for River Plate Spanish phonetic comparison.
- * Strips accents, applies seseo/yeísmo/b-v merging, removes stop words.
+ * Strips accents, applies seseo/yeísmo/b-v merging, removes stop words and business suffixes.
  */
 export function normalizeText(text: string): string {
   let t = text
@@ -60,6 +63,17 @@ export function normalizeText(text: string): string {
     // Collapse whitespace
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Remove business suffixes before phonetic normalization
+  for (const suffix of BUSINESS_SUFFIXES) {
+    if (t.endsWith(suffix)) {
+      t = t.slice(0, -suffix.length).trim();
+    }
+    // Also handle with leading space and dots
+    t = t.replace(new RegExp('\\b' + suffix.replace(/\./g, '\\.?') + '\\b', 'g'), '').trim();
+  }
+  // Remove trailing dots/commas after suffix removal
+  t = t.replace(/[.,]+$/, '').trim();
 
   // River Plate phonetic equivalences
   t = t
@@ -87,6 +101,99 @@ export function normalizeText(text: string): string {
     .trim();
 
   return t;
+}
+
+/** Split normalized text into tokens (words) */
+export function tokenize(text: string): string[] {
+  const normalized = normalizeText(text);
+  return normalized.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Token-based matching: checks how many query tokens match candidate tokens.
+ * For tokens ≥5 chars, allows Levenshtein distance ≤1 (typo tolerance).
+ * For tokens 3-4 chars, requires exact match after normalization.
+ * Returns a composite score 0-1.
+ */
+export function tokenMatchScore(query: string, candidate: string): number {
+  const queryTokens = tokenize(query);
+  const candidateTokens = tokenize(candidate);
+  if (queryTokens.length === 0 || candidateTokens.length === 0) return 0;
+
+  let matchedQueryTokens = 0;
+  const usedCandidateIndexes = new Set<number>();
+
+  for (const qt of queryTokens) {
+    let bestMatch = -1;
+    let bestDist = Infinity;
+
+    for (let ci = 0; ci < candidateTokens.length; ci++) {
+      if (usedCandidateIndexes.has(ci)) continue;
+      const ct = candidateTokens[ci];
+
+      // Exact match
+      if (qt === ct) {
+        bestMatch = ci;
+        bestDist = 0;
+        break;
+      }
+
+      // Substring match: query token is start of candidate token or vice-versa
+      if (ct.startsWith(qt) || qt.startsWith(ct)) {
+        const dist = Math.abs(ct.length - qt.length);
+        if (dist < bestDist) {
+          bestMatch = ci;
+          bestDist = dist <= 2 ? 0 : dist;
+        }
+        continue;
+      }
+
+      // Typo tolerance for longer tokens (≥5 chars)
+      if (qt.length >= 5 || ct.length >= 5) {
+        const dist = levenshteinDistance(qt, ct);
+        if (dist <= 1 && dist < bestDist) {
+          bestMatch = ci;
+          bestDist = dist;
+        }
+      } else if (qt.length >= 3 && ct.length >= 3) {
+        // For 3-4 char tokens, only allow distance 0 (already handled above)
+        const dist = levenshteinDistance(qt, ct);
+        if (dist === 0 && dist < bestDist) {
+          bestMatch = ci;
+          bestDist = dist;
+        }
+      }
+    }
+
+    if (bestMatch >= 0 && bestDist <= 1) {
+      matchedQueryTokens++;
+      usedCandidateIndexes.add(bestMatch);
+    }
+  }
+
+  if (matchedQueryTokens === 0) return 0;
+
+  // (a) % of query tokens that matched
+  const queryRatio = matchedQueryTokens / queryTokens.length;
+  // (b) % of candidate tokens that were matched
+  const candidateRatio = usedCandidateIndexes.size / candidateTokens.length;
+  // (c) Order bonus: check if matched tokens appear in the same relative order
+  const matchedIndexes = Array.from(usedCandidateIndexes).sort((a, b) => a - b);
+  let orderBonus = 0;
+  if (matchedIndexes.length >= 2) {
+    let inOrder = true;
+    for (let i = 1; i < matchedIndexes.length; i++) {
+      if (matchedIndexes[i] <= matchedIndexes[i - 1]) {
+        inOrder = false;
+        break;
+      }
+    }
+    orderBonus = inOrder ? 0.05 : 0;
+  }
+
+  // Composite: heavily weight query coverage, lighter weight on candidate coverage
+  const score = queryRatio * 0.65 + candidateRatio * 0.30 + orderBonus;
+  return Math.min(score, 1.0);
 }
 
 // ======================== LEVENSHTEIN DISTANCE =======================
@@ -187,20 +294,28 @@ export function fuzzySearch<T>(
     }
   }
 
-  // Levenshtein + substring matching
+  // Multi-strategy matching: Levenshtein, token-based, and substring
   const results: FuzzyResult<T>[] = [];
   for (const item of items) {
     const label = getLabel(item);
     const normalizedLabel = normalizeText(label);
-    let score = similarityScore(query, label);
 
-    // Substring boost: if query is contained in label or label in query, boost score
+    // Strategy 1: Whole-string Levenshtein similarity
+    const levScore = similarityScore(query, label);
+
+    // Strategy 2: Token-based matching (handles partial name queries)
+    const tokScore = tokenMatchScore(query, label);
+
+    // Strategy 3: Substring boost
+    let subScore = 0;
     if (normalizedLabel.includes(normalizedQuery) || normalizedQuery.includes(normalizedLabel)) {
-      const subScore = Math.min(normalizedQuery.length, normalizedLabel.length) /
+      const ratio = Math.min(normalizedQuery.length, normalizedLabel.length) /
         Math.max(normalizedQuery.length, normalizedLabel.length);
-      // Use the better of Levenshtein score or substring-based score (min 0.80)
-      score = Math.max(score, Math.max(subScore, 0.80));
+      subScore = Math.max(ratio, 0.80);
     }
+
+    // Take the best score across all strategies
+    const score = Math.max(levScore, tokScore, subScore);
 
     if (score >= threshold) {
       results.push({ item, score, matchedLabel: label });
