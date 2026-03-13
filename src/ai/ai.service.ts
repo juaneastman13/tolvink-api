@@ -1907,6 +1907,11 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     if (!input.loadDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.loadDate)) {
       return JSON.stringify({ error: 'Falta la fecha de carga (loadDate) o formato inválido. Usa YYYY-MM-DD.' });
     }
+    // P1-6: Validate loadDate is not in the past (Uruguay timezone)
+    const todayUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS).toISOString().split('T')[0];
+    if (input.loadDate < todayUY) {
+      return JSON.stringify({ error: `La fecha ${input.loadDate} ya pasó. Indicá una fecha desde ${todayUY}.` });
+    }
     if (!input.loadTime || !/^\d{2}:\d{2}$/.test(input.loadTime)) {
       return JSON.stringify({ error: 'Falta la hora de carga (loadTime) o formato inválido. Usa HH:MM.' });
     }

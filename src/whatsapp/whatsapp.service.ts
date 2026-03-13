@@ -750,6 +750,17 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const masked = normalized.length > 4 ? '*'.repeat(normalized.length - 4) + normalized.slice(-4) : normalized;
     this.logger.error(`WhatsApp send to ${masked} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
 
+    // P1-7: Report to Sentry if available — send failures are critical (user gets silence)
+    try {
+      const Sentry = require('@sentry/node');
+      if (Sentry.isInitialized?.() || process.env.SENTRY_DSN) {
+        Sentry.captureException(lastError || new Error(`WhatsApp send failed to ${masked}`), {
+          tags: { service: 'whatsapp', action: 'send' },
+          extra: { phone: masked, messageType: payload.type, attempts: MAX_RETRIES },
+        });
+      }
+    } catch { /* Sentry not available */ }
+
     this.prisma.whatsAppMessageLog.create({
       data: {
         phone: normalized,

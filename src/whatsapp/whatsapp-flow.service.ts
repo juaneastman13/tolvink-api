@@ -120,8 +120,23 @@ export class WhatsAppFlowService implements OnModuleDestroy {
   ) {
     // Check if session has expired
     if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      // P1-8: If flow was create_freight with partial data, mention it
+      const state = (session.flowState as any) || {};
+      const flowType = session.flowType;
+      let expiryMsg = 'Se agotó el tiempo de la sesión. Escribí "menu" para empezar de nuevo.';
+      if (flowType === 'create_freight' && (state.grain || state.destPlantId)) {
+        const parts: string[] = [];
+        if (state.grain) parts.push(state.grain);
+        if (state.destPlantId) {
+          try {
+            const destName = await this.resolveDestName(state.destPlantId);
+            if (destName) parts.push(`a ${destName}`);
+          } catch { /* non-critical */ }
+        }
+        expiryMsg = `Se agotó el tiempo. Tenías un flete en borrador${parts.length ? ` (${parts.join(', ')})` : ''}. Escribime "crear flete" si querés retomar.`;
+      }
       await this.endFlow(session.id);
-      await this.wa.sendText(phone, 'La sesión expiró. Escriba "menu" para comenzar de nuevo.');
+      await this.wa.sendText(phone, expiryMsg);
       return;
     }
 
