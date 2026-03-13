@@ -181,7 +181,7 @@ export class FreightsService {
       } else {
         // Fallback: destPlantId might be a Company ID (producers select companies as destinations)
         const company = await this.prisma.company.findFirst({
-          where: { id: dto.destPlantId, type: 'plant', active: true },
+          where: { id: dto.destPlantId, active: true, OR: [{ type: 'plant' }, { types: { has: 'plant' } }] as any },
         });
         if (!company) throw new BadRequestException('Planta no encontrada');
         destCompanyId = company.id;

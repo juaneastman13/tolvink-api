@@ -16,19 +16,19 @@ async function main() {
   // ======================== COMPANIES ================================
 
   const producer = await prisma.company.create({
-    data: { name: 'Est. Las Acacias', type: CompanyType.producer, address: 'Ruta 50 km 12, Colonia', phone: '099 333 111' },
+    data: { name: 'Est. Las Acacias', type: CompanyType.producer, types: ['producer'], address: 'Ruta 50 km 12, Colonia', phone: '099 333 111' },
   });
 
   const plant = await prisma.company.create({
-    data: { name: 'SOFOVAL', type: CompanyType.plant, address: 'Ruta 1 km 123, Colonia', phone: '099 111 111' },
+    data: { name: 'SOFOVAL', type: CompanyType.plant, types: ['plant'], address: 'Ruta 1 km 123, Colonia', phone: '099 111 111' },
   });
 
   const transport1 = await prisma.company.create({
-    data: { name: 'Transportes del Sur', type: CompanyType.transporter, address: 'Av. Italia 2345, Montevideo', phone: '099 222 111' },
+    data: { name: 'Transportes del Sur', type: CompanyType.transporter, types: ['transporter'], address: 'Av. Italia 2345, Montevideo', phone: '099 222 111' },
   });
 
   const transport2 = await prisma.company.create({
-    data: { name: 'Logística Norte', type: CompanyType.transporter, address: 'Ruta 5 km 60, Durazno', phone: '099 222 112' },
+    data: { name: 'Logística Norte', type: CompanyType.transporter, types: ['transporter'], address: 'Ruta 5 km 60, Durazno', phone: '099 222 112' },
   });
 
   // ======================== USERS ====================================

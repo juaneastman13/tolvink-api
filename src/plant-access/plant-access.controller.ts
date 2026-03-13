@@ -93,7 +93,7 @@ export class PlantAccessService {
         phone: c.phone ? `***${c.phone.slice(-3)}` : null,
         email: c.email && c.email.includes('@') ? `${c.email.substring(0, 1)}***@${c.email.split('@')[1]}` : c.email ? '***' : null,
         address: c.address,
-        companyType: c.type,
+        companyType: (Array.isArray(c.types) && (c.types as string[]).length > 0 ? (c.types as string[])[0] : c.type) as string,
       }));
   }
 

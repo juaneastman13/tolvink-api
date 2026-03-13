@@ -4165,7 +4165,7 @@ NAVEGACIÓN IN-APP (solo web):
       const companies = memberships.map((m: any) => ({
         id: m.companyId,
         name: m.company?.name || 'Empresa',
-        type: TYPE_LABELS[m.company?.type] || m.company?.type || 'Desconocido',
+        type: AiService.resolveCompanyTypes(m.company).map(t => TYPE_LABELS[t] || t).join(', ') || 'Desconocido',
         active: m.companyId === activeCompanyId,
       }));
 
@@ -4224,7 +4224,8 @@ NAVEGACIÓN IN-APP (solo web):
     effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
 
     const companyName = (freshMembership as any).company?.name || 'Empresa';
-    const companyType = TYPE_LABELS[(freshMembership as any).company?.type] || (freshMembership as any).company?.type || '';
+    const freshTypes = AiService.resolveCompanyTypes((freshMembership as any).company);
+    const companyType = freshTypes.map(t => TYPE_LABELS[t] || t).join(', ') || '';
 
     return JSON.stringify({
       status: 'switched',
@@ -4747,13 +4748,23 @@ NAVEGACIÓN IN-APP (solo web):
    * If the user has multiple memberships, prioritize the active company's type
    * so the prompt and tool filter reflect what the user is currently operating as.
    */
+  /** Resolve types[] from a company object: prefer types[] array, fallback to single type field */
+  private static resolveCompanyTypes(company: any): string[] {
+    if (!company) return [];
+    if (Array.isArray(company.types) && company.types.length > 0) return company.types;
+    return company.type ? [company.type] : [];
+  }
+
   private resolveCompanyType(user: any): string {
     const activeCoId = user.activeCompanyId || user.companyId;
 
     // 1. If we know the active company, find its type from memberships
     if (activeCoId && user.memberships?.length > 0) {
       const activeMem = user.memberships.find((m: any) => m.companyId === activeCoId);
-      if (activeMem?.company?.type) return activeMem.company.type;
+      if (activeMem?.company) {
+        const types = AiService.resolveCompanyTypes(activeMem.company);
+        if (types.length > 0) return types.join(', ');
+      }
     }
 
     // 2. Fallback: userTypes (legacy)
@@ -4761,12 +4772,17 @@ NAVEGACIÓN IN-APP (solo web):
     if (userTypes.length > 0) return userTypes.join(', ');
 
     // 3. Fallback: direct company
-    if (user.company?.type) return user.company.type;
+    if (user.company) {
+      const types = AiService.resolveCompanyTypes(user.company);
+      if (types.length > 0) return types.join(', ');
+    }
 
     // 4. Fallback: first membership
     if (user.memberships?.length > 0) {
-      const firstType = user.memberships.find((m: any) => m.company?.type)?.company?.type;
-      if (firstType) return firstType;
+      for (const m of user.memberships) {
+        const types = AiService.resolveCompanyTypes(m.company);
+        if (types.length > 0) return types.join(', ');
+      }
     }
     return 'unknown';
   }
@@ -4807,7 +4823,7 @@ NAVEGACIÓN IN-APP (solo web):
     if (userTypes.includes('producer') && companyByType.producer) {
       return companyByType.producer;
     }
-    if (user.company?.type === 'producer') return user.companyId;
+    if (AiService.resolveCompanyTypes(user.company).includes('producer')) return user.companyId;
     return null;
   }
 
@@ -4832,7 +4848,7 @@ NAVEGACIÓN IN-APP (solo web):
     if (userTypes.includes('plant') && companyByType.plant) {
       return companyByType.plant;
     }
-    if (user.company?.type === 'plant') return user.companyId;
+    if (AiService.resolveCompanyTypes(user.company).includes('plant')) return user.companyId;
     // No fallback — only plant companies allowed
     return null;
   }
@@ -5006,10 +5022,12 @@ NAVEGACIÓN IN-APP (solo web):
     if (!plantCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa planta.' });
     const producerCo = await this.prisma.company.findFirst({
       where: { id: input.producerCompanyId, active: true },
-      select: { id: true, name: true, type: true },
+      select: { id: true, name: true, type: true, types: true },
     });
     if (!producerCo) return JSON.stringify({ error: 'Empresa productora no encontrada.' });
-    if (producerCo.type !== 'producer' && producerCo.type !== 'transporter') return JSON.stringify({ error: 'La empresa debe ser de tipo productor o transportista.' });
+    const coTypes = Array.isArray(producerCo.types) && (producerCo.types as string[]).length > 0
+      ? (producerCo.types as string[]) : [producerCo.type];
+    if (!coTypes.includes('producer') && !coTypes.includes('transporter')) return JSON.stringify({ error: 'La empresa debe ser de tipo productor o transportista.' });
     return this.stageAction(session, 'grant_producer_access', {
       plantCompanyId, producerCompanyId: input.producerCompanyId, producerUserId: input.producerUserId,
       producerName: producerCo.name,

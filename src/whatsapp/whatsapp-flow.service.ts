@@ -1528,8 +1528,10 @@ export class WhatsAppFlowService implements OnModuleDestroy {
       return companyByType.producer;
     }
 
-    // Fallback to company type
-    if (user.company?.type === 'producer') {
+    // Fallback to company type (check types[] array first, then legacy type)
+    const coTypes = Array.isArray(user.company?.types) && user.company.types.length > 0
+      ? user.company.types : (user.company?.type ? [user.company.type] : []);
+    if (coTypes.includes('producer')) {
       return user.companyId;
     }
 

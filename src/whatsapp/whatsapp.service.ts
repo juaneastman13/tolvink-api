@@ -274,10 +274,10 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         id: true,
         phone: true,
         companyId: true,
-        company: { select: { id: true, type: true } },
+        company: { select: { id: true, type: true, types: true } },
         memberships: {
           where: { active: true },
-          select: { companyId: true, company: { select: { id: true, type: true } } },
+          select: { companyId: true, company: { select: { id: true, type: true, types: true } } },
         },
       },
       take: 500,
@@ -285,15 +285,19 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
     for (const user of users) {
       try {
-        // Collect all companies and their types
-        const companies: { id: string; type: string }[] = [];
-        if (user.company) companies.push({ id: user.company.id, type: user.company.type || '' });
+        // Collect all companies and their resolved types (prefer types[] array, fallback to type)
+        const companies: { id: string; types: string[] }[] = [];
+        const resolveTypes = (co: any): string[] => {
+          if (Array.isArray(co?.types) && co.types.length > 0) return co.types;
+          return co?.type ? [co.type] : [];
+        };
+        if (user.company) companies.push({ id: user.company.id, types: resolveTypes(user.company) });
         for (const m of user.memberships) {
-          if (m.company) companies.push({ id: m.company.id, type: m.company.type || '' });
+          if (m.company) companies.push({ id: m.company.id, types: resolveTypes(m.company) });
         }
 
         // Producer summary
-        const producerCompanies = companies.filter(c => c.type.includes('producer'));
+        const producerCompanies = companies.filter(c => c.types.includes('producer'));
         if (producerCompanies.length > 0) {
           const producerIds = producerCompanies.map(c => c.id);
           const freights = await this.prisma.freight.findMany({
@@ -318,7 +322,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         }
 
         // Transporter summary
-        const transporterCompanies = companies.filter(c => c.type.includes('transporter'));
+        const transporterCompanies = companies.filter(c => c.types.includes('transporter'));
         if (transporterCompanies.length > 0) {
           const transporterIds = transporterCompanies.map(c => c.id);
           const assignments = await this.prisma.freightAssignment.findMany({

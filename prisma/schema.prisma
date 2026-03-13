@@ -93,8 +93,8 @@ enum DocumentStep {
 model Company {
   id               String      @id @default(uuid())
   name             String      @db.VarChar(255)
-  type             CompanyType // Legacy single-type field — kept for backward compat
-  types            Json        @default("[]") @map("company_types") // TODO: migrate to typed enum array, deprecate `type`
+  type             CompanyType // @deprecated — usar types[] en su lugar. Mantenido para backward compat.
+  types            Json        @default("[]") @map("company_types") // Fuente de verdad para tipo(s) de empresa
   address          String?
   phone            String?     @db.VarChar(50)
   email            String?     @db.VarChar(255)
