@@ -208,7 +208,9 @@ export class WhatsAppController implements OnModuleDestroy {
             },
           };
         }
-        return { type: 'text', payload: { body: '' } };
+        // P2-1: Unknown interactive subtype — log and treat as text with context
+        this.logger.warn(`Unknown interactive type: ${message.interactive?.type}`);
+        return { type: 'text', payload: { body: message.interactive?.body?.text || '' } };
 
       case 'location':
         return {

@@ -15,7 +15,7 @@ import { OcrService } from '../ocr/ocr.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
-import { fuzzySearch, classifyFuzzyResult } from '../common/fuzzy-match';
+import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
 import {
@@ -292,25 +292,39 @@ export class AiService implements OnModuleDestroy {
           messages: currentMessages,
         };
 
-        // 45s timeout to prevent hanging requests
-        let timeoutHandle: ReturnType<typeof setTimeout>;
-        const timeout = new Promise((_, reject) => {
-          timeoutHandle = setTimeout(() => reject(new Error('Claude API timeout')), 45_000);
-        });
-        try {
-          if (onDelta) {
-            // Streaming mode: emit text deltas as they arrive
-            let isFirst = true;
-            const stream = this.client.messages.stream(createParams as any);
-            stream.on('text', (text) => { try { onDelta(text, isFirst); isFirst = false; } catch {} });
-            const streamResult = Promise.resolve(stream.finalMessage());
-            response = await Promise.race([streamResult, timeout]) as any;
-          } else {
-            const apiCall = this.client.messages.create(createParams as any);
-            response = await Promise.race([apiCall, timeout]) as any;
+        // P2-7: Claude API call with 1 retry on transient errors (timeout, 529, 500)
+        const callClaude = async (): Promise<any> => {
+          let timeoutHandle: ReturnType<typeof setTimeout>;
+          const timeout = new Promise((_, reject) => {
+            timeoutHandle = setTimeout(() => reject(new Error('Claude API timeout')), 45_000);
+          });
+          try {
+            if (onDelta) {
+              let isFirst = true;
+              const stream = this.client.messages.stream(createParams as any);
+              stream.on('text', (text) => { try { onDelta(text, isFirst); isFirst = false; } catch {} });
+              const streamResult = Promise.resolve(stream.finalMessage());
+              return await Promise.race([streamResult, timeout]);
+            } else {
+              const apiCall = this.client.messages.create(createParams as any);
+              return await Promise.race([apiCall, timeout]);
+            }
+          } finally {
+            clearTimeout(timeoutHandle!);
           }
-        } finally {
-          clearTimeout(timeoutHandle!);
+        };
+        try {
+          response = await callClaude();
+        } catch (retryErr: any) {
+          const status = retryErr?.status || retryErr?.statusCode;
+          const isTransient = !status || status === 529 || status >= 500 || retryErr.message?.includes('timeout');
+          if (isTransient && Date.now() + 50_000 < loopDeadline) {
+            this.logger.warn(`Claude API transient error (${retryErr.message}), retrying in 2s...`);
+            await new Promise(r => setTimeout(r, 2000));
+            response = await callClaude();
+          } else {
+            throw retryErr;
+          }
         }
         this.logger.log(`Claude response: stop_reason=${response.stop_reason}, content blocks=${response.content.length}`);
 
@@ -321,6 +335,7 @@ export class AiService implements OnModuleDestroy {
           // Execute tool calls — parallel for read-only tools, sequential otherwise
           const READ_ONLY_TOOLS = new Set([
             'list_freights', 'get_freight_detail', 'search_plants', 'list_lots', 'list_fields',
+            'search_fields', 'search_lots', 'get_user_profile',
             'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers', 'summarize_freights',
             'list_documents', 'freight_history', 'get_dashboard',
             'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
@@ -698,7 +713,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
   // CORE: Always included for all roles (confirmation, detail, listing)
   private static readonly CORE_TOOLS = new Set([
     'confirm_action', 'confirm_create_freight', 'list_freights', 'get_freight_detail',
-    'summarize_freights', 'update_profile',
+    'summarize_freights', 'update_profile', 'get_user_profile',
   ]);
 
   // CHOFER: Only these tools for driver role
@@ -712,7 +727,8 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
 
   // PRODUCER: Creation & management tools
   private static readonly PRODUCER_TOOLS = new Set([
-    'prepare_freight', 'list_lots', 'list_fields', 'create_field', 'create_lot',
+    'prepare_freight', 'list_lots', 'list_fields', 'search_fields', 'search_lots',
+    'create_field', 'create_lot',
     'search_plants', 'list_trucks', 'create_truck', 'generate_location_link',
     'duplicate_freight', 'update_field', 'update_lot', 'cancel_freight',
     'list_enabled_plants', 'assign_truck_to_freight', 'cancel_assignment',
@@ -905,6 +921,9 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
         case 'confirm_finished': return await this.toolConfirmFinished(input, user, synUser, session);
         case 'cancel_freight': return await this.toolCancelFreight(input, user, synUser, session);
         case 'list_fields': return await this.toolListFields(user, session);
+        case 'search_fields': return await this.toolSearchFields(input, user);
+        case 'search_lots': return await this.toolSearchLots(input, user);
+        case 'get_user_profile': return this.toolGetUserProfile(user);
         case 'create_field': return await this.toolCreateField(input, user, session);
         case 'create_lot': return await this.toolCreateLot(input, user, session);
         case 'list_trucks': return await this.toolListTrucks(user, session);
@@ -919,7 +938,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
         case 'share_live_location': return await this.toolShareLiveLocation(input, user);
         case 'view_live_locations': return await this.toolViewLiveLocations(input, user);
         case 'request_location': return await this.toolRequestLocation(input, user);
-        case 'list_transporters': return await this.toolListTransporters(user, session);
+        case 'list_transporters': return await this.toolListTransporters(input, user, session);
         case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
         case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
         case 'assign_truck_to_freight': return await this.toolAssignTruckToFreight(input, user, synUser, session);
@@ -1787,15 +1806,15 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     let filtered = companies;
     let matchType: string | undefined;
     if (input.query) {
-      // Search by company name first
-      const fuzzyResults = fuzzySearch(input.query, companies, (c) => c.name, { threshold: 0.55, maxResults: 10 });
+      // Search by company name first (P2-5: include entity aliases)
+      const fuzzyResults = fuzzySearch(input.query, companies, (c) => c.name, { threshold: 0.55, maxResults: 10, aliases: ENTITY_ALIASES });
 
       // P1 fix: also search by branch/sucursal name for better matching
       const branchResults = fuzzySearch(
         input.query,
         companies.flatMap((c: any) => (c.plants || []).map((b: any) => ({ ...b, _parentCompany: c }))),
         (b: any) => b.name,
-        { threshold: 0.55, maxResults: 10 },
+        { threshold: 0.55, maxResults: 10, aliases: ENTITY_ALIASES },
       );
       // Merge: add parent companies from branch matches not already in results
       const resultIds = new Set(fuzzyResults.map(r => r.item.id));
@@ -1899,7 +1918,21 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
   private async toolPrepareFreight(input: any, user: any, session: any): Promise<string> {
     // Input validation
     if (!input.grain || typeof input.grain !== 'string') {
-      return JSON.stringify({ error: 'Falta el tipo de grano (grain).' });
+      // P2-9: Send interactive grain list instead of plain error
+      const grainItems = [
+        { id: 'grain_sel:Soja', title: 'SOJA' },
+        { id: 'grain_sel:Maíz', title: 'MAÍZ' },
+        { id: 'grain_sel:Trigo', title: 'TRIGO' },
+        { id: 'grain_sel:Girasol', title: 'GIRASOL' },
+        { id: 'grain_sel:Sorgo', title: 'SORGO' },
+        { id: 'grain_sel:Cebada', title: 'CEBADA' },
+        { id: 'grain_sel:Otros', title: 'OTROS' },
+      ];
+      return this.storePendingSelection(session, grainItems, {
+        headerText: '🌾 ¿Qué grano vas a cargar?',
+        listButtonLabel: 'Elegir grano',
+        sectionTitle: 'GRANOS',
+      }, 'grain_selection', { partialFreight: input });
     }
     if (!input.tons || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
       return JSON.stringify({ error: 'Falta la cantidad de toneladas (tons) o es inválida.' });
@@ -3125,6 +3158,62 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     }, 'field_info', { fields: fieldsData });
   }
 
+  // ---- P2-2: search_fields ----
+  private async toolSearchFields(input: any, user: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No es productor.' });
+    const fields = await this.prisma.field.findMany({
+      where: { companyId: producerCompanyId, active: true },
+      select: { id: true, name: true, address: true },
+      orderBy: { name: 'asc' },
+      take: 200,
+    });
+    if (fields.length === 0) return JSON.stringify({ results: [], message: 'No hay campos registrados.' });
+    const results = fuzzySearch(input.query, fields, (f) => f.name, { threshold: 0.4, maxResults: 10 });
+    if (results.length === 0) {
+      return JSON.stringify({ results: [], message: `No se encontraron campos con "${input.query}".`, total: fields.length });
+    }
+    return JSON.stringify({ results: results.map(r => ({ ...r.item, score: r.score })) });
+  }
+
+  // ---- P2-2: search_lots ----
+  private async toolSearchLots(input: any, user: any): Promise<string> {
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return JSON.stringify({ error: 'No es productor.' });
+    const where: any = { companyId: producerCompanyId, active: true };
+    if (input.fieldId) where.fieldId = input.fieldId;
+    const lots = await this.prisma.lot.findMany({
+      where,
+      select: { id: true, name: true, hectares: true, field: { select: { id: true, name: true } } },
+      orderBy: { name: 'asc' },
+      take: 500,
+    });
+    if (lots.length === 0) return JSON.stringify({ results: [], message: 'No hay lotes registrados.' });
+    const results = fuzzySearch(input.query, lots, (l) => l.name, { threshold: 0.4, maxResults: 10 });
+    if (results.length === 0) {
+      return JSON.stringify({ results: [], message: `No se encontraron lotes con "${input.query}".`, total: lots.length });
+    }
+    return JSON.stringify({ results: results.map(r => ({ ...r.item, score: r.score })) });
+  }
+
+  // ---- P2-3: get_user_profile ----
+  private toolGetUserProfile(user: any): string {
+    const { isChofer, isAdmin, userRole } = AiService.resolveActiveRole(user);
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = (user.memberships || []).find((m: any) => m.companyId === activeCoId && m.active !== false);
+    return JSON.stringify({
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      role: userRole,
+      isAdmin,
+      isChofer,
+      company: activeMem?.company?.name || user.company?.name || null,
+      companyType: this.resolveCompanyType(user),
+      totalCompanies: (user.memberships || []).filter((m: any) => m.active !== false).length,
+    });
+  }
+
   // ---- create_field ----
   private async toolCreateField(input: any, user: any, session: any): Promise<string> {
     const synUser = this.buildSyntheticUser(user);
@@ -3254,6 +3343,15 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
       operario: 'operator', chofer: 'operator',
     };
     const prismaRole = roleToEnum[inputRole] || 'operator';
+
+    // P2-11: Check for duplicate email before staging
+    const existing = await this.prisma.user.findFirst({
+      where: { email: input.email?.toLowerCase().trim() },
+      select: { id: true, name: true },
+    });
+    if (existing) {
+      return JSON.stringify({ error: `Ya existe un usuario con email ${input.email} (${existing.name}). No se puede crear duplicado.` });
+    }
 
     // Password generated at confirm time — never stored in session flowState
 
@@ -3792,7 +3890,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
   // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================
 
   // ---- list_transporters ----
-  private async toolListTransporters(user: any, session: any): Promise<string> {
+  private async toolListTransporters(input: any, user: any, session: any): Promise<string> {
     const companyType = this.resolveCompanyType(user);
     if (!AiService.hasType(companyType, 'plant') && !AiService.hasType(companyType, 'producer')) {
       return JSON.stringify({ error: 'Solo usuarios de tipo planta o productor pueden listar transportistas.' });
@@ -3841,7 +3939,16 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
         })
       : [];
 
-    const result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
+    let result: any[] = transporters.map(c => ({ id: c.id, name: c.name, phone: c.phone }));
+
+    // P2-4: If query provided, apply fuzzy filter
+    if (input?.query && typeof input.query === 'string' && input.query.trim()) {
+      const fuzzyResults = fuzzySearch(input.query.trim(), result, (r) => r.name, { threshold: 0.4, maxResults: 10 });
+      if (fuzzyResults.length > 0) {
+        result = fuzzyResults.map(r => r.item);
+      }
+      // If no fuzzy match, keep full list so user sees all options
+    }
 
     if (hasOwnFleet && ownCompanyId && !result.some(r => r.id === ownCompanyId)) {
       const ownCompany = await this.prisma.company.findUnique({

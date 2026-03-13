@@ -132,7 +132,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     const rate = this.messageRate.get(phone);
     if (rate && now < rate.resetAt) {
-      if (rate.count >= 30) return; // silently drop
+      if (rate.count >= 30) {
+        // P2-6: Send feedback instead of silent drop (once per window)
+        if (rate.count === 30) {
+          this.wa.sendText(phone, 'Estás enviando muchos mensajes. Esperá un momento antes de continuar.')
+            .catch(() => {});
+        }
+        return;
+      }
       rate.count++;
     } else {
       this.messageRate.set(phone, { count: 1, resetAt: now + 60_000 });
@@ -457,6 +464,25 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 min
           },
         });
+      }
+
+      // P2-10: Renew session expiry on every message (sliding window) + warn if was close
+      const msLeft = session.expiresAt ? new Date(session.expiresAt).getTime() - Date.now() : Infinity;
+      const newExpiry = new Date(Date.now() + 30 * 60 * 1000);
+      if (msLeft < 5 * 60 * 1000) {
+        // Session was about to expire — renew and log
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { expiresAt: newExpiry },
+        });
+        session.expiresAt = newExpiry;
+      } else if (msLeft < 25 * 60 * 1000) {
+        // Silently extend on every interaction
+        this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: { expiresAt: newExpiry },
+        }).catch(() => {});
+        session.expiresAt = newExpiry;
       }
 
       // Show "typing" indicator so user sees the bot is working

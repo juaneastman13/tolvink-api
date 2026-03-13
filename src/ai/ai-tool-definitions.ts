@@ -294,8 +294,14 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   // ======================== ASIGNACIÓN DE TRANSPORTE ========================
   {
     name: 'list_transporters',
-    description: 'Lista transportistas disponibles como menú interactivo. Para plantas y productores con flota interna. Retorna _selectionSent:true — NO repetir ítems.',
-    input_schema: { type: 'object' as const, properties: {}, required: [] },
+    description: 'Lista transportistas disponibles como menú interactivo. Para plantas y productores con flota interna. Puede filtrar por nombre con fuzzy search. Retorna _selectionSent:true — NO repetir ítems.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Filtrar por nombre de transportista (fuzzy, opcional).' },
+      },
+      required: [],
+    },
   },
   {
     name: 'assign_transporter',
@@ -446,6 +452,34 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       },
       required: [],
     },
+  },
+  {
+    name: 'search_fields',
+    description: 'Busca campos del productor por nombre (fuzzy). Retorna campos que matchean. Usar cuando el usuario menciona un campo por nombre parcial.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Nombre parcial del campo (fuzzy).' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'search_lots',
+    description: 'Busca lotes del productor por nombre (fuzzy). Puede filtrar por campo. Retorna lotes que matchean. Usar cuando el usuario menciona un lote por nombre parcial.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Nombre parcial del lote (fuzzy).' },
+        fieldId: { type: 'string', description: 'UUID de campo para limitar búsqueda (opcional).' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_user_profile',
+    description: 'Retorna datos del perfil del usuario actual: nombre, email, teléfono, rol, empresa activa. Usar cuando pregunta "quién soy", "mis datos", "mi perfil".',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
   },
   {
     name: 'create_field',

@@ -16,6 +16,30 @@ export const GRAIN_ALIASES: Map<string, string[]> = new Map([
   ['Otros', ['otros', 'otro']],
 ]);
 
+// ======================== ENTITY ALIASES =============================
+
+/** P2-5: Common abbreviations and alternate names for Uruguayan ag entities */
+export const ENTITY_ALIASES: Map<string, string[]> = new Map([
+  // Cooperatives / major plants
+  ['COPAGRAN', ['copagran', 'copagra']],
+  ['CONAPROLE', ['conaprole', 'conprole', 'conapro']],
+  ['CALMER', ['calmer']],
+  ['CARGILL', ['cargill', 'cargil', 'kargill']],
+  ['BARRACA ERRO', ['erro', 'barraca erro']],
+  ['AGRONEGOCIOS DEL PLATA', ['adp', 'agronegocios']],
+  ['CEREOIL', ['cereoil', 'cereol']],
+  ['ISUSA', ['isusa']],
+  ['SPEADEX', ['speadex', 'spedex']],
+  // Locations
+  ['Nueva Palmira', ['palmira', 'nueva palmira', 'n palmira']],
+  ['Nueva Helvecia', ['helvecia', 'nueva helvecia', 'n helvecia']],
+  ['Young', ['young', 'yung']],
+  ['Paysandú', ['paysandu', 'paysandú']],
+  ['Mercedes', ['mercedes']],
+  ['Dolores', ['dolores']],
+  ['Fray Bentos', ['fray bentos', 'fbentos']],
+]);
+
 // ======================== TEXT NORMALIZATION ==========================
 
 const STOP_WORDS = new Set([
