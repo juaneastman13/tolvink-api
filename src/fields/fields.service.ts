@@ -142,7 +142,6 @@ export class FieldsService {
       const ownPois = await this.prisma.poi.findMany({
         where: { companyId: { in: companyIds }, active: true },
         include: {
-          createdBy: { select: { id: true, name: true } },
           shares: {
             where: { active: true },
             select: { id: true, sharedWithUserId: true, sharedWith: { select: { id: true, name: true } } },
@@ -155,11 +154,7 @@ export class FieldsService {
       const sharedPois = await this.prisma.sharedPoi.findMany({
         where: { sharedWithUserId: user.sub, active: true, poi: { active: true } },
         include: {
-          poi: {
-            include: {
-              createdBy: { select: { id: true, name: true } },
-            },
-          },
+          poi: true,
           sharedBy: { select: { id: true, name: true } },
         },
       });
@@ -192,7 +187,6 @@ export class FieldsService {
       data: {
         name: dto.name,
         companyId,
-        createdByUserId: user.sub,
         address: dto.address || null,
         lat: dto.lat,
         lng: dto.lng,

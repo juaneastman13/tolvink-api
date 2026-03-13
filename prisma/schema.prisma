@@ -169,7 +169,6 @@ model User {
   uploadedDocuments          FreightDocument[]         @relation("uploadedDocuments")
   weighTicketsRegistered     WeighTicket[]             @relation("WeighTicketRegisteredBy")
   conversationParticipations ConversationParticipant[] @relation("conversationParticipations")
-  poisCreated                Poi[]                     @relation("PoiCreatedBy")
   sharedPoisSent             SharedPoi[]               @relation("SharedPoiSharedBy")
   sharedPoisReceived         SharedPoi[]               @relation("SharedPoiSharedWith")
 
@@ -252,7 +251,6 @@ model Poi {
   id              String   @id @default(uuid())
   name            String   @db.VarChar(255)
   companyId       String   @map("company_id")
-  createdByUserId String?  @map("created_by_user_id")
   address         String?
   lat             Decimal  @db.Decimal(10, 6)
   lng             Decimal  @db.Decimal(10, 6)
@@ -262,11 +260,9 @@ model Poi {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  createdBy User?      @relation("PoiCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   shares    SharedPoi[]
 
   @@index([companyId])
-  @@index([createdByUserId])
   @@map("pois")
 }
 

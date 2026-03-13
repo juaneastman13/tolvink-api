@@ -1,12 +1,3 @@
--- AlterTable: Add createdByUserId to pois
-ALTER TABLE "pois" ADD COLUMN "created_by_user_id" TEXT;
-
--- CreateIndex
-CREATE INDEX "pois_created_by_user_id_idx" ON "pois"("created_by_user_id");
-
--- AddForeignKey
-ALTER TABLE "pois" ADD CONSTRAINT "pois_created_by_user_id_fkey" FOREIGN KEY ("created_by_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
 -- CreateTable: shared_pois
 CREATE TABLE "shared_pois" (
     "id" TEXT NOT NULL,
