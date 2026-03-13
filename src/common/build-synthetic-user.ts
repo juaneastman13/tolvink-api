@@ -2,6 +2,7 @@
  * Build a synthetic JWT-like user object from a DB user.
  * Shared across AI, Router, and Flow services to avoid duplication.
  */
+import { getCompanyTypes } from './company-type-helpers';
 
 /** Expected shape of the dbUser parameter */
 export interface DbUserForSynthetic {
@@ -25,22 +26,15 @@ export function buildSyntheticUser(dbUser: DbUserForSynthetic): any {
 
   let companyId = dbUser.activeCompanyId || dbUser.companyId || '';
 
-  // Resolve company types: prefer types[] array, fallback to single type
-  const resolveTypes = (co: any): string[] => {
-    if (!co) return [];
-    if (Array.isArray(co.types) && co.types.length > 0) return co.types;
-    return co.type ? [co.type] : [];
-  };
-
   let resolvedTypes: string[] = [];
   if (userTypes.length > 0) {
     resolvedTypes = userTypes;
   } else if (dbUser.company) {
-    resolvedTypes = resolveTypes(dbUser.company);
+    resolvedTypes = getCompanyTypes(dbUser.company);
   }
   if (resolvedTypes.length === 0 && dbUser.memberships?.length > 0) {
     const first = dbUser.memberships[0];
-    resolvedTypes = resolveTypes(first.company);
+    resolvedTypes = getCompanyTypes(first.company);
     companyId = companyId || first.companyId;
   }
 

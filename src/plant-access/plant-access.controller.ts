@@ -7,6 +7,7 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { UUID_RE } from '../common/constants';
+import { companyHasType } from '../common/company-type-helpers';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsUUID, IsOptional, IsArray } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -128,15 +129,10 @@ export class PlantAccessService {
       membershipMap.get(m.userId)!.push(m);
     }
 
-    const matchesType = (company: any, t: string) => {
-      if (company?.type === t) return true;
-      return Array.isArray(company?.types) && company.types.includes(t);
-    };
-
     const results: any[] = [];
     for (const user of users) {
       const userMemberships = membershipMap.get(user.id) || [];
-      const typedMembership = userMemberships.find((m: any) => matchesType(m.company, type));
+      const typedMembership = userMemberships.find((m: any) => companyHasType(m.company, type));
       if (typedMembership) {
         results.push({
           userId: user.id,

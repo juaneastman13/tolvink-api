@@ -7,6 +7,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { SelectionItem, SelectionConfig, SelectionResult } from '../common/selection-helpers';
+import { getCompanyTypes } from '../common/company-type-helpers';
 
 const META_API = 'https://graph.facebook.com/v22.0';
 
@@ -287,13 +288,9 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       try {
         // Collect all companies and their resolved types (prefer types[] array, fallback to type)
         const companies: { id: string; types: string[] }[] = [];
-        const resolveTypes = (co: any): string[] => {
-          if (Array.isArray(co?.types) && co.types.length > 0) return co.types;
-          return co?.type ? [co.type] : [];
-        };
-        if (user.company) companies.push({ id: user.company.id, types: resolveTypes(user.company) });
+        if (user.company) companies.push({ id: user.company.id, types: getCompanyTypes(user.company) });
         for (const m of user.memberships) {
-          if (m.company) companies.push({ id: m.company.id, types: resolveTypes(m.company) });
+          if (m.company) companies.push({ id: m.company.id, types: getCompanyTypes(m.company) });
         }
 
         // Producer summary

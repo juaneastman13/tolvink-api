@@ -1,6 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../database/prisma.service';
+import { getCompanyTypes } from '../company-type-helpers';
 
 export const ROLES_KEY = 'roles';
 
@@ -50,9 +51,7 @@ export class RolesGuard implements CanActivate {
       });
       const allTypes = new Set<string>();
       for (const m of memberships) {
-        if (m.company?.type) allTypes.add(m.company.type);
-        const arr = m.company?.types;
-        if (Array.isArray(arr)) arr.forEach((t: string) => allTypes.add(t));
+        for (const t of getCompanyTypes(m.company)) allTypes.add(t);
       }
       const hasDbType = requiredRoles.some((role) => allTypes.has(role));
       if (hasDbType) return true;

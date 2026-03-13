@@ -6,6 +6,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { requestCache } from '../request-cache';
+import { getCompanyTypes, companyHasType } from '../company-type-helpers';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -17,14 +18,7 @@ export class CompanyResolutionService {
     return requestCache.getStore();
   }
 
-  /** Helper: get all types for a company (from types[] array or fallback to type) */
-  private getCompanyTypes(company: any): string[] {
-    if (!company) return [];
-    const arr = Array.isArray(company.types) && company.types.length > 0
-      ? company.types
-      : (company.type ? [company.type] : []);
-    return arr;
-  }
+  // Company type helpers now imported from '../company-type-helpers'
 
   /** Shared: fetch memberships with company type once per request.
    *  Deduplicates concurrent calls within the same request (e.g. parallel catalog sub-calls). */
@@ -96,8 +90,7 @@ export class CompanyResolutionService {
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    const isProducer = (m: any) =>
-      m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer');
+    const isProducer = (m: any) => companyHasType(m.company, 'producer');
 
     // Prioritize activeCompanyId / companyId if it's a producer
     if (activeId) {
@@ -119,8 +112,7 @@ export class CompanyResolutionService {
     if (cache?.has(key)) return cache.get(key);
 
     const memberships = await this.getMemberships(user.sub);
-    const isPlant = (m: any) =>
-      m.company?.type === 'plant' || this.getCompanyTypes(m.company).includes('plant');
+    const isPlant = (m: any) => companyHasType(m.company, 'plant');
 
     // Prioritize activeCompanyId / companyId if it's a plant
     if (activeId) {
@@ -143,10 +135,7 @@ export class CompanyResolutionService {
     if (user.companyType === type) { cache?.set(key, true); return true; }
     const memberships = await this.getMemberships(user.sub);
     // Check both company.type and company.types[] array for multi-type support
-    const result = memberships.some((m: any) => {
-      if (m.company?.type === type) return true;
-      return this.getCompanyTypes(m.company).includes(type);
-    });
+    const result = memberships.some((m: any) => companyHasType(m.company, type));
     cache?.set(key, result);
     return result;
   }
@@ -160,7 +149,7 @@ export class CompanyResolutionService {
     const memberships = await this.getMemberships(user.sub);
     // Prefer types[] array if available, fallback to type field
     if (memberships.length > 0) {
-      const types = this.getCompanyTypes(memberships[0].company);
+      const types = getCompanyTypes(memberships[0].company);
       const result = types[0] || memberships[0].company?.type || 'unknown';
       cache?.set(key, result);
       return result;
@@ -180,7 +169,7 @@ export class CompanyResolutionService {
 
     for (const m of memberships) {
       // Check both type and types[] for multi-type support
-      const isProducer = m.company?.type === 'producer' || this.getCompanyTypes(m.company).includes('producer');
+      const isProducer = companyHasType(m.company, 'producer');
       if (isProducer || isAdmin) ids.add(m.companyId);
     }
     if (ids.size === 0 && user.companyId) ids.add(user.companyId);

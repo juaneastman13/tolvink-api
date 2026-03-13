@@ -7,6 +7,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { LoginDto, RegisterDto, SwitchCompanyDto, RefreshTokenDto, IdentifyForResetDto, RequestCodeDto, VerifyCodeDto, ResetPasswordDto, ChangePasswordDto } from './auth.dto';
 import { BCRYPT_ROUNDS } from '../common/constants';
+import { getCompanyTypes } from '../common/company-type-helpers';
 
 // Pre-computed valid bcrypt hash for constant-time comparison against non-existent users
 // Use synchronous hashSync to guarantee DUMMY_HASH is ready before any request
@@ -20,15 +21,6 @@ const MAX_CODES_PER_HOUR = 3;
 
 // Company select with types field (Json field not yet in generated Prisma client)
 const COMPANY_SELECT = { id: true, name: true, type: true, types: true, hasInternalFleet: true } as any;
-
-/** Helper: get all types for a company (from types[] array or fallback to type) */
-function getCompanyTypes(company: any): string[] {
-  if (!company) return [];
-  const arr = Array.isArray(company.types) && company.types.length > 0
-    ? company.types
-    : (company.type ? [company.type] : []);
-  return arr;
-}
 
 @Injectable()
 export class AuthService {
