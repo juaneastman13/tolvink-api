@@ -5,6 +5,8 @@ import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
+import { ConfigService } from '@nestjs/config';
+import { SseService } from '../sse/sse.service';
 
 // Mock @prisma/client enums + PrismaClient base class
 jest.mock('@prisma/client', () => ({
@@ -116,10 +118,13 @@ describe('FreightsService', () => {
         { provide: CompanyResolutionService, useValue: mockCompanyRes },
         { provide: FreightStateMachine, useValue: mockStateMachine },
         { provide: NotificationService, useValue: mockNotifications },
+        { provide: SseService, useValue: { broadcastFreightUpdate: jest.fn().mockResolvedValue(undefined), invalidateParticipantsCache: jest.fn() } },
+        { provide: ConfigService, useValue: { get: jest.fn() } },
       ],
     }).compile();
 
     service = module.get(FreightsService);
+    (service as any).sse = module.get(SseService);
     prisma = module.get(PrismaService);
     companyRes = module.get(CompanyResolutionService);
     stateMachine = module.get(FreightStateMachine);
