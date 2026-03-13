@@ -225,3 +225,39 @@ export class ImportGoogleListDto {
   @MaxLength(2000)
   url: string;
 }
+
+// ── Shared POIs ──────────────────────────────────────────────────────
+
+export class SharePoiDto {
+  @ApiProperty({ description: 'ID del usuario con quien compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
+export class UnsharePoiDto {
+  @ApiProperty({ description: 'ID del usuario a dejar de compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
+// ── Reclassify POI ───────────────────────────────────────────────────
+
+export class ReclassifyPoiDto {
+  @ApiProperty({ description: 'Nuevo tipo: field o lot', enum: ['field', 'lot'] })
+  @IsString()
+  targetType: 'field' | 'lot';
+
+  @ApiPropertyOptional({ description: 'ID del campo padre (requerido si targetType=lot)' })
+  @IsOptional()
+  @IsString()
+  fieldId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100000)
+  hectares?: number;
+}

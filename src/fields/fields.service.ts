@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, UnprocessableEntityException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto, UpdatePoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto } from './fields.dto';
 
 const GMAPS_DOMAINS = ['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com'];
 const BROWSER_HEADERS = {
@@ -138,10 +138,45 @@ export class FieldsService {
     const companyIds = await this.resolveAllProducerCompanyIds(user);
     if (companyIds.length === 0) return [];
     try {
-      return await this.prisma.poi.findMany({
+      // Own POIs
+      const ownPois = await this.prisma.poi.findMany({
         where: { companyId: { in: companyIds }, active: true },
+        include: {
+          createdBy: { select: { id: true, name: true } },
+          shares: {
+            where: { active: true },
+            select: { id: true, sharedWithUserId: true, sharedWith: { select: { id: true, name: true } } },
+          },
+        },
         orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
       });
+
+      // Shared with me
+      const sharedPois = await this.prisma.sharedPoi.findMany({
+        where: { sharedWithUserId: user.sub, active: true, poi: { active: true } },
+        include: {
+          poi: {
+            include: {
+              createdBy: { select: { id: true, name: true } },
+            },
+          },
+          sharedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      // Merge: mark own vs shared
+      const own = ownPois.map(p => ({ ...p, _isSharedWithMe: false }));
+      const shared = sharedPois
+        .filter(sp => !ownPois.some(op => op.id === sp.poiId)) // avoid duplicates
+        .map(sp => ({
+          ...sp.poi,
+          shares: [],
+          _isSharedWithMe: true,
+          _sharedBy: sp.sharedBy,
+          _shareId: sp.id,
+        }));
+
+      return [...own, ...shared];
     } catch (err: any) {
       if (err?.code === 'P2021' || err?.message?.includes('does not exist')) {
         this.logger.warn('getPois: pois table not found, returning empty');
@@ -157,6 +192,7 @@ export class FieldsService {
       data: {
         name: dto.name,
         companyId,
+        createdByUserId: user.sub,
         address: dto.address || null,
         lat: dto.lat,
         lng: dto.lng,
@@ -189,14 +225,183 @@ export class FieldsService {
 
   async deletePoi(user: any, poiId: string) {
     const companyIds = await this.resolveAllProducerCompanyIds(user);
+
+    // Check if this is a shared POI (shared with me, not mine)
+    const sharedEntry = await this.prisma.sharedPoi.findFirst({
+      where: { poiId, sharedWithUserId: user.sub, active: true },
+    });
+    if (sharedEntry) {
+      // "Delete only for me" — just deactivate the share link
+      this.logger.log(`deletePoi: unlinking shared POI ${poiId} for user ${user.sub}`);
+      await this.prisma.sharedPoi.update({
+        where: { id: sharedEntry.id },
+        data: { active: false },
+      });
+      return { deleted: true, unlinkOnly: true };
+    }
+
+    // Own POI — soft delete + deactivate all shares
     const poi = await this.prisma.poi.findFirst({
       where: { id: poiId, companyId: { in: companyIds }, active: true },
     });
     if (!poi) throw new NotFoundException('Ubicación no encontrada');
     this.logger.log(`deletePoi: soft-deleting "${poi.name}" (id=${poiId})`);
+
+    await this.prisma.sharedPoi.updateMany({
+      where: { poiId, active: true },
+      data: { active: false },
+    });
+
     return this.prisma.poi.update({
       where: { id: poiId },
       data: { active: false },
+    });
+  }
+
+  // ── Share / Unshare POIs ───────────────────────────────────────────
+
+  async sharePoi(user: any, poiId: string, dto: SharePoiDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId: { in: companyIds }, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+    if (dto.sharedWithUserId === user.sub) throw new BadRequestException('No podés compartir contigo mismo');
+
+    // Check target user exists
+    const targetUser = await this.prisma.user.findUnique({ where: { id: dto.sharedWithUserId } });
+    if (!targetUser || !targetUser.active) throw new NotFoundException('Usuario no encontrado');
+
+    // Upsert: reactivate if previously unshared
+    const existing = await this.prisma.sharedPoi.findUnique({
+      where: { poiId_sharedWithUserId: { poiId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (existing) {
+      if (existing.active) return existing; // already shared
+      const reactivated = await this.prisma.sharedPoi.update({
+        where: { id: existing.id },
+        data: { active: true, sharedByUserId: user.sub },
+      });
+      this.logger.log(`sharePoi: reshared POI ${poiId} with user ${dto.sharedWithUserId}`);
+      return reactivated;
+    }
+
+    const share = await this.prisma.sharedPoi.create({
+      data: {
+        poiId,
+        sharedByUserId: user.sub,
+        sharedWithUserId: dto.sharedWithUserId,
+      },
+    });
+    this.logger.log(`sharePoi: shared POI "${poi.name}" (${poiId}) with user ${dto.sharedWithUserId}`);
+    return share;
+  }
+
+  async unsharePoi(user: any, poiId: string, dto: UnsharePoiDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId: { in: companyIds }, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+
+    const share = await this.prisma.sharedPoi.findUnique({
+      where: { poiId_sharedWithUserId: { poiId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (!share || !share.active) throw new NotFoundException('No se encontró el compartido');
+
+    await this.prisma.sharedPoi.update({
+      where: { id: share.id },
+      data: { active: false },
+    });
+    this.logger.log(`unsharePoi: unshared POI ${poiId} from user ${dto.sharedWithUserId}`);
+    return { unshared: true };
+  }
+
+  async getPoiShares(user: any, poiId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId: { in: companyIds }, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+
+    return this.prisma.sharedPoi.findMany({
+      where: { poiId, active: true },
+      include: { sharedWith: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // ── Reclassify POI to Field or Lot ────────────────────────────────
+
+  async reclassifyPoi(user: any, poiId: string, dto: ReclassifyPoiDto) {
+    const companyId = await this.resolveProducerCompanyId(user);
+    const poi = await this.prisma.poi.findFirst({
+      where: { id: poiId, companyId, active: true },
+    });
+    if (!poi) throw new NotFoundException('Ubicación no encontrada');
+
+    if (dto.targetType === 'lot') {
+      if (!dto.fieldId) throw new BadRequestException('Se requiere fieldId para reclasificar como lote');
+      const field = await this.prisma.field.findFirst({
+        where: { id: dto.fieldId, companyId, active: true },
+      });
+      if (!field) throw new NotFoundException('Campo no encontrado');
+
+      const lot = await this.prisma.lot.create({
+        data: {
+          name: poi.name,
+          companyId,
+          fieldId: dto.fieldId,
+          hectares: dto.hectares ?? null,
+          lat: poi.lat,
+          lng: poi.lng,
+        },
+      });
+
+      // Deactivate POI + its shares
+      await this.prisma.sharedPoi.updateMany({ where: { poiId, active: true }, data: { active: false } });
+      await this.prisma.poi.update({ where: { id: poiId }, data: { active: false } });
+
+      this.logger.log(`reclassifyPoi: POI "${poi.name}" → Lot ${lot.id} in field ${dto.fieldId}`);
+      return { type: 'lot', created: lot };
+    }
+
+    // Field
+    const field = await this.prisma.field.create({
+      data: {
+        name: poi.name,
+        companyId,
+        address: poi.address,
+        lat: poi.lat,
+        lng: poi.lng,
+      },
+    });
+
+    await this.prisma.sharedPoi.updateMany({ where: { poiId, active: true }, data: { active: false } });
+    await this.prisma.poi.update({ where: { id: poiId }, data: { active: false } });
+
+    this.logger.log(`reclassifyPoi: POI "${poi.name}" → Field ${field.id}`);
+    return { type: 'field', created: field };
+  }
+
+  // ── Search users (for sharing) ────────────────────────────────────
+
+  async searchUsersForShare(user: any, query: string) {
+    if (!query || query.trim().length < 2) return [];
+    const q = query.trim();
+    return this.prisma.user.findMany({
+      where: {
+        active: true,
+        id: { not: user.sub },
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q } },
+        ],
+      },
+      select: { id: true, name: true, email: true },
+      take: 10,
+      orderBy: { name: 'asc' },
     });
   }
 

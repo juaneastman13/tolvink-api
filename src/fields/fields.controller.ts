@@ -1,11 +1,11 @@
-import { Controller, Get, Post, Patch, Param, Body, UseGuards, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto, UpdatePoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -76,6 +76,15 @@ export class FieldsController {
 
   // ── Points of Interest ──────────────────────────────────────────
 
+  @Get('pois/search-users')
+  @ApiOperation({ summary: 'Buscar usuarios para compartir ubicaciones' })
+  searchUsersForShare(
+    @CurrentUser() user: any,
+    @Query('q') query: string,
+  ) {
+    return this.service.searchUsersForShare(user, query);
+  }
+
   @Get('pois')
   @ApiOperation({ summary: 'Listar ubicaciones de interés del usuario' })
   getPois(@CurrentUser() user: any) {
@@ -111,6 +120,57 @@ export class FieldsController {
     @Param('poiId', ParseUUIDPipe) poiId: string,
   ) {
     return this.service.deletePoi(user, poiId);
+  }
+
+  // ── Share POIs ─────────────────────────────────────────────────────
+
+  @Post('pois/:poiId/share')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Compartir una ubicación de interés con otro usuario' })
+  sharePoi(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+    @Body() dto: SharePoiDto,
+  ) {
+    return this.service.sharePoi(user, poiId, dto);
+  }
+
+  @Patch('pois/:poiId/unshare')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Dejar de compartir una ubicación con un usuario' })
+  unsharePoi(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+    @Body() dto: UnsharePoiDto,
+  ) {
+    return this.service.unsharePoi(user, poiId, dto);
+  }
+
+  @Get('pois/:poiId/shares')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Listar usuarios con quienes se compartió una ubicación' })
+  getPoiShares(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+  ) {
+    return this.service.getPoiShares(user, poiId);
+  }
+
+  // ── Reclassify POI ────────────────────────────────────────────────
+
+  @Post('pois/:poiId/reclassify')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Reclasificar una ubicación de interés como Campo o Lote' })
+  reclassifyPoi(
+    @CurrentUser() user: any,
+    @Param('poiId', ParseUUIDPipe) poiId: string,
+    @Body() dto: ReclassifyPoiDto,
+  ) {
+    return this.service.reclassifyPoi(user, poiId, dto);
   }
 
   // ── Google Maps Link Import ──────────────────────────────────────
