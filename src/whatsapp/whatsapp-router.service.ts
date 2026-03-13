@@ -431,13 +431,29 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           });
 
       if (!session) {
+        // P1 fix: recover activeContext from the most recently expired session
+        let recoveredState: Record<string, any> = {};
+        const expiredSession = await this.prisma.whatsAppSession.findFirst({
+          where: { userId: user.id, flowType: null, expiresAt: { lte: new Date() } },
+          orderBy: { updatedAt: 'desc' },
+        });
+        if (expiredSession?.flowState) {
+          const oldState = expiredSession.flowState as any;
+          if (oldState.activeContext) {
+            recoveredState = {
+              _recoveredContext: oldState.activeContext,
+              _sessionExpiredNote: true,
+            };
+          }
+        }
+
         session = await this.prisma.whatsAppSession.create({
           data: {
             userId: user.id,
             phone: this.wa.normalizePhone(phone),
             flowType: null,
             flowStep: '0',
-            flowState: {},
+            flowState: recoveredState,
             expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 min
           },
         });

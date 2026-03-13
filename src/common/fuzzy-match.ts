@@ -163,11 +163,21 @@ export function fuzzySearch<T>(
     }
   }
 
-  // Levenshtein-based fuzzy matching
+  // Levenshtein + substring matching
   const results: FuzzyResult<T>[] = [];
   for (const item of items) {
     const label = getLabel(item);
-    const score = similarityScore(query, label);
+    const normalizedLabel = normalizeText(label);
+    let score = similarityScore(query, label);
+
+    // Substring boost: if query is contained in label or label in query, boost score
+    if (normalizedLabel.includes(normalizedQuery) || normalizedQuery.includes(normalizedLabel)) {
+      const subScore = Math.min(normalizedQuery.length, normalizedLabel.length) /
+        Math.max(normalizedQuery.length, normalizedLabel.length);
+      // Use the better of Levenshtein score or substring-based score (min 0.80)
+      score = Math.max(score, Math.max(subScore, 0.80));
+    }
+
     if (score >= threshold) {
       results.push({ item, score, matchedLabel: label });
     }

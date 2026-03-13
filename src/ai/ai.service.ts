@@ -178,7 +178,7 @@ export class AiService implements OnModuleDestroy {
     const synUser = this.buildSyntheticUser(user);
     const companyType = this.resolveCompanyType(user);
     const isWeb = phone === 'web';
-    const systemPrompt = this.buildSystemPrompt(user, companyType, isWeb);
+    const systemPrompt = await this.buildSystemPrompt(user, companyType, isWeb);
 
     // Cap message length to prevent context window abuse (5000 chars max)
     const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
@@ -224,6 +224,18 @@ export class AiService implements OnModuleDestroy {
       }
       if (parts.length > 0) {
         messageToSend = `[Contexto activo: ${parts.join('. ')}]\n\n${messageToSend}`;
+      }
+    }
+
+    // P1 fix: inject recovered context from expired session
+    if (state._sessionExpiredNote && state._recoveredContext) {
+      const rc = state._recoveredContext;
+      const parts: string[] = [];
+      if (rc.lastFreightCode) parts.push(`último flete: ${this.sanitizeForPrompt(rc.lastFreightCode)}`);
+      if (rc.lastAction) parts.push(`última acción: ${this.sanitizeForPrompt(rc.lastAction)}`);
+      if (rc.lastSearchFilter) parts.push(`último filtro: ${this.sanitizeForPrompt(rc.lastSearchFilter)}`);
+      if (parts.length > 0) {
+        messageToSend = `[Sistema: la sesión anterior expiró. Contexto recuperado: ${parts.join('. ')}. Informar brevemente al usuario que su sesión anterior expiró y ofrecerse a retomar.]\n\n${messageToSend}`;
       }
     }
 
@@ -394,7 +406,7 @@ export class AiService implements OnModuleDestroy {
 
       // Extract pending buttons: side-effects take priority over DB state
       const pendingButtons = sideEffects._pendingButtons || latestState._pendingButtons || undefined;
-      const { _pendingButtons: _dbBtns, ...cleanState } = latestState;
+      const { _pendingButtons: _dbBtns, _sessionExpiredNote: _expNote, _recoveredContext: _recCtx, ...cleanState } = latestState;
       const { _pendingButtons: _seBtns, _clearAiMessages, activeContext: seActiveContext, _navigate, ...otherSideEffects } = sideEffects;
 
       // Merge activeContext: DB state + side-effects
@@ -454,7 +466,7 @@ export class AiService implements OnModuleDestroy {
       .slice(0, 100);
   }
 
-  private buildSystemPrompt(user: any, companyType: string, isWeb = false): string {
+  private async buildSystemPrompt(user: any, companyType: string, isWeb = false): Promise<string> {
     const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
     const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
@@ -474,11 +486,8 @@ export class AiService implements OnModuleDestroy {
       ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${activeMemberships.length} empresas. Usar switch_company SOLO si el usuario pide cambiar. NO pedir que seleccione empresa si ya está operando correctamente.`
       : '';
 
-    const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
-    const userRole = isChofer ? 'chofer' :
-      (['admin', 'platform_admin'].includes(user.role) ? 'admin' :
-      user.role === 'gerente' ? 'gerente' : 'operario');
-    const isAdmin = ['admin', 'platform_admin', 'gerente'].includes(userRole);
+    // P0 fix: resolve role scoped to activeCompanyId, not globally
+    const { isChofer, isAdmin, userRole } = AiService.resolveActiveRole(user);
 
     // Build role restrictions — handles dual types (producer,plant) with additive blocks
     const roleParts: string[] = [];
@@ -508,7 +517,7 @@ ACCIONES TÍPICAS: "fletes asignados" → list_freights(status="assigned"). "mis
 
     const roleRestrictions = '\n' + roleParts.join('\n');
 
-    return `Asistente de Tolvink — plataforma de gestión de fletes de granos y cargas del agro.
+    let basePrompt = `Asistente de Tolvink — plataforma de gestión de fletes de granos y cargas del agro.
 USUARIO: ${name} | Perfil: ${companyType} | Fecha: ${today} | Uruguay (UTC-3)${ownFleetNote}${multiCompanyNote}${roleRestrictions}
 
 IDENTIDAD: "Capataz digital" — claro, directo, profesional, lenguaje del campo.
@@ -661,6 +670,70 @@ NAVEGACIÓN IN-APP (solo web):
 - Ejemplo: "ver calendario" → navigate_app(screen="calendar").
 - SIEMPRE navegar cuando la acción tiene sentido visual (ver detalle, crear, listar). NO navegar para consultas de datos simples que se responden en el chat.
 - navigate_app NO reemplaza las herramientas de datos — usarlo ADEMÁS de la respuesta informativa.` : ''}`;
+
+    // P1 fix: append proactive data summary so AI can reference without extra tool calls
+    const proactiveLines: string[] = [];
+    try {
+      const activeCoId = user.activeCompanyId || user.companyId;
+      if (activeCoId) {
+        // Fields & lots count
+        if (AiService.hasType(companyType, 'producer')) {
+          const producerCoId = this.resolveProducerCompanyId(user);
+          if (producerCoId) {
+            const [fieldCount, lotCount] = await Promise.all([
+              this.prisma.field.count({ where: { companyId: producerCoId, active: true } }),
+              this.prisma.lot.count({ where: { companyId: producerCoId, active: true } }),
+            ]);
+            proactiveLines.push(`Campos: ${fieldCount} | Lotes: ${lotCount}`);
+
+            // Accessible plants
+            const accesses = await this.prisma.plantProducerAccess.findMany({
+              where: { producerCompanyId: producerCoId, active: true },
+              select: { plantCompany: { select: { name: true } } },
+              take: 10,
+            });
+            if (accesses.length > 0) {
+              const plantNames = accesses.map(a => a.plantCompany?.name).filter(Boolean).slice(0, 5);
+              proactiveLines.push(`Plantas habilitadas: ${plantNames.join(', ')}${accesses.length > 5 ? ` (+${accesses.length - 5} más)` : ''}`);
+            }
+          }
+        }
+
+        // Recent freights (last 5 active)
+        const recentFreights = await this.prisma.freight.findMany({
+          where: { companyId: activeCoId, status: { notIn: ['canceled', 'draft'] } },
+          select: { code: true, status: true, grain: true },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        });
+        if (recentFreights.length > 0) {
+          const fList = recentFreights.map(f =>
+            `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.grain})`
+          ).join(', ');
+          proactiveLines.push(`Últimos fletes: ${fList}`);
+        }
+
+        // Trucks & drivers if has own fleet
+        if (hasOwnFleet) {
+          const [truckCount, driverCount] = await Promise.all([
+            this.prisma.truck.count({ where: { companyId: activeCoId, active: true } }),
+            this.prisma.userCompany.count({ where: { companyId: activeCoId, active: true, role: 'chofer' } }),
+          ]);
+          proactiveLines.push(`Flota propia: ${truckCount} camión(es), ${driverCount} chofer(es)`);
+        }
+      }
+    } catch (e) {
+      // Non-critical — don't break the prompt if data loading fails
+      this.logger.warn(`Proactive data loading failed: ${e.message}`);
+    }
+
+    if (proactiveLines.length > 0) {
+      basePrompt += `\n\nDATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):
+${proactiveLines.join('\n')}
+AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión), seleccionarla automáticamente sin preguntar.`;
+    }
+
+    return basePrompt;
   }
 
   // ======================== CONTEXT-BASED TOOL FILTERING ==================
@@ -740,9 +813,8 @@ NAVEGACIÓN IN-APP (solo web):
   ]);
 
   private getFilteredTools(user: any, companyType: string, isWeb = false): any[] {
-    const isChofer = user.role === 'chofer' || (user.memberships || []).some((m: any) => m.role === 'chofer' && m.active);
-    const isAdmin = ['admin', 'platform_admin', 'gerente'].includes(user.role) ||
-      (user.memberships || []).some((m: any) => ['admin', 'gerente'].includes(m.role) && m.active);
+    // P0 fix: resolve role scoped to activeCompanyId, not globally
+    const { isChofer, isAdmin } = AiService.resolveActiveRole(user);
     const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
     const hasMultiCompany = activeMemberships.length > 1;
 
@@ -1758,9 +1830,29 @@ NAVEGACIÓN IN-APP (solo web):
     let filtered = companies;
     let matchType: string | undefined;
     if (input.query) {
+      // Search by company name first
       const fuzzyResults = fuzzySearch(input.query, companies, (c) => c.name, { threshold: 0.55, maxResults: 10 });
+
+      // P1 fix: also search by branch/sucursal name for better matching
+      const branchResults = fuzzySearch(
+        input.query,
+        companies.flatMap((c: any) => (c.plants || []).map((b: any) => ({ ...b, _parentCompany: c }))),
+        (b: any) => b.name,
+        { threshold: 0.55, maxResults: 10 },
+      );
+      // Merge: add parent companies from branch matches not already in results
+      const resultIds = new Set(fuzzyResults.map(r => r.item.id));
+      for (const br of branchResults) {
+        const parent = (br.item as any)._parentCompany;
+        if (parent && !resultIds.has(parent.id)) {
+          fuzzyResults.push({ item: parent, score: br.score, matchedLabel: br.matchedLabel });
+          resultIds.add(parent.id);
+        }
+      }
+      fuzzyResults.sort((a, b) => b.score - a.score);
+
       matchType = classifyFuzzyResult(fuzzyResults);
-      filtered = fuzzyResults.map(r => r.item) as any;
+      filtered = fuzzyResults.slice(0, 10).map(r => r.item) as any;
     }
 
     if (filtered.length === 0) {
@@ -2055,16 +2147,24 @@ NAVEGACIÓN IN-APP (solo web):
       if (trucks.length === 0) {
         return JSON.stringify({ error: 'No hay camiones registrados para su flota. Registre uno primero con create_truck.' });
       }
-      const truckItems = trucks.map((t: any) => ({
-        id: `ownfleet_truck:${t.id}`,
-        title: (t.plate || '').toUpperCase().slice(0, 24),
-        description: `${[t.brand, t.model].filter(Boolean).join(' ')}${t.assignedUser?.name ? ' · ' + t.assignedUser.name : ''}`.slice(0, 72) || 'Sin detalle',
-      }));
-      return this.storePendingSelection(session, truckItems, {
-        headerText: '🚛 Seleccione el camión para el flete:',
-        listButtonLabel: 'Ver camiones',
-        sectionTitle: 'CAMIONES',
-      }, 'ownfleet_truck_select', { _ownFleetPrepare: input });
+      // P1 fix: auto-select single truck (and its assigned driver if available)
+      if (trucks.length === 1) {
+        input.truckId = trucks[0].id;
+        if (trucks[0].assignedUserId) {
+          input.driverId = trucks[0].assignedUserId;
+        }
+      } else {
+        const truckItems = trucks.map((t: any) => ({
+          id: `ownfleet_truck:${t.id}`,
+          title: (t.plate || '').toUpperCase().slice(0, 24),
+          description: `${[t.brand, t.model].filter(Boolean).join(' ')}${t.assignedUser?.name ? ' · ' + t.assignedUser.name : ''}`.slice(0, 72) || 'Sin detalle',
+        }));
+        return this.storePendingSelection(session, truckItems, {
+          headerText: '🚛 Seleccione el camión para el flete:',
+          listButtonLabel: 'Ver camiones',
+          sectionTitle: 'CAMIONES',
+        }, 'ownfleet_truck_select', { _ownFleetPrepare: input });
+      }
     }
     if (input.truckId && !input.driverId) {
       // Show interactive driver list so user can select
@@ -4753,6 +4853,40 @@ NAVEGACIÓN IN-APP (solo web):
     if (!company) return [];
     if (Array.isArray(company.types) && company.types.length > 0) return company.types;
     return company.type ? [company.type] : [];
+  }
+
+  /**
+   * Resolve user role scoped to their activeCompanyId (or companyId fallback).
+   * Fixes P0: a user who is chofer in company A and admin in company B
+   * should NOT be treated as chofer when operating in company B.
+   */
+  private static resolveActiveRole(user: any): { isChofer: boolean; isAdmin: boolean; userRole: string } {
+    const activeCoId = user.activeCompanyId || user.companyId;
+
+    // Find the membership for the active company
+    let activeRole: string | null = null;
+    if (activeCoId && user.memberships?.length > 0) {
+      const activeMem = (user.memberships as any[]).find(
+        (m: any) => m.companyId === activeCoId && m.active !== false,
+      );
+      if (activeMem?.role) activeRole = activeMem.role;
+    }
+
+    // Fallback to user.role if no membership found (legacy / single-company)
+    const effectiveRole = activeRole || user.role || 'operario';
+
+    // platform_admin is always admin regardless of membership
+    if (user.role === 'platform_admin') {
+      return { isChofer: false, isAdmin: true, userRole: 'admin' };
+    }
+
+    const isChofer = effectiveRole === 'chofer';
+    const isAdmin = ['admin', 'gerente'].includes(effectiveRole);
+    const userRole = isChofer ? 'chofer'
+      : isAdmin ? (effectiveRole === 'gerente' ? 'gerente' : 'admin')
+      : 'operario';
+
+    return { isChofer, isAdmin, userRole };
   }
 
   private resolveCompanyType(user: any): string {
