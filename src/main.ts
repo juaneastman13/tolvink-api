@@ -12,6 +12,7 @@ import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { UserRateLimitInterceptor } from './common/interceptors/user-rate-limit.interceptor';
+import { DecimalTransformInterceptor } from './common/interceptors/decimal-transform.interceptor';
 import { requestCache } from './common/request-cache';
 
 async function bootstrap() {
@@ -159,7 +160,7 @@ async function bootstrap() {
 
   // Global exception filter + request logging
   app.useGlobalFilters(new GlobalExceptionFilter());
-  app.useGlobalInterceptors(new LoggingInterceptor(), new UserRateLimitInterceptor());
+  app.useGlobalInterceptors(new LoggingInterceptor(), new UserRateLimitInterceptor(), new DecimalTransformInterceptor());
 
   // Validation pipe
   app.useGlobalPipes(new ValidationPipe({
