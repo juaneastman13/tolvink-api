@@ -242,6 +242,38 @@ export class UnsharePoiDto {
   sharedWithUserId: string;
 }
 
+// ── Shared Fields ─────────────────────────────────────────────────────
+
+export class ShareFieldDto {
+  @ApiProperty({ description: 'ID del usuario con quien compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
+export class UnshareFieldDto {
+  @ApiProperty({ description: 'ID del usuario a dejar de compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
+// ── Shared Lots ───────────────────────────────────────────────────────
+
+export class ShareLotDto {
+  @ApiProperty({ description: 'ID del usuario con quien compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
+export class UnshareLotDto {
+  @ApiProperty({ description: 'ID del usuario a dejar de compartir' })
+  @IsString()
+  @MinLength(1)
+  sharedWithUserId: string;
+}
+
 // ── Reclassify POI ───────────────────────────────────────────────────
 
 export class ReclassifyPoiDto {

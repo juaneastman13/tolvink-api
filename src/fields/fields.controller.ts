@@ -5,7 +5,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FieldsService } from './fields.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, ImportParseLinksDto, ImportGoogleListDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto, ShareFieldDto, UnshareFieldDto, ShareLotDto, UnshareLotDto } from './fields.dto';
 
 @ApiTags('Fields')
 @ApiBearerAuth()
@@ -72,6 +72,102 @@ export class FieldsController {
     @Body() dto: UpdateLotDto,
   ) {
     return this.service.updateLot(user, fieldId, lotId, dto);
+  }
+
+  // ── Share / Delete Fields ────────────────────────────────────────
+
+  @Post(':fieldId/share')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Compartir un campo con otro usuario' })
+  shareField(
+    @CurrentUser() user: any,
+    @Param('fieldId', ParseUUIDPipe) fieldId: string,
+    @Body() dto: ShareFieldDto,
+  ) {
+    return this.service.shareField(user, fieldId, dto);
+  }
+
+  @Patch(':fieldId/unshare')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Dejar de compartir un campo con un usuario' })
+  unshareField(
+    @CurrentUser() user: any,
+    @Param('fieldId', ParseUUIDPipe) fieldId: string,
+    @Body() dto: UnshareFieldDto,
+  ) {
+    return this.service.unshareField(user, fieldId, dto);
+  }
+
+  @Get(':fieldId/shares')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Listar usuarios con quienes se compartió un campo' })
+  getFieldShares(
+    @CurrentUser() user: any,
+    @Param('fieldId', ParseUUIDPipe) fieldId: string,
+  ) {
+    return this.service.getFieldShares(user, fieldId);
+  }
+
+  @Patch(':fieldId/delete')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Eliminar un campo (soft delete, cascade lotes)' })
+  deleteField(
+    @CurrentUser() user: any,
+    @Param('fieldId', ParseUUIDPipe) fieldId: string,
+  ) {
+    return this.service.deleteField(user, fieldId);
+  }
+
+  // ── Share / Delete Lots ─────────────────────────────────────────
+
+  @Post(':fieldId/lots/:lotId/share')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Compartir un lote con otro usuario' })
+  shareLot(
+    @CurrentUser() user: any,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body() dto: ShareLotDto,
+  ) {
+    return this.service.shareLot(user, lotId, dto);
+  }
+
+  @Patch(':fieldId/lots/:lotId/unshare')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Dejar de compartir un lote con un usuario' })
+  unshareLot(
+    @CurrentUser() user: any,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body() dto: UnshareLotDto,
+  ) {
+    return this.service.unshareLot(user, lotId, dto);
+  }
+
+  @Get(':fieldId/lots/:lotId/shares')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Listar usuarios con quienes se compartió un lote' })
+  getLotShares(
+    @CurrentUser() user: any,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+  ) {
+    return this.service.getLotShares(user, lotId);
+  }
+
+  @Patch(':fieldId/lots/:lotId/delete')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('producer')
+  @ApiOperation({ summary: 'Eliminar un lote (soft delete)' })
+  deleteLot(
+    @CurrentUser() user: any,
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+  ) {
+    return this.service.deleteLot(user, lotId);
   }
 
   // ── Points of Interest ──────────────────────────────────────────

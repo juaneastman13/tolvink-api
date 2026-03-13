@@ -171,6 +171,10 @@ model User {
   conversationParticipations ConversationParticipant[] @relation("conversationParticipations")
   sharedPoisSent             SharedPoi[]               @relation("SharedPoiSharedBy")
   sharedPoisReceived         SharedPoi[]               @relation("SharedPoiSharedWith")
+  sharedFieldsSent           SharedField[]             @relation("SharedFieldSharedBy")
+  sharedFieldsReceived       SharedField[]             @relation("SharedFieldSharedWith")
+  sharedLotsSent             SharedLot[]               @relation("SharedLotSharedBy")
+  sharedLotsReceived         SharedLot[]               @relation("SharedLotSharedWith")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -213,12 +217,31 @@ model Field {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   lots     Lot[]
   freights Freight[]
+  shares   SharedField[]
 
   @@index([companyId])
   @@map("fields")
+}
+
+model SharedField {
+  id               String   @id @default(uuid())
+  fieldId          String   @map("field_id")
+  sharedByUserId   String   @map("shared_by_user_id")
+  sharedWithUserId String   @map("shared_with_user_id")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  field      Field @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  sharedBy   User  @relation("SharedFieldSharedBy", fields: [sharedByUserId], references: [id], onDelete: Cascade)
+  sharedWith User  @relation("SharedFieldSharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, sharedWithUserId])
+  @@index([sharedWithUserId])
+  @@index([fieldId])
+  @@map("shared_fields")
 }
 
 // ======================== LOTS =======================================
@@ -236,13 +259,32 @@ model Lot {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  field    Field?    @relation(fields: [fieldId], references: [id], onDelete: SetNull)
-  freights Freight[] @relation("FreightOriginLot")
+  company  Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  field    Field?      @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  freights Freight[]   @relation("FreightOriginLot")
+  shares   SharedLot[]
 
   @@index([companyId])
   @@index([fieldId])
   @@map("lots")
+}
+
+model SharedLot {
+  id               String   @id @default(uuid())
+  lotId            String   @map("lot_id")
+  sharedByUserId   String   @map("shared_by_user_id")
+  sharedWithUserId String   @map("shared_with_user_id")
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  lot        Lot  @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  sharedBy   User @relation("SharedLotSharedBy", fields: [sharedByUserId], references: [id], onDelete: Cascade)
+  sharedWith User @relation("SharedLotSharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@unique([lotId, sharedWithUserId])
+  @@index([sharedWithUserId])
+  @@index([lotId])
+  @@map("shared_lots")
 }
 
 // ======================== POINTS OF INTEREST =========================

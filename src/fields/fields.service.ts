@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, UnprocessableEntityException, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto } from './fields.dto';
+import { CreateFieldDto, UpdateFieldDto, CreateLotDto, UpdateLotDto, ImportConfirmDto, CreatePoiDto, UpdatePoiDto, SharePoiDto, UnsharePoiDto, ReclassifyPoiDto, ShareFieldDto, UnshareFieldDto, ShareLotDto, UnshareLotDto } from './fields.dto';
 
 const GMAPS_DOMAINS = ['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com'];
 const BROWSER_HEADERS = {
@@ -31,7 +31,9 @@ export class FieldsService {
   async getFields(user: any) {
     const companyIds = await this.resolveAllProducerCompanyIds(user);
     if (companyIds.length === 0) return [];
-    return this.prisma.field.findMany({
+
+    // Own fields
+    const ownFields = await this.prisma.field.findMany({
       where: { companyId: { in: companyIds }, active: true },
       include: {
         company: { select: { id: true, name: true } },
@@ -40,9 +42,44 @@ export class FieldsService {
           select: { id: true, name: true, hectares: true, lat: true, lng: true },
           orderBy: { name: 'asc' },
         },
+        shares: {
+          where: { active: true },
+          select: { id: true, sharedWithUserId: true, sharedWith: { select: { id: true, name: true } } },
+        },
       },
       orderBy: [{ companyId: 'asc' }, { name: 'asc' }],
     });
+
+    // Shared with me
+    const sharedFields = await this.prisma.sharedField.findMany({
+      where: { sharedWithUserId: user.sub, active: true, field: { active: true } },
+      include: {
+        field: {
+          include: {
+            company: { select: { id: true, name: true } },
+            lots: {
+              where: { active: true },
+              select: { id: true, name: true, hectares: true, lat: true, lng: true },
+              orderBy: { name: 'asc' },
+            },
+          },
+        },
+        sharedBy: { select: { id: true, name: true } },
+      },
+    });
+
+    const own = ownFields.map(f => ({ ...f, _isSharedWithMe: false }));
+    const shared = sharedFields
+      .filter(sf => !ownFields.some(of => of.id === sf.fieldId))
+      .map(sf => ({
+        ...sf.field,
+        shares: [],
+        _isSharedWithMe: true,
+        _sharedBy: sf.sharedBy,
+        _shareId: sf.id,
+      }));
+
+    return [...own, ...shared];
   }
 
   async createField(user: any, dto: CreateFieldDto) {
@@ -322,6 +359,238 @@ export class FieldsService {
       where: { poiId, active: true },
       include: { sharedWith: { select: { id: true, name: true, email: true } } },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  // ── Share / Unshare / Delete Fields ─────────────────────────────────
+
+  async shareField(user: any, fieldId: string, dto: ShareFieldDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const field = await this.prisma.field.findFirst({
+      where: { id: fieldId, companyId: { in: companyIds }, active: true },
+    });
+    if (!field) throw new NotFoundException('Campo no encontrado');
+    if (dto.sharedWithUserId === user.sub) throw new BadRequestException('No podés compartir contigo mismo');
+
+    const targetUser = await this.prisma.user.findUnique({ where: { id: dto.sharedWithUserId } });
+    if (!targetUser || !targetUser.active) throw new NotFoundException('Usuario no encontrado');
+
+    const existing = await this.prisma.sharedField.findUnique({
+      where: { fieldId_sharedWithUserId: { fieldId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (existing) {
+      if (existing.active) return existing;
+      const reactivated = await this.prisma.sharedField.update({
+        where: { id: existing.id },
+        data: { active: true, sharedByUserId: user.sub },
+      });
+      this.logger.log(`shareField: reshared field ${fieldId} with user ${dto.sharedWithUserId}`);
+      return reactivated;
+    }
+
+    const share = await this.prisma.sharedField.create({
+      data: { fieldId, sharedByUserId: user.sub, sharedWithUserId: dto.sharedWithUserId },
+    });
+    this.logger.log(`shareField: shared "${field.name}" (${fieldId}) with user ${dto.sharedWithUserId}`);
+    return share;
+  }
+
+  async unshareField(user: any, fieldId: string, dto: UnshareFieldDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const field = await this.prisma.field.findFirst({
+      where: { id: fieldId, companyId: { in: companyIds }, active: true },
+    });
+    if (!field) throw new NotFoundException('Campo no encontrado');
+
+    const share = await this.prisma.sharedField.findUnique({
+      where: { fieldId_sharedWithUserId: { fieldId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (!share || !share.active) throw new NotFoundException('No se encontró el compartido');
+
+    await this.prisma.sharedField.update({
+      where: { id: share.id },
+      data: { active: false },
+    });
+    this.logger.log(`unshareField: unshared field ${fieldId} from user ${dto.sharedWithUserId}`);
+    return { unshared: true };
+  }
+
+  async getFieldShares(user: any, fieldId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const field = await this.prisma.field.findFirst({
+      where: { id: fieldId, companyId: { in: companyIds }, active: true },
+    });
+    if (!field) throw new NotFoundException('Campo no encontrado');
+
+    return this.prisma.sharedField.findMany({
+      where: { fieldId, active: true },
+      include: { sharedWith: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async deleteField(user: any, fieldId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+
+    // Check if shared with me
+    const sharedEntry = await this.prisma.sharedField.findFirst({
+      where: { fieldId, sharedWithUserId: user.sub, active: true },
+    });
+    if (sharedEntry) {
+      this.logger.log(`deleteField: unlinking shared field ${fieldId} for user ${user.sub}`);
+      await this.prisma.sharedField.update({
+        where: { id: sharedEntry.id },
+        data: { active: false },
+      });
+      return { deleted: true, unlinkOnly: true };
+    }
+
+    // Own field
+    const field = await this.prisma.field.findFirst({
+      where: { id: fieldId, companyId: { in: companyIds }, active: true },
+    });
+    if (!field) throw new NotFoundException('Campo no encontrado');
+
+    // Check active freights
+    const activeFreight = await this.prisma.freight.findFirst({
+      where: { fieldId, status: { notIn: ['finished', 'canceled'] } },
+    });
+    if (activeFreight) throw new BadRequestException('No se puede eliminar: el campo tiene fletes activos');
+
+    this.logger.log(`deleteField: soft-deleting "${field.name}" (id=${fieldId})`);
+
+    // Deactivate shares
+    await this.prisma.sharedField.updateMany({
+      where: { fieldId, active: true },
+      data: { active: false },
+    });
+
+    // Deactivate lots + their shares
+    const lots = await this.prisma.lot.findMany({ where: { fieldId, active: true }, select: { id: true } });
+    if (lots.length > 0) {
+      const lotIds = lots.map(l => l.id);
+      await this.prisma.sharedLot.updateMany({
+        where: { lotId: { in: lotIds }, active: true },
+        data: { active: false },
+      });
+      await this.prisma.lot.updateMany({
+        where: { id: { in: lotIds } },
+        data: { active: false },
+      });
+    }
+
+    return this.prisma.field.update({
+      where: { id: fieldId },
+      data: { active: false },
+    });
+  }
+
+  // ── Share / Unshare / Delete Lots ──────────────────────────────────
+
+  async shareLot(user: any, lotId: string, dto: ShareLotDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const lot = await this.prisma.lot.findFirst({
+      where: { id: lotId, companyId: { in: companyIds }, active: true },
+    });
+    if (!lot) throw new NotFoundException('Lote no encontrado');
+    if (dto.sharedWithUserId === user.sub) throw new BadRequestException('No podés compartir contigo mismo');
+
+    const targetUser = await this.prisma.user.findUnique({ where: { id: dto.sharedWithUserId } });
+    if (!targetUser || !targetUser.active) throw new NotFoundException('Usuario no encontrado');
+
+    const existing = await this.prisma.sharedLot.findUnique({
+      where: { lotId_sharedWithUserId: { lotId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (existing) {
+      if (existing.active) return existing;
+      const reactivated = await this.prisma.sharedLot.update({
+        where: { id: existing.id },
+        data: { active: true, sharedByUserId: user.sub },
+      });
+      this.logger.log(`shareLot: reshared lot ${lotId} with user ${dto.sharedWithUserId}`);
+      return reactivated;
+    }
+
+    const share = await this.prisma.sharedLot.create({
+      data: { lotId, sharedByUserId: user.sub, sharedWithUserId: dto.sharedWithUserId },
+    });
+    this.logger.log(`shareLot: shared "${lot.name}" (${lotId}) with user ${dto.sharedWithUserId}`);
+    return share;
+  }
+
+  async unshareLot(user: any, lotId: string, dto: UnshareLotDto) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const lot = await this.prisma.lot.findFirst({
+      where: { id: lotId, companyId: { in: companyIds }, active: true },
+    });
+    if (!lot) throw new NotFoundException('Lote no encontrado');
+
+    const share = await this.prisma.sharedLot.findUnique({
+      where: { lotId_sharedWithUserId: { lotId, sharedWithUserId: dto.sharedWithUserId } },
+    });
+    if (!share || !share.active) throw new NotFoundException('No se encontró el compartido');
+
+    await this.prisma.sharedLot.update({
+      where: { id: share.id },
+      data: { active: false },
+    });
+    this.logger.log(`unshareLot: unshared lot ${lotId} from user ${dto.sharedWithUserId}`);
+    return { unshared: true };
+  }
+
+  async getLotShares(user: any, lotId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+    const lot = await this.prisma.lot.findFirst({
+      where: { id: lotId, companyId: { in: companyIds }, active: true },
+    });
+    if (!lot) throw new NotFoundException('Lote no encontrado');
+
+    return this.prisma.sharedLot.findMany({
+      where: { lotId, active: true },
+      include: { sharedWith: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async deleteLot(user: any, lotId: string) {
+    const companyIds = await this.resolveAllProducerCompanyIds(user);
+
+    // Check if shared with me
+    const sharedEntry = await this.prisma.sharedLot.findFirst({
+      where: { lotId, sharedWithUserId: user.sub, active: true },
+    });
+    if (sharedEntry) {
+      this.logger.log(`deleteLot: unlinking shared lot ${lotId} for user ${user.sub}`);
+      await this.prisma.sharedLot.update({
+        where: { id: sharedEntry.id },
+        data: { active: false },
+      });
+      return { deleted: true, unlinkOnly: true };
+    }
+
+    // Own lot
+    const lot = await this.prisma.lot.findFirst({
+      where: { id: lotId, companyId: { in: companyIds }, active: true },
+    });
+    if (!lot) throw new NotFoundException('Lote no encontrado');
+
+    // Check active freights
+    const activeFreight = await this.prisma.freight.findFirst({
+      where: { originLotId: lotId, status: { notIn: ['finished', 'canceled'] } },
+    });
+    if (activeFreight) throw new BadRequestException('No se puede eliminar: el lote tiene fletes activos');
+
+    this.logger.log(`deleteLot: soft-deleting "${lot.name}" (id=${lotId})`);
+
+    // Deactivate shares
+    await this.prisma.sharedLot.updateMany({
+      where: { lotId, active: true },
+      data: { active: false },
+    });
+
+    return this.prisma.lot.update({
+      where: { id: lotId },
+      data: { active: false },
     });
   }
 
