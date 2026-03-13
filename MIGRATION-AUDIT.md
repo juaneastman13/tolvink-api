@@ -22,6 +22,7 @@
 | 10 | 2026-03-13 | `add_weigh_tickets` | CREATE | weigh_tickets |
 | 11 | 2026-03-13 | `add_shared_pois` | CREATE | shared_pois |
 | 12 | 2026-03-13 | `add_shared_fields_and_lots` | CREATE | shared_fields, shared_lots |
+| 13 | 2026-03-13 | `fix_missing_creates` | CREATE IF NOT EXISTS + ALTER | 11 tablas faltantes + correcciones de tipo |
 
 **Archivo extra:** `prisma/migrations/migration.sql` (no está en carpeta numerada — es un archivo de referencia/manual, NO ejecutado por `prisma migrate deploy`).
 
@@ -33,63 +34,43 @@ Las siguientes 11 tablas están definidas en `schema.prisma` pero **NO tienen CR
 
 | Tabla (@@map) | Modelo Prisma | Estado |
 |--------------|--------------|--------|
-| `analytics_events` | AnalyticsEvent | ⚠️ Sin CREATE TABLE |
-| `branches` | Branch | ⚠️ Sin CREATE TABLE |
-| `freight_pending_changes` | FreightPendingChange | ⚠️ Sin CREATE TABLE |
-| `freight_tracking` | FreightTracking | ⚠️ Sin CREATE TABLE (solo ALTER en migration 4) |
-| `live_locations` | LiveLocation | ⚠️ Sin CREATE TABLE |
-| `password_reset_codes` | PasswordResetCode | ⚠️ Sin CREATE TABLE |
-| `push_subscriptions` | PushSubscription | ⚠️ Sin CREATE TABLE |
-| `refresh_tokens` | RefreshToken | ⚠️ Sin CREATE TABLE |
-| `user_companies` | UserCompany | ⚠️ Sin CREATE TABLE |
-| `whatsapp_message_logs` | WhatsAppMessageLog | ⚠️ Sin CREATE TABLE |
-| `whatsapp_sessions` | WhatsAppSession | ⚠️ Sin CREATE TABLE |
+| `analytics_events` | AnalyticsEvent | ✅ CORREGIDO — migration 13 |
+| `branches` | Branch | ✅ CORREGIDO — migration 13 |
+| `freight_pending_changes` | FreightPendingChange | ✅ CORREGIDO — migration 13 |
+| `freight_tracking` | FreightTracking | ✅ CORREGIDO — migration 13 |
+| `live_locations` | LiveLocation | ✅ CORREGIDO — migration 13 |
+| `password_reset_codes` | PasswordResetCode | ✅ CORREGIDO — migration 13 |
+| `push_subscriptions` | PushSubscription | ✅ CORREGIDO — migration 13 |
+| `refresh_tokens` | RefreshToken | ✅ CORREGIDO — migration 13 |
+| `user_companies` | UserCompany | ✅ CORREGIDO — migration 13 |
+| `whatsapp_message_logs` | WhatsAppMessageLog | ✅ CORREGIDO — migration 13 |
+| `whatsapp_sessions` | WhatsAppSession | ✅ CORREGIDO — migration 13 |
 
-### Impacto
+### Corrección aplicada
 
-Si se hace un deploy limpio (nueva base de datos + `prisma migrate deploy`), estas 11 tablas **NO serán creadas**, causando errores en:
+Migración `20260313230000_fix_missing_creates` contiene `CREATE TABLE IF NOT EXISTS` para las 11 tablas con todos sus campos, índices, constraints y foreign keys según el schema actual. Usa `IF NOT EXISTS` para ser segura tanto en producción (donde las tablas ya existen) como en deploys limpios.
 
-- **Auth:** `refresh_tokens`, `password_reset_codes` — login/refresh/password-reset fallarían
-- **Branches:** `branches` — catálogo de sucursales vacío
-- **Analytics:** `analytics_events` — tracking de eventos falla silenciosamente
-- **WhatsApp:** `whatsapp_sessions`, `whatsapp_message_logs` — bot WhatsApp no funciona
-- **Push:** `push_subscriptions` — notificaciones push no funcionan
-- **Tracking:** `freight_tracking`, `live_locations` — tracking GPS no funciona
-- **Multi-empresa:** `user_companies` — memberships multi-empresa no funcionan
-- **Cambios pendientes:** `freight_pending_changes` — flujo de aprobación no funciona
+### Causa original
 
-### Causa probable
-
-Estas tablas fueron creadas manualmente en la base de datos de desarrollo/producción (o via `prisma db push`) pero nunca se generó una migración formal con `prisma migrate dev`.
-
-### Acción correctiva requerida
-
-Crear una migración de consolidación que incluya `CREATE TABLE IF NOT EXISTS` para las 11 tablas con todos sus campos, índices, constraints y foreign keys según el schema actual.
+Estas tablas fueron creadas via `prisma db push` pero nunca se generó una migración formal.
 
 ---
 
-## 3. ⚠️ BUG EN MIGRACIÓN `sync_company_types`
+## 3. ✅ BUG CORREGIDO — MIGRACIÓN `sync_company_types`
 
-La migración `20260313120000_sync_company_types` referencia la tabla como `"Company"` (modelo Prisma) en lugar de `"companies"` (nombre en PostgreSQL vía `@@map`):
+La migración `20260313120000_sync_company_types` referenciaba la tabla como `"Company"` (modelo Prisma) en lugar de `"companies"` (nombre en PostgreSQL vía `@@map`).
 
+**Estado:** ✅ CORREGIDO — El SQL de la migración fue editado in-place para usar `"companies"` en todas las referencias (`information_schema` check, `ALTER TABLE`, `UPDATE`).
+
+**Nota para producción:** Si esta migración ya fue ejecutada en producción (con el nombre incorrecto), no hizo nada. La columna `company_types` podría necesitar ser creada manualmente si no existe. Verificar con:
 ```sql
--- LÍNEA 3: INCORRECTO
-WHERE table_name = 'Company' AND column_name = 'company_types'
--- DEBERÍA SER:
-WHERE table_name = 'companies' AND column_name = 'company_types'
-
--- LÍNEA 8: INCORRECTO
-ALTER TABLE "Company" ADD COLUMN "company_types" JSONB DEFAULT '[]';
--- DEBERÍA SER:
-ALTER TABLE "companies" ADD COLUMN "company_types" JSONB DEFAULT '[]';
-
--- LÍNEA 13-16: INCORRECTO
-UPDATE "Company" SET ...
--- DEBERÍA SER:
-UPDATE "companies" SET ...
+SELECT column_name FROM information_schema.columns WHERE table_name = 'companies' AND column_name = 'company_types';
 ```
-
-**Impacto:** Esta migración falla silenciosamente o no hace nada en producción, ya que la tabla `"Company"` no existe (es `"companies"`). La columna `company_types` podría NO existir en producción si no fue creada por otro mecanismo.
+Si no retorna resultados, ejecutar manualmente:
+```sql
+ALTER TABLE "companies" ADD COLUMN "company_types" JSONB DEFAULT '[]';
+UPDATE "companies" SET "company_types" = jsonb_build_array("type"::text) WHERE "company_types" IS NULL OR "company_types"::text = '[]';
+```
 
 ---
 
@@ -150,30 +131,68 @@ UPDATE "companies" SET ...
 
 | Campo | Init migration | Schema actual | Migración que lo corrige |
 |-------|---------------|--------------|-------------------------|
-| `freights.dest_company_id` | NOT NULL | `String?` (opcional) | No encontrada ⚠️ |
-| `freight_items.grain` | `"GrainType" NOT NULL` (enum) | `String @db.VarChar(50)` | No encontrada ⚠️ |
+| `freights.dest_company_id` | NOT NULL | `String?` (opcional) | ✅ Migration 13 (`fix_missing_creates`) — DROP NOT NULL condicional |
+| `freight_items.grain` | `"GrainType" NOT NULL` (enum) | `String @db.VarChar(50)` | ✅ Migration 13 (`fix_missing_creates`) — ALTER TYPE condicional |
 | `conversations.freight_id` | NOT NULL | `String?` (optional) | Migration 3 (`structural_domain_update`) ✅ |
-| `audit_logs.from_value` | `VARCHAR(50)` | `@db.Text` | No encontrada ⚠️ |
-| `audit_logs.to_value` | `VARCHAR(50)` | `@db.Text` | No encontrada ⚠️ |
+| `audit_logs.from_value` | `VARCHAR(50)` | `@db.Text` | ✅ Migration 13 (`fix_missing_creates`) — ALTER TYPE condicional |
+| `audit_logs.to_value` | `VARCHAR(50)` | `@db.Text` | ✅ Migration 13 (`fix_missing_creates`) — ALTER TYPE condicional |
 
-### Impacto de discrepancias
-- `dest_company_id` como NOT NULL en DB pero optional en schema: podría causar errores al crear fletes sin destino (si soportado). El ALTER TABLE para DROP NOT NULL no existe en migraciones.
-- `grain` como enum en DB pero VarChar en schema: Prisma ORM manejará la conversión, pero SQL directo podría fallar si se envía un valor fuera del enum.
-- `audit_logs.from_value/to_value` como VARCHAR(50) en DB pero Text en schema: truncación silenciosa si valores > 50 chars.
+### Impacto de discrepancias — CORREGIDO
+Las correcciones de tipo en migration 13 usan bloques `DO $$ ... IF EXISTS ... $$` condicionales:
+- Solo aplican si la discrepancia realmente existe en la DB
+- Son no-ops si ya fueron corregidas por otro mecanismo
 
 ---
 
 ## 8. Resumen de acciones correctivas
 
-| Prioridad | Acción | Riesgo |
+| Prioridad | Acción | Estado |
 |-----------|--------|--------|
-| 🔴 CRÍTICO | Crear migración de consolidación para las 11 tablas faltantes | Sin esto, un deploy limpio falla completamente |
-| 🔴 CRÍTICO | Corregir migración `sync_company_types` (tabla "Company" → "companies") | La columna `company_types` podría no existir |
-| 🟡 MEDIO | Crear ALTER TABLE para `dest_company_id` DROP NOT NULL | Freights sin destino podrían fallar |
-| 🟡 MEDIO | Crear ALTER TABLE para `freight_items.grain` cambiar de enum a VARCHAR | Grain types fuera del enum fallarían |
-| 🟡 MEDIO | Crear ALTER TABLE para `audit_logs.from_value/to_value` cambiar a TEXT | Valores largos se truncan |
-| 🟢 BAJO | Verificar estado real de producción con `prisma migrate status` contra la DB | Confirmar qué tablas existen realmente |
+| 🔴 CRÍTICO | Crear migración de consolidación para las 11 tablas faltantes | ✅ CORREGIDO — `20260313230000_fix_missing_creates` |
+| 🔴 CRÍTICO | Corregir migración `sync_company_types` (tabla "Company" → "companies") | ✅ CORREGIDO — SQL editado in-place |
+| 🟡 MEDIO | Crear ALTER TABLE para `dest_company_id` DROP NOT NULL | ✅ CORREGIDO — incluido en migration 13 |
+| 🟡 MEDIO | Crear ALTER TABLE para `freight_items.grain` cambiar de enum a VARCHAR | ✅ CORREGIDO — incluido en migration 13 |
+| 🟡 MEDIO | Crear ALTER TABLE para `audit_logs.from_value/to_value` cambiar a TEXT | ✅ CORREGIDO — incluido en migration 13 |
+| 🟢 BAJO | Verificar estado real de producción con `prisma migrate status` contra la DB | PENDIENTE DE DEPLOY |
 
 ---
 
-*Generado automáticamente el 2026-03-13*
+## 9. Instrucciones de deploy
+
+### Para aplicar las correcciones en producción:
+
+1. **Merge** este branch a main (si no lo está)
+2. Railway ejecuta `prisma migrate deploy` automáticamente en el start script
+3. Las migraciones se aplican en orden cronológico:
+   - `20260313120000_sync_company_types` — ahora corregido, creará `company_types` en `"companies"` si no existe
+   - `20260313230000_fix_missing_creates` — creará las 11 tablas si no existen (`IF NOT EXISTS`), aplicará correcciones de tipo condicionalmente
+
+### Verificación post-deploy:
+
+```sql
+-- Verificar que las 11 tablas existen
+SELECT table_name FROM information_schema.tables
+WHERE table_schema = 'public'
+AND table_name IN ('refresh_tokens', 'password_reset_codes', 'branches',
+  'user_companies', 'push_subscriptions', 'analytics_events',
+  'freight_tracking', 'live_locations', 'whatsapp_sessions',
+  'whatsapp_message_logs', 'freight_pending_changes');
+
+-- Verificar company_types existe
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'companies' AND column_name = 'company_types';
+
+-- Verificar correcciones de tipo
+SELECT column_name, is_nullable, data_type FROM information_schema.columns
+WHERE (table_name = 'freights' AND column_name = 'dest_company_id')
+   OR (table_name = 'freight_items' AND column_name = 'grain')
+   OR (table_name = 'audit_logs' AND column_name IN ('from_value', 'to_value'));
+```
+
+### Riesgo:
+
+**BAJO** — Todas las correcciones usan `IF NOT EXISTS` / `IF EXISTS` condicionales. Son idempotentes y no pueden romper datos existentes.
+
+---
+
+*Generado automáticamente el 2026-03-13 — Actualizado el 2026-03-13*
