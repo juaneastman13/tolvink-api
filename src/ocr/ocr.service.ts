@@ -238,8 +238,8 @@ export class OcrService {
       this.logger.warn(`OCR: failed to parse JSON response (${raw.length} chars)`);
       return {
         tipoDocumento: docType || 'desconocido',
-        datos: { textoExtraido: raw.slice(0, 3000) },
-        confianza: 0.1,
+        datos: { textoExtraido: raw.slice(0, 3000), _parseError: true },
+        confianza: 0.05,
         textoOriginal: raw.slice(0, 2000),
       };
     }

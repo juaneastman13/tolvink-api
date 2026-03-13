@@ -23,6 +23,16 @@ import { WebChatService } from './web-chat.service';
 
 const MAX_TEXT_LENGTH = 2000;
 const MAX_AUDIO_SIZE = 24 * 1024 * 1024; // 24MB
+const IDEMPOTENCY_TTL_MS = 60_000; // 1 minute
+
+// Simple in-memory dedup set with TTL cleanup
+const recentIdempotencyKeys = new Map<string, number>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, ts] of recentIdempotencyKeys) {
+    if (now - ts > IDEMPOTENCY_TTL_MS) recentIdempotencyKeys.delete(key);
+  }
+}, IDEMPOTENCY_TTL_MS).unref();
 
 @ApiTags('web-chat')
 @ApiBearerAuth()
@@ -38,8 +48,16 @@ export class WebChatController {
   @ApiOperation({ summary: 'Send text message to AI agent' })
   async sendMessage(
     @CurrentUser() user: any,
-    @Body() body: { text: string },
+    @Body() body: { text: string; idempotencyKey?: string },
   ) {
+    // Dedup check
+    if (body?.idempotencyKey) {
+      if (recentIdempotencyKeys.has(body.idempotencyKey)) {
+        return { ok: true, deduplicated: true };
+      }
+      recentIdempotencyKeys.set(body.idempotencyKey, Date.now());
+    }
+
     const text = body?.text?.trim();
     if (!text) throw new BadRequestException('Texto requerido');
     if (text.length > MAX_TEXT_LENGTH) {

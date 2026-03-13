@@ -135,7 +135,7 @@ export class FreightsService {
     for (const cid of companyIds) {
       const isAction = actionCompanyIds?.has(cid) ?? false;
       this.notifications.notifyCompany(cid, type, title, body, freight.id, excludeUserId, isAction)
-        ;
+        .catch(err => this.logger.error(`notifyCompany failed for ${cid}: ${err.message}`));
     }
   }
 
@@ -411,8 +411,8 @@ export class FreightsService {
       if (query.dateFrom && !isNaN(new Date(query.dateFrom).getTime())) {
         where.loadDate.gte = new Date(query.dateFrom);
       }
-      if (query.dateTo && !isNaN(new Date(query.dateTo + 'T23:59:59').getTime())) {
-        where.loadDate.lte = new Date(query.dateTo + 'T23:59:59');
+      if (query.dateTo && !isNaN(new Date(query.dateTo + 'T23:59:59.999Z').getTime())) {
+        where.loadDate.lte = new Date(query.dateTo + 'T23:59:59.999Z');
       }
       if (Object.keys(where.loadDate).length === 0) delete where.loadDate;
     }
@@ -2470,11 +2470,16 @@ export class FreightsService {
         if (!dm) throw new BadRequestException('Chofer no encontrado');
         acceptData.driverId = dm.user.id;
         acceptData.driverName = dm.user.name;
-        const maxPos: any = await (tx.freightAssignment as any).aggregate({
-          _max: { queuePosition: true },
-          where: { driverId: dto.driverId, status: { in: ['active', 'accepted'] }, freight: { status: { in: ['assigned', 'accepted', 'in_progress', 'loaded'] } } },
-        });
-        acceptData.queuePosition = (maxPos._max.queuePosition ?? 0) + 1;
+        // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
+        const lockRows: any[] = await tx.$queryRaw`
+          SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+          FROM "freight_assignments" fa
+          JOIN "freights" f ON f.id = fa."freightId"
+          WHERE fa."driverId" = ${dto.driverId}::uuid
+            AND fa.status IN ('active','accepted')
+            AND f.status IN ('assigned','accepted','in_progress','loaded')
+          FOR UPDATE OF fa`;
+        acceptData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
       }
 
       await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: acceptData });
@@ -2655,7 +2660,7 @@ export class FreightsService {
           return freight;
         }
 
-        throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
+        throw new ForbiddenException('Solo transportista, productor o planta con flota propia pueden confirmar carga');
       });
 
       // Notify all participants about trip loaded
@@ -2833,8 +2838,8 @@ export class FreightsService {
   ) {
     // Validate coordinate bounds
     if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
-        body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180 ||
-        !isFinite(body.lat) || !isFinite(body.lng)) {
+        !isFinite(body.lat) || !isFinite(body.lng) ||
+        body.lat < -90 || body.lat > 90 || body.lng < -180 || body.lng > 180) {
       throw new BadRequestException('Coordenadas inválidas (lat: -90..90, lng: -180..180)');
     }
 

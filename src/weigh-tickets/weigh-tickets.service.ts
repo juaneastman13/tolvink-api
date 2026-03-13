@@ -189,7 +189,13 @@ export class WeighTicketsService {
     if (!ticket.photoUrl) throw new BadRequestException('El ticket no tiene foto asociada');
 
     // Run OCR with weigh-ticket-specific prompt
-    const ocrResult = await this.ocrService.analyzeFromUrl(ticket.photoUrl, 'pesaje');
+    let ocrResult: any;
+    try {
+      ocrResult = await this.ocrService.analyzeFromUrl(ticket.photoUrl, 'pesaje');
+    } catch (err) {
+      this.logger.error(`OCR failed for ticket ${ticketId}: ${err.message}`);
+      return ticket;
+    }
 
     const datos = ocrResult.datos || {};
     const confidence = ocrResult.confianza;
