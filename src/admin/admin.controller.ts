@@ -263,7 +263,7 @@ export class AdminService {
   // --- Permission helpers ---
   isPlatformAdmin(user: any): boolean {
     // Quick JWT check — callers doing mutations MUST also call resolveFullUser() for DB verification
-    return user.role === 'platform_admin';
+    return user.role === 'platform_admin' || user.isSuperAdmin === true;
   }
 
   /** Verify company admin role against the DATABASE, not JWT claims */
@@ -304,11 +304,14 @@ export class AdminService {
   // Fetch full user from DB (JWT only has sub, role, companyId)
   async resolveFullUser(jwtUser: any): Promise<any> {
     if (this.isPlatformAdmin(jwtUser)) {
-      const adminCheck = await this.prisma.user.findUnique({ where: { id: jwtUser.sub }, select: { active: true, role: true } });
-      if (!adminCheck || !adminCheck.active || adminCheck.role !== 'platform_admin') {
+      const adminCheck = await this.prisma.user.findUnique({ where: { id: jwtUser.sub }, select: { active: true, role: true, isSuperAdmin: true } });
+      if (!adminCheck || !adminCheck.active) {
         throw new UnauthorizedException('Usuario desactivado o sin permisos');
       }
-      return jwtUser;
+      if (adminCheck.role !== 'platform_admin' && !adminCheck.isSuperAdmin) {
+        throw new UnauthorizedException('Usuario sin permisos de administrador');
+      }
+      return { ...jwtUser, isSuperAdmin: adminCheck.isSuperAdmin, role: adminCheck.isSuperAdmin ? 'platform_admin' : adminCheck.role };
     }
     const full = await this.prisma.user.findUnique({
       where: { id: jwtUser.sub },
