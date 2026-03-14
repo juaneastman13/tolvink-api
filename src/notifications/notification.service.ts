@@ -87,6 +87,9 @@ export class NotificationService implements OnModuleDestroy {
         totalTracking += batch;
       } while (batch >= CLEANUP_BATCH);
 
+      // Clear stale rate-limit entries
+      this.proactiveLastSent.clear();
+
       if (totalNotifs > 0 || totalTracking > 0) {
         this.logger.log(`Cleanup: removed ${totalNotifs} old notifications, ${totalTracking} old tracking points`);
       }
@@ -247,6 +250,23 @@ export class NotificationService implements OnModuleDestroy {
     return this.sendWhatsAppDirect(userId, null, type, title, body, entityId);
   }
 
+  /** Rate limit: max 1 proactive WA message per user per minute */
+  private proactiveLastSent = new Map<string, number>();
+
+  /** Check if user has interacted with the bot in the last 24h (Meta session window) */
+  private async canSendProactive(phone: string): Promise<boolean> {
+    const lastInbound = await this.prisma.whatsAppMessageLog.findFirst({
+      where: {
+        phone,
+        direction: 'inbound',
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    return !!lastInbound;
+  }
+
   /** Send WhatsApp notification — accepts pre-fetched phone to avoid extra DB query */
   private async sendWhatsAppDirect(
     userId: string,
@@ -257,14 +277,8 @@ export class NotificationService implements OnModuleDestroy {
     entityId?: string,
     actionRecipient = false,
   ) {
-    if (!this.wa) {
-      this.logger.debug(`WhatsApp notification skipped for user ${userId}: service not available`);
-      return;
-    }
-    if (!this.wa.isEnabled()) {
-      this.logger.debug(`WhatsApp notification skipped for user ${userId}: not enabled`);
-      return;
-    }
+    if (!this.wa) return;
+    if (!this.wa.isEnabled()) return;
 
     // Use pre-fetched phone or fall back to DB query
     let userPhone = phone;
@@ -275,20 +289,36 @@ export class NotificationService implements OnModuleDestroy {
       });
       userPhone = user?.phone || null;
     }
-    if (!userPhone) {
-      this.logger.debug(`WhatsApp notification skipped for user ${userId}: no phone`);
+    if (!userPhone) return;
+
+    // Check 24h session window — Meta rejects messages outside it without approved templates
+    const canSend = await this.canSendProactive(userPhone);
+    if (!canSend) {
+      this.logger.debug(`WhatsApp skipped for ${userPhone.slice(-4)}: no 24h session`);
+      return;
+    }
+
+    // Rate limit: max 1 message per user per minute to avoid flood
+    const lastSent = this.proactiveLastSent.get(userPhone) || 0;
+    if (Date.now() - lastSent < 60_000) {
+      this.logger.debug(`WhatsApp skipped for ${userPhone.slice(-4)}: rate limited`);
       return;
     }
 
     // Build message with action buttons based on notification type
     const buttons = this.getWhatsAppButtons(type, entityId, actionRecipient);
-
     const text = `*${title}*\n${body}`;
 
-    if (buttons.length > 0 && entityId) {
-      await this.wa.sendButtons(userPhone, text, buttons);
-    } else {
-      await this.wa.sendText(userPhone, text);
+    try {
+      if (buttons.length > 0 && entityId) {
+        await this.wa.sendButtons(userPhone, text, buttons);
+      } else {
+        await this.wa.sendText(userPhone, text);
+      }
+      this.proactiveLastSent.set(userPhone, Date.now());
+    } catch (err) {
+      this.logger.warn(`WhatsApp send failed for ${userPhone.slice(-4)}: ${err.message}`);
+      // Best-effort — never throw
     }
   }
 
@@ -366,7 +396,7 @@ export class NotificationService implements OnModuleDestroy {
           )
           .catch(async (err: any) => {
             if (err.statusCode === 404 || err.statusCode === 410) {
-              await this.prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(e => this.logger.warn(e.message));
+              await this.prisma.pushSubscription.deleteMany({ where: { id: sub.id } }).catch(e => this.logger.warn(e.message));
               this.logger.log(`Removed expired subscription for user ${userId}`);
             } else {
               this.logger.error(`Push failed for user ${userId}: ${err.message}`);
