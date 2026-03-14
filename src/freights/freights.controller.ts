@@ -68,12 +68,14 @@ export class FreightsController {
   @ApiOperation({ summary: 'Estadísticas de fletes por período' })
   @ApiQuery({ name: 'from', required: false, description: 'Fecha desde (YYYY-MM-DD)' })
   @ApiQuery({ name: 'to', required: false, description: 'Fecha hasta (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'groupBy', required: false, description: 'day | week | month' })
   getStats(
     @CurrentUser() user: any,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('groupBy') groupBy?: string,
   ) {
-    return this.service.getStats(user, from?.trim(), to?.trim());
+    return this.service.getStats(user, from?.trim(), to?.trim(), groupBy?.trim() || 'week');
   }
 
   @Get('drivers')

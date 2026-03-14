@@ -3077,68 +3077,164 @@ export class FreightsService {
   }
 
   // ─── Stats by period ───────────────────────────────────────────
-  async getStats(user: any, from?: string, to?: string) {
+  async getStats(user: any, from?: string, to?: string, groupBy = 'week') {
     const companyIds = await this.resolveAllCompanyIds(user);
-    if (!companyIds.length) return { period: { from, to }, totalFreights: 0, byStatus: {}, totalTons: 0, byGrain: [], topTransporters: [], topDestinations: [], completionRate: 0, avgTonsPerFreight: 0 };
+    const empty = { period: { from, to }, groupBy, overview: { totalFreights: 0, completedFreights: 0, canceledFreights: 0, inProgressFreights: 0, completionRate: 0, cancellationRate: 0, totalTons: 0, avgTonsPerFreight: 0, avgCompletionTimeHours: 0, totalTrips: 0, multiTruckFreights: 0 }, byStatus: {}, byGrain: [], byTransporter: [], byDestination: [], byOrigin: [], timeline: [], delays: { totalDelayed: 0, delayedPercentage: 0, avgDelayHours: 0, topDelayedRoutes: [] }, drivers: [] };
+    if (!companyIds.length) return empty;
 
     const now = new Date();
     const dateFrom = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
     const dateTo = to ? new Date(to + 'T23:59:59') : now;
+    const r = (n: number) => Math.round(n * 100) / 100;
 
     const freights = await this.prisma.freight.findMany({
-      where: {
-        participantCompanyIds: { hasSome: companyIds },
-        loadDate: { gte: dateFrom, lte: dateTo },
-      },
+      where: { participantCompanyIds: { hasSome: companyIds }, loadDate: { gte: dateFrom, lte: dateTo } },
       include: {
         items: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, include: { transportCompany: { select: { name: true } } } },
+        field: { select: { id: true, name: true } },
+        assignments: { include: { transportCompany: { select: { id: true, name: true } }, driver: { select: { id: true, name: true } }, truck: { select: { plate: true } } } },
       },
       take: 2000,
+      orderBy: { loadDate: 'asc' },
     });
 
+    // ── Aggregation maps ──
     const byStatus: Record<string, number> = {};
     const grainMap: Record<string, { count: number; tons: number }> = {};
-    const transporterMap: Record<string, { name: string; count: number; tons: number }> = {};
+    const transporterMap: Record<string, { name: string; count: number; tons: number; completedCount: number; rejectedCount: number; totalAssignments: number; responseTimes: number[] }> = {};
     const destMap: Record<string, { name: string; count: number; tons: number }> = {};
-    let totalTons = 0;
+    const originMap: Record<string, { name: string; fieldId: string | null; count: number; tons: number }> = {};
+    const driverMap: Record<string, { name: string; plate: string; trips: number; tons: number; dates: Set<string> }> = {};
+    const completionTimes: number[] = [];
+    let totalTons = 0, totalTrips = 0, multiTruckCount = 0;
+    const delayed: { origin: string; dest: string; delayH: number }[] = [];
 
     for (const f of freights) {
       byStatus[f.status] = (byStatus[f.status] || 0) + 1;
       const fTons = f.items.reduce((s, i) => s + Number(i.tons || 0), 0);
       totalTons += fTons;
+      if (f.isMultiTruck) multiTruckCount++;
+
+      // Grain
       for (const it of f.items) {
         const g = it.grain || 'Otros';
         if (!grainMap[g]) grainMap[g] = { count: 0, tons: 0 };
         grainMap[g].count++;
         grainMap[g].tons += Number(it.tons || 0);
       }
-      for (const a of f.assignments) {
-        const tName = a.transportCompany?.name || 'Desconocido';
-        const tId = a.transportCompanyId;
-        if (!transporterMap[tId]) transporterMap[tId] = { name: tName, count: 0, tons: 0 };
-        transporterMap[tId].count++;
-        transporterMap[tId].tons += fTons;
+
+      // Completion time
+      if (f.status === 'finished' && f.finishedAt) {
+        const h = (new Date(f.finishedAt).getTime() - new Date(f.createdAt).getTime()) / 3600000;
+        if (h > 0 && h < 720) completionTimes.push(h);
       }
+
+      // Delay detection
+      const loadDT = new Date(`${new Date(f.loadDate).toISOString().split('T')[0]}T${f.loadTime || '00:00'}`);
+      if (loadDT < now && ['pending_assignment', 'assigned', 'accepted'].includes(f.status)) {
+        const delayH = (now.getTime() - loadDT.getTime()) / 3600000;
+        delayed.push({ origin: f.originName, dest: f.destName, delayH });
+      }
+
+      // Transporters & drivers
+      for (const a of f.assignments) {
+        const tId = a.transportCompanyId;
+        const tName = a.transportCompany?.name || 'Desconocido';
+        if (!transporterMap[tId]) transporterMap[tId] = { name: tName, count: 0, tons: 0, completedCount: 0, rejectedCount: 0, totalAssignments: 0, responseTimes: [] };
+        transporterMap[tId].totalAssignments++;
+        if (a.status === 'rejected') transporterMap[tId].rejectedCount++;
+        else { transporterMap[tId].count++; transporterMap[tId].tons += fTons; }
+        if (a.tripStatus === 'finished') transporterMap[tId].completedCount++;
+
+        // Response time (assigned → accepted/rejected)
+        if ((a.status === 'accepted' || a.status === 'rejected') && a.updatedAt && a.createdAt) {
+          const rt = (new Date(a.updatedAt).getTime() - new Date(a.createdAt).getTime()) / 3600000;
+          if (rt >= 0 && rt < 168) transporterMap[tId].responseTimes.push(rt);
+        }
+
+        // Trips & drivers
+        if (['accepted', 'in_progress', 'loaded', 'finished'].includes(a.tripStatus)) totalTrips++;
+        if (a.driver) {
+          const dId = a.driverId || a.driver.id;
+          const plate = a.truck?.plate || a.plate || '';
+          if (!driverMap[dId]) driverMap[dId] = { name: a.driver.name || a.driverName || 'Desconocido', plate, trips: 0, tons: 0, dates: new Set() };
+          driverMap[dId].trips++;
+          driverMap[dId].tons += Number(a.loadedTons || a.tons || 0);
+          driverMap[dId].dates.add(new Date(f.loadDate).toISOString().split('T')[0]);
+        }
+      }
+
+      // Destination
       const dKey = f.destName || 'Sin destino';
       if (!destMap[dKey]) destMap[dKey] = { name: dKey, count: 0, tons: 0 };
-      destMap[dKey].count++;
-      destMap[dKey].tons += fTons;
+      destMap[dKey].count++; destMap[dKey].tons += fTons;
+
+      // Origin
+      const oKey = f.originName || 'Sin origen';
+      if (!originMap[oKey]) originMap[oKey] = { name: oKey, fieldId: f.fieldId || null, count: 0, tons: 0 };
+      originMap[oKey].count++; originMap[oKey].tons += fTons;
+    }
+
+    // ── Timeline ──
+    const timeline: { period: string; label: string; count: number; tons: number; completed: number; canceled: number }[] = [];
+    const bucketKey = (d: Date): string => {
+      if (groupBy === 'day') return d.toISOString().split('T')[0];
+      if (groupBy === 'week') { const mon = new Date(d); mon.setDate(mon.getDate() - ((mon.getDay() + 6) % 7)); return mon.toISOString().split('T')[0]; }
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+    const bucketLabel = (key: string, idx: number): string => {
+      if (groupBy === 'day') return key.slice(5);
+      if (groupBy === 'week') return `Sem ${idx + 1}`;
+      const [y, m] = key.split('-'); const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']; return months[parseInt(m) - 1] || key;
+    };
+    const tlMap: Record<string, { count: number; tons: number; completed: number; canceled: number }> = {};
+    for (const f of freights) {
+      const k = bucketKey(new Date(f.loadDate));
+      if (!tlMap[k]) tlMap[k] = { count: 0, tons: 0, completed: 0, canceled: 0 };
+      tlMap[k].count++;
+      tlMap[k].tons += f.items.reduce((s, i) => s + Number(i.tons || 0), 0);
+      if (f.status === 'finished') tlMap[k].completed++;
+      if (f.status === 'canceled') tlMap[k].canceled++;
+    }
+    const sortedKeys = Object.keys(tlMap).sort();
+    sortedKeys.forEach((k, i) => timeline.push({ period: k, label: bucketLabel(k, i), ...tlMap[k], tons: r(tlMap[k].tons) }));
+
+    // ── Delays ──
+    const delayRouteMap: Record<string, { origin: string; dest: string; delayedCount: number; totalDelay: number }> = {};
+    for (const d of delayed) {
+      const rk = `${d.origin}→${d.dest}`;
+      if (!delayRouteMap[rk]) delayRouteMap[rk] = { origin: d.origin, dest: d.dest, delayedCount: 0, totalDelay: 0 };
+      delayRouteMap[rk].delayedCount++; delayRouteMap[rk].totalDelay += d.delayH;
     }
 
     const finished = byStatus['finished'] || 0;
     const canceled = byStatus['canceled'] || 0;
+    const inProgress = (byStatus['in_progress'] || 0) + (byStatus['loaded'] || 0) + (byStatus['accepted'] || 0) + (byStatus['assigned'] || 0);
+    const avgCT = completionTimes.length > 0 ? r(completionTimes.reduce((a, b) => a + b, 0) / completionTimes.length) : 0;
 
     return {
       period: { from: dateFrom.toISOString().split('T')[0], to: dateTo.toISOString().split('T')[0] },
-      totalFreights: freights.length,
+      groupBy,
+      overview: {
+        totalFreights: freights.length, completedFreights: finished, canceledFreights: canceled, inProgressFreights: inProgress,
+        completionRate: finished + canceled > 0 ? r(finished / (finished + canceled)) : 0,
+        cancellationRate: freights.length > 0 ? r(canceled / freights.length) : 0,
+        totalTons: r(totalTons), avgTonsPerFreight: freights.length > 0 ? r(totalTons / freights.length) : 0,
+        avgCompletionTimeHours: avgCT, totalTrips, multiTruckFreights: multiTruckCount,
+      },
       byStatus,
-      totalTons: Math.round(totalTons * 100) / 100,
-      byGrain: Object.entries(grainMap).map(([grain, v]) => ({ grain, ...v, tons: Math.round(v.tons * 100) / 100 })).sort((a, b) => b.tons - a.tons),
-      topTransporters: Object.values(transporterMap).sort((a, b) => b.count - a.count).slice(0, 10).map(t => ({ ...t, tons: Math.round(t.tons * 100) / 100 })),
-      topDestinations: Object.values(destMap).sort((a, b) => b.count - a.count).slice(0, 10).map(d => ({ ...d, tons: Math.round(d.tons * 100) / 100 })),
-      completionRate: finished + canceled > 0 ? Math.round((finished / (finished + canceled)) * 100) / 100 : 0,
-      avgTonsPerFreight: freights.length > 0 ? Math.round((totalTons / freights.length) * 10) / 10 : 0,
+      byGrain: Object.entries(grainMap).map(([grain, v]) => ({ grain, count: v.count, tons: r(v.tons), percentage: totalTons > 0 ? r((v.tons / totalTons) * 100) : 0, avgTons: v.count > 0 ? r(v.tons / v.count) : 0 })).sort((a, b) => b.tons - a.tons),
+      byTransporter: Object.entries(transporterMap).map(([id, v]) => ({ id, name: v.name, count: v.count, tons: r(v.tons), completedCount: v.completedCount, avgResponseTimeHours: v.responseTimes.length > 0 ? r(v.responseTimes.reduce((a, b) => a + b, 0) / v.responseTimes.length) : 0, rejectionRate: v.totalAssignments > 0 ? r(v.rejectedCount / v.totalAssignments) : 0 })).sort((a, b) => b.count - a.count).slice(0, 15),
+      byDestination: Object.values(destMap).map(d => ({ ...d, tons: r(d.tons), avgTons: d.count > 0 ? r(d.tons / d.count) : 0 })).sort((a, b) => b.count - a.count).slice(0, 15),
+      byOrigin: Object.values(originMap).map(o => ({ ...o, tons: r(o.tons) })).sort((a, b) => b.count - a.count).slice(0, 15),
+      timeline,
+      delays: {
+        totalDelayed: delayed.length,
+        delayedPercentage: freights.length > 0 ? r((delayed.length / freights.length) * 100) : 0,
+        avgDelayHours: delayed.length > 0 ? r(delayed.reduce((s, d) => s + d.delayH, 0) / delayed.length) : 0,
+        topDelayedRoutes: Object.values(delayRouteMap).sort((a, b) => b.delayedCount - a.delayedCount).slice(0, 5).map(r2 => ({ ...r2, avgDelayHours: r(r2.totalDelay / r2.delayedCount) })),
+      },
+      drivers: Object.values(driverMap).map(d => ({ name: d.name, plate: d.plate, trips: d.trips, tons: r(d.tons), avgTripsPerDay: d.dates.size > 0 ? r(d.trips / d.dates.size) : 0 })).sort((a, b) => b.trips - a.trips).slice(0, 15),
     };
   }
 }
