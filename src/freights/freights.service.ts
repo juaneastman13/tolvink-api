@@ -837,6 +837,11 @@ export class FreightsService {
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.accepted, 'transporter');
 
+      // Truck is required when accepting a freight
+      if (!dto.truckId) {
+        throw new BadRequestException('Debe asignar un camión para aceptar el flete');
+      }
+
       const assignmentUpdate: any = { status: AssignmentStatus.accepted };
 
       if (dto.truckId) {
@@ -959,6 +964,24 @@ export class FreightsService {
       const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
+
+      // Check truck availability — truck must not be in another active trip
+      const activeAssignment = freight.assignments?.[0];
+      if (activeAssignment?.truckId) {
+        const busyAssignment = await tx.freightAssignment.findFirst({
+          where: {
+            truckId: activeAssignment.truckId,
+            tripStatus: { in: ['accepted', 'in_progress', 'loaded'] },
+            freightId: { not: freightId },
+          },
+          include: { freight: { select: { code: true } } },
+        });
+        if (busyAssignment) {
+          throw new BadRequestException(
+            `El camión ${activeAssignment.plate || ''} está en otro viaje activo (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
+          );
+        }
+      }
 
       const updated = await tx.freight.update({
         where: { id: freightId },
@@ -2450,6 +2473,11 @@ export class FreightsService {
 
       this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'accepted' as any);
 
+      // Truck is required when accepting a trip (unless already assigned by plant)
+      if (!dto.truckId && !assignment.truckId) {
+        throw new BadRequestException('Debe asignar un camión para aceptar el viaje');
+      }
+
       const acceptData: any = { status: AssignmentStatus.accepted, tripStatus: 'accepted' };
 
       if (dto.truckId) {
@@ -2544,6 +2572,23 @@ export class FreightsService {
       }
 
       this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'in_progress' as any);
+
+      // Check truck availability — truck must not be in another active trip
+      if (assignment.truckId) {
+        const busyAssignment = await (tx.freightAssignment as any).findFirst({
+          where: {
+            truckId: assignment.truckId,
+            tripStatus: { in: ['accepted', 'in_progress', 'loaded'] },
+            freightId: { not: freightId },
+          },
+          include: { freight: { select: { code: true } } },
+        });
+        if (busyAssignment) {
+          throw new BadRequestException(
+            `El camión ${assignment.plate || ''} está en otro viaje activo (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
+          );
+        }
+      }
 
       await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
