@@ -590,6 +590,11 @@ export class AdminService {
         userTypes: true, isSuperAdmin: true, active: true, companyId: true,
         companyByType: true, roleByType: true, createdAt: true,
         company: { select: { id: true, name: true, type: true } },
+        memberships: {
+          where: { active: true },
+          select: { id: true, companyId: true, role: true, company: { select: { id: true, name: true, type: true } } },
+          orderBy: { createdAt: 'asc' as any },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: MAX_USER_LIST_RESULTS,
@@ -768,6 +773,74 @@ export class AdminService {
     }
 
     return updated;
+  }
+
+  // --- Membership management ---
+  async addUserCompany(userId: string, companyId: string, role: string, callerUser: any) {
+    const resolvedCaller = await this.resolveFullUser(callerUser);
+    if (!resolvedCaller.isSuperAdmin) {
+      const myIds = await this.getUserCompanyIds(resolvedCaller);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('No podés asignar esta empresa');
+    }
+    const company = await this.prisma.company.findUnique({ where: { id: companyId }, select: { id: true, name: true, type: true } });
+    if (!company) throw new NotFoundException('Empresa no encontrada');
+
+    const membership = await (this.prisma as any).userCompany.upsert({
+      where: { userId_companyId: { userId, companyId } },
+      create: { userId, companyId, role, active: true },
+      update: { role, active: true },
+    });
+
+    // Sync user.companyByType and userTypes
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { userTypes: true, companyByType: true, companyId: true } });
+    if (user) {
+      const types = Array.isArray(user.userTypes) ? [...user.userTypes as string[]] : [];
+      const cbt = (user.companyByType && typeof user.companyByType === 'object') ? { ...(user.companyByType as any) } : {};
+      if (!types.includes(company.type)) types.push(company.type);
+      if (!cbt[company.type]) cbt[company.type] = companyId;
+      const data: any = { userTypes: types, companyByType: cbt };
+      if (!user.companyId) data.companyId = companyId;
+      await this.prisma.user.update({ where: { id: userId }, data });
+    }
+    return { ...membership, company };
+  }
+
+  async updateUserCompany(userId: string, companyId: string, role: string, callerUser: any) {
+    const resolvedCaller = await this.resolveFullUser(callerUser);
+    if (!resolvedCaller.isSuperAdmin) {
+      const myIds = await this.getUserCompanyIds(resolvedCaller);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('No podés editar esta membresía');
+    }
+    return (this.prisma as any).userCompany.update({
+      where: { userId_companyId: { userId, companyId } },
+      data: { role },
+    });
+  }
+
+  async removeUserCompany(userId: string, companyId: string, callerUser: any) {
+    const resolvedCaller = await this.resolveFullUser(callerUser);
+    if (!resolvedCaller.isSuperAdmin) {
+      const myIds = await this.getUserCompanyIds(resolvedCaller);
+      if (!myIds.includes(companyId)) throw new ForbiddenException('No podés quitar esta empresa');
+    }
+    await (this.prisma as any).userCompany.updateMany({
+      where: { userId, companyId },
+      data: { active: false },
+    });
+
+    // Sync user.companyByType — remove this company from it
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { userTypes: true, companyByType: true, companyId: true, activeCompanyId: true } });
+    if (user) {
+      const cbt = (user.companyByType && typeof user.companyByType === 'object') ? { ...(user.companyByType as any) } : {};
+      for (const [type, cId] of Object.entries(cbt)) {
+        if (cId === companyId) delete cbt[type];
+      }
+      const data: any = { companyByType: cbt };
+      if (user.companyId === companyId) data.companyId = null;
+      if (user.activeCompanyId === companyId) data.activeCompanyId = null;
+      await this.prisma.user.update({ where: { id: userId }, data });
+    }
+    return { ok: true };
   }
 
   // Self-edit: any user can edit their own name/email/phone
@@ -1144,6 +1217,41 @@ export class AdminController {
   async updateUser(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserDto, @CurrentUser() u: any) {
     await this.svc.assertCompanyOrPlatformAdmin(u);
     return this.svc.updateUser(id, dto, u);
+  }
+
+  // --- User membership management ---
+  @Post('users/:userId/companies')
+  @ApiOperation({ summary: 'Agregar empresa a usuario' })
+  async addUserCompany(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() body: { companyId: string; role?: string },
+    @CurrentUser() u: any,
+  ) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.addUserCompany(userId, body.companyId, body.role || 'operario', u);
+  }
+
+  @Patch('users/:userId/companies/:companyId')
+  @ApiOperation({ summary: 'Editar rol de usuario en empresa' })
+  async updateUserCompany(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body() body: { role: string },
+    @CurrentUser() u: any,
+  ) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.updateUserCompany(userId, companyId, body.role, u);
+  }
+
+  @Delete('users/:userId/companies/:companyId')
+  @ApiOperation({ summary: 'Quitar empresa de usuario' })
+  async removeUserCompany(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @CurrentUser() u: any,
+  ) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    return this.svc.removeUserCompany(userId, companyId, u);
   }
 
   // --- Self edit (any user) ---
