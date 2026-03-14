@@ -259,6 +259,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // Extract session-scoped company for use in menus and role resolution
+      const sessionCoId = ((cachedSession?.flowState as any) || {}).selectedCompanyId || undefined;
+
       // Check for active flow (reuse cached session)
       const session = cachedSession;
 
@@ -268,12 +271,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.wa.sendText(phone, '❌ Operación cancelada.');
-          await this.showMainMenu(phone, user);
+          await this.showMainMenu(phone, user, sessionCoId);
           return;
         }
         if (/^(menu|inicio|hola)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
-          await this.showMainMenu(phone, user);
+          await this.showMainMenu(phone, user, sessionCoId);
           return;
         }
 
@@ -320,6 +323,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   private async handleText(phone: string, user: any, text: string, cachedSession?: any) {
     const t = text.trim();
+    const sessionCoId = ((cachedSession?.flowState as any) || {}).selectedCompanyId || undefined;
 
     // Edge case: empty or whitespace-only message
     if (!t) return;
@@ -375,7 +379,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     // Covers: hola, buenas, buen dia, buenos dias, buenas tardes/noches, que tal, como estas, hey, etc.
     const GREETING_RE = /^(hola|hi|hey|buenas?|buen\s*d[ií]a|buenos?\s*d[ií]as?|buenas?\s*tardes?|buenas?\s*noches?|qu[eé]\s*tal|c[oó]mo\s*(est[aá]s?|and[aá]s?|va)|saludos?|menu|inicio)[\s?!.,]*$/i;
     if (GREETING_RE.test(t)) {
-      await this.showMainMenu(phone, user);
+      await this.showMainMenu(phone, user, sessionCoId);
       return;
     }
 
@@ -390,7 +394,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         const msg = emojiOnly ? `[El usuario envió solo emojis: ${t}]` : t;
         await this.handleAiChat(phone, user, msg, cachedSession);
       } else {
-        await this.showMainMenu(phone, user);
+        await this.showMainMenu(phone, user, sessionCoId);
       }
       return;
     }
@@ -418,7 +422,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Default: show menu
-    await this.showMainMenu(phone, user);
+    await this.showMainMenu(phone, user, sessionCoId);
   }
 
   // ======================== AI CHAT HANDLER ==============================
@@ -447,10 +451,13 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         if (expiredSession?.flowState) {
           const oldState = expiredSession.flowState as any;
           if (oldState.activeContext) {
-            recoveredState = {
-              _recoveredContext: oldState.activeContext,
-              _sessionExpiredNote: true,
-            };
+            recoveredState._recoveredContext = oldState.activeContext;
+            recoveredState._sessionExpiredNote = true;
+          }
+          // Recover company selection so user doesn't have to re-select after session timeout
+          if (oldState.selectedCompanyId && oldState.companyConfirmed) {
+            recoveredState.selectedCompanyId = oldState.selectedCompanyId;
+            recoveredState.companyConfirmed = true;
           }
         }
 
@@ -547,7 +554,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.wa.sendText(phone,
         'Se produjo un inconveniente técnico. Por favor, utilice las opciones del menú.',
       );
-      await this.showMainMenu(phone, user);
+      const sessCoId = ((cachedSession?.flowState as any) || {}).selectedCompanyId;
+      await this.showMainMenu(phone, user, sessCoId);
     }
   }
 
@@ -963,7 +971,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           break;
         }
         case 'menu': {
-          await this.showMainMenu(phone, user);
+          const menuSess = await this.prisma.whatsAppSession.findFirst({ where: { userId: user.id, expiresAt: { gt: new Date() } }, orderBy: { updatedAt: 'desc' } });
+          await this.showMainMenu(phone, user, ((menuSess?.flowState as any) || {}).selectedCompanyId);
           break;
         }
         case 'active_freights': {
@@ -1225,7 +1234,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         await this.wa.sendText(phone, 'Hubo un problema al procesar su mensaje. Por favor, intente nuevamente.');
       }
     } else if (updatedUser) {
-      await this.showMainMenu(phone, updatedUser);
+      await this.showMainMenu(phone, updatedUser, companyId);
     }
   }
 
@@ -1339,9 +1348,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   // ======================== SHOW MAIN MENU ==============================
 
-  async showMainMenu(phone: string, user: any) {
+  async showMainMenu(phone: string, user: any, sessionCompanyId?: string) {
+    // Use session-scoped company (WhatsApp selection) over DB activeCompanyId
+    const activeCoId = sessionCompanyId || user.activeCompanyId || user.companyId;
+    // Temporarily override user for role resolution
+    if (sessionCompanyId) user = { ...user, activeCompanyId: sessionCompanyId };
     const role = this.getUserRole(user);
-    const activeCoId = user.activeCompanyId || user.companyId;
     const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
     const companyName = activeMem?.company?.name || user.company?.name || '';
     const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
