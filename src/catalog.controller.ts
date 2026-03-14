@@ -131,7 +131,7 @@ export class CatalogController implements OnModuleDestroy {
 
       // Non-producer (plant/other): return plant-type companies as destinations
       const allCos = await this.prisma.company.findMany({
-        where: { active: true, OR: [{ type: 'plant' }, { types: { has: 'plant' } }] as any },
+        where: { active: true, OR: [{ type: 'plant' }, { types: { array_contains: 'plant' } }] },
         select: { id: true, name: true, address: true, lat: true, lng: true, type: true, types: true },
         orderBy: { name: 'asc' },
         take: t + s,

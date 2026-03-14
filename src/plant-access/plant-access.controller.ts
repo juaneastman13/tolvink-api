@@ -346,7 +346,7 @@ export class PlantAccessService {
 
   async listPlantCompanies() {
     return this.prisma.company.findMany({
-      where: { active: true, OR: [{ type: 'plant' }, { types: { has: 'plant' } }] as any },
+      where: { active: true, OR: [{ type: 'plant' }, { types: { array_contains: 'plant' } }] },
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     });
