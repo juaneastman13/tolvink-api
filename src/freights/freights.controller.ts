@@ -64,6 +64,18 @@ export class FreightsController {
     });
   }
 
+  @Get('stats')
+  @ApiOperation({ summary: 'Estadísticas de fletes por período' })
+  @ApiQuery({ name: 'from', required: false, description: 'Fecha desde (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'to', required: false, description: 'Fecha hasta (YYYY-MM-DD)' })
+  getStats(
+    @CurrentUser() user: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.service.getStats(user, from?.trim(), to?.trim());
+  }
+
   @Get('drivers')
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar choferes disponibles de una empresa' })

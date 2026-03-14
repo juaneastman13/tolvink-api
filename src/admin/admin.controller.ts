@@ -334,6 +334,58 @@ export class AdminService {
     return data;
   }
 
+  async getActivity(callerUser: any, page: number, limit: number) {
+    const companyIds = this.isPlatformAdmin(callerUser) ? [] : await this.getUserCompanyIds(callerUser);
+    const skip = (page - 1) * limit;
+
+    // Build where clause: filter by freights the company participates in
+    const where: any = {};
+    if (companyIds.length > 0) {
+      const freightIds = await this.prisma.freight.findMany({
+        where: { participantCompanyIds: { hasSome: companyIds } },
+        select: { id: true },
+        take: 500,
+        orderBy: { updatedAt: 'desc' },
+      });
+      where.freightId = { in: freightIds.map(f => f.id) };
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          user: { select: { id: true, name: true } },
+          freight: { select: { id: true, code: true } },
+        },
+      }),
+      this.prisma.auditLog.count({ where }),
+    ]);
+
+    return {
+      data: data.map(e => ({
+        id: e.id,
+        action: e.action,
+        entityType: e.entityType,
+        entityId: e.entityId,
+        freightId: e.freightId,
+        freightCode: (e as any).freight?.code || null,
+        userId: e.userId,
+        userName: (e as any).user?.name || 'Sistema',
+        metadata: e.metadata,
+        fromValue: e.fromValue,
+        toValue: e.toValue,
+        reason: e.reason,
+        createdAt: e.createdAt,
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
   // --- Companies ---
   async listCompanies(search?: string, callerUser?: any) {
     const where: any = {};
@@ -952,6 +1004,21 @@ export class AdminService {
 @Controller('admin')
 export class AdminController {
   constructor(private svc: AdminService) {}
+
+  // --- Activity log ---
+  @Get('activity')
+  @ApiOperation({ summary: 'Actividad reciente de la empresa' })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  async activity(
+    @CurrentUser() u: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.getActivity(fullUser, parseInt(page || '1') || 1, Math.min(parseInt(limit || '20') || 20, 50));
+  }
 
   // --- Stats (platform_admin only) ---
   @Get('stats')

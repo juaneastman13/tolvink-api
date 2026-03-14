@@ -3075,4 +3075,70 @@ export class FreightsService {
       return { ok: true };
     });
   }
+
+  // ─── Stats by period ───────────────────────────────────────────
+  async getStats(user: any, from?: string, to?: string) {
+    const companyIds = await this.resolveAllCompanyIds(user);
+    if (!companyIds.length) return { period: { from, to }, totalFreights: 0, byStatus: {}, totalTons: 0, byGrain: [], topTransporters: [], topDestinations: [], completionRate: 0, avgTonsPerFreight: 0 };
+
+    const now = new Date();
+    const dateFrom = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const dateTo = to ? new Date(to + 'T23:59:59') : now;
+
+    const freights = await this.prisma.freight.findMany({
+      where: {
+        participantCompanyIds: { hasSome: companyIds },
+        loadDate: { gte: dateFrom, lte: dateTo },
+      },
+      include: {
+        items: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, include: { transportCompany: { select: { name: true } } } },
+      },
+      take: 2000,
+    });
+
+    const byStatus: Record<string, number> = {};
+    const grainMap: Record<string, { count: number; tons: number }> = {};
+    const transporterMap: Record<string, { name: string; count: number; tons: number }> = {};
+    const destMap: Record<string, { name: string; count: number; tons: number }> = {};
+    let totalTons = 0;
+
+    for (const f of freights) {
+      byStatus[f.status] = (byStatus[f.status] || 0) + 1;
+      const fTons = f.items.reduce((s, i) => s + Number(i.tons || 0), 0);
+      totalTons += fTons;
+      for (const it of f.items) {
+        const g = it.grain || 'Otros';
+        if (!grainMap[g]) grainMap[g] = { count: 0, tons: 0 };
+        grainMap[g].count++;
+        grainMap[g].tons += Number(it.tons || 0);
+      }
+      for (const a of f.assignments) {
+        const tName = a.transportCompany?.name || 'Desconocido';
+        const tId = a.transportCompanyId;
+        if (!transporterMap[tId]) transporterMap[tId] = { name: tName, count: 0, tons: 0 };
+        transporterMap[tId].count++;
+        transporterMap[tId].tons += fTons;
+      }
+      const dKey = f.destName || 'Sin destino';
+      if (!destMap[dKey]) destMap[dKey] = { name: dKey, count: 0, tons: 0 };
+      destMap[dKey].count++;
+      destMap[dKey].tons += fTons;
+    }
+
+    const finished = byStatus['finished'] || 0;
+    const canceled = byStatus['canceled'] || 0;
+
+    return {
+      period: { from: dateFrom.toISOString().split('T')[0], to: dateTo.toISOString().split('T')[0] },
+      totalFreights: freights.length,
+      byStatus,
+      totalTons: Math.round(totalTons * 100) / 100,
+      byGrain: Object.entries(grainMap).map(([grain, v]) => ({ grain, ...v, tons: Math.round(v.tons * 100) / 100 })).sort((a, b) => b.tons - a.tons),
+      topTransporters: Object.values(transporterMap).sort((a, b) => b.count - a.count).slice(0, 10).map(t => ({ ...t, tons: Math.round(t.tons * 100) / 100 })),
+      topDestinations: Object.values(destMap).sort((a, b) => b.count - a.count).slice(0, 10).map(d => ({ ...d, tons: Math.round(d.tons * 100) / 100 })),
+      completionRate: finished + canceled > 0 ? Math.round((finished / (finished + canceled)) * 100) / 100 : 0,
+      avgTonsPerFreight: freights.length > 0 ? Math.round((totalTons / freights.length) * 10) / 10 : 0,
+    };
+  }
 }
