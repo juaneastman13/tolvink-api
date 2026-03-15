@@ -20,7 +20,7 @@ export function haversineDistance(
 }
 
 /**
- * Returns distance in km, or null if any coordinate is null/undefined.
+ * Returns distance in km, or null if any coordinate is null/undefined/NaN.
  */
 export function haversineDistanceOrNull(
   lat1: number | null | undefined,
@@ -29,5 +29,6 @@ export function haversineDistanceOrNull(
   lng2: number | null | undefined,
 ): number | null {
   if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null;
+  if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) return null;
   return haversineDistance(lat1, lng1, lat2, lng2);
 }
