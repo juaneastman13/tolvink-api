@@ -12,6 +12,7 @@ import { TrucksService } from '../trucks/trucks.controller';
 import { AdminService } from '../admin/admin.controller';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { OcrService } from '../ocr/ocr.service';
+import { AssignmentSuggestionsService } from '../freights/assignment-suggestions.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
 import { createSignedToken } from '../common/signed-token';
@@ -82,6 +83,7 @@ export class AiService implements OnModuleDestroy {
     private trucksService: TrucksService,
     private adminService: AdminService,
     private ocrService: OcrService,
+    private assignmentSuggestions: AssignmentSuggestionsService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -742,6 +744,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     'cancel_assignment', 'update_assignment', 'cancel_freight',
     'assign_multi_trucks', 'view_driver_queue', 'reorder_driver_queue',
     'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
+    'get_assignment_suggestions',
   ]);
 
   // TRANSPORTER: Trip & freight response tools
@@ -989,6 +992,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
         case 'view_driver_queue': return await this.toolViewDriverQueue(input, user);
         case 'reorder_driver_queue': return await this.toolReorderDriverQueue(input, user, session);
         case 'navigate_app': return this.toolNavigateApp(input, session);
+        case 'get_assignment_suggestions': return await this.toolGetAssignmentSuggestions(input, user);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
     }
   }
@@ -5400,5 +5404,49 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     return this.stageAction(session, 'reorder_driver_queue', {
       driverId: input.driverId, driverName: driver.name, orderedFreightIds: input.orderedFreightIds,
     }, `Reordenar cola de ${driver.name} (${input.orderedFreightIds.length} fletes)`, user);
+  }
+
+  // ======================== ASSIGNMENT SUGGESTIONS TOOL ====================
+
+  private async toolGetAssignmentSuggestions(input: any, user: any): Promise<string> {
+    const companyType = this.resolveCompanyType(user);
+    if (!companyType.includes('plant')) {
+      return JSON.stringify({ error: 'Solo usuarios de tipo planta pueden obtener sugerencias de asignación.' });
+    }
+
+    if (!input.freightId) {
+      return JSON.stringify({ error: 'Se requiere el freightId del flete.' });
+    }
+
+    try {
+      const result = await this.assignmentSuggestions.getSuggestions(input.freightId, user.sub || user.id);
+
+      if (result.suggestions.length === 0) {
+        return JSON.stringify({ message: 'No encontré opciones de transporte disponibles para este flete.' });
+      }
+
+      const lines = [`🏆 Sugerencias para flete ${result.freightCode}:\n`];
+      result.suggestions.forEach((s, i) => {
+        const label = s.type === 'own_fleet' ? `Flota propia (${s.plate || 'sin patente'})` : s.companyName;
+        lines.push(`${i + 1}. ${label} (${s.score} pts) — ${s.reasons.slice(0, 3).join(' · ')}`);
+        if (s.plate && s.type !== 'own_fleet') lines.push(`   Camión: ${s.plate}${s.driverName ? ` · ${s.driverName}` : ''}`);
+      });
+      lines.push(`\n¿Querés que asigne a alguno? Decime el número o el nombre.`);
+
+      return JSON.stringify({
+        message: lines.join('\n'),
+        suggestions: result.suggestions.map(s => ({
+          companyId: s.companyId,
+          companyName: s.companyName,
+          truckId: s.truckId,
+          plate: s.plate,
+          score: s.score,
+          type: s.type,
+        })),
+        freightId: result.freightId,
+      });
+    } catch (e) {
+      return JSON.stringify({ error: e.message || 'Error al obtener sugerencias.' });
+    }
   }
 }

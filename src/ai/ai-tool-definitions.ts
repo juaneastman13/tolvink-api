@@ -1019,4 +1019,15 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ['screen'],
     },
   },
+  {
+    name: 'get_assignment_suggestions',
+    description: 'Obtiene sugerencias rankeadas de transporte para asignar un flete. Usar cuando el usuario pide asignar sin especificar transportista, pregunta quién puede hacer un flete, o pide recomendaciones de transporte.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        freightId: { type: 'string', description: 'ID del flete' },
+      },
+      required: ['freightId'],
+    },
+  },
 ];

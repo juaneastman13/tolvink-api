@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Pa
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
+import { AssignmentSuggestionsService } from './assignment-suggestions.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
@@ -14,7 +15,10 @@ import { Roles } from '../common/decorators/roles.decorator';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('freights')
 export class FreightsController {
-  constructor(private service: FreightsService) {}
+  constructor(
+    private service: FreightsService,
+    private suggestions: AssignmentSuggestionsService,
+  ) {}
 
   @Post()
   @Roles('producer', 'plant')
@@ -116,6 +120,15 @@ export class FreightsController {
   @ApiOperation({ summary: 'Solo documentos, conversación y cambios pendientes (complemento del listado)' })
   findOneDetailExtra(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOneDetailExtra(id);
+  }
+
+  @Get(':id/assignment-suggestions')
+  @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  @Roles('plant')
+  @ApiOperation({ summary: 'Sugerencias de asignación de transporte' })
+  getAssignmentSuggestions(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.suggestions.getSuggestions(id, user.sub);
   }
 
   @Get(':id')
