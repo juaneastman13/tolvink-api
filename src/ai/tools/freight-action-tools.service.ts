@@ -616,9 +616,14 @@ export class FreightActionToolsService {
       }
     }
 
-    // Truck count is mandatory — user must specify
+    // Auto-calculate truck count if not provided: 1 truck per 30 tons (round up)
     if (!input.truckCount || isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1) {
-      return JSON.stringify({ error: 'Debe indicar la cantidad de camiones (truckCount). Pregúntele al usuario cuántos camiones necesita.' });
+      const tons = Number(input.tons);
+      if (tons > 0) {
+        input.truckCount = Math.ceil(tons / 30);
+      } else {
+        return JSON.stringify({ error: 'Debe indicar la cantidad de camiones (truckCount) o las toneladas para calcularlo automáticamente.' });
+      }
     }
     const truckCount = Number(input.truckCount);
 

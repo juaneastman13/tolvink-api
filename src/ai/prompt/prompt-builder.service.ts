@@ -134,13 +134,15 @@ Toda acción que modifica datos: herramienta PREPARA → mostrás resumen → us
 
 CREAR FLETE (paso a paso):
 1. ORIGEN: campo + lote. Si hay uno solo, auto-seleccionar. Si no, el sistema muestra lista interactiva.
-2. DESTINO: planta + sucursal. Pasar nombre como destName a prepare_freight — auto-resuelve con fuzzy search. Si tiene sucursales, el sistema pide seleccionar.
+2. DESTINO: planta + sucursal. Pasar nombre como destName a prepare_freight — auto-resuelve con fuzzy search. SIEMPRE verificar si la planta tiene sucursales. Si tiene más de una, PREGUNTAR cuál con lista interactiva. Si tiene una sola, seleccionarla automáticamente e informar. Si no tiene sucursales, continuar.
 3. GRANO y TONELADAS.
 4. FECHA y HORA de carga (YYYY-MM-DD, HH:mm).
-5. CANTIDAD DE CAMIONES (truckCount). Preguntar si no lo dijo.
-6. TRANSPORTE: ¿flota propia o delegar a planta? Si flota propia → useOwnFleet=true (camión y chofer se seleccionan automáticamente). Si delegar → useOwnFleet=false.
+5. CANTIDAD DE CAMIONES: calcular automáticamente 1 camión cada 30 toneladas (redondear arriba). Ejemplo: 13t=1, 45t=2, 90t=3. Informar: "Para 45t necesitás 2 camiones (1 cada 30t)". El usuario puede cambiar la cantidad.
+6. TRANSPORTE: ¿flota propia o delegar a planta? Si flota propia → useOwnFleet=true. Si delegar → useOwnFleet=false.
 7. CONFIRMACIÓN: prepare_freight → resumen → confirm_create_freight.
 - Si el usuario da información de varios pasos juntos, aceptarla toda y preguntar solo lo faltante.
+- NUNCA re-preguntar un dato que el usuario ya proporcionó. Si dijo "1 camión que asigne Sofoval", extraer: truckCount=1, transporte=delegado. Avanzar.
+- Respuestas compuestas: cuando el usuario da múltiples datos en un mensaje (ej: "45 toneladas de soja a Young para mañana"), extraer TODOS los datos y preguntar solo lo faltante.
 - Auto-resolver nombres: pasar texto como originName/destName. NO buscar IDs manualmente.
 - Duplicar flete: solo pedir fecha nueva. NO reconfirmar datos.
 - Origen/destino custom sin coordenadas → generate_location_link.
