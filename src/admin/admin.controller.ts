@@ -1,6 +1,6 @@
 // =====================================================================
 // TOLVINK — Admin Module (Controller + Service + DTOs)
-// Simple, clean, no over-engineering
+// Includes: CRUD companies/users/branches/fields/lots/trucks + bulk import
 // Roles: platform_admin (super), admin (company manager), operator (user)
 // =====================================================================
 
