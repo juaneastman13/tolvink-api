@@ -11,10 +11,17 @@ import { SessionManagerService } from './session/session-manager.service';
 import { PromptBuilderService } from './prompt/prompt-builder.service';
 import { IntentRouterService } from './routing/intent-router.service';
 import { AiContextService } from './tools/ai-context.service';
+import { LocationToolsService } from './tools/location-tools.service';
+import { AdminToolsService } from './tools/admin-tools.service';
+import { TransportToolsService } from './tools/transport-tools.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
-  providers: [AiService, FieldsService, TrucksService, AdminService, ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService, AiContextService],
+  providers: [
+    AiService, FieldsService, TrucksService, AdminService,
+    ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService,
+    AiContextService, LocationToolsService, AdminToolsService, TransportToolsService,
+  ],
   exports: [AiService],
 })
 export class AiModule {}

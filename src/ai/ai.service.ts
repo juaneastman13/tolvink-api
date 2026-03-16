@@ -28,6 +28,9 @@ import { SessionManagerService } from './session/session-manager.service';
 import { PromptBuilderService } from './prompt/prompt-builder.service';
 import { IntentRouterService } from './routing/intent-router.service';
 import { AiContextService } from './tools/ai-context.service';
+import { LocationToolsService } from './tools/location-tools.service';
+import { AdminToolsService } from './tools/admin-tools.service';
+import { TransportToolsService } from './tools/transport-tools.service';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
@@ -46,7 +49,10 @@ const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
-  private _requestLocationCooldowns = new Map<string, number>();
+  /** @deprecated Cooldowns now live in LocationToolsService */
+  private get _requestLocationCooldowns(): Map<string, number> {
+    return this.locationTools._requestLocationCooldowns;
+  }
   // LEGACY: Direct access to side-effects map for tool handlers not yet migrated to SessionManagerService.
   // After full tool handler extraction, this getter can be removed.
   get _chatSideEffects(): Map<string, Record<string, any>> {
@@ -95,6 +101,9 @@ export class AiService implements OnModuleDestroy {
     private promptBuilder: PromptBuilderService,
     private intentRouter: IntentRouterService,
     private aiContext: AiContextService,
+    private locationTools: LocationToolsService,
+    private adminTools: AdminToolsService,
+    private transportTools: TransportToolsService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -566,12 +575,12 @@ export class AiService implements OnModuleDestroy {
         case 'list_fields': return await this.toolListFields(user, session);
         case 'search_fields': return await this.toolSearchFields(input, user);
         case 'search_lots': return await this.toolSearchLots(input, user);
-        case 'get_user_profile': return this.toolGetUserProfile(user);
+        case 'get_user_profile': return this.adminTools.toolGetUserProfile(user);
         case 'create_field': return await this.toolCreateField(input, user, session);
         case 'create_lot': return await this.toolCreateLot(input, user, session);
-        case 'list_trucks': return await this.toolListTrucks(user, session);
-        case 'create_truck': return await this.toolCreateTruck(input, user, session);
-        case 'create_user': return await this.toolCreateUser(input, user, session);
+        case 'list_trucks': return await this.transportTools.toolListTrucks(user, session);
+        case 'create_truck': return await this.transportTools.toolCreateTruck(input, user, session);
+        case 'create_user': return await this.adminTools.toolCreateUser(input, user, session);
         case 'attach_document': return await this.toolAttachDocument(input, user, synUser, session);
         case 'generate_location_link': return this.toolGenerateLocationLink(input, session);
         case 'generate_tracking_link': return await this.toolGenerateTrackingLink(input, user);
@@ -581,15 +590,15 @@ export class AiService implements OnModuleDestroy {
         case 'share_live_location': return await this.toolShareLiveLocation(input, user);
         case 'view_live_locations': return await this.toolViewLiveLocations(input, user);
         case 'request_location': return await this.toolRequestLocation(input, user);
-        case 'list_transporters': return await this.toolListTransporters(input, user, session);
-        case 'assign_transporter': return await this.toolAssignTransporter(input, user, synUser, session);
-        case 'assign_truck_to_trip': return await this.toolAssignTruckToTrip(input, user, synUser, session);
-        case 'assign_truck_to_freight': return await this.toolAssignTruckToFreight(input, user, synUser, session);
-        case 'list_company_users': return await this.toolListCompanyUsers(user, session);
-        case 'list_drivers': return await this.toolListDrivers(user, session);
-        case 'update_user_role': return await this.toolUpdateUserRole(input, user, session);
-        case 'deactivate_user': return await this.toolDeactivateUser(input, user, session);
-        case 'switch_company': return await this.toolSwitchCompany(input, user, session);
+        case 'list_transporters': return await this.transportTools.toolListTransporters(input, user, session);
+        case 'assign_transporter': return await this.transportTools.toolAssignTransporter(input, user, synUser, session);
+        case 'assign_truck_to_trip': return await this.transportTools.toolAssignTruckToTrip(input, user, synUser, session);
+        case 'assign_truck_to_freight': return await this.transportTools.toolAssignTruckToFreight(input, user, synUser, session);
+        case 'list_company_users': return await this.adminTools.toolListCompanyUsers(user, session);
+        case 'list_drivers': return await this.transportTools.toolListDrivers(user, session);
+        case 'update_user_role': return await this.adminTools.toolUpdateUserRole(input, user, session);
+        case 'deactivate_user': return await this.adminTools.toolDeactivateUser(input, user, session);
+        case 'switch_company': return await this.adminTools.toolSwitchCompany(input, user, session);
         case 'summarize_freights': return await this.toolSummarizeFreights(synUser, input);
         case 'update_freight': return await this.toolUpdateFreight(input, user, session);
         case 'duplicate_freight': return await this.toolDuplicateFreight(input, user, synUser, session);
@@ -598,7 +607,7 @@ export class AiService implements OnModuleDestroy {
         case 'get_dashboard': return await this.toolGetDashboard(user);
         case 'update_field': return await this.toolUpdateField(input, user, session);
         case 'update_lot': return await this.toolUpdateLot(input, user, session);
-        case 'reactivate_user': return await this.toolReactivateUser(input, user, session);
+        case 'reactivate_user': return await this.adminTools.toolReactivateUser(input, user, session);
         case 'authorize_freight': return await this.toolAuthorizeFreight(input, user, session);
         case 'approve_pending_change': return await this.toolApprovePendingChange(input, user, session);
         case 'reject_pending_change': return await this.toolRejectPendingChange(input, user, session);
@@ -606,33 +615,33 @@ export class AiService implements OnModuleDestroy {
         case 'start_trip': return await this.toolStartTrip(input, user, session);
         case 'confirm_trip_loaded': return await this.toolConfirmTripLoaded(input, user, session);
         case 'confirm_trip_finished': return await this.toolConfirmTripFinished(input, user, session);
-        case 'cancel_assignment': return await this.toolCancelAssignment(input, user, session);
-        case 'update_assignment': return await this.toolUpdateAssignment(input, user, session);
-        case 'create_driver': return await this.toolCreateDriver(input, user, session);
-        case 'update_profile': return await this.toolUpdateProfile(input, user, session);
+        case 'cancel_assignment': return await this.transportTools.toolCancelAssignment(input, user, session);
+        case 'update_assignment': return await this.transportTools.toolUpdateAssignment(input, user, session);
+        case 'create_driver': return await this.transportTools.toolCreateDriver(input, user, session);
+        case 'update_profile': return await this.adminTools.toolUpdateProfile(input, user, session);
         case 'generate_batch_report_link': return await this.toolGenerateBatchReportLink(input, user);
         case 'ocr_analyze': return await this.toolOcrAnalyze(input, user, session);
         // --- New tools: admin & management ---
         case 'delete_document': return await this.toolDeleteDocument(input, user, session);
         case 'save_ocr_data': return await this.toolSaveOcrData(input, user, session);
-        case 'deactivate_truck': return await this.toolDeactivateTruck(input, user, session);
-        case 'update_truck': return await this.toolUpdateTruck(input, user, session);
-        case 'deactivate_driver': return await this.toolDeactivateDriver(input, user, session);
-        case 'list_enabled_plants': return await this.toolListEnabledPlants(user);
-        case 'list_enabled_producers': return await this.toolListEnabledProducers(user);
-        case 'grant_producer_access': return await this.toolGrantProducerAccess(input, user, session);
-        case 'revoke_producer_access': return await this.toolRevokeProducerAccess(input, user, session);
-        case 'list_branches': return await this.toolListBranches(user);
-        case 'create_branch': return await this.toolCreateBranch(input, user, session);
-        case 'update_branch': return await this.toolUpdateBranch(input, user, session);
-        case 'delete_branch': return await this.toolDeleteBranch(input, user, session);
-        case 'update_company': return await this.toolUpdateCompany(input, user, session);
-        case 'update_user_admin': return await this.toolUpdateUserAdmin(input, user, session);
-        case 'assign_multi_trucks': return await this.toolAssignMultiTrucks(input, user, session);
-        case 'view_driver_queue': return await this.toolViewDriverQueue(input, user);
-        case 'reorder_driver_queue': return await this.toolReorderDriverQueue(input, user, session);
+        case 'deactivate_truck': return await this.transportTools.toolDeactivateTruck(input, user, session);
+        case 'update_truck': return await this.transportTools.toolUpdateTruck(input, user, session);
+        case 'deactivate_driver': return await this.transportTools.toolDeactivateDriver(input, user, session);
+        case 'list_enabled_plants': return await this.adminTools.toolListEnabledPlants(user);
+        case 'list_enabled_producers': return await this.adminTools.toolListEnabledProducers(user);
+        case 'grant_producer_access': return await this.adminTools.toolGrantProducerAccess(input, user, session);
+        case 'revoke_producer_access': return await this.adminTools.toolRevokeProducerAccess(input, user, session);
+        case 'list_branches': return await this.adminTools.toolListBranches(user);
+        case 'create_branch': return await this.adminTools.toolCreateBranch(input, user, session);
+        case 'update_branch': return await this.adminTools.toolUpdateBranch(input, user, session);
+        case 'delete_branch': return await this.adminTools.toolDeleteBranch(input, user, session);
+        case 'update_company': return await this.adminTools.toolUpdateCompany(input, user, session);
+        case 'update_user_admin': return await this.adminTools.toolUpdateUserAdmin(input, user, session);
+        case 'assign_multi_trucks': return await this.transportTools.toolAssignMultiTrucks(input, user, session);
+        case 'view_driver_queue': return await this.transportTools.toolViewDriverQueue(input, user);
+        case 'reorder_driver_queue': return await this.transportTools.toolReorderDriverQueue(input, user, session);
         case 'navigate_app': return this.toolNavigateApp(input, session);
-        case 'get_assignment_suggestions': return await this.toolGetAssignmentSuggestions(input, user);
+        case 'get_assignment_suggestions': return await this.adminTools.toolGetAssignmentSuggestions(input, user);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
     }
   }
@@ -3037,489 +3046,54 @@ export class AiService implements OnModuleDestroy {
 
   // ---- generate_location_link ----
   private toolNavigateApp(input: any, session: any): string {
-    const { screen, freightId } = input;
-    const effects = this._chatSideEffects.get(session.id) || {};
-    effects._navigate = { screen, freightId: freightId || undefined };
-    effects._ts = effects._ts || Date.now();
-    this._chatSideEffects.set(session.id, effects);
-    return JSON.stringify({ status: 'ok', navigated: screen });
+    return this.locationTools.toolNavigateApp(input, session);
   }
 
   private toolGenerateLocationLink(input: any, session: any): string {
-    const token = crypto.randomUUID();
-    const purposeLabel = (input.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
-    const slug = `${purposeLabel}-${crypto.randomBytes(8).toString('hex')}`;
-
-    // Use side-effects pattern (merged by chat()) — avoids direct DB write race
-    const effects = this._chatSideEffects.get(session.id) || {};
-    effects.locationToken = {
-      token,
-      slug,
-      purpose: input.purpose || 'general',
-      createdAt: new Date().toISOString(),
-    };
-    effects._pendingButtons = [
-      { id: 'location_done', title: 'UBICACIÓN LISTA' },
-    ];
-    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
-
-    this.logger.log(`generate_location_link — slug=${slug}, sessionId=${session.id}`);
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/ubicacion/${slug}`;
-
-    const purposeLabels: Record<string, string> = {
-      origin: 'origen del flete',
-      destination: 'destino del flete',
-      field: 'ubicación del campo',
-      lot: 'ubicación del lote',
-    };
-    const label = purposeLabels[input.purpose] || 'ubicación';
-
-    return JSON.stringify({
-      url,
-      message: `Abra el siguiente enlace para marcar el ${label} en el mapa. Una vez confirmada la ubicación, presione el botón "UBICACIÓN LISTA".`,
-    });
+    return this.locationTools.toolGenerateLocationLink(input, session);
   }
 
   // ---- generate_tracking_link ----
   private async toolGenerateTrackingLink(input: any, user: any): Promise<string> {
-    const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
-
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, shareToken: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access control (origin, dest, and transporter companies)
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    if (['finished', 'canceled'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} ya está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
-    }
-
-    // Reuse existing token or generate new one
-    let token = freight.shareToken;
-    if (!token) {
-      token = crypto.randomUUID();
-      await this.prisma.freight.update({
-        where: { id: freight.id },
-        data: { shareToken: token },
-      });
-    }
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/${freight.code}/ubicacion?s=${token}`;
-
-    return JSON.stringify({
-      url,
-      message: `Aquí tiene el enlace de seguimiento en vivo del flete ${code}. Ábralo para ver la ruta y posición del camión en tiempo real.`,
-    });
+    return this.locationTools.toolGenerateTrackingLink(input, user);
   }
 
   // ---- generate_map_link ----
   private toolGenerateMapLink(input: any): string {
-    const lat = Number(input.lat);
-    const lng = Number(input.lng);
-    if (isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      return JSON.stringify({ error: 'Coordenadas inválidas (lat: -90..90, lng: -180..180)' });
-    }
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const params = new URLSearchParams();
-    params.set('lat', lat.toFixed(6));
-    params.set('lng', lng.toFixed(6));
-    params.set('n', (input.name || 'Ubicación').slice(0, 60));
-    if (input.destLat != null && input.destLng != null) {
-      const dlat = Number(input.destLat), dlng = Number(input.destLng);
-      if (!isNaN(dlat) && !isNaN(dlng) && isFinite(dlat) && isFinite(dlng) && dlat >= -90 && dlat <= 90 && dlng >= -180 && dlng <= 180) {
-        params.set('dlat', dlat.toFixed(6));
-        params.set('dlng', dlng.toFixed(6));
-        if (input.destName) params.set('dn', input.destName.slice(0, 60));
-      }
-    }
-    const url = `${frontendUrl}/ver-mapa?${params.toString()}`;
-
-    return JSON.stringify({
-      url,
-      message: `Abra el link para ver la ubicación de ${input.name || 'este punto'} en el mapa Tolvink.`,
-    });
+    return this.locationTools.toolGenerateMapLink(input);
   }
 
   // ---- generate_report_link ----
   private async toolGenerateReportLink(input: any, user: any): Promise<string> {
-    const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
-
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, shareToken: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access control (origin, dest, and transporter companies)
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    // Reuse existing token or generate new one
-    let token = freight.shareToken;
-    if (!token) {
-      token = crypto.randomUUID();
-      await this.prisma.freight.update({
-        where: { id: freight.id },
-        data: { shareToken: token },
-      });
-    }
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/${freight.code}/informe?s=${token}`;
-
-    return JSON.stringify({
-      url,
-      message: `Aquí tiene el enlace para descargar el informe PDF del flete ${code}. Ábralo desde cualquier dispositivo.`,
-    });
+    return this.locationTools.toolGenerateReportLink(input, user);
   }
 
   // ======================== MAP & LIVE LOCATION TOOLS =====================
 
   // ---- generate_daily_map_link ----
   private async toolGenerateDailyMapLink(user: any): Promise<string> {
-    const companyId = user.activeCompanyId || user.companyId;
-    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar la empresa activa.' });
-
-    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
-
-    const token = createSignedToken({ uid: user.id, cid: companyId, purpose: 'daily_map' }, secret, 1440); // 24h
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/daily-map?t=${token}`;
-
-    return JSON.stringify({
-      url,
-      message: 'Abra el siguiente link para ver el mapa con todos los fletes del día. Puede filtrar por estado y tocar cada marcador para ver detalles.',
-    });
+    return this.locationTools.toolGenerateDailyMapLink(user);
   }
 
   // ---- share_live_location ----
   private async toolShareLiveLocation(input: any, user: any): Promise<string> {
-    const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
-
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    if (['finished', 'canceled'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}. Solo se puede compartir ubicación en fletes activos.` });
-    }
-
-    // Access control
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
-
-    const companyType = this.resolveCompanyType(user);
-    const role = AiService.hasType(companyType, 'chofer') ? 'chofer'
-      : AiService.hasType(companyType, 'transporter') ? 'transporter'
-      : AiService.hasType(companyType, 'plant') ? 'plant' : 'producer';
-
-    const token = createSignedToken(
-      { uid: user.id, cid: userCompanyId, fid: freight.id, role, name: user.name || 'Usuario', purpose: 'live_location' },
-      secret,
-      120, // 2h
-    );
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/live-freight?t=${token}&mode=share`;
-
-    return JSON.stringify({
-      url,
-      message: `Abra el siguiente link para compartir su ubicación en tiempo real en el flete ${code}. Los demás participantes del flete podrán ver su posición en el mapa.`,
-    });
+    return this.locationTools.toolShareLiveLocation(input, user);
   }
 
   // ---- view_live_locations ----
   private async toolViewLiveLocations(input: any, user: any): Promise<string> {
-    const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
-
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access control
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    if (!secret) return JSON.stringify({ error: 'Configuración del servidor incompleta.' });
-
-    const token = createSignedToken(
-      { uid: user.id, cid: userCompanyId, fid: freight.id, purpose: 'view_locations' },
-      secret,
-      120, // 2h
-    );
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/live-freight?t=${token}&mode=view`;
-
-    return JSON.stringify({
-      url,
-      message: `Abra el siguiente link para ver las ubicaciones en tiempo real de los participantes del flete ${code}.`,
-    });
+    return this.locationTools.toolViewLiveLocations(input, user);
   }
 
   // ---- request_location ----
   private async toolRequestLocation(input: any, user: any): Promise<string> {
-    const code = input.code?.toUpperCase();
-    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
-
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, code: true, status: true,
-        originName: true, destName: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: {
-          where: { status: { in: ['active', 'accepted'] } },
-          select: {
-            transportCompanyId: true,
-            driverId: true,
-            driver: { select: { phone: true, name: true, id: true } },
-          },
-        },
-      },
-    });
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access check
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
-      ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    if (!['in_progress', 'loaded', 'accepted'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} no está activo (estado: ${freight.status})` });
-    }
-
-    // Cooldown: max 1 request_location per freight per 5 minutes
-    const cooldownKey = `req_loc_${freight.id}`;
-    const now = Date.now();
-    if ((this._requestLocationCooldowns.get(cooldownKey) || 0) > now) {
-      return JSON.stringify({ error: `Ya se solicitó ubicación para ${code} hace poco. Intente en unos minutos.` });
-    }
-    this._requestLocationCooldowns.set(cooldownKey, now + 5 * 60 * 1000);
-
-    // Collect all participant companies
-    const companyIds = new Set<string>();
-    if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
-    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
-    for (const a of freight.assignments) {
-      if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
-    }
-
-    const participants = await this.prisma.user.findMany({
-      where: {
-        phone: { not: null },
-        active: true,
-        OR: [
-          { companyId: { in: Array.from(companyIds) } },
-          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true } } },
-        ],
-      },
-      select: { phone: true, id: true, name: true },
-      take: 50,
-    });
-
-    // Merge drivers + company users, deduplicate, exclude requester
-    const allTargets = new Map<string, { phone: string; name: string }>();
-    for (const a of freight.assignments) {
-      const d = a.driver;
-      if (d?.phone && d.id !== user.id) allTargets.set(d.id, { phone: d.phone, name: d.name || 'Chofer' });
-    }
-    for (const p of participants) {
-      if (p.id !== user.id && !allTargets.has(p.id)) {
-        allTargets.set(p.id, { phone: p.phone!, name: p.name || 'Usuario' });
-      }
-    }
-
-    if (allTargets.size === 0) {
-      return JSON.stringify({ error: 'No hay participantes con WhatsApp a quienes solicitar ubicación' });
-    }
-
-    const requesterName = user.name?.split(' ')[0] || 'Un participante';
-    const msg = `*Solicitud de ubicación*\n${requesterName} solicita su ubicación para el flete ${freight.code} (${freight.originName} → ${freight.destName}).\n\nEnvíe su ubicación en este chat (adjuntar → Ubicación).`;
-
-    let sent = 0;
-    for (const [, target] of allTargets) {
-      await this.wa.sendText(target.phone, msg).catch(() => {});
-      sent++;
-    }
-
-    return JSON.stringify({
-      status: 'ok',
-      message: `Solicitud enviada a ${sent} participante${sent > 1 ? 's' : ''}`,
-      sent,
-    });
+    return this.locationTools.toolRequestLocation(input, user);
   }
 
   // ======================== POST-START TRACKING MESSAGES =================
 
-  /**
-   * Fire-and-forget: after a freight is started, send tracking links to stakeholders
-   * and prompt the driver to share GPS location.
-   */
   private async sendPostStartTrackingMessages(freightId: string, code: string, triggerUser: any): Promise<void> {
-    const freight = await this.prisma.freight.findUnique({
-      where: { id: freightId },
-      select: {
-        id: true, code: true, shareToken: true,
-        originName: true, destName: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: {
-          where: { status: { in: ['active', 'accepted'] } },
-          select: {
-            transportCompanyId: true,
-            driverId: true,
-            driver: { select: { phone: true, name: true, id: true } },
-          },
-        },
-      },
-    });
-    if (!freight) return;
-
-    // Ensure shareToken exists for tracking URL
-    let shareToken = freight.shareToken;
-    if (!shareToken) {
-      shareToken = crypto.randomUUID();
-      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken } });
-    }
-
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const trackingUrl = `${frontendUrl}/${freight.code}/ubicacion?s=${shareToken}`;
-
-    // 1) Build all messages first, then send in parallel
-    const secret = this.config.get<string>('WHATSAPP_APP_SECRET');
-    const sends: Promise<any>[] = [];
-
-    // Driver messages (GPS sharing request)
-    for (const a of freight.assignments) {
-      const driver = a.driver;
-      if (!driver?.phone) continue;
-
-      let liveShareUrl = '';
-      if (secret) {
-        const token = createSignedToken(
-          { uid: driver.id, cid: a.transportCompanyId, fid: freight.id, role: 'chofer', name: driver.name || 'Chofer' },
-          secret, 120,
-        );
-        liveShareUrl = `${frontendUrl}/live-freight?t=${token}&mode=share`;
-      }
-
-      const driverMsg = `*Flete ${freight.code} iniciado*\n${freight.originName} \u2192 ${freight.destName}\n\n`
-        + `Puede enviar su ubicación en este chat (adjuntar \u2192 Ubicación) para que las empresas sigan el viaje.\n\n`
-        + `Seguimiento: ${trackingUrl}`;
-
-      sends.push(this.wa.sendText(driver.phone, driverMsg));
-    }
-
-    // 2) Stakeholder messages (tracking link)
-    const companyIds = new Set<string>();
-    if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
-    if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
-    for (const a of freight.assignments) {
-      if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
-    }
-
-    const stakeholders = await this.prisma.user.findMany({
-      where: {
-        phone: { not: null },
-        active: true,
-        OR: [
-          { companyId: { in: Array.from(companyIds) }, role: { in: ['admin', 'platform_admin'] } },
-          { memberships: { some: { companyId: { in: Array.from(companyIds) }, active: true, role: { in: ['gerente', 'admin'] } } } },
-        ],
-      },
-      select: { phone: true, id: true, companyId: true },
-      take: 30,
-    });
-
-    const driverIds = new Set(freight.assignments.map(a => a.driverId).filter(Boolean));
-    const triggerUserId = triggerUser.id;
-
-    for (const s of stakeholders) {
-      if (driverIds.has(s.id) || s.id === triggerUserId) continue;
-      if (!s.phone) continue;
-
-      let liveViewUrl = '';
-      if (secret && s.companyId) {
-        const viewToken = createSignedToken(
-          { uid: s.id, cid: s.companyId, fid: freight.id },
-          secret, 120,
-        );
-        liveViewUrl = `${frontendUrl}/live-freight?t=${viewToken}&mode=view`;
-      }
-
-      const trackMsg = `*Flete ${freight.code} en camino*\n${freight.originName} → ${freight.destName}\n\n`
-        + `Seguimiento en vivo: ${liveViewUrl || trackingUrl}`;
-
-      sends.push(this.wa.sendText(s.phone, trackMsg));
-    }
-
-    // Send all messages in parallel
-    await Promise.allSettled(sends);
+    return this.locationTools.sendPostStartTrackingMessages(freightId, code, triggerUser);
   }
 
   // ======================== TRANSPORTER ASSIGNMENT TOOLS ==================
@@ -4339,13 +3913,7 @@ export class AiService implements OnModuleDestroy {
 
   // ---- generate_batch_report_link ----
   private async toolGenerateBatchReportLink(input: any, _user: any): Promise<string> {
-    const params = new URLSearchParams();
-    if (input.status) params.set('status', input.status);
-    if (input.dateFrom) params.set('from', input.dateFrom);
-    if (input.dateTo) params.set('to', input.dateTo);
-    const qs = params.toString();
-    const url = `${APP_URL}/reports${qs ? `?${qs}` : ''}`;
-    return JSON.stringify({ url, message: `Enlace a reportes: ${url}\nDesde ahí puede descargar PDF o Excel con los filtros aplicados.` });
+    return this.locationTools.toolGenerateBatchReportLink(input, _user);
   }
 
   // ======================== HELPERS =====================================
