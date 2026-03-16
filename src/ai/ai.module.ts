@@ -10,10 +10,11 @@ import { ResponseFormatterService } from './response/response-formatter.service'
 import { SessionManagerService } from './session/session-manager.service';
 import { PromptBuilderService } from './prompt/prompt-builder.service';
 import { IntentRouterService } from './routing/intent-router.service';
+import { AiContextService } from './tools/ai-context.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
-  providers: [AiService, FieldsService, TrucksService, AdminService, ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService],
+  providers: [AiService, FieldsService, TrucksService, AdminService, ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService, AiContextService],
   exports: [AiService],
 })
 export class AiModule {}

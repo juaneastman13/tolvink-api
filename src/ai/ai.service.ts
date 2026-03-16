@@ -27,6 +27,7 @@ import { ResponseFormatterService } from './response/response-formatter.service'
 import { SessionManagerService } from './session/session-manager.service';
 import { PromptBuilderService } from './prompt/prompt-builder.service';
 import { IntentRouterService } from './routing/intent-router.service';
+import { AiContextService } from './tools/ai-context.service';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
@@ -93,6 +94,7 @@ export class AiService implements OnModuleDestroy {
     private sessionManager: SessionManagerService,
     private promptBuilder: PromptBuilderService,
     private intentRouter: IntentRouterService,
+    private aiContext: AiContextService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -4349,86 +4351,10 @@ export class AiService implements OnModuleDestroy {
   // ======================== HELPERS =====================================
 
   /** Resolve freight by code WITH access control — returns { freight } or { error } */
-  private async resolveFreightWithAccess(code: string, user: any): Promise<{ freight?: any; error?: string }> {
-    if (!code || typeof code !== 'string') {
-      return { error: 'Código de flete requerido.' };
-    }
-
-    // Pre-compute user companies for access control (used by both exact and fuzzy paths)
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).filter((m: any) => m.active).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-
-    // Try exact match first
-    let freight: any = await this.findFreightByCode(code.toUpperCase());
-
-    // Fuzzy fallback: try partial code match (e.g. "1822" matches "F26-LCP.1822")
-    // Scoped to user's companies to prevent freight code enumeration
-    if (!freight) {
-      const sanitized = code.replace(/[^a-zA-Z0-9.\-]/g, '').toUpperCase();
-      if (sanitized.length >= 3) {
-        const candidates = await this.findFreightsByCodePattern(sanitized, allUserCompanies, user.id);
-        if (candidates.length === 1) {
-          freight = candidates[0];
-        } else if (candidates.length > 1) {
-          const codes = candidates.map((c: any) => c.code).join(', ');
-          return { error: `Se encontraron varios fletes que coinciden con "${code}": ${codes}. Indique el código completo.` };
-        }
-      }
-    }
-
-    // Unified error message prevents freight code enumeration
-    const ACCESS_DENIED = `No se encontró el flete ${code} o no tiene acceso.`;
-    if (!freight) return { error: ACCESS_DENIED };
-
-    const freightCompanies = [
-      freight.originCompanyId, freight.destCompanyId,
-      ...(freight.assignments || []).map((a: any) => a.transportCompanyId),
-    ].filter(Boolean);
-    const isDriver = (freight.assignments || []).some((a: any) => a.driverId === user.id);
-    const isCompanyUser = allUserCompanies.some((c: string) => freightCompanies.includes(c));
-    if (!isDriver && !isCompanyUser) {
-      return { error: ACCESS_DENIED };
-    }
-    // Drivers without company access only see their own assignment
-    if (isDriver && !isCompanyUser) {
-      freight.assignments = (freight.assignments || []).filter((a: any) => a.driverId === user.id);
-    }
-    return { freight };
-  }
-
-  /** Find freight by exact code — single source of truth for the select shape */
-  private async findFreightByCode(code: string) {
-    return this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, tripNumber: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
-      },
-    });
-  }
-
-  /** Find freights by partial code pattern — scoped to user's companies + driver assignments */
-  private async findFreightsByCodePattern(pattern: string, userCompanyIds: string[], userId: string) {
-    return this.prisma.freight.findMany({
-      where: {
-        code: { contains: pattern, mode: 'insensitive' },
-        OR: [
-          { originCompanyId: { in: userCompanyIds } },
-          { destCompanyId: { in: userCompanyIds } },
-          { assignments: { some: { transportCompanyId: { in: userCompanyIds } } } },
-          { assignments: { some: { driverId: userId } } },
-        ],
-      },
-      select: {
-        id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, tripNumber: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
-      },
-      take: 5,
-    });
-  }
+  /** @deprecated Use AiContextService */
+  private async resolveFreightWithAccess(code: string, user: any) { return this.aiContext.resolveFreightWithAccess(code, user); }
+  private async findFreightByCode(code: string) { return this.aiContext.findFreightByCode(code); }
+  private async findFreightsByCodePattern(pattern: string, ids: string[], userId: string) { return this.aiContext.findFreightsByCodePattern(pattern, ids, userId); }
 
   // ---- ocr_analyze ----
   private async toolOcrAnalyze(input: any, user: any, session: any): Promise<string> {
@@ -4467,132 +4393,20 @@ export class AiService implements OnModuleDestroy {
     return _resolveActiveRole(user);
   }
 
-  private resolveCompanyType(user: any): string {
-    const activeCoId = user.activeCompanyId || user.companyId;
 
-    // 1. If we know the active company, find its type from memberships
-    if (activeCoId && user.memberships?.length > 0) {
-      const activeMem = user.memberships.find((m: any) => m.companyId === activeCoId);
-      if (activeMem?.company) {
-        const types = AiService.resolveCompanyTypes(activeMem.company);
-        if (types.length > 0) return types.join(', ');
-      }
-    }
-
-    // 2. Fallback: userTypes (legacy)
-    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
-    if (userTypes.length > 0) return userTypes.join(', ');
-
-    // 3. Fallback: direct company
-    if (user.company) {
-      const types = AiService.resolveCompanyTypes(user.company);
-      if (types.length > 0) return types.join(', ');
-    }
-
-    // 4. Fallback: first membership
-    if (user.memberships?.length > 0) {
-      for (const m of user.memberships) {
-        const types = AiService.resolveCompanyTypes(m.company);
-        if (types.length > 0) return types.join(', ');
-      }
-    }
-    return 'unknown';
-  }
+  /** @deprecated Use AiContextService */
+  private resolveCompanyType(user: any): string { return this.aiContext.resolveCompanyType(user); }
+  private resolveProducerCompanyIdForCompany(user: any, targetCompanyId: string): string | null { return this.aiContext.resolveProducerCompanyIdForCompany(user, targetCompanyId); }
+  private resolveProducerCompanyId(user: any): string | null { return this.aiContext.resolveProducerCompanyId(user); }
+  private resolvePlantCompanyId(user: any): string | null { return this.aiContext.resolvePlantCompanyId(user); }
+  private isCallerAdminForCompany(user: any, companyId?: string): boolean { return this.aiContext.isCallerAdminForCompany(user, companyId); }
+  private canAccessCompany(user: any, synUser: any, companyId: string): boolean { return this.aiContext.canAccessCompany(user, synUser, companyId); }
+  private buildSyntheticUser(dbUser: any): any { return this.aiContext.buildSyntheticUser(dbUser); }
 
   /** @deprecated Use isProducerMembership from ai.utils.ts */
-  private static isProducerMembership(m: any): boolean {
-    return _isProducerMembership(m);
-  }
-
-  /**
-   * Resolve producer company for a specific target companyId.
-   * Used when the WhatsApp session has a selectedCompanyId that should take priority.
-   * Falls back to generic resolution if the target isn't a valid producer.
-   */
-  private resolveProducerCompanyIdForCompany(user: any, targetCompanyId: string): string | null {
-    if (user.memberships?.length > 0) {
-      const targetMem = user.memberships.find((m: any) => m.companyId === targetCompanyId && AiService.isProducerMembership(m));
-      if (targetMem) return targetMem.companyId;
-    }
-    // Target isn't a producer — fall back to generic resolution
-    return this.resolveProducerCompanyId(user);
-  }
-
-  private resolveProducerCompanyId(user: any): string | null {
-    if (user.memberships?.length > 0) {
-      // Prioritize activeCompanyId — the company the user explicitly selected
-      const activeId = user.activeCompanyId;
-      if (activeId) {
-        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && AiService.isProducerMembership(m));
-        if (activeMem) return activeMem.companyId;
-      }
-      // Fallback: first producer membership
-      const pm = user.memberships.find(AiService.isProducerMembership);
-      if (pm) return pm.companyId;
-    }
-    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
-    const companyByType = (user.companyByType as any) || {};
-    if (userTypes.includes('producer') && companyByType.producer) {
-      return companyByType.producer;
-    }
-    if (AiService.resolveCompanyTypes(user.company).includes('producer')) return user.companyId;
-    return null;
-  }
-
-  private resolvePlantCompanyId(user: any): string | null {
-    const isPlant = (m: any) =>
-      m.company?.type === 'plant' ||
-      (Array.isArray(m.company?.types) && m.company.types.includes('plant'));
-
-    if (user.memberships?.length > 0) {
-      // Prioritize activeCompanyId
-      const activeId = user.activeCompanyId;
-      if (activeId) {
-        const activeMem = user.memberships.find((m: any) => m.companyId === activeId && isPlant(m));
-        if (activeMem) return activeMem.companyId;
-      }
-      // Fallback: first plant membership
-      const pm = user.memberships.find(isPlant);
-      if (pm) return pm.companyId;
-    }
-    const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
-    const companyByType = (user.companyByType as any) || {};
-    if (userTypes.includes('plant') && companyByType.plant) {
-      return companyByType.plant;
-    }
-    if (AiService.resolveCompanyTypes(user.company).includes('plant')) return user.companyId;
-    // No fallback — only plant companies allowed
-    return null;
-  }
-
+  private static isProducerMembership(m: any): boolean { return _isProducerMembership(m); }
   /** @deprecated Use hasType from ai.utils.ts */
-  private static hasType(companyType: string, type: string): boolean {
-    return _hasType(companyType, type);
-  }
-
-  /** Check if caller is admin/gerente — scoped to specific company when provided */
-  private isCallerAdminForCompany(user: any, companyId?: string): boolean {
-    if (user.isSuperAdmin || user.role === 'platform_admin') return true;
-    if (!companyId) {
-      // Fallback: check any active membership
-      const memberRoles = (user.memberships || []).filter((m: any) => m.active !== false).map((m: any) => m.role);
-      return [user.role || '', ...memberRoles].some((r: string) => ['admin', 'gerente', 'platform_admin'].includes(r));
-    }
-    // Scoped: check membership for the specific company
-    const membership = (user.memberships || []).find((m: any) => m.companyId === companyId && m.active);
-    if (!membership) return false;
-    return ['admin', 'gerente'].includes(membership.role);
-  }
-
-  /** Check if caller has access to the given company (any role) */
-  private canAccessCompany(user: any, synUser: any, companyId: string): boolean {
-    const ids = [synUser.companyId, ...(user.memberships || []).filter((m: any) => m.active !== false).map((m: any) => m.companyId)].filter(Boolean);
-    return ids.includes(companyId);
-  }
-
-  private buildSyntheticUser(dbUser: any): any {
-    return aiBuildSyntheticUser(dbUser);
-  }
+  private static hasType(companyType: string, type: string): boolean { return _hasType(companyType, type); }
 
   // ======================== NEW TOOL HANDLERS ==============================
 
