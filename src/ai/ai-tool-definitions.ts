@@ -116,7 +116,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
         driverId: { type: 'string', description: 'UUID del chofer o "self" para el usuario actual. OBLIGATORIO si truckId indicado.' },
         notes: { type: 'string', description: 'Notas adicionales.' },
       },
-      required: ['grain', 'tons', 'loadDate', 'loadTime', 'truckCount', 'useOwnFleet'],
+      required: ['grain', 'tons', 'loadDate', 'truckCount'],
     },
   },
   {

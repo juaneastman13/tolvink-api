@@ -274,8 +274,10 @@ export class FreightActionToolsService {
     if (input.loadDate < todayUY) {
       return JSON.stringify({ error: `La fecha ${input.loadDate} ya pasó. Indicá una fecha desde ${todayUY}.` });
     }
-    if (!input.loadTime || !/^\d{2}:\d{2}$/.test(input.loadTime)) {
-      return JSON.stringify({ error: 'Falta la hora de carga (loadTime) o formato inválido. Usa HH:MM.' });
+    // Default loadTime to 08:00 if not provided (standard field morning start)
+    if (!input.loadTime) input.loadTime = '08:00';
+    if (!/^\d{2}:\d{2}$/.test(input.loadTime)) {
+      return JSON.stringify({ error: 'Formato de hora inválido. Usa HH:MM.' });
     }
     if (input.truckCount !== undefined && (isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1)) {
       return JSON.stringify({ error: 'truckCount debe ser un número >= 1.' });
@@ -452,11 +454,9 @@ export class FreightActionToolsService {
       }
     }
 
-    // ── FLEET DECISION IS MANDATORY ──
+    // Default useOwnFleet to false (delegated) if not specified
     if (input.useOwnFleet === undefined || input.useOwnFleet === null) {
-      return JSON.stringify({
-        error: 'Debe indicar si usa flota propia (useOwnFleet=true) o delega los camiones a la planta (useOwnFleet=false). Pregúntele al usuario.',
-      });
+      input.useOwnFleet = false;
     }
 
     // ── OWN FLEET: require truck + driver when useOwnFleet is set ──

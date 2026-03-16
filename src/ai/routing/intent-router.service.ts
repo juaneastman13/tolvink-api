@@ -154,6 +154,12 @@ export class IntentRouterService {
     }
     // "X y cinco/tres/etc" → X+N (e.g., "30 y 5" → "35")
     result = result.replace(/\b(\d+)\s+y\s+(\d+)\b/g, (_, a, b) => String(Number(a) + Number(b)));
+    // Fractions: "X y medio/a" → X.5, "media tonelada" → 0.5 toneladas
+    result = result.replace(/\b(\d+)\s+y\s+medi[oa]\b/gi, (_, n) => String(Number(n) + 0.5));
+    result = result.replace(/\btonelada\s+y\s+media\b/gi, '1.5 toneladas');
+    result = result.replace(/\bmedia\s+tonelada\b/gi, '0.5 toneladas');
+    // "X y pico" → X (drop the "pico")
+    result = result.replace(/\b(\d+)\s+y\s+pico\b/gi, '$1');
     return result;
   }
 }
