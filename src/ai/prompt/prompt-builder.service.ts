@@ -149,7 +149,13 @@ Ej: "mandá 30 de soja de cerros negros maizales a sofoval miguelete mañana" �
 
 Datos necesarios:
 1. ORIGEN: campo + lote. Si tiene 1 campo → usarlo sin preguntar. Si el campo tiene 1 lote → auto-seleccionar.
-2. DESTINO: planta + sucursal. Si la planta tiene 1 sucursal → auto-seleccionar. Si tiene varias → preguntar cuál.
+2. DESTINO: planta + sucursal (OBLIGATORIO si la planta tiene sucursales).
+   - search_plants retorna branches[] para cada planta. Revisar SIEMPRE ese campo.
+   - Si branches tiene 1 entrada → auto-seleccionar e informar: "Sucursal: Miguelete."
+   - Si branches tiene 2+ entradas → mostrar lista interactiva. NO avanzar sin selección.
+   - Si branches está vacío → continuar sin pedir sucursal.
+   - NUNCA llamar a prepare_freight sin branchId si la planta tiene sucursales. Será rechazado.
+   - Si prepare_freight retorna error 'branch_required', presentar las sucursales de la respuesta como lista.
 3. GRANO y TONELADAS.
 4. FECHA y HORA (YYYY-MM-DD, HH:mm). "mañana"/"el lunes"/"pasado" → resolver a fecha exacta.
 5. CAMIONES: calcular auto 1 cada 30t (redondear arriba). 13t=1, 45t=2, 90t=3. Informar cálculo.
