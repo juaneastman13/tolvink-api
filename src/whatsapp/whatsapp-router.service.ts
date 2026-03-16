@@ -413,7 +413,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     if (/^(crear|nuevo|nuevo flete|solicitar)$/i.test(t)) {
       // Redirect to AI agent for conversational freight creation
-      await this.handleAiChat(phone, 'Quiero crear un flete', user);
+      await this.handleAiChat(phone, user, 'Quiero crear un flete');
       return;
     }
 
@@ -982,7 +982,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
         case 'create_freight': {
           // Redirect to AI agent for conversational freight creation
-          await this.handleAiChat(phone, 'Quiero crear un flete', user);
+          await this.handleAiChat(phone, user, 'Quiero crear un flete');
           break;
         }
         case 'show_help': {
