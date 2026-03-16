@@ -335,6 +335,11 @@ export class FreightQueryToolsService {
         },
         purpose: 'freight_actions',
       };
+      // Also set quick-action buttons (max 3) based on status + role
+      const quickButtons = this.getQuickActionButtons(status, freight.id, isOriginCompany, isDestCompany, isTransporter);
+      if (quickButtons.length > 0) {
+        effects._pendingButtons = quickButtons;
+      }
       effects._ts = effects._ts || Date.now();
       this.sessionManager.setSideEffects(session.id, effects);
     }
@@ -368,6 +373,34 @@ export class FreightQueryToolsService {
       _selectionSent: actions.length > 0,
       availableActions: actions.map(a => a.title),
     });
+  }
+
+  /** Get top 3 quick-action buttons based on freight status and user role. */
+  private getQuickActionButtons(
+    status: string, freightId: string,
+    isOrigin: boolean, isDest: boolean, isTransporter: boolean,
+  ): Array<{ id: string; title: string }> {
+    const btns: Array<{ id: string; title: string }> = [];
+    if (status === 'pending_assignment' && isDest) {
+      btns.push({ id: `reassign:${freightId}`, title: 'Asignar transporte' });
+    }
+    if (status === 'assigned' && isTransporter) {
+      btns.push({ id: `accept:${freightId}`, title: 'Aceptar' });
+      btns.push({ id: `reject:${freightId}`, title: 'Rechazar' });
+    }
+    if (status === 'accepted' && isTransporter) {
+      btns.push({ id: `start:${freightId}`, title: 'Iniciar viaje' });
+    }
+    if ((status === 'in_progress' || status === 'loaded') && (isOrigin || isTransporter)) {
+      btns.push({ id: `confirm_loaded:${freightId}`, title: 'Confirmar carga' });
+    }
+    if (status === 'loaded' && isDest) {
+      btns.push({ id: `confirm_finished:${freightId}`, title: 'Confirmar entrega' });
+    }
+    if (btns.length < 3 && !['finished', 'canceled'].includes(status) && (isOrigin || isDest)) {
+      btns.push({ id: `cancel:${freightId}`, title: 'Cancelar' });
+    }
+    return btns.slice(0, 3);
   }
 
   // ---- get_dashboard ----
