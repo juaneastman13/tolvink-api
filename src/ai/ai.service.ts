@@ -15,6 +15,18 @@ import { OcrService } from '../ocr/ocr.service';
 import { AssignmentSuggestionsService } from '../freights/assignment-suggestions.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildSyntheticUser } from '../common/build-synthetic-user';
+import {
+  resolveCompanyTypes as _resolveCompanyTypes,
+  resolveActiveRole as _resolveActiveRole,
+  isProducerMembership as _isProducerMembership,
+  hasType as _hasType,
+  sanitizeForPrompt as _sanitizeForPrompt,
+  aiBuildSyntheticUser,
+} from './ai.utils';
+import { ResponseFormatterService } from './response/response-formatter.service';
+import { SessionManagerService } from './session/session-manager.service';
+import { PromptBuilderService } from './prompt/prompt-builder.service';
+import { IntentRouterService } from './routing/intent-router.service';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
@@ -34,8 +46,11 @@ export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
   private _requestLocationCooldowns = new Map<string, number>();
-  // Per-chat-call side-effects accumulated by tools, merged into single session write by chat()
-  private _chatSideEffects: Map<string, Record<string, any>> = new Map();
+  // LEGACY: Direct access to side-effects map for tool handlers not yet migrated to SessionManagerService.
+  // After full tool handler extraction, this getter can be removed.
+  get _chatSideEffects(): Map<string, Record<string, any>> {
+    return (this.sessionManager as any)['_chatSideEffects'];
+  }
   // Per-session lock to prevent concurrent chat() calls from racing on side-effects
   private _chatLocks = new Set<string>();
   private rateCleanupTimer = setInterval(() => {
@@ -60,18 +75,8 @@ export class AiService implements OnModuleDestroy {
         if (k) this._requestLocationCooldowns.delete(k); else break;
       }
     }
-    // Clean stale side effects (>10 min old, not all) + hard cap
-    for (const [k, v] of this._chatSideEffects) {
-      if (v._ts && now - v._ts > 10 * 60 * 1000) this._chatSideEffects.delete(k);
-      else if (!v._ts) this._chatSideEffects.delete(k); // legacy entries without timestamp
-    }
-    if (this._chatSideEffects.size > 5_000) {
-      const iter = this._chatSideEffects.keys();
-      while (this._chatSideEffects.size > 4_000) {
-        const k = iter.next().value;
-        if (k) this._chatSideEffects.delete(k); else break;
-      }
-    }
+    // Clean stale side effects — delegated to SessionManagerService
+    this.sessionManager.cleanStaleSideEffects();
   }, 5 * 60 * 1000);
 
   constructor(
@@ -84,6 +89,10 @@ export class AiService implements OnModuleDestroy {
     private adminService: AdminService,
     private ocrService: OcrService,
     private assignmentSuggestions: AssignmentSuggestionsService,
+    private responseFormatter: ResponseFormatterService,
+    private sessionManager: SessionManagerService,
+    private promptBuilder: PromptBuilderService,
+    private intentRouter: IntentRouterService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -102,31 +111,9 @@ export class AiService implements OnModuleDestroy {
 
   // ======================== MODEL SELECTION ==============================
 
-  /** Classify message complexity to pick the right model.
-   *  Simple queries → Haiku (faster). Complex queries → Sonnet (smarter). */
+  /** @deprecated Use IntentRouterService.selectModel() */
   private selectModel(message: string, hasHistory: boolean): string {
-    const lower = message.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    // Simple patterns: greetings, status checks, confirmations, short queries
-    const simplePatterns = [
-      /^(hola|buenas|buen dia|buenos dias|hey|che)\b/,
-      /^(si|no|ok|dale|listo|perfecto|gracias|confirmo|cancelo)\b/,
-      /\b(estado|status)\b.{0,20}\b(flete|flt)/,
-      /^(mis fletes|fletes pendientes|pendientes)/,
-      /^(resumen del dia|resumen diario)/,
-      /\b(como (van|estan|esta)|que hay de nuevo)\b/,
-    ];
-    // Complex patterns: creation, analysis, multi-step operations
-    const complexPatterns = [
-      /\b(crear|creat|nuevo flete|solicitar|agendar)\b/,
-      /\b(analiz|compar|recomiend|optimiz|reporte detallado)\b/,
-      /\b(cambiar empresa|switch|modificar)\b/,
-      /\b(adjunt|document|archivo)\b/,
-    ];
-    if (complexPatterns.some(p => p.test(lower))) return MODEL_ID;
-    if (!hasHistory && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
-    if (message.length < 40 && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
-    // Default to Sonnet for anything ambiguous
-    return MODEL_ID;
+    return this.intentRouter.selectModel(message, hasHistory);
   }
 
   // ======================== MAIN CHAT METHOD =============================
@@ -473,372 +460,23 @@ export class AiService implements OnModuleDestroy {
 
   // ======================== SYSTEM PROMPT ================================
 
-  /** Strip newlines/control chars/prompt delimiters from user-controlled strings interpolated into system prompt */
+  /** @deprecated Use sanitizeForPrompt from ai.utils.ts */
   private sanitizeForPrompt(s: string): string {
-    return s
-      .replace(/[\r\n\x00-\x1F]/g, ' ')
-      .replace(/[\[\]{}]/g, '')   // Strip bracket/brace delimiters to prevent prompt injection
-      .replace(/[<>]/g, '')       // Strip angle brackets
-      .trim()
-      .slice(0, 100);
+    return _sanitizeForPrompt(s);
   }
 
+  /** @deprecated Use PromptBuilderService.build() */
   private async buildSystemPrompt(user: any, companyType: string, isWeb = false): Promise<string> {
-    const name = this.sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
-    const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
-    const today = nowUY.toISOString().split('T')[0];
-
-    const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
-    const activeCoId = user.activeCompanyId || user.companyId;
-    const activeMem = activeMemberships.find((m: any) => m.companyId === activeCoId);
-    const activeCoName = this.sanitizeForPrompt(activeMem?.company?.name || user.company?.name || '');
-
-    // Check own fleet for the ACTIVE company only (not all memberships)
-    const hasOwnFleet = activeMem?.company?.hasInternalFleet ||
-      (!activeMem && user.company?.hasInternalFleet);
-    const ownFleetNote = hasOwnFleet
-      ? `\nFLOTA INTERNA: Tiene flota propia. Preguntar siempre: "¿Desea usar su flota propia o que la planta asigne?" Si sí → assign_transporter con transporterCompanyId="own_fleet".`
-      : '';
-    const multiCompanyNote = activeMemberships.length > 1
-      ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${activeMemberships.length} empresas. Usar switch_company SOLO si el usuario pide cambiar. NO pedir que seleccione empresa si ya está operando correctamente.`
-      : '';
-
-    // P0 fix: resolve role scoped to activeCompanyId, not globally
-    const { isChofer, isAdmin, userRole } = AiService.resolveActiveRole(user);
-
-    // Build role block — explicit permissions AND prohibitions per role
-    const roleParts: string[] = [];
-    if (isChofer) {
-      roleParts.push(`ROL: Chofer
-PUEDE: ver sus fletes asignados, aceptar/rechazar asignaciones, iniciar viaje, confirmar carga, confirmar entrega, consultar estado, compartir ubicación, adjuntar documentos.
-NO PUEDE: crear fletes, cancelar fletes, asignar transportistas, gestionar campos/lotes/camiones/usuarios, ver dashboard de empresa.
-ATAJOS: "mis fletes" → list_freights(status="accepted"). "ya cargué" → confirm_loaded. "ya llegué" → confirm_finished. "salí" → start_freight.
-MULTI-CAMIÓN: Usar respond_trip, start_trip, confirm_trip_loaded, confirm_trip_finished para viajes individuales.
-PROACTIVO: Si escribe sin contexto, mostrar sus fletes asignados/activos con list_freights ANTES de pedir código.`);
-    } else {
-      if (AiService.hasType(companyType, 'producer')) {
-        roleParts.push(`ROL: Productor (${userRole})
-PUEDE: crear fletes (desde sus campos hacia plantas habilitadas), ver/cancelar sus fletes, gestionar campos/lotes, confirmar carga, ver dashboard, adjuntar documentos.
-NO PUEDE: asignar transportistas a fletes ajenos, autorizar fletes, gestionar accesos de productores, confirmar entrega en planta.
-ATAJOS: "mandar soja" → crear flete. "mis fletes" → get_dashboard. "mis campos" → list_fields.`);
-      }
-      if (AiService.hasType(companyType, 'plant')) {
-        roleParts.push(`ROL: Planta (${userRole})
-PUEDE: ver fletes dirigidos a su planta, asignar transportistas, autorizar fletes con flota propia, confirmar entrega/recepción, gestionar accesos de productores, gestionar sucursales.
-NO PUEDE: crear fletes, gestionar campos/lotes de productores.
-ATAJOS: "pendientes" → list_freights(status="pending_assignment"). "asignar" → list_freights + assign_transporter. "autorizar" → authorize_freight.`);
-      }
-      if (AiService.hasType(companyType, 'transporter')) {
-        roleParts.push(`ROL: Transportista (${userRole})
-PUEDE: ver fletes asignados, aceptar/rechazar, gestionar camiones y choferes, confirmar carga/entrega.
-NO PUEDE: crear fletes, cancelar fletes ajenos, gestionar campos/lotes.
-ATAJOS: "asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
-      }
-      if (roleParts.length === 0) {
-        roleParts.push(`ROL: Operario (${userRole})
-PUEDE: consultar fletes y dashboard.
-NO PUEDE: crear, modificar ni cancelar fletes. No puede gestionar recursos.`);
-      }
-    }
-
-    const roleBlock = roleParts.join('\n');
-
-    let basePrompt = `Sos Tolvink, asistente de logística agrícola para gestión de fletes de granos en Uruguay.
-USUARIO: ${name} | Empresa: ${activeCoName} (${companyType}) | Fecha: ${today} | Uruguay (UTC-3)
-${roleBlock}${ownFleetNote}${multiCompanyNote}
-
-TONO Y FORMATO:
-- Hablás español rioplatense: tuteo natural, vocabulario del campo. Profesional pero cercano.
-- Mensajes cortos — esto es WhatsApp, no un email. Máximo 3-4 líneas salvo resúmenes.
-- Sin disclaimers, sin tecnicismos.${isWeb ? '' : ' Sin *negritas* ni markdown.'}
-- No mencionar nombres de herramientas ni estados internos (in_progress, pending_assignment, etc.) — traducir siempre.
-- No repetir información ya dada. No saludar si ya lo hiciste.
-- Emojis solo como bullets al inicio de línea: 🌾📦🚛📍📅🕒👤🏢✅⚠️❌⏳
-
-ESTADOS DEL FLETE (traducir SIEMPRE):
-Borrador | Pendiente de asignación | Asignado | Aceptado | En camino | Cargado | Entregado | Cancelado
-
-GRANOS: Soja, Maíz, Trigo, Girasol, Sorgo, Cebada, Otros.
-
-BÚSQUEDA PROACTIVA:
-- NUNCA pedir código de flete si podés buscar. Código directo → get_freight_detail. Sin código → list_freights con filtros.
-- Consultas vagas ("cómo va todo", "novedades") → get_dashboard.
-- "el flete de soja" → list_freights(grain="Soja"). "quiero rechazar" → list_freights(status="assigned").
-- Pedir código solo si hay ambigüedad DESPUÉS de buscar.
-
-CONTEXTO:
-- Mantener hilo. Resolver "eso", "el flete", "ese campo" del historial.
-- FLETE ACTIVO: al consultar un flete queda activo para acciones. No re-pedir código.
-- Se pierde al: seleccionar otro flete, cambiar empresa, expirar sesión.
-- Fechas en UTC-3. "a las 8" = 08:00. Formatos: "15/3", "mañana", "el lunes".
-- Si se recuperó contexto de sesión expirada, mencionar: "Veo que estabas con un flete a [destino]. ¿Seguimos con eso?"
-
-DATOS PRE-CARGADOS:
-- Si el usuario tiene UN solo campo/planta/camión, usarlo sin preguntar. Mencionar cuál usaste.
-- Si tiene MÚLTIPLES, mostrar lista interactiva para elegir.
-- Referenciar fletes recientes cuando sea relevante ("Tenés un flete pendiente a Planta X, ¿consultamos ese?").
-- NUNCA preguntar datos que ya tenés en el contexto.
-
-ANTI-ALUCINACIÓN:
-- SOLO afirmar datos de resultados de herramientas. NUNCA inventar códigos, nombres, toneladas, fechas.
-- NUNCA confirmar una acción que la herramienta no ejecutó.
-- NUNCA exponer UUIDs. Solo códigos completos (ej: F26-LCP.1822).
-
-CONFIRMACIÓN (2 etapas):
-Toda acción que modifica datos: herramienta PREPARA → mostrás resumen → usuario confirma → confirm_action (o confirm_create_freight para fletes nuevos). Sin confirm NO se ejecutó. Botones se envían automáticamente.
-
-CREAR FLETE (paso a paso):
-1. ORIGEN: campo + lote. Si hay uno solo, auto-seleccionar. Si no, el sistema muestra lista interactiva.
-2. DESTINO: planta + sucursal. Pasar nombre como destName a prepare_freight — auto-resuelve con fuzzy search. Si tiene sucursales, el sistema pide seleccionar.
-3. GRANO y TONELADAS.
-4. FECHA y HORA de carga (YYYY-MM-DD, HH:mm).
-5. CANTIDAD DE CAMIONES (truckCount). Preguntar si no lo dijo.
-6. TRANSPORTE: ¿flota propia o delegar a planta? Si flota propia → useOwnFleet=true (camión y chofer se seleccionan automáticamente). Si delegar → useOwnFleet=false.
-7. CONFIRMACIÓN: prepare_freight → resumen → confirm_create_freight.
-- Si el usuario da información de varios pasos juntos, aceptarla toda y preguntar solo lo faltante.
-- Auto-resolver nombres: pasar texto como originName/destName. NO buscar IDs manualmente.
-- Duplicar flete: solo pedir fecha nueva. NO reconfirmar datos.
-- Origen/destino custom sin coordenadas → generate_location_link.
-
-ASIGNAR TRANSPORTISTA:
-- Flota propia → assign_transporter(transporterCompanyId="own_fleet").
-- Externa → list_transporters → selección → assign_transporter → confirm_action.
-- Multi-camión → assign_truck_to_freight por viaje adicional.
-- Carga/entrega requieren confirmación de AMBAS partes.
-
-GESTIÓN CAMIONES EN FLETES:
-- Agregar: update_freight(truckCount=nuevo) + assign_truck_to_freight si flota propia.
-- Quitar con camión asignado: cancel_assignment + update_freight(truckCount=nuevo).
-- Quitar sin camión: solo update_freight(truckCount=nuevo).
-
-LISTAS Y SELECCIÓN:
-- _selectionSent:true → lista YA enviada. NO repetir ítems. Solo frase contextual breve.
-- Toda selección DEBE ser menú interactivo (list_fields, list_lots, list_trucks, etc.). NUNCA opciones como texto plano.
-- Resúmenes → summarize_freights. Selección individual → list_freights.
-
-RESOLUCIÓN DE ENTIDADES:
-- Usar fuzzy search para nombres de plantas, campos, sucursales.
-- Match único con score alto → usar sin preguntar.
-- Múltiples matches → Reply Buttons (2-3 opciones) o List Message (4+).
-- Sin match → decirlo y sugerir opciones cercanas.
-
-AMBIGÜEDAD: Si el mensaje no es claro, hacer UNA pregunta clarificadora. Preferir Reply Buttons para sí/no y opciones cortas.
-
-AUDIO: Interpretar intención (errores fonéticos: "solla"=Soja, "tigo"=Trigo). No resetear contexto.
-
-DOCUMENTOS: Archivo pendiente + flete activo → attach_document directo. Foto de remito/pesaje → ocr_analyze.
-
-UBICACIONES:
-- No mostrar coordenadas crudas.${isAdmin ? ' Admins pueden pedir coordenadas.' : ''}
-- Con mapLink → frase + link. Sin mapLink → "Ubicación no disponible."
-- Marcar ubicación → generate_location_link.
-
-ERRORES: No mostrar errores técnicos. "Hubo un problema, ¿podés intentar de nuevo?" Si no soporta la acción, decirlo claro.
-
-LINKS:
-- Web: ${APP_URL}
-- Detalle de flete: usar campo "link" de get_freight_detail.
-- Mapa del día: generate_daily_map_link.
-- PDF: generate_report_link.${isWeb ? `
-
-NAVEGACIÓN (web):
-- navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, reports, fields, trucks, menu, chats.
-- Usarlo ADEMÁS de la respuesta informativa cuando tiene sentido visual.` : ''}`;
-
-    // P1 fix: append proactive data summary so AI can reference without extra tool calls
-    const proactiveLines: string[] = [];
-    try {
-      const activeCoId = user.activeCompanyId || user.companyId;
-      if (activeCoId) {
-        // Fields & lots count
-        if (AiService.hasType(companyType, 'producer')) {
-          const producerCoId = this.resolveProducerCompanyId(user);
-          if (producerCoId) {
-            const [fieldCount, lotCount] = await Promise.all([
-              this.prisma.field.count({ where: { companyId: producerCoId, active: true } }),
-              this.prisma.lot.count({ where: { companyId: producerCoId, active: true } }),
-            ]);
-            proactiveLines.push(`Campos: ${fieldCount} | Lotes: ${lotCount}`);
-
-            // Accessible plants
-            const accesses = await this.prisma.plantProducerAccess.findMany({
-              where: { producerCompanyId: producerCoId, active: true },
-              select: { plantCompany: { select: { name: true } } },
-              take: 10,
-            });
-            if (accesses.length > 0) {
-              const plantNames = accesses.map(a => a.plantCompany?.name).filter(Boolean).slice(0, 5);
-              proactiveLines.push(`Plantas habilitadas: ${plantNames.join(', ')}${accesses.length > 5 ? ` (+${accesses.length - 5} más)` : ''}`);
-            }
-          }
-        }
-
-        // Recent freights (last 5 active)
-        const recentFreights = await this.prisma.freight.findMany({
-          where: { participantCompanyIds: { has: activeCoId }, status: { notIn: ['canceled', 'draft'] } },
-          select: { code: true, status: true, items: { select: { grain: true }, take: 1 } },
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        });
-        if (recentFreights.length > 0) {
-          const fList = recentFreights.map(f =>
-            `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.items[0]?.grain || '-'})`
-          ).join(', ');
-          proactiveLines.push(`Últimos fletes: ${fList}`);
-        }
-
-        // Trucks & drivers if has own fleet
-        if (hasOwnFleet) {
-          const [truckCount, driverCount] = await Promise.all([
-            this.prisma.truck.count({ where: { companyId: activeCoId, active: true } }),
-            this.prisma.userCompany.count({ where: { companyId: activeCoId, active: true, role: 'chofer' } }),
-          ]);
-          proactiveLines.push(`Flota propia: ${truckCount} camión(es), ${driverCount} chofer(es)`);
-        }
-      }
-    } catch (e) {
-      // Non-critical — don't break the prompt if data loading fails
-      this.logger.warn(`Proactive data loading failed: ${e.message}`);
-    }
-
-    if (proactiveLines.length > 0) {
-      basePrompt += `\n\nDATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):
-${proactiveLines.join('\n')}
-AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión), seleccionarla automáticamente sin preguntar.`;
-    }
-
-    return basePrompt;
+    return this.promptBuilder.build(user, companyType, isWeb);
   }
 
-  // ======================== CONTEXT-BASED TOOL FILTERING ==================
+  // Tool sets moved to IntentRouterService
 
-  // CORE: Always included for all roles (confirmation, detail, listing)
-  private static readonly CORE_TOOLS = new Set([
-    'confirm_action', 'confirm_create_freight', 'list_freights', 'get_freight_detail',
-    'summarize_freights', 'update_profile', 'get_user_profile',
-  ]);
-
-  // CHOFER: Only these tools for driver role
-  private static readonly CHOFER_TOOLS = new Set([
-    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
-    'confirm_finished', 'get_freight_detail', 'list_freights', 'generate_tracking_link',
-    'share_live_location', 'view_live_locations', 'request_location', 'confirm_action',
-    'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
-    'update_profile', 'ocr_analyze',
-  ]);
-
-  // PRODUCER: Creation & management tools
-  private static readonly PRODUCER_TOOLS = new Set([
-    'prepare_freight', 'list_lots', 'list_fields', 'search_fields', 'search_lots',
-    'create_field', 'create_lot',
-    'search_plants', 'list_trucks', 'create_truck', 'generate_location_link',
-    'duplicate_freight', 'update_field', 'update_lot', 'cancel_freight',
-    'list_enabled_plants', 'assign_truck_to_freight', 'cancel_assignment',
-    'list_drivers',
-  ]);
-
-  // PLANT: Assignment & management tools
-  private static readonly PLANT_TOOLS = new Set([
-    'search_plants', 'list_transporters', 'assign_transporter', 'assign_truck_to_trip',
-    'assign_truck_to_freight', 'list_trucks', 'list_drivers', 'authorize_freight',
-    'cancel_assignment', 'update_assignment', 'cancel_freight',
-    'assign_multi_trucks', 'view_driver_queue', 'reorder_driver_queue',
-    'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
-    'get_assignment_suggestions',
-  ]);
-
-  // TRANSPORTER: Trip & freight response tools
-  private static readonly TRANSPORTER_TOOLS = new Set([
-    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
-    'confirm_finished', 'respond_trip', 'start_trip', 'confirm_trip_loaded',
-    'confirm_trip_finished', 'list_trucks', 'list_drivers',
-    'deactivate_truck', 'deactivate_driver',
-  ]);
-
-  // TRACKING & MAPS: Available when user may need location/tracking features
-  private static readonly TRACKING_TOOLS = new Set([
-    'generate_tracking_link', 'generate_map_link', 'generate_report_link',
-    'generate_daily_map_link', 'share_live_location', 'view_live_locations',
-    'request_location',
-  ]);
-
-  // ANALYTICS & DOCS: Available for all non-chofer roles
-  private static readonly ANALYTICS_TOOLS = new Set([
-    'get_dashboard', 'list_documents', 'freight_history', 'update_freight',
-    'attach_document', 'ocr_analyze', 'generate_batch_report_link',
-    'delete_document', 'save_ocr_data',
-  ]);
-
-  // ADMIN: Only for admin/gerente roles
-  private static readonly ADMIN_TOOLS = new Set([
-    'create_user', 'update_user_role', 'deactivate_user', 'reactivate_user',
-    'list_company_users', 'list_drivers', 'create_driver',
-    'update_truck', 'deactivate_truck', 'deactivate_driver',
-    'list_branches', 'create_branch', 'update_branch', 'delete_branch',
-    'update_company', 'update_user_admin',
-  ]);
-
-  // MULTI-COMPANY: Only when user has multiple memberships
-  private static readonly MULTI_COMPANY_TOOLS = new Set([
-    'switch_company',
-  ]);
-
-  // PENDING CHANGES: Only include when relevant
-  private static readonly PENDING_CHANGE_TOOLS = new Set([
-    'approve_pending_change', 'reject_pending_change',
-  ]);
-
+  /** @deprecated Use IntentRouterService.getFilteredTools() */
   private getFilteredTools(user: any, companyType: string, isWeb = false): any[] {
-    // P0 fix: resolve role scoped to activeCompanyId, not globally
-    const { isChofer, isAdmin } = AiService.resolveActiveRole(user);
-    const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
-    const hasMultiCompany = activeMemberships.length > 1;
-
-    // Choferes: restricted set
-    if (isChofer && !isAdmin) {
-      return this.tools.filter(t => AiService.CHOFER_TOOLS.has(t.name));
-    }
-
-    // Build allowed set based on role context
-    const allowed = new Set<string>(AiService.CORE_TOOLS);
-
-    // Add tracking/maps for everyone
-    for (const t of AiService.TRACKING_TOOLS) allowed.add(t);
-
-    // Add analytics/docs for non-chofer
-    for (const t of AiService.ANALYTICS_TOOLS) allowed.add(t);
-
-    // Role-based additions
-    const isProducer = AiService.hasType(companyType, 'producer');
-    const isPlant = AiService.hasType(companyType, 'plant');
-    const isTransporter = AiService.hasType(companyType, 'transporter');
-
-    if (isProducer) {
-      for (const t of AiService.PRODUCER_TOOLS) allowed.add(t);
-    }
-    if (isPlant) {
-      for (const t of AiService.PLANT_TOOLS) allowed.add(t);
-      for (const t of AiService.PENDING_CHANGE_TOOLS) allowed.add(t);
-    }
-    if (isTransporter) {
-      for (const t of AiService.TRANSPORTER_TOOLS) allowed.add(t);
-    }
-
-    // Admin tools
-    if (isAdmin) {
-      for (const t of AiService.ADMIN_TOOLS) allowed.add(t);
-    }
-
-    // Multi-company
-    if (hasMultiCompany) {
-      for (const t of AiService.MULTI_COMPANY_TOOLS) allowed.add(t);
-    }
-
-    // Web-only tools
-    if (isWeb) allowed.add('navigate_app');
-
-    return this.tools.filter(t => allowed.has(t.name));
+    return this.intentRouter.getFilteredTools(user, companyType, isWeb);
   }
+
 
   // ======================== TOOL DEFINITIONS =============================
 
@@ -1572,8 +1210,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     }, `Reactivar usuario "${membership.user.name}" en su empresa`, user);
   }
 
-  // ---- Helper: store _pendingSelection for interactive list ----
-  // Accumulates in _chatSideEffects (merged by chat()) to avoid DB race conditions
+  /** @deprecated Use SessionManagerService.storePendingSelection() */
   private storePendingSelection(
     session: any,
     items: { id: string; title: string; description?: string }[],
@@ -1581,15 +1218,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     purpose: string,
     extraJson?: Record<string, any>,
   ): string {
-    const effects = this._chatSideEffects.get(session.id) || {};
-    effects._pendingSelection = { items, config, purpose };
-    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
-    return JSON.stringify({
-      total: items.length,
-      message: `Se presento lista interactiva de ${items.length} elemento(s). Espere a que seleccione uno.`,
-      _selectionSent: true,
-      ...extraJson,
-    });
+    return this.sessionManager.storePendingSelection(session.id, items, config, purpose, extraJson);
   }
 
   // ---- get_freight_detail ----
@@ -4410,114 +4039,35 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
 
   // ======================== MESSAGE PREPROCESSING ========================
 
-  /** Clean audio transcription: strip filler words, normalize whitespace, expand spelled-out letters */
+  /** @deprecated Use ResponseFormatterService.preprocessMessage() */
   private preprocessMessage(text: string): string {
-    let clean = text
-      .replace(AUDIO_FILLERS, ' ')       // Strip filler words from voice
-      .replace(/\bv\s+corta\b/gi, 'v')  // Whisper spells out "v corta" → v
-      .replace(/\bb\s+larga\b/gi, 'b')  // Whisper spells out "b larga" → b
-      .replace(/\bese\s+de\b/gi, 's')   // "ese de" → s
-      .replace(/\bdoble\s+ele\b/gi, 'll') // "doble ele" → ll
-      .replace(/\s{2,}/g, ' ')           // Collapse multiple spaces
-      .replace(/^[\s,.:;]+/, '')         // Trim leading punctuation artifacts
-      .trim();
-    return clean || text.trim();         // If cleaning removed everything, keep original
+    return this.responseFormatter.preprocessMessage(text);
   }
 
   // ======================== RESPONSE VALIDATION ===========================
 
-  /** Post-process AI response: strip UUIDs, enforce length, quality check */
+  /** @deprecated Use ResponseFormatterService.validateResponse() */
   private validateResponse(text: string, isWeb = false): string {
-    // 1. Strip UUID patterns that may have leaked through
-    //    BUT preserve UUIDs inside URLs (e.g. pick-location?token=UUID)
-    const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-    let clean = text.replace(UUID_RE, (match, offset) => {
-      const before = text.slice(Math.max(0, offset - 80), offset);
-      if (/https?:\/\/\S*$/i.test(before)) return match; // UUID is part of a URL
-      return '[ID interno]';
-    });
-
-    // 2. Enforce max length for WhatsApp-friendly responses (skip for web — no char limit)
-    //    Exception: freight lists (contain freight codes) are allowed to be longer
-    if (!isWeb && clean.length > MAX_RESPONSE_CHARS && !/F\d{2}-[A-Z]{3}\.\d{4}|FLT-\d{4,}/i.test(clean)) {
-      // Find a natural break point (newline or sentence end)
-      const lineBreak = clean.lastIndexOf('\n', MAX_RESPONSE_CHARS);
-      if (lineBreak > MAX_RESPONSE_CHARS * 0.5) {
-        clean = clean.slice(0, lineBreak);
-      } else {
-        const sentenceBreak = clean.lastIndexOf('. ', MAX_RESPONSE_CHARS);
-        if (sentenceBreak > MAX_RESPONSE_CHARS * 0.5) {
-          clean = clean.slice(0, sentenceBreak + 1);
-        } else {
-          clean = clean.slice(0, MAX_RESPONSE_CHARS);
-        }
-      }
-    }
-
-    // 3. Strip excessive trailing whitespace/newlines
-    return clean.replace(/\n{3,}/g, '\n\n').trim();
+    return this.responseFormatter.validateResponse(text, isWeb);
   }
 
   // ======================== SMART HISTORY MANAGEMENT =====================
 
-  /** Trim message history intelligently: keep recent + preserve tool results */
+  /** @deprecated Use SessionManagerService.smartTrimHistory() */
   private smartTrimHistory(messages: any[]): any[] {
-    if (messages.length <= MAX_HISTORY) return messages;
-
-    // Simple trim: keep last MAX_HISTORY messages
-    let trimmed = messages.slice(-MAX_HISTORY);
-
-    // Ensure we don't start with an orphaned tool_result
-    // (each tool_result needs a preceding tool_use from the assistant)
-    while (trimmed.length > 0) {
-      const first = trimmed[0];
-      const hasToolResult = first.role === 'user' && Array.isArray(first.content) &&
-        first.content.some((b: any) => b.type === 'tool_result');
-      if (hasToolResult) {
-        trimmed = trimmed.slice(1); // drop the orphan
-      } else {
-        break;
-      }
-    }
-
-    // Also ensure we don't end with a tool_use without its tool_result
-    while (trimmed.length > 0) {
-      const last = trimmed[trimmed.length - 1];
-      const hasToolUse = last.role === 'assistant' && Array.isArray(last.content) &&
-        last.content.some((b: any) => b.type === 'tool_use');
-      if (hasToolUse) {
-        trimmed = trimmed.slice(0, -1); // drop trailing tool_use without result
-      } else {
-        break;
-      }
-    }
-
-    // Guardrail: if trimming removed everything, keep at least the last user message
-    if (trimmed.length === 0 && messages.length > 0) {
-      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && (!Array.isArray(m.content) || !m.content.some((b: any) => b.type === 'tool_result')));
-      if (lastUserMsg) return [lastUserMsg];
-      return messages.slice(-1);
-    }
-
-    return trimmed;
+    return this.sessionManager.smartTrimHistory(messages);
   }
 
   // ======================== ACTIVE CONTEXT ==============================
 
-  /** Accumulate active context update — merged by chat() into single session write */
+  /** @deprecated Use SessionManagerService.updateActiveContext() */
   private updateActiveContext(sessionId: string, context: Record<string, any>): void {
-    const effects = this._chatSideEffects.get(sessionId) || {};
-    effects.activeContext = {
-      ...(effects.activeContext || {}),
-      ...context,
-      updatedAt: new Date().toISOString(),
-    };
-    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(sessionId, effects);
+    this.sessionManager.updateActiveContext(sessionId, context);
   }
 
   // ======================== GENERIC CONFIRMATION ========================
 
-  /** Stage an action for user confirmation — accumulates in _chatSideEffects (merged by chat()) */
+  /** @deprecated Use SessionManagerService.stageAction() */
   private stageAction(
     session: any,
     tool: string,
@@ -4525,21 +4075,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     summary: string,
     user?: any,
   ): string {
-    const effects = this._chatSideEffects.get(session.id) || {};
-    // Always record stagedCompanyId — try params.actionSynUser as fallback for company context
-    const stagedCompanyId = user?.activeCompanyId || user?.companyId || params?.actionSynUser?.companyId || null;
-    effects.pendingAction = { tool, params, summary, createdAt: Date.now(), stagedCompanyId };
-    effects._pendingButtons = [
-      { id: 'ai_confirm', title: 'CONFIRMAR' },
-      { id: 'ai_cancel', title: 'CANCELAR' },
-    ];
-    effects._ts = effects._ts || Date.now(); this._chatSideEffects.set(session.id, effects);
-
-    return JSON.stringify({
-      status: 'pending_confirmation',
-      summary,
-      IMPORTANT: 'La acción NO fue ejecutada todavía. Presente el resumen y consulte al usuario si confirma. Se enviarán botones CONFIRMAR/CANCELAR automáticamente.',
-    });
+    return this.sessionManager.stageAction(session.id, tool, params, summary, user);
   }
 
   // ======================== NEW TOOLS: FEATURE PARITY ===================
@@ -4921,45 +4457,14 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
    * If the user has multiple memberships, prioritize the active company's type
    * so the prompt and tool filter reflect what the user is currently operating as.
    */
-  /** Resolve types[] from a company object: prefer types[] array, fallback to single type field */
+  /** @deprecated Use resolveCompanyTypes from ai.utils.ts */
   private static resolveCompanyTypes(company: any): string[] {
-    if (!company) return [];
-    if (Array.isArray(company.types) && company.types.length > 0) return company.types;
-    return company.type ? [company.type] : [];
+    return _resolveCompanyTypes(company);
   }
 
-  /**
-   * Resolve user role scoped to their activeCompanyId (or companyId fallback).
-   * Fixes P0: a user who is chofer in company A and admin in company B
-   * should NOT be treated as chofer when operating in company B.
-   */
+  /** @deprecated Use resolveActiveRole from ai.utils.ts */
   private static resolveActiveRole(user: any): { isChofer: boolean; isAdmin: boolean; userRole: string } {
-    const activeCoId = user.activeCompanyId || user.companyId;
-
-    // Find the membership for the active company
-    let activeRole: string | null = null;
-    if (activeCoId && user.memberships?.length > 0) {
-      const activeMem = (user.memberships as any[]).find(
-        (m: any) => m.companyId === activeCoId && m.active !== false,
-      );
-      if (activeMem?.role) activeRole = activeMem.role;
-    }
-
-    // Fallback to user.role if no membership found (legacy / single-company)
-    const effectiveRole = activeRole || user.role || 'operario';
-
-    // platform_admin is always admin regardless of membership
-    if (user.role === 'platform_admin') {
-      return { isChofer: false, isAdmin: true, userRole: 'admin' };
-    }
-
-    const isChofer = effectiveRole === 'chofer';
-    const isAdmin = ['admin', 'gerente'].includes(effectiveRole);
-    const userRole = isChofer ? 'chofer'
-      : isAdmin ? (effectiveRole === 'gerente' ? 'gerente' : 'admin')
-      : 'operario';
-
-    return { isChofer, isAdmin, userRole };
+    return _resolveActiveRole(user);
   }
 
   private resolveCompanyType(user: any): string {
@@ -4994,9 +4499,9 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     return 'unknown';
   }
 
+  /** @deprecated Use isProducerMembership from ai.utils.ts */
   private static isProducerMembership(m: any): boolean {
-    return m.company?.type === 'producer' ||
-      (Array.isArray(m.company?.types) && m.company.types.includes('producer'));
+    return _isProducerMembership(m);
   }
 
   /**
@@ -5060,9 +4565,9 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
     return null;
   }
 
-  /** Exact match for company type in comma-separated string (prevents substring false positives) */
+  /** @deprecated Use hasType from ai.utils.ts */
   private static hasType(companyType: string, type: string): boolean {
-    return companyType === type || companyType.split(',').some(t => t.trim() === type);
+    return _hasType(companyType, type);
   }
 
   /** Check if caller is admin/gerente — scoped to specific company when provided */
@@ -5086,7 +4591,7 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
   }
 
   private buildSyntheticUser(dbUser: any): any {
-    return buildSyntheticUser(dbUser);
+    return aiBuildSyntheticUser(dbUser);
   }
 
   // ======================== NEW TOOL HANDLERS ==============================
