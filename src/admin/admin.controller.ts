@@ -291,10 +291,14 @@ export class AdminService {
       await this.resolveFullUser(user);
       return;
     }
-    const isAdmin = await this.isCompanyAdmin(user);
-    if (!isAdmin) {
-      throw new ForbiddenException('Permisos insuficientes');
-    }
+    // JWT may be stale (e.g., is_super_admin set after last login) — check DB
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub || user.id },
+      select: { role: true, active: true, isSuperAdmin: true },
+    });
+    if (!dbUser || !dbUser.active) throw new ForbiddenException('Permisos insuficientes');
+    if (dbUser.isSuperAdmin || dbUser.role === 'platform_admin' || dbUser.role === 'admin') return;
+    throw new ForbiddenException('Permisos insuficientes');
   }
 
   async getUserCompanyIds(user: any): Promise<string[]> {
@@ -318,7 +322,9 @@ export class AdminService {
       select: { id: true, role: true, companyId: true, isSuperAdmin: true, active: true },
     });
     if (!full || !full.active) throw new ForbiddenException('Usuario no encontrado');
-    return { ...jwtUser, ...full, sub: full.id };
+    // If DB shows isSuperAdmin, ensure role reflects platform_admin (JWT may be stale)
+    const resolvedRole = full.isSuperAdmin ? 'platform_admin' : full.role;
+    return { ...jwtUser, ...full, role: resolvedRole, sub: full.id };
   }
 
   // --- Stats (cached 60s) ---
