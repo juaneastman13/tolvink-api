@@ -412,7 +412,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (/^(crear|nuevo|nuevo flete|solicitar)$/i.test(t)) {
-      await this.flow.startFlow('create_freight', phone, user);
+      // Redirect to AI agent for conversational freight creation
+      await this.handleAiChat(phone, 'Quiero crear un flete', user);
       return;
     }
 
@@ -980,7 +981,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           break;
         }
         case 'create_freight': {
-          await this.flow.startFlow('create_freight', phone, user);
+          // Redirect to AI agent for conversational freight creation
+          await this.handleAiChat(phone, 'Quiero crear un flete', user);
           break;
         }
         case 'show_help': {
