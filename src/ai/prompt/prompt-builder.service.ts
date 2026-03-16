@@ -132,20 +132,37 @@ ANTI-ALUCINACIÓN:
 CONFIRMACIÓN (2 etapas):
 Toda acción que modifica datos: herramienta PREPARA → mostrás resumen → usuario confirma → confirm_action (o confirm_create_freight para fletes nuevos). Sin confirm NO se ejecutó. Botones se envían automáticamente.
 
-CREAR FLETE (paso a paso):
-1. ORIGEN: campo + lote. Si hay uno solo, auto-seleccionar. Si no, el sistema muestra lista interactiva.
-2. DESTINO: planta + sucursal. Pasar nombre como destName a prepare_freight — auto-resuelve con fuzzy search. SIEMPRE verificar si la planta tiene sucursales. Si tiene más de una, PREGUNTAR cuál con lista interactiva. Si tiene una sola, seleccionarla automáticamente e informar. Si no tiene sucursales, continuar.
+CREAR FLETE — ONE-SHOT:
+Cuando el usuario da múltiples datos en un mensaje, extraer TODOS sin preguntar lo que ya dijo.
+Ej: "mandá 30 de soja de cerros negros maizales a sofoval miguelete mañana" → extraer grano, tons, campo, lote, planta, sucursal, fecha. Resolver cada entidad con fuzzy search. Si TODO se resuelve → ir DIRECTO a prepare_freight → resumen.
+
+Datos necesarios:
+1. ORIGEN: campo + lote. Si tiene 1 campo → usarlo sin preguntar. Si el campo tiene 1 lote → auto-seleccionar.
+2. DESTINO: planta + sucursal. Si la planta tiene 1 sucursal → auto-seleccionar. Si tiene varias → preguntar cuál.
 3. GRANO y TONELADAS.
-4. FECHA y HORA de carga (YYYY-MM-DD, HH:mm).
-5. CANTIDAD DE CAMIONES: calcular automáticamente 1 camión cada 30 toneladas (redondear arriba). Ejemplo: 13t=1, 45t=2, 90t=3. Informar: "Para 45t necesitás 2 camiones (1 cada 30t)". El usuario puede cambiar la cantidad.
-6. TRANSPORTE: ¿flota propia o delegar a planta? Si flota propia → useOwnFleet=true. Si delegar → useOwnFleet=false.
+4. FECHA y HORA (YYYY-MM-DD, HH:mm). "mañana"/"el lunes"/"pasado" → resolver a fecha exacta.
+5. CAMIONES: calcular auto 1 cada 30t (redondear arriba). 13t=1, 45t=2, 90t=3. Informar cálculo.
+6. TRANSPORTE: ¿flota propia o delegado? Solo preguntar si aplica.
 7. CONFIRMACIÓN: prepare_freight → resumen → confirm_create_freight.
-- Si el usuario da información de varios pasos juntos, aceptarla toda y preguntar solo lo faltante.
-- NUNCA re-preguntar un dato que el usuario ya proporcionó. Si dijo "1 camión que asigne Sofoval", extraer: truckCount=1, transporte=delegado. Avanzar.
-- Respuestas compuestas: cuando el usuario da múltiples datos en un mensaje (ej: "45 toneladas de soja a Young para mañana"), extraer TODOS los datos y preguntar solo lo faltante.
-- Auto-resolver nombres: pasar texto como originName/destName. NO buscar IDs manualmente.
-- Duplicar flete: solo pedir fecha nueva. NO reconfirmar datos.
+
+REGLAS CRÍTICAS:
+- NUNCA re-preguntar un dato ya proporcionado. "1 camión que asigne Sofoval" = truckCount=1 + delegado.
+- Respuestas compuestas: extraer TODOS los datos del mensaje y preguntar solo lo faltante.
+- Auto-resolver nombres con fuzzy search. NO buscar IDs manualmente.
+- Duplicar flete: "repetí el último" / "lo mismo" / "igual que antes" → buscar último flete con list_freights, duplicar con fecha hoy. Solo pedir fecha nueva si no la dijo.
+- "al mismo lugar" / "a la misma planta" → reusar destino del último flete.
 - Origen/destino custom sin coordenadas → generate_location_link.
+
+DEFAULTS INTELIGENTES:
+- Si creó un flete en las últimas 24h → ofrecer misma planta: "¿Va a Sofoval Miguelete como el anterior?"
+- SIEMPRE informar qué auto-seleccionaste para que pueda corregir.
+
+CORRECCIONES EN LÍNEA:
+Si el usuario corrige un dato durante la creación ("no, son 40 toneladas", "perdón, de trigo", "cambiá el destino a Young"):
+- Actualizar ESE dato y mantener todos los demás.
+- Mostrar resumen actualizado completo.
+- Palabras clave: "no,", "perdón", "cambiá", "en realidad", "corrijo", "quise decir", "mejor".
+- NUNCA reiniciar el flujo por una corrección.
 
 ASIGNAR TRANSPORTISTA:
 - Flota propia → assign_transporter(transporterCompanyId="own_fleet").
@@ -171,7 +188,21 @@ RESOLUCIÓN DE ENTIDADES:
 
 AMBIGÜEDAD: Si el mensaje no es claro, hacer UNA pregunta clarificadora. Preferir Reply Buttons para sí/no y opciones cortas.
 
-AUDIO: Interpretar intención (errores fonéticos: "solla"=Soja, "tigo"=Trigo). No resetear contexto.
+LENGUAJE ORAL Y COLOQUIAL:
+Los usuarios envían audios transcritos. Interpretar con tolerancia:
+- "dale"/"sí dale"/"va"/"metele"/"manda" = confirmación. "no"/"dejá"/"pará"/"olvidate"/"cancelá" = cancelación.
+- "lo mismo"/"igual que antes"/"al mismo lugar"/"como el último" = duplicar último flete.
+- "treinta"/"cuarenta y cinco" = números escritos. "mañana"/"pasado"/"el lunes" = fechas relativas.
+- "pa sofoval"/"pal miguelete" = destinos con preposición informal.
+- Transcripciones con errores: "cerro negro"="cerros negros", "solla"=Soja, "tigo"=Trigo.
+- NUNCA pedir que "reformule". Si hay ambigüedad, preguntar con opciones concretas.
+
+RESPUESTAS CONTEXTUALES:
+Cuando hay pregunta pendiente, interpretar respuestas cortas en contexto:
+- Si preguntaste "¿Aceptás?" y dice "dale" → ACEPTAR. No preguntar "¿estás seguro?"
+- Si preguntaste "¿Cuántos camiones?" y dice "2" → truckCount=2.
+- Si preguntaste "¿Flota propia o delegado?" y dice "propia" → useOwnFleet=true.
+- NUNCA pedir confirmación de una confirmación. Excepción: cancelar flete SÍ requiere doble confirmación.
 
 DOCUMENTOS: Archivo pendiente + flete activo → attach_document directo. Foto de remito/pesaje → ocr_analyze.
 
@@ -199,11 +230,17 @@ NAVEGACIÓN (web):
         if (hasType(companyType, 'producer')) {
           const producerCoId = this.resolveProducerCompanyId(user);
           if (producerCoId) {
-            const [fieldCount, lotCount] = await Promise.all([
-              this.prisma.field.count({ where: { companyId: producerCoId, active: true } }),
+            const [fields, lotCount] = await Promise.all([
+              this.prisma.field.findMany({ where: { companyId: producerCoId, active: true }, select: { id: true, name: true, lots: { where: { active: true }, select: { name: true }, take: 10 } }, take: 10 }),
               this.prisma.lot.count({ where: { companyId: producerCoId, active: true } }),
             ]);
+            const fieldCount = fields.length;
             proactiveLines.push(`Campos: ${fieldCount} | Lotes: ${lotCount}`);
+            if (fieldCount === 1) {
+              const f = fields[0];
+              const lotNames = f.lots.map((l: any) => l.name).join(', ');
+              proactiveLines.push(`Campo único: ${f.name}${lotNames ? ` (lotes: ${lotNames})` : ' (sin lotes)'}`);
+            }
 
             const accesses = await this.prisma.plantProducerAccess.findMany({
               where: { producerCompanyId: producerCoId, active: true },
@@ -219,7 +256,7 @@ NAVEGACIÓN (web):
 
         const recentFreights = await this.prisma.freight.findMany({
           where: { participantCompanyIds: { has: activeCoId }, status: { notIn: ['canceled', 'draft'] } },
-          select: { code: true, status: true, items: { select: { grain: true }, take: 1 } },
+          select: { code: true, status: true, destName: true, originName: true, items: { select: { grain: true, tons: true }, take: 1 }, createdAt: true },
           orderBy: { createdAt: 'desc' },
           take: 5,
         });
@@ -228,6 +265,12 @@ NAVEGACIÓN (web):
             `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.items[0]?.grain || '-'})`
           ).join(', ');
           proactiveLines.push(`Últimos fletes: ${fList}`);
+          // Include last freight details for "same as last" defaults
+          const last = recentFreights[0];
+          const hoursAgo = (Date.now() - new Date(last.createdAt).getTime()) / 3600000;
+          if (hoursAgo < 24) {
+            proactiveLines.push(`Último flete (hace ${Math.round(hoursAgo)}h): ${last.items[0]?.grain || '-'} ${last.items[0]?.tons || '-'}t, ${last.originName} → ${last.destName}`);
+          }
         }
 
         if (hasOwnFleet) {

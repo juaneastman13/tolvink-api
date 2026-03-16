@@ -133,4 +133,27 @@ export class IntentRouterService {
 
     return this.tools.filter(t => allowed.has(t.name));
   }
+
+  // ======================== MESSAGE PREPROCESSING ========================
+
+  private static readonly NUMBER_WORDS: Record<string, string> = {
+    cero:'0',uno:'1',una:'1',dos:'2',tres:'3',cuatro:'4',cinco:'5',
+    seis:'6',siete:'7',ocho:'8',nueve:'9',diez:'10',
+    once:'11',doce:'12',trece:'13',catorce:'14',quince:'15',
+    veinte:'20',veintiuno:'21',veintidos:'22',veinticinco:'25',
+    treinta:'30',cuarenta:'40',cincuenta:'50',sesenta:'60',
+    setenta:'70',ochenta:'80',noventa:'90',cien:'100',
+  };
+
+  /** Normalize spoken Spanish numbers and compound expressions in text. */
+  normalizeSpokenNumbers(text: string): string {
+    let result = text;
+    // Replace standalone number words
+    for (const [word, num] of Object.entries(IntentRouterService.NUMBER_WORDS)) {
+      result = result.replace(new RegExp(`\\b${word}\\b`, 'gi'), num);
+    }
+    // "X y cinco/tres/etc" → X+N (e.g., "30 y 5" → "35")
+    result = result.replace(/\b(\d+)\s+y\s+(\d+)\b/g, (_, a, b) => String(Number(a) + Number(b)));
+    return result;
+  }
 }
