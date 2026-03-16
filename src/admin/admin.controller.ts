@@ -1075,6 +1075,108 @@ export class AdminService {
     }
     return this.prisma.truck.update({ where: { id: truckId }, data: { active: false } });
   }
+
+  // ==================== BULK IMPORT ====================
+
+  async importCompanies(rows: any[]) {
+    const typeMap: Record<string, string> = { planta: 'plant', productor: 'producer', transportista: 'transporter' };
+    const results: { imported: number; errors: { row: number; name: string; error: string }[] } = { imported: 0, errors: [] };
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const name = r.name?.toString().trim();
+      if (!name) { results.errors.push({ row: i + 1, name: '(vacío)', error: 'Nombre requerido' }); continue; }
+
+      const rawType = r.type?.toString().trim().toLowerCase();
+      const type = typeMap[rawType];
+      if (!type) { results.errors.push({ row: i + 1, name, error: `Tipo inválido: ${r.type || '(vacío)'}` }); continue; }
+
+      const existing = await this.prisma.company.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+      if (existing) { results.errors.push({ row: i + 1, name, error: 'Empresa ya existe' }); continue; }
+
+      try {
+        await (this.prisma.company as any).create({
+          data: {
+            name,
+            type,
+            types: [type],
+            email: r.email?.toString().trim() || null,
+            phone: r.phone?.toString().trim() || null,
+            rut: r.rut?.toString().trim() || null,
+            hasInternalFleet: r.hasInternalFleet === true,
+          },
+        });
+        results.imported++;
+      } catch (e: any) {
+        results.errors.push({ row: i + 1, name, error: e.message?.slice(0, 120) || 'Error desconocido' });
+      }
+    }
+    return results;
+  }
+
+  async importUsers(rows: any[]) {
+    const roleMap: Record<string, { userRole: string; membershipRole: string }> = {
+      operario: { userRole: 'operator', membershipRole: 'operario' },
+      gerente: { userRole: 'admin', membershipRole: 'gerente' },
+      chofer: { userRole: 'operator', membershipRole: 'chofer' },
+    };
+    const results: { imported: number; errors: { row: number; email: string; error: string }[] } = { imported: 0, errors: [] };
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const name = r.name?.toString().trim();
+      const email = r.email?.toString().trim().toLowerCase();
+      const password = r.password?.toString().trim();
+      const companyName = r.companyName?.toString().trim();
+      const rawRole = r.role?.toString().trim().toLowerCase();
+
+      if (!name || !email) { results.errors.push({ row: i + 1, email: email || '(vacío)', error: 'Nombre y email requeridos' }); continue; }
+      if (!password || password.length < 6) { results.errors.push({ row: i + 1, email, error: 'Contraseña requerida (mín 6 caracteres)' }); continue; }
+      if (!companyName) { results.errors.push({ row: i + 1, email, error: 'Empresa requerida' }); continue; }
+
+      const roleDef = roleMap[rawRole];
+      if (!roleDef) { results.errors.push({ row: i + 1, email, error: `Rol inválido: ${r.role || '(vacío)'}` }); continue; }
+
+      const company = await this.prisma.company.findFirst({ where: { name: { equals: companyName, mode: 'insensitive' }, active: true } });
+      if (!company) { results.errors.push({ row: i + 1, email, error: `Empresa no encontrada: ${companyName}` }); continue; }
+
+      const existing = await this.prisma.user.findUnique({ where: { email } });
+      if (existing) { results.errors.push({ row: i + 1, email, error: 'Email ya registrado' }); continue; }
+
+      try {
+        const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+        const companyType = (company as any).type;
+        const userTypes = [companyType];
+        const companyByType: Record<string, string> = { [companyType]: company.id };
+        const roleByType: Record<string, string> = { [companyType]: roleDef.userRole };
+
+        const user = await this.prisma.user.create({
+          data: {
+            name,
+            email,
+            phone: r.phone?.toString().trim() || null,
+            passwordHash: hash,
+            role: roleDef.userRole as any,
+            userTypes,
+            companyId: company.id,
+            activeCompanyId: company.id,
+            companyByType,
+            roleByType,
+          },
+        });
+
+        await (this.prisma as any).userCompany.create({
+          data: { userId: user.id, companyId: company.id, role: roleDef.membershipRole },
+        }).catch(() => {});
+
+        results.imported++;
+      } catch (e: any) {
+        const msg = handlePrismaUniqueError(e, { email: 'email', phone: 'teléfono' });
+        results.errors.push({ row: i + 1, email, error: msg || e.message?.slice(0, 120) || 'Error desconocido' });
+      }
+    }
+    return results;
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -1392,5 +1494,27 @@ export class AdminController {
     await this.svc.assertCompanyOrPlatformAdmin(u);
     const fullUser = await this.svc.resolveFullUser(u);
     return this.svc.deleteTruck(id, fullUser);
+  }
+
+  // ==================== BULK IMPORT ====================
+
+  @Post('import/companies')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Importar empresas desde Excel (batch)' })
+  async importCompanies(@Body() body: { companies: any[] }, @CurrentUser() u: any) {
+    await this.svc.assertPlatformAdmin(u);
+    if (!Array.isArray(body.companies) || body.companies.length === 0) throw new BadRequestException('Lista de empresas vacía');
+    if (body.companies.length > 200) throw new BadRequestException('Máximo 200 empresas por importación');
+    return this.svc.importCompanies(body.companies);
+  }
+
+  @Post('import/users')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Importar usuarios desde Excel (batch)' })
+  async importUsers(@Body() body: { users: any[] }, @CurrentUser() u: any) {
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    if (!Array.isArray(body.users) || body.users.length === 0) throw new BadRequestException('Lista de usuarios vacía');
+    if (body.users.length > 200) throw new BadRequestException('Máximo 200 usuarios por importación');
+    return this.svc.importUsers(body.users);
   }
 }
