@@ -207,27 +207,21 @@ export class AiService implements OnModuleDestroy {
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
-      const ctxFreight = state.activeContext?.lastFreightCode
-        ? ` El último flete consultado fue ${this.sanitizeForPrompt(state.activeContext.lastFreightCode)} (${this.sanitizeForPrompt(state.activeContext.lastFreightSummary || '')}).`
-        : '';
-      messageToSend = `[Sistema: HAY UN ARCHIVO PENDIENTE de adjuntar — "${safeName}" (${doc.type}).${ctxFreight} Si el usuario indica un código de flete o hace referencia al flete anterior, usar attach_document DIRECTAMENTE. NO usar list_freights.]\n\n${messageToSend}`;
+      const activeCode = state.activeContext?.lastFreightCode;
+      if (activeCode) {
+        messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}). ADJUNTAR DIRECTAMENTE al flete activo ${this.sanitizeForPrompt(activeCode)}. Usar attach_document(code="${this.sanitizeForPrompt(activeCode)}") y mostrar confirmación con botones. NO preguntar a qué flete.]\n\n${messageToSend}`;
+      } else {
+        messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}). No hay flete activo. Preguntar a qué flete adjuntarlo o buscar fletes recientes.]\n\n${messageToSend}`;
+      }
     }
 
-    // Inject active context (survives message trimming) — sanitized to prevent injection
+    // Inject active context — directive format so Claude acts on active freight directly
     if (state.activeContext && !state.pendingDocument) {
       const ac = state.activeContext;
-      const parts: string[] = [];
       if (ac.lastFreightCode) {
-        parts.push(`último flete: ${this.sanitizeForPrompt(ac.lastFreightCode)} — ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}`);
-      }
-      if (ac.lastAction) {
-        parts.push(`última acción: ${this.sanitizeForPrompt(ac.lastAction)}`);
-      }
-      if (ac.lastSearchFilter) {
-        parts.push(`último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}`);
-      }
-      if (parts.length > 0) {
-        messageToSend = `[Contexto activo: ${parts.join('. ')}]\n\n${messageToSend}`;
+        messageToSend = `[FLETE ACTIVO: ${this.sanitizeForPrompt(ac.lastFreightCode)}. REGLA: Toda acción del usuario sobre "el flete", "este", "ese", o sin especificar código, se ejecuta sobre ${this.sanitizeForPrompt(ac.lastFreightCode)}. NO preguntar cuál flete. Resumen: ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}. Última acción: ${this.sanitizeForPrompt(ac.lastAction || 'ninguna')}.${ac.lastSearchFilter ? ` Último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}.` : ''}]\n\n${messageToSend}`;
+      } else if (ac.lastSearchFilter) {
+        messageToSend = `[Contexto activo: último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
       }
     }
 
