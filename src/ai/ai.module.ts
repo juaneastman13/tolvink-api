@@ -14,6 +14,8 @@ import { AiContextService } from './tools/ai-context.service';
 import { LocationToolsService } from './tools/location-tools.service';
 import { AdminToolsService } from './tools/admin-tools.service';
 import { TransportToolsService } from './tools/transport-tools.service';
+import { FreightQueryToolsService } from './tools/freight-query-tools.service';
+import { FreightActionToolsService } from './tools/freight-action-tools.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
@@ -21,6 +23,7 @@ import { TransportToolsService } from './tools/transport-tools.service';
     AiService, FieldsService, TrucksService, AdminService,
     ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService,
     AiContextService, LocationToolsService, AdminToolsService, TransportToolsService,
+    FreightQueryToolsService, FreightActionToolsService,
   ],
   exports: [AiService],
 })
