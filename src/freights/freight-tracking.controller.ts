@@ -3,7 +3,7 @@
 // Public endpoints (no JWT) for real-time freight tracking via share link
 // =====================================================================
 
-import { Controller, Get, Param, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Param, NotFoundException, BadRequestException, GoneException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
 import { FreightsService } from './freights.service';
@@ -17,6 +17,12 @@ export class FreightTrackingController {
     // Security: share tokens should be at least 16 chars to prevent brute-force enumeration
     if (!token || token.length < 16 || token.length > 100 || !/^[a-zA-Z0-9_-]+$/.test(token)) {
       throw new BadRequestException('Token inválido');
+    }
+  }
+
+  private checkTokenExpiry(freight: { shareTokenExpiresAt?: Date | null }) {
+    if (freight.shareTokenExpiresAt && new Date(freight.shareTokenExpiresAt) < new Date()) {
+      throw new GoneException('El enlace de seguimiento ha expirado');
     }
   }
 
@@ -35,6 +41,7 @@ export class FreightTrackingController {
         originLng: true,
         destLat: true,
         destLng: true,
+        shareTokenExpiresAt: true,
         items: {
           select: { grain: true, tons: true },
           take: 1,
@@ -45,6 +52,7 @@ export class FreightTrackingController {
     if (!freight) {
       throw new NotFoundException('Link de seguimiento no válido');
     }
+    this.checkTokenExpiry(freight);
 
     return {
       code: freight.code,
@@ -66,12 +74,13 @@ export class FreightTrackingController {
     this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
-      select: { id: true, status: true },
+      select: { id: true, status: true, shareTokenExpiresAt: true },
     });
 
     if (!freight) {
       throw new NotFoundException('Link de seguimiento no válido');
     }
+    this.checkTokenExpiry(freight);
 
     if (['finished', 'canceled'].includes(freight.status)) {
       return null;
@@ -90,12 +99,13 @@ export class FreightTrackingController {
     this.validateToken(token);
     const freight = await this.prisma.freight.findUnique({
       where: { shareToken: token },
-      select: { id: true, status: true },
+      select: { id: true, status: true, shareTokenExpiresAt: true },
     });
 
     if (!freight) {
       throw new NotFoundException('Link de seguimiento no válido');
     }
+    this.checkTokenExpiry(freight);
 
     // Don't expose historical GPS data for completed/canceled freights
     if (['finished', 'canceled'].includes(freight.status)) {
@@ -128,6 +138,7 @@ export class FreightTrackingController {
         loadedAt: true,
         finishedAt: true,
         notes: true,
+        shareTokenExpiresAt: true,
         originCompany: { select: { name: true, hasInternalFleet: true } },
         field: { select: { name: true } },
         requestedBy: { select: { name: true } },
@@ -136,7 +147,7 @@ export class FreightTrackingController {
           take: 1,
         },
         assignments: {
-          where: { status: { not: 'rejected' as any } },
+          where: { status: { not: 'rejected' } },
           orderBy: { createdAt: 'desc' as const },
           take: 1,
           select: {
@@ -159,6 +170,7 @@ export class FreightTrackingController {
     if (!freight) {
       throw new NotFoundException('Link de informe no válido');
     }
+    this.checkTokenExpiry(freight);
 
     // Fetch audit log
     const auditLog = await this.prisma.auditLog.findMany({
@@ -182,6 +194,12 @@ export class FreightTrackingController {
     const a = freight.assignments[0];
     const isOwnFleet = !!(a && freight.originCompany?.hasInternalFleet && a.transportCompanyId === freight.originCompanyId);
 
+    // PII redaction helper: full name → initials (e.g. "Juan Pérez" → "J.P.")
+    const toInitials = (name: string | null | undefined): string | null => {
+      if (!name) return null;
+      return name.split(' ').map(w => w[0]).join('.') + '.';
+    };
+
     return {
       code: freight.code,
       status: freight.status,
@@ -194,11 +212,11 @@ export class FreightTrackingController {
       destName: freight.destName,
       loadDate: freight.loadDate ? freight.loadDate.toISOString().split('T')[0] : null,
       loadTime: freight.loadTime,
-      requestedByName: freight.requestedBy?.name || null,
+      requestedByName: toInitials(freight.requestedBy?.name),
       transporterName: a?.transportCompany?.name || null,
       truckPlate: a?.truck?.plate || a?.plate || null,
       truckModel: a?.truck?.model || null,
-      driverName: a?.driver?.name || a?.driverName || null,
+      driverName: toInitials(a?.driver?.name || a?.driverName),
       isOwnFleet,
       notes: freight.notes,
       originLat: freight.originLat ? Number(freight.originLat) : null,
@@ -216,6 +234,7 @@ export class FreightTrackingController {
       })),
       auditLog: auditLog.map(log => ({
         action: log.action,
+        reason: log.reason ? log.reason.slice(0, 50) : null,
         createdAt: log.createdAt,
         actorCompany: log.user?.company?.name || null,
       })),

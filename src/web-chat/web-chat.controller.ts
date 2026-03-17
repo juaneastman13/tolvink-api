@@ -91,6 +91,12 @@ export class WebChatController {
   ) {
     if (!file || !file.buffer) throw new BadRequestException('Archivo de audio requerido');
 
+    // Whitelist allowed audio MIME types
+    const ALLOWED_AUDIO_MIMES = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/webm', 'audio/ogg', 'audio/x-m4a'];
+    if (!ALLOWED_AUDIO_MIMES.includes(file.mimetype)) {
+      throw new BadRequestException('Formato de audio no soportado. Use MP3, WAV, M4A, WebM u OGG.');
+    }
+
     // Fire-and-forget: respond immediately, result comes via SSE
     this.service.handleAudioMessage(user, file.buffer, file.mimetype).catch((e) => {
       this.logger.error(`handleAudioMessage error: ${e.message}`);

@@ -63,15 +63,21 @@ export class WebChatService {
     return user;
   }
 
-  /** Find or create an AI session for the web channel */
-  private async getOrCreateSession(userId: string) {
+  /** Find or create an AI session for the web channel (isolated by company) */
+  private async getOrCreateSession(userId: string, companyId?: string) {
+    const where: any = {
+      userId,
+      phone: WEB_PHONE,
+      flowType: null,
+      expiresAt: { gt: new Date() },
+    };
+    // Include companyId in session lookup for company isolation
+    if (companyId) {
+      where.flowState = { path: ['selectedCompanyId'], equals: companyId };
+    }
+
     let session = await this.prisma.whatsAppSession.findFirst({
-      where: {
-        userId,
-        phone: WEB_PHONE,
-        flowType: null,
-        expiresAt: { gt: new Date() },
-      },
+      where,
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -82,7 +88,7 @@ export class WebChatService {
           phone: WEB_PHONE,
           flowType: null,
           flowStep: '0',
-          flowState: {},
+          flowState: companyId ? { selectedCompanyId: companyId } : {},
           expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS),
         },
       });
@@ -94,7 +100,8 @@ export class WebChatService {
   /** Shared: call AI, handle _pendingSelection, emit response via SSE (fetches own session) */
   private async processAndEmit(dbUser: any, text: string): Promise<void> {
     this.sse.emitToUser(dbUser.id, 'ai:thinking', {});
-    const session = await this.getOrCreateSession(dbUser.id);
+    const companyId = dbUser.activeCompanyId || dbUser.companyId || undefined;
+    const session = await this.getOrCreateSession(dbUser.id, companyId);
     return this.processAndEmitWithSession(dbUser, text, session);
   }
 
@@ -155,11 +162,8 @@ export class WebChatService {
     // Emit thinking ASAP — before any DB queries
     this.sse.emitToUser(jwtUser.sub, 'ai:thinking', {});
 
-    // Parallel: load user + find/create session at the same time
-    const [dbUser, session] = await Promise.all([
-      this.loadFullUser(jwtUser.sub),
-      this.getOrCreateSession(jwtUser.sub),
-    ]);
+    // Load user first to get companyId for session isolation
+    const dbUser = await this.loadFullUser(jwtUser.sub);
 
     if (!dbUser || !dbUser.active) {
       this.sse.emitToUser(jwtUser.sub, 'ai:response', {
@@ -168,6 +172,9 @@ export class WebChatService {
       });
       return;
     }
+
+    const companyId = dbUser.activeCompanyId || dbUser.companyId || undefined;
+    const session = await this.getOrCreateSession(dbUser.id, companyId);
 
     try {
       await this.processAndEmitWithSession(dbUser, text, session);
@@ -245,13 +252,18 @@ export class WebChatService {
 
   /** Get conversation history for the current session */
   async getHistory(jwtUser: any): Promise<{ messages: any[] }> {
+    const companyId = jwtUser.activeCompanyId || jwtUser.companyId;
+    const where: any = {
+      userId: jwtUser.sub,
+      phone: WEB_PHONE,
+      flowType: null,
+      expiresAt: { gt: new Date() },
+    };
+    if (companyId) {
+      where.flowState = { path: ['selectedCompanyId'], equals: companyId };
+    }
     const session = await this.prisma.whatsAppSession.findFirst({
-      where: {
-        userId: jwtUser.sub,
-        phone: WEB_PHONE,
-        flowType: null,
-        expiresAt: { gt: new Date() },
-      },
+      where,
       orderBy: { updatedAt: 'desc' },
     });
 

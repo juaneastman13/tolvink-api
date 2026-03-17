@@ -445,7 +445,8 @@ model Freight {
   participantCompanyIds String[] @default([]) @map("participant_company_ids")
 
   // Public tracking share token (generated on first share request)
-  shareToken String? @unique @map("share_token") @db.VarChar(36)
+  shareToken          String?   @unique @map("share_token") @db.VarChar(36)
+  shareTokenExpiresAt DateTime? @map("share_token_expires_at")
 
   // Cross-confirmations
   transporterLoadedConfirmedAt   DateTime? @map("transporter_loaded_confirmed_at")
@@ -546,6 +547,7 @@ model FreightAssignment {
 
   @@index([freightId])
   @@index([freightId, tripStatus])
+  @@index([transportCompanyId])
   @@index([transportCompanyId, status])
   @@index([truckId])
   @@index([driverId])

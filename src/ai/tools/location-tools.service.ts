@@ -21,6 +21,21 @@ export class LocationToolsService {
   private readonly logger = new Logger(LocationToolsService.name);
   _requestLocationCooldowns = new Map<string, number>();
 
+  /** Clean expired cooldown entries and enforce hard cap */
+  cleanupCooldowns(): void {
+    const now = Date.now();
+    for (const [k, v] of this._requestLocationCooldowns) {
+      if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
+    }
+    if (this._requestLocationCooldowns.size > 5000) {
+      const iter = this._requestLocationCooldowns.keys();
+      while (this._requestLocationCooldowns.size > 4000) {
+        const k = iter.next().value;
+        if (k) this._requestLocationCooldowns.delete(k); else break;
+      }
+    }
+  }
+
   constructor(
     private config: ConfigService,
     private prisma: PrismaService,
@@ -28,6 +43,50 @@ export class LocationToolsService {
     private sessionManager: SessionManagerService,
     private aiContext: AiContextService,
   ) {}
+
+  // ======================== SHARED HELPERS ================================
+
+  /** Fetch freight by code, check access, ensure shareToken exists. Returns { freight, token } or error JSON. */
+  private async fetchFreightAndEnsureToken(
+    code: string,
+    user: any,
+    options?: { rejectFinished?: boolean },
+  ): Promise<{ freight: any; token: string } | { error: string }> {
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: {
+        id: true, status: true, shareToken: true, code: true,
+        originCompanyId: true, destCompanyId: true,
+        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
+      },
+    });
+    if (!freight) return { error: `Flete ${code} no encontrado` };
+
+    // Access control
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
+    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
+    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
+    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
+      return { error: `No tiene acceso al flete ${code}` };
+    }
+
+    if (options?.rejectFinished && ['finished', 'canceled'].includes(freight.status)) {
+      return { error: `El flete ${code} ya está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` };
+    }
+
+    // Ensure shareToken
+    let token = freight.shareToken;
+    if (!token) {
+      token = crypto.randomUUID();
+      await this.prisma.freight.update({
+        where: { id: freight.id },
+        data: { shareToken: token, shareTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) },
+      });
+    }
+
+    return { freight, token };
+  }
 
   // ======================== NAVIGATE APP ================================
 
@@ -83,42 +142,11 @@ export class LocationToolsService {
     const code = input.code?.toUpperCase();
     if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, shareToken: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access control (origin, dest, and transporter companies)
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    if (['finished', 'canceled'].includes(freight.status)) {
-      return JSON.stringify({ error: `El flete ${code} ya está ${freight.status === 'finished' ? 'finalizado' : 'cancelado'}` });
-    }
-
-    // Reuse existing token or generate new one
-    let token = freight.shareToken;
-    if (!token) {
-      token = crypto.randomUUID();
-      await this.prisma.freight.update({
-        where: { id: freight.id },
-        data: { shareToken: token },
-      });
-    }
+    const result = await this.fetchFreightAndEnsureToken(code, user, { rejectFinished: true });
+    if ('error' in result) return JSON.stringify({ error: result.error });
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/${freight.code}/ubicacion?s=${token}`;
+    const url = `${frontendUrl}/${result.freight.code}/ubicacion?s=${result.token}`;
 
     return JSON.stringify({
       url,
@@ -160,38 +188,11 @@ export class LocationToolsService {
     const code = input.code?.toUpperCase();
     if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
 
-    const freight = await this.prisma.freight.findFirst({
-      where: { code },
-      select: {
-        id: true, status: true, shareToken: true, code: true,
-        originCompanyId: true, destCompanyId: true,
-        assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } },
-      },
-    });
-
-    if (!freight) return JSON.stringify({ error: `Flete ${code} no encontrado` });
-
-    // Access control (origin, dest, and transporter companies)
-    const userCompanyId = user.activeCompanyId || user.companyId;
-    const memberCompanyIds = (user.memberships || []).map((m: any) => m.companyId);
-    const allUserCompanies = [userCompanyId, ...memberCompanyIds].filter(Boolean);
-    const freightCompanies = [freight.originCompanyId, freight.destCompanyId, ...freight.assignments.map(a => a.transportCompanyId)];
-    if (!allUserCompanies.some(c => freightCompanies.includes(c))) {
-      return JSON.stringify({ error: `No tiene acceso al flete ${code}` });
-    }
-
-    // Reuse existing token or generate new one
-    let token = freight.shareToken;
-    if (!token) {
-      token = crypto.randomUUID();
-      await this.prisma.freight.update({
-        where: { id: freight.id },
-        data: { shareToken: token },
-      });
-    }
+    const result = await this.fetchFreightAndEnsureToken(code, user);
+    if ('error' in result) return JSON.stringify({ error: result.error });
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
-    const url = `${frontendUrl}/${freight.code}/informe?s=${token}`;
+    const url = `${frontendUrl}/${result.freight.code}/informe?s=${result.token}`;
 
     return JSON.stringify({
       url,
@@ -449,7 +450,7 @@ export class LocationToolsService {
     let shareToken = freight.shareToken;
     if (!shareToken) {
       shareToken = crypto.randomUUID();
-      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken } });
+      await this.prisma.freight.update({ where: { id: freightId }, data: { shareToken, shareTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } });
     }
 
     const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';

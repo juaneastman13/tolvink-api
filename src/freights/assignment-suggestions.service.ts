@@ -135,12 +135,86 @@ export class AssignmentSuggestionsService {
     const candidates = await this.buildCandidatePool(freight);
     const totalCandidatesEvaluated = candidates.length;
 
-    // ── Score all candidates in parallel ────────────────────────
+    // ── Batch-fetch scoring data for all candidates ────────────
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
+    const allCompanyIds = [...new Set(candidates.map(c => c.companyId))];
+    const allTruckIds = candidates.map(c => c.truckId).filter(Boolean) as string[];
+
+    // Pre-fetch all data in parallel batches
+    const [historyAssignments, routeAssignments, availabilityConflicts] = await Promise.all([
+      // History: all assignments for all candidate companies in last 90 days
+      this.prisma.freightAssignment.findMany({
+        where: { transportCompanyId: { in: allCompanyIds }, createdAt: { gte: ninetyDaysAgo } },
+        select: { transportCompanyId: true, tripStatus: true, status: true },
+      }),
+      // Route affinity: finished assignments matching origin/dest
+      this.prisma.freightAssignment.count ? this.prisma.freightAssignment.findMany({
+        where: {
+          transportCompanyId: { in: allCompanyIds },
+          createdAt: { gte: ninetyDaysAgo },
+          tripStatus: 'finished',
+          freight: {
+            originCompanyId: freight.originCompanyId,
+            ...(freight.destCompanyId ? { destCompanyId: freight.destCompanyId } : {}),
+          },
+        },
+        select: { transportCompanyId: true },
+      }) : Promise.resolve([]),
+      // Availability: active assignments on the load date for all candidate trucks/companies
+      (() => {
+        const loadDate = freight.loadDate ? new Date(freight.loadDate) : null;
+        if (!loadDate) return Promise.resolve([]);
+        const dayStart = new Date(loadDate); dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(loadDate); dayEnd.setHours(23, 59, 59, 999);
+        const where: any = {
+          tripStatus: { in: ['accepted', 'in_progress', 'loaded'] },
+          freight: { loadDate: { gte: dayStart, lte: dayEnd } },
+          OR: [
+            ...(allTruckIds.length > 0 ? [{ truckId: { in: allTruckIds } }] : []),
+            { transportCompanyId: { in: allCompanyIds } },
+          ],
+        };
+        return this.prisma.freightAssignment.findMany({
+          where,
+          select: { truckId: true, transportCompanyId: true, freight: { select: { loadTime: true } } },
+        });
+      })(),
+    ]);
+
+    // Index batch results by companyId
+    const historyByCompany = new Map<string, typeof historyAssignments>();
+    for (const a of historyAssignments) {
+      const arr = historyByCompany.get(a.transportCompanyId) || [];
+      arr.push(a);
+      historyByCompany.set(a.transportCompanyId, arr);
+    }
+    const routeCountByCompany = new Map<string, number>();
+    for (const a of routeAssignments) {
+      routeCountByCompany.set(a.transportCompanyId, (routeCountByCompany.get(a.transportCompanyId) || 0) + 1);
+    }
+    const availByTruck = new Map<string, typeof availabilityConflicts>();
+    const availByCompany = new Map<string, typeof availabilityConflicts>();
+    for (const a of availabilityConflicts) {
+      if (a.truckId) {
+        const arr = availByTruck.get(a.truckId) || [];
+        arr.push(a);
+        availByTruck.set(a.truckId, arr);
+      }
+      const arr = availByCompany.get(a.transportCompanyId) || [];
+      arr.push(a);
+      availByCompany.set(a.transportCompanyId, arr);
+    }
+
+    // Score all candidates using batched data
     const scored = await Promise.all(
-      candidates.map(c => this.scoreCandidate(c, freight, originLat, originLng, geoAvailable, requiredTons, ninetyDaysAgo)),
+      candidates.map(c => this.scoreCandidateBatched(
+        c, freight, originLat, originLng, geoAvailable, requiredTons,
+        historyByCompany.get(c.companyId) || [],
+        routeCountByCompany.get(c.companyId) || 0,
+        c.truckId ? (availByTruck.get(c.truckId) || []) : (availByCompany.get(c.companyId) || []),
+      )),
     );
 
     // ── Sort ────────────────────────────────────────────────────
@@ -267,6 +341,36 @@ export class AssignmentSuggestionsService {
   // SCORING
   // ══════════════════════════════════════════════════════════════
 
+  /** Score using pre-fetched batched data (no individual DB queries) */
+  private async scoreCandidateBatched(
+    c: Candidate,
+    freight: any,
+    originLat: number | null,
+    originLng: number | null,
+    geoAvailable: boolean,
+    requiredTons: number,
+    historyAssignments: { tripStatus: string; status: string }[],
+    routeTrips: number,
+    availabilityConflicts: { truckId: string | null; transportCompanyId: string; freight: { loadTime: string | null } }[],
+  ): Promise<Suggestion> {
+    // Proximity still requires individual queries (live location, last destination, company HQ)
+    const proxResult = await this.scoreProximity(c, originLat, originLng);
+
+    // Availability from batched data
+    const availResult = this.scoreAvailabilityBatched(c, freight, availabilityConflicts);
+
+    // History from batched data
+    const histResult = this.scoreHistoryBatched(historyAssignments);
+
+    // Route affinity from batched data
+    const routeResult = this.scoreRouteAffinityBatched(routeTrips);
+
+    const capResult = this.scoreCapacity(c, requiredTons);
+
+    return this.buildSuggestion(c, freight, geoAvailable, requiredTons, availResult, proxResult, histResult, routeResult, capResult);
+  }
+
+  /** @deprecated Use scoreCandidateBatched */
   private async scoreCandidate(
     c: Candidate,
     freight: any,
@@ -284,6 +388,21 @@ export class AssignmentSuggestionsService {
       this.scoreRouteAffinity(c.companyId, freight, ninetyDaysAgo),
     ]);
     const capResult = this.scoreCapacity(c, requiredTons);
+
+    return this.buildSuggestion(c, freight, geoAvailable, requiredTons, availResult, proxResult, histResult, routeResult, capResult);
+  }
+
+  private buildSuggestion(
+    c: Candidate,
+    freight: any,
+    geoAvailable: boolean,
+    requiredTons: number,
+    availResult: { score: number; status: 'free' | 'busy_other_hours' | 'busy_now' },
+    proxResult: { score: number; distanceKm: number | null; source: 'live' | 'last_destination' | 'company_hq' | null },
+    histResult: { score: number; totalTrips: number; completedTrips: number; rejectedTrips: number; completionRate: number },
+    routeResult: { score: number; routeTrips: number },
+    capResult: { score: number },
+  ): Suggestion {
 
     let breakdown: ScoreBreakdown;
 
@@ -538,6 +657,67 @@ export class AssignmentSuggestionsService {
     if (requiredTons <= 0) return { score: 10 };
     if (c.capacity >= requiredTons) return { score: 10 };
     return { score: 0 };
+  }
+
+  // ── Batched scoring variants (use pre-fetched data) ──────────
+
+  private scoreAvailabilityBatched(
+    c: Candidate,
+    freight: any,
+    conflicts: { truckId: string | null; transportCompanyId: string; freight: { loadTime: string | null } }[],
+  ): { score: number; status: 'free' | 'busy_other_hours' | 'busy_now' } {
+    // Filter conflicts relevant to this specific candidate
+    const relevant = c.truckId
+      ? conflicts.filter(cf => cf.truckId === c.truckId)
+      : conflicts.filter(cf => cf.transportCompanyId === c.companyId);
+
+    if (relevant.length === 0) return { score: 30, status: 'free' };
+
+    if (freight.loadTime) {
+      const freightHour = parseInt(freight.loadTime.split(':')[0], 10);
+      const hasOverlap = relevant.some(cf => {
+        if (!cf.freight.loadTime) return true;
+        const conflictHour = parseInt(cf.freight.loadTime.split(':')[0], 10);
+        return Math.abs(freightHour - conflictHour) < 4;
+      });
+      if (!hasOverlap) return { score: 20, status: 'busy_other_hours' };
+    }
+
+    if (!c.truckId) {
+      if (relevant.length < 3) return { score: 30, status: 'free' };
+      if (relevant.length < 6) return { score: 20, status: 'busy_other_hours' };
+    }
+
+    return { score: 5, status: 'busy_now' };
+  }
+
+  private scoreHistoryBatched(assignments: { tripStatus: string; status: string }[]): {
+    score: number; totalTrips: number; completedTrips: number; rejectedTrips: number; completionRate: number;
+  } {
+    const totalTrips = assignments.length;
+    if (totalTrips === 0) return { score: 10, totalTrips: 0, completedTrips: 0, rejectedTrips: 0, completionRate: 0 };
+
+    const completedTrips = assignments.filter(a => a.tripStatus === 'finished').length;
+    const rejectedTrips = assignments.filter(a => a.status === 'rejected').length;
+    const completionRate = completedTrips / totalTrips;
+    const rejectionRate = rejectedTrips / totalTrips;
+
+    let score: number;
+    if (completionRate >= 0.9 && rejectionRate < 0.05) score = 25;
+    else if (completionRate >= 0.8) score = 20;
+    else if (completionRate >= 0.65) score = 14;
+    else score = 6;
+
+    return { score, totalTrips, completedTrips, rejectedTrips, completionRate };
+  }
+
+  private scoreRouteAffinityBatched(routeTrips: number): { score: number; routeTrips: number } {
+    let score: number;
+    if (routeTrips >= 5) score = 10;
+    else if (routeTrips >= 3) score = 7;
+    else if (routeTrips >= 1) score = 4;
+    else score = 0;
+    return { score, routeTrips };
   }
 
   // ── Helpers ───────────────────────────────────────────────────

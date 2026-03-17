@@ -11,6 +11,7 @@ import {
   Query,
   NotFoundException,
   BadRequestException,
+  GoneException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { PrismaService } from '../database/prisma.service';
@@ -34,12 +35,16 @@ export class FreightPublicController {
     if (!shareToken) {
       throw new BadRequestException('Token de compartir requerido');
     }
+    // Always fetch shareTokenExpiresAt for TTL check
     const freight = await this.prisma.freight.findFirst({
       where: { code, shareToken },
-      select,
+      select: { ...select, shareTokenExpiresAt: true },
     });
     if (!freight) {
       throw new NotFoundException('Flete no encontrado');
+    }
+    if (freight.shareTokenExpiresAt && new Date(freight.shareTokenExpiresAt) < new Date()) {
+      throw new GoneException('El enlace ha expirado');
     }
     return freight;
   }
@@ -146,7 +151,7 @@ export class FreightPublicController {
         take: 1,
       },
       assignments: {
-        where: { status: { not: 'rejected' as any } },
+        where: { status: { not: 'rejected' } },
         orderBy: { createdAt: 'desc' as const },
         take: 1,
         select: {
@@ -190,6 +195,12 @@ export class FreightPublicController {
       a.transportCompanyId === freight.originCompanyId
     );
 
+    // PII redaction helper: full name → initials (e.g. "Juan Pérez" → "J.P.")
+    const toInitials = (name: string | null | undefined): string | null => {
+      if (!name) return null;
+      return name.split(' ').map(w => w[0]).join('.') + '.';
+    };
+
     return {
       code: freight.code,
       status: freight.status,
@@ -204,11 +215,11 @@ export class FreightPublicController {
         ? freight.loadDate.toISOString().split('T')[0]
         : null,
       loadTime: freight.loadTime,
-      requestedByName: freight.requestedBy?.name || null,
+      requestedByName: toInitials(freight.requestedBy?.name),
       transporterName: a?.transportCompany?.name || null,
       truckPlate: a?.truck?.plate || a?.plate || null,
       truckModel: a?.truck?.model || null,
-      driverName: a?.driver?.name || a?.driverName || null,
+      driverName: toInitials(a?.driver?.name || a?.driverName),
       isOwnFleet,
       notes: freight.notes,
       originLat: freight.originLat ? Number(freight.originLat) : null,
@@ -226,6 +237,7 @@ export class FreightPublicController {
       })),
       auditLog: auditLog.map((log) => ({
         action: log.action,
+        reason: log.reason ? log.reason.slice(0, 50) : null,
         createdAt: log.createdAt,
         actorCompany: log.user?.company?.name || null,
       })),

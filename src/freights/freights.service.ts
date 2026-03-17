@@ -22,16 +22,27 @@ export class FreightsService {
     this.statusCountsCache.clear();
   }
 
+  private _broadcastConsecutiveErrors = 0;
+
   /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs */
   private broadcastAndInvalidate(freightId: string, data: any, excludeUserId?: string) {
     this.invalidateStatusCounts();
     this.refreshParticipantIds(freightId).catch(e => this.logger.error('refreshParticipantIds failed', e.message));
     this.sse.broadcastFreightUpdate(freightId, data, excludeUserId)
-      .catch(e => this.logger.error('Async side-effect failed', e.message));
+      .then(() => { this._broadcastConsecutiveErrors = 0; })
+      .catch(e => {
+        this._broadcastConsecutiveErrors++;
+        if (this._broadcastConsecutiveErrors >= 5) {
+          this.logger.error(`broadcastAndInvalidate: ${this._broadcastConsecutiveErrors} consecutive failures — ${e.message}`);
+        } else {
+          this.logger.warn(`Async side-effect failed: ${e.message}`);
+        }
+      });
   }
 
   private async getCachedStatusCounts(companyWhere: any): Promise<Record<string, number>> {
-    const key = JSON.stringify(companyWhere);
+    // Normalize key by sorting object keys for consistent cache hits
+    const key = JSON.stringify(Object.keys(companyWhere).sort().reduce((acc, k) => { acc[k] = companyWhere[k]; return acc; }, {} as any));
     const cached = this.statusCountsCache.get(key);
     if (cached && Date.now() - cached.ts < FreightsService.STATUS_COUNTS_TTL) {
       return cached.data;
@@ -43,6 +54,8 @@ export class FreightsService {
     });
     const statusCounts: Record<string, number> = {};
     for (const row of statusGroupBy) { statusCounts[row.status] = row._count._all; }
+    // Prevent unbounded cache growth
+    if (this.statusCountsCache.size > 100) this.statusCountsCache.clear();
     this.statusCountsCache.set(key, { data: statusCounts, ts: Date.now() });
     return statusCounts;
   }

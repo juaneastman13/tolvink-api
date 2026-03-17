@@ -51,14 +51,9 @@ const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 export class AiService implements OnModuleDestroy {
   private readonly logger = new Logger(AiService.name);
   private client: Anthropic | null = null;
-  /** @deprecated Cooldowns now live in LocationToolsService */
-  private get _requestLocationCooldowns(): Map<string, number> {
-    return this.locationTools._requestLocationCooldowns;
-  }
-  // LEGACY: Direct access to side-effects map for tool handlers not yet migrated to SessionManagerService.
-  // After full tool handler extraction, this getter can be removed.
+  // Access side-effects map via public API on SessionManagerService
   get _chatSideEffects(): Map<string, Record<string, any>> {
-    return (this.sessionManager as any)['_chatSideEffects'];
+    return this.sessionManager.getChatSideEffectsMap();
   }
   // Per-session lock to prevent concurrent chat() calls from racing on side-effects
   private _chatLocks = new Set<string>();
@@ -73,17 +68,8 @@ export class AiService implements OnModuleDestroy {
         if (k) aiRateMap.delete(k); else break;
       }
     }
-    // Clean stale request_location cooldowns (5 min TTL) + hard cap
-    for (const [k, v] of this._requestLocationCooldowns) {
-      if (now - v > 5 * 60 * 1000) this._requestLocationCooldowns.delete(k);
-    }
-    if (this._requestLocationCooldowns.size > 5000) {
-      const iter = this._requestLocationCooldowns.keys();
-      while (this._requestLocationCooldowns.size > 4000) {
-        const k = iter.next().value;
-        if (k) this._requestLocationCooldowns.delete(k); else break;
-      }
-    }
+    // Clean stale request_location cooldowns via public API
+    this.locationTools.cleanupCooldowns();
     // Clean stale side effects — delegated to SessionManagerService
     this.sessionManager.cleanStaleSideEffects();
   }, 5 * 60 * 1000);

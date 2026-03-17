@@ -12,6 +12,7 @@ import { Throttle } from '@nestjs/throttler';
 import {
   Injectable, BadRequestException, NotFoundException, ForbiddenException, UnauthorizedException, Logger,
 } from '@nestjs/common';
+import { CompanyType } from '@prisma/client';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
   IsNotEmpty, IsOptional, IsString, IsEmail, IsUUID,
@@ -449,10 +450,10 @@ export class AdminService {
     const primaryType = dto.types && dto.types.length > 0 ? dto.types[0] : dto.type;
     const typesArray = dto.types && dto.types.length > 0 ? dto.types : [dto.type];
 
-    return (this.prisma.company as any).create({
+    return this.prisma.company.create({
       data: {
         name: dto.name,
-        type: primaryType,
+        type: primaryType as CompanyType,
         types: typesArray,
         address: dto.address,
         phone: dto.phone,
@@ -501,7 +502,7 @@ export class AdminService {
       data.types = [dto.type]; // Sync types from single type
     }
 
-    return (this.prisma.company as any).update({ where: { id }, data });
+    return this.prisma.company.update({ where: { id }, data });
   }
 
   // --- Branches ---
@@ -509,6 +510,7 @@ export class AdminService {
     return this.prisma.branch.findMany({
       where: { companyId, active: true },
       orderBy: { name: 'asc' },
+      take: 500,
     });
   }
 
@@ -565,11 +567,14 @@ export class AdminService {
   async listUsers(search?: string, companyId?: string, callerUser?: any) {
     const where: any = {};
 
-    // Non-superadmin: only see users from their own companies
+    // Non-superadmin: only see users from their own companies (including via memberships)
     if (callerUser && !this.isPlatformAdmin(callerUser)) {
       const myIds = await this.getUserCompanyIds(callerUser);
       if (myIds.length === 0) return [];
-      where.companyId = { in: myIds };
+      where.OR = [
+        { companyId: { in: myIds } },
+        { memberships: { some: { companyId: { in: myIds }, active: true } } },
+      ];
     } else if (companyId) {
       where.companyId = companyId;
     }
@@ -582,9 +587,12 @@ export class AdminService {
           { phone: { contains: search, mode: 'insensitive' } },
         ],
       };
-      if (where.companyId) {
-        where.AND = [{ companyId: where.companyId }, searchFilter];
+      if (where.OR || where.companyId) {
+        // Combine existing company filter with search filter
+        const companyFilter = where.OR ? { OR: where.OR } : { companyId: where.companyId };
+        where.AND = [companyFilter, searchFilter];
         delete where.companyId;
+        delete where.OR;
       } else {
         Object.assign(where, searchFilter);
       }
@@ -658,7 +666,7 @@ export class AdminService {
 
     // Create UserCompany membership
     if (dto.companyId) {
-      await (this.prisma as any).userCompany.create({
+      await this.prisma.userCompany.create({
         data: { userId: user.id, companyId: dto.companyId, role: membershipRole },
       }).catch(e => this.logger.warn(e.message));
     }
@@ -669,7 +677,7 @@ export class AdminService {
         if (coId && coId !== dto.companyId) {
           const rbt = (dto.roleByType as any) || {};
           const role = rbt[type] === 'admin' ? 'gerente' : rbt[type] === 'chofer' ? 'chofer' : 'operario';
-          await (this.prisma as any).userCompany.create({
+          await this.prisma.userCompany.create({
             data: { userId: user.id, companyId: coId, role },
           }).catch(e => this.logger.warn(e.message));
         }
@@ -756,7 +764,7 @@ export class AdminService {
     // Sync memberships if companyId changed
     if (dto.companyId !== undefined && dto.companyId) {
       const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
-      await (this.prisma as any).userCompany.upsert({
+      await this.prisma.userCompany.upsert({
         where: { userId_companyId: { userId, companyId: dto.companyId } },
         create: { userId, companyId: dto.companyId, role: membershipRole },
         update: { active: true, role: membershipRole },
@@ -769,7 +777,7 @@ export class AdminService {
         if (coId && typeof coId === 'string') {
           const rbt = (dto.roleByType as any) || {};
           const role = rbt[type] === 'admin' ? 'gerente' : rbt[type] === 'chofer' ? 'chofer' : 'operario';
-          await (this.prisma as any).userCompany.upsert({
+          await this.prisma.userCompany.upsert({
             where: { userId_companyId: { userId, companyId: coId } },
             create: { userId, companyId: coId, role },
             update: { active: true, role },
@@ -791,7 +799,7 @@ export class AdminService {
     const company = await this.prisma.company.findUnique({ where: { id: companyId }, select: { id: true, name: true, type: true } });
     if (!company) throw new NotFoundException('Empresa no encontrada');
 
-    const membership = await (this.prisma as any).userCompany.upsert({
+    const membership = await this.prisma.userCompany.upsert({
       where: { userId_companyId: { userId, companyId } },
       create: { userId, companyId, role, active: true },
       update: { role, active: true },
@@ -817,7 +825,7 @@ export class AdminService {
       const myIds = await this.getUserCompanyIds(resolvedCaller);
       if (!myIds.includes(companyId)) throw new ForbiddenException('No podés editar esta membresía');
     }
-    return (this.prisma as any).userCompany.update({
+    return this.prisma.userCompany.update({
       where: { userId_companyId: { userId, companyId } },
       data: { role },
     });
@@ -829,7 +837,7 @@ export class AdminService {
       const myIds = await this.getUserCompanyIds(resolvedCaller);
       if (!myIds.includes(companyId)) throw new ForbiddenException('No podés quitar esta empresa');
     }
-    await (this.prisma as any).userCompany.updateMany({
+    await this.prisma.userCompany.updateMany({
       where: { userId, companyId },
       data: { active: false },
     });
@@ -908,12 +916,16 @@ export class AdminService {
         _count: { select: { lots: true } },
       },
       orderBy: { name: 'asc' },
+      take: 500,
     });
   }
 
   async createField(companyId: string, dto: any) {
     if (!dto.name?.trim()) throw new BadRequestException('Nombre requerido');
     if (dto.lat == null || dto.lng == null) throw new BadRequestException('Ubicación requerida');
+    if (typeof dto.lat !== 'number' || typeof dto.lng !== 'number') throw new BadRequestException('Coordenadas deben ser numéricas');
+    // Strip dangerous fields that could override ownership
+    delete dto.id; delete dto.companyId; delete dto.active;
     return this.prisma.field.create({
       data: {
         name: dto.name.trim(),
@@ -958,12 +970,16 @@ export class AdminService {
     return this.prisma.lot.findMany({
       where: { fieldId, active: true },
       orderBy: { name: 'asc' },
+      take: 500,
     });
   }
 
   async createLot(fieldId: string, companyId: string, dto: any) {
     if (!dto.name?.trim()) throw new BadRequestException('Nombre requerido');
     if (dto.lat == null || dto.lng == null) throw new BadRequestException('Ubicación requerida');
+    if (typeof dto.lat !== 'number' || typeof dto.lng !== 'number') throw new BadRequestException('Coordenadas deben ser numéricas');
+    // Strip dangerous fields that could override ownership
+    delete dto.id; delete dto.companyId; delete dto.active;
     return this.prisma.lot.create({
       data: {
         name: dto.name.trim(),
@@ -1016,6 +1032,7 @@ export class AdminService {
       where: { companyId, active: true },
       include: { assignedUser: { select: { id: true, name: true } } },
       orderBy: { plate: 'asc' },
+      take: 500,
     });
   }
 
@@ -1027,7 +1044,7 @@ export class AdminService {
     if (existing && !existing.active && existing.companyId === companyId) {
       return this.prisma.truck.update({ where: { id: existing.id }, data: { active: true, brand: dto.brand || existing.brand, model: dto.model || existing.model } });
     }
-    if (existing) throw new BadRequestException(`La patente ${plate} ya está registrada`);
+    if (existing) throw new BadRequestException('Esta patente está registrada en otra empresa. Contacte al administrador.');
     return this.prisma.truck.create({
       data: {
         plate,
@@ -1095,10 +1112,10 @@ export class AdminService {
       if (existing) { results.errors.push({ row: i + 1, name, error: 'Empresa ya existe' }); continue; }
 
       try {
-        await (this.prisma.company as any).create({
+        await this.prisma.company.create({
           data: {
             name,
-            type,
+            type: type as CompanyType,
             types: [type],
             email: r.email?.toString().trim() || null,
             phone: r.phone?.toString().trim() || null,
@@ -1165,7 +1182,7 @@ export class AdminService {
           },
         });
 
-        await (this.prisma as any).userCompany.create({
+        await this.prisma.userCompany.create({
           data: { userId: user.id, companyId: company.id, role: roleDef.membershipRole },
         }).catch(() => {});
 

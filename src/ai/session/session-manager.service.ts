@@ -13,6 +13,11 @@ import { MAX_HISTORY } from '../ai.constants';
 export class SessionManagerService {
   private _chatSideEffects: Map<string, Record<string, any>> = new Map();
 
+  /** Get the underlying side-effects map (for direct access by AiService) */
+  getChatSideEffectsMap(): Map<string, Record<string, any>> {
+    return this._chatSideEffects;
+  }
+
   // ======================== SIDE-EFFECTS ========================
 
   getSideEffects(sessionId: string): Record<string, any> {
