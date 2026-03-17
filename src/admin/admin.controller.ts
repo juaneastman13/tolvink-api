@@ -635,7 +635,10 @@ export class AdminService {
     // Use pre-hashed password (internal callers like AI) or hash from plaintext
     const hash = preHashedPassword || await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
-    const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+    // Derive primary membership role from roleByType (supports chofer), then fall back to dto.role
+    const rbtObj = (dto.roleByType as any) || {};
+    const firstRbtRole = Object.values(rbtObj).find(Boolean) as string | undefined;
+    const membershipRole = firstRbtRole === 'chofer' ? 'chofer' : firstRbtRole === 'admin' ? 'gerente' : dto.role === 'admin' ? 'gerente' : 'operario';
 
     let user: any;
     try {
