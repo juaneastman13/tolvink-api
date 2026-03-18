@@ -1800,7 +1800,24 @@ export class FreightsService {
     if (user) {
       const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
       if (!callerCompanies.includes(companyId)) {
-        throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
+        // Allow plant users with a business relationship (active freight assignment with this company)
+        const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+        const hasRelation = await this.prisma.freightAssignment.findFirst({
+          where: {
+            transportCompanyId: companyId,
+            freight: {
+              OR: [
+                { destCompanyId: { in: callerCompanies } },
+                { originCompanyId: { in: callerCompanies } },
+              ],
+              status: { notIn: ['canceled'] },
+            },
+            createdAt: { gte: cutoff },
+          },
+        });
+        if (!hasRelation) {
+          throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
+        }
       }
     }
 
