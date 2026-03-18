@@ -165,7 +165,7 @@ export class FreightsController {
 
   @Post(':id/start')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'chofer')
   @ApiOperation({ summary: 'Iniciar viaje' })
   start(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.start(id, user);
@@ -173,7 +173,7 @@ export class FreightsController {
 
   @Post(':id/confirm-loaded')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'chofer')
   @ApiOperation({ summary: 'Confirmar carga' })
   confirmLoaded(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmLoadedDto, @CurrentUser() user: any) {
     return this.service.confirmLoaded(id, user, dto.loadedTons);
@@ -181,7 +181,7 @@ export class FreightsController {
 
   @Post(':id/confirm-finished')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant')
+  @Roles('transporter', 'plant', 'chofer')
   @ApiOperation({ summary: 'Confirmar finalización (requiere ambos: transportista + planta)' })
   confirmFinished(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.confirmFinished(id, user);
@@ -189,7 +189,7 @@ export class FreightsController {
 
   @Post(':id/finish')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant')
+  @Roles('transporter', 'plant', 'chofer')
   @ApiOperation({ summary: 'Finalizar viaje — redirige a confirm-finished (cross-confirmation)' })
   finish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.confirmFinished(id, user);
@@ -282,7 +282,7 @@ export class FreightsController {
 
   @Post(':id/assignments/:aId/start')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'chofer')
   @ApiOperation({ summary: 'Iniciar viaje de un camión específico' })
   startTrip(
     @Param('id', ParseUUIDPipe) id: string,
@@ -294,7 +294,7 @@ export class FreightsController {
 
   @Post(':id/assignments/:aId/confirm-loaded')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'producer')
+  @Roles('transporter', 'producer', 'chofer')
   @ApiOperation({ summary: 'Confirmar carga de un camión específico' })
   confirmTripLoaded(
     @Param('id', ParseUUIDPipe) id: string,
@@ -307,7 +307,7 @@ export class FreightsController {
 
   @Post(':id/assignments/:aId/confirm-finished')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant')
+  @Roles('transporter', 'plant', 'chofer')
   @ApiOperation({ summary: 'Confirmar entrega de un camión específico' })
   confirmTripFinished(
     @Param('id', ParseUUIDPipe) id: string,
