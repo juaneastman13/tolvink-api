@@ -24,7 +24,9 @@ export class FreightsService {
 
   private _broadcastConsecutiveErrors = 0;
 
-  /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs */
+  /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs.
+   *  TODO: Add AI conversation cache invalidation after assignment changes (assign, assignMulti, updateAssignment, respond)
+   *  to prevent stale context in AI responses. */
   private broadcastAndInvalidate(freightId: string, data: any, excludeUserId?: string) {
     this.invalidateStatusCounts();
     this.refreshParticipantIds(freightId).catch(e => this.logger.error('refreshParticipantIds failed', e.message));
@@ -32,11 +34,20 @@ export class FreightsService {
       .then(() => { this._broadcastConsecutiveErrors = 0; })
       .catch(e => {
         this._broadcastConsecutiveErrors++;
-        if (this._broadcastConsecutiveErrors >= 5) {
-          this.logger.error(`broadcastAndInvalidate: ${this._broadcastConsecutiveErrors} consecutive failures — ${e.message}`);
-        } else {
-          this.logger.warn(`Async side-effect failed: ${e.message}`);
-        }
+        this.logger.warn(`SSE broadcast failed (attempt 1) for freight ${freightId}: ${e.message}`);
+        // Retry once after a short delay
+        setTimeout(() => {
+          this.sse.broadcastFreightUpdate(freightId, data, excludeUserId)
+            .then(() => { this._broadcastConsecutiveErrors = 0; })
+            .catch(retryErr => {
+              this._broadcastConsecutiveErrors++;
+              if (this._broadcastConsecutiveErrors >= 5) {
+                this.logger.error(`broadcastAndInvalidate: ${this._broadcastConsecutiveErrors} consecutive failures — ${retryErr.message}`);
+              } else {
+                this.logger.warn(`SSE broadcast retry failed for freight ${freightId}: ${retryErr.message}`);
+              }
+            });
+        }, 500);
       });
   }
 
@@ -362,9 +373,10 @@ export class FreightsService {
           } else {
             newStatus = FreightStatus.accepted; // Flow D
           }
+          const assignedCount = await tx.freightAssignment.count({ where: { freightId: f.id, status: { in: ['active', 'accepted'] } } });
           await tx.freight.update({
             where: { id: f.id },
-            data: { status: newStatus, assignedTruckCount: 1 } as any,
+            data: { status: newStatus, assignedTruckCount: assignedCount } as any,
           });
         }
       }
@@ -1368,17 +1380,19 @@ export class FreightsService {
       }
 
       // Upgrade all active assignments that have trucks to accepted (producer own fleet Flow C)
-      for (const a of freight.assignments) {
-        if ((a as any).status === AssignmentStatus.active && (a as any).truckId) {
-          await (tx.freightAssignment as any).update({
-            where: { id: (a as any).id },
-            data: {
-              status: AssignmentStatus.accepted,
-              ...((a as any).tripStatus === 'pending' ? { tripStatus: 'accepted' } : {}),
-            },
-          });
-        }
+      // Use updateMany with status filter for optimistic locking (prevents race conditions)
+      const upgradeResult = await tx.freightAssignment.updateMany({
+        where: { freightId: freight.id, status: AssignmentStatus.active, truckId: { not: null } },
+        data: { status: AssignmentStatus.accepted },
+      });
+      if (upgradeResult.count === 0 && freight.assignments.some((a: any) => a.status === 'active' && a.truckId)) {
+        this.logger.warn(`No active assignments to authorize for freight ${freight.id} — possible race condition`);
       }
+      // Also upgrade tripStatus for pending trips
+      await tx.freightAssignment.updateMany({
+        where: { freightId: freight.id, status: AssignmentStatus.accepted, tripStatus: 'pending' },
+        data: { tripStatus: 'accepted' },
+      });
 
       // Determine final freight status based on whether all assignments have trucks
       const allHaveTrucks = freight.assignments.every((a: any) => a.truckId);
@@ -1455,7 +1469,7 @@ export class FreightsService {
     return await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
         where: { id: freightId },
-        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
+        include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } }, items: { select: { tons: true } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       // Compute actual assigned count from active assignments (not stale field)
@@ -1486,6 +1500,12 @@ export class FreightsService {
           const parsedLoadDate = new Date(dto.loadDate);
           if (isNaN(parsedLoadDate.getTime())) {
             throw new BadRequestException('Fecha de carga inválida');
+          }
+          // Reasonable date range check: not more than 1 year in the future
+          const maxDate = new Date();
+          maxDate.setFullYear(maxDate.getFullYear() + 1);
+          if (parsedLoadDate > maxDate) {
+            throw new BadRequestException('Fecha demasiado lejana (máximo 1 año)');
           }
           data.loadDate = parsedLoadDate;
           data.scheduledAt = new Date(`${dto.loadDate}T${dto.loadTime || freight.loadTime || '08:00'}:00`);
@@ -1579,6 +1599,14 @@ export class FreightsService {
               data: { status: AssignmentStatus.canceled, reason: 'Cambio a flota propia' },
             });
           }
+          // Capacity warning (non-blocking — business may assign undersized trucks)
+          if (truck.capacity && freight.items?.length > 0) {
+            const requiredTons = freight.items.reduce((s: number, i: any) => s + (Number(i.tons) || 0), 0);
+            const truckCapacity = parseFloat(truck.capacity) || 0;
+            if (truckCapacity > 0 && requiredTons > truckCapacity) {
+              this.logger.warn(`Truck ${truck.plate} capacity ${truckCapacity}t < required ${requiredTons}t for freight ${freight.code}`);
+            }
+          }
           // Create new assignment with own fleet truck
           await tx.freightAssignment.create({
             data: {
@@ -1593,7 +1621,9 @@ export class FreightsService {
             } as any,
           });
           data.status = FreightStatus.accepted;
-          data.assignedTruckCount = 1;
+          // Recompute from DB to avoid stale count
+          const ownFleetCount = await tx.freightAssignment.count({ where: { freightId, status: { in: ['active', 'accepted'] } } });
+          data.assignedTruckCount = ownFleetCount;
         }
       }
 
@@ -1602,7 +1632,7 @@ export class FreightsService {
         // Try Plant table first, then Company table (producers select companies as destinations)
         let resolvedDest: { plantId: string | null; companyId: string; name: string; lat: any; lng: any };
         const plant = await tx.plant.findFirst({
-          where: { id: dto.destPlantId, active: true },
+          where: { id: dto.destPlantId, active: true, company: { active: true } },
           include: { company: { select: { id: true, name: true } } },
         });
         if (plant) {
@@ -2145,11 +2175,12 @@ export class FreightsService {
           }
         }
 
-        const newCount = existingCount + dto.trucks.length;
+        // Recompute count from DB to avoid race conditions with concurrent assignments
+        const activeCount = await tx.freightAssignment.count({ where: { freightId, status: { in: ['active', 'accepted'] } } });
         const newStatus = await this.deriveFreightStatus(tx, freightId);
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: newStatus, assignedTruckCount: newCount, isMultiTruck: true } as any,
+          data: { status: newStatus, assignedTruckCount: activeCount, isMultiTruck: true } as any,
         });
 
         await tx.auditLog.create({
@@ -2160,7 +2191,7 @@ export class FreightsService {
             fromValue: freight.status,
             toValue: newStatus,
             userId: user.sub,
-            metadata: { trucksAssigned: dto.trucks.length, totalAssigned: newCount },
+            metadata: { trucksAssigned: dto.trucks.length, totalAssigned: activeCount },
           },
         });
 
@@ -2275,7 +2306,7 @@ export class FreightsService {
     return result;
   }
 
-  async updateAssignment(freightId: string, assignmentId: string, dto: any, user: any) {
+  async updateAssignment(freightId: string, assignmentId: string, dto: { transportCompanyId?: string; truckId?: string | null; driverId?: string | null; tons?: number }, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
     const isProducer = await this.hasCompanyType(user, 'producer');
@@ -2558,9 +2589,14 @@ export class FreightsService {
   async startTrip(freightId: string, assignmentId: string, user: any) {
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
-        where: { id: assignmentId, freightId, driverId: user.sub },
+        where: { id: assignmentId, freightId, driverId: user.sub, status: { in: ['active', 'accepted'] } },
       });
       if (!a) throw new ForbiddenException('No sos el chofer asignado');
+      // Verify driver's company membership matches the assignment's transport company
+      const allIds = await this.resolveAllCompanyIds(user);
+      if (!allIds.includes(a.transportCompanyId)) {
+        throw new ForbiddenException('Driver not authorized for this transport company');
+      }
     }
 
     const { result, freight, assignment } = await this.prisma.$transaction(async (tx) => {

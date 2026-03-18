@@ -371,28 +371,6 @@ export class AssignmentSuggestionsService {
     return this.buildSuggestion(c, freight, geoAvailable, requiredTons, availResult, proxResult, histResult, routeResult, capResult);
   }
 
-  /** @deprecated Use scoreCandidateBatched */
-  private async scoreCandidate(
-    c: Candidate,
-    freight: any,
-    originLat: number | null,
-    originLng: number | null,
-    geoAvailable: boolean,
-    requiredTons: number,
-    ninetyDaysAgo: Date,
-  ): Promise<Suggestion> {
-    // Run all scoring factors in parallel
-    const [availResult, proxResult, histResult, routeResult] = await Promise.all([
-      this.scoreAvailability(c, freight),
-      this.scoreProximity(c, originLat, originLng),
-      this.scoreHistory(c.companyId, ninetyDaysAgo),
-      this.scoreRouteAffinity(c.companyId, freight, ninetyDaysAgo),
-    ]);
-    const capResult = this.scoreCapacity(c, requiredTons);
-
-    return this.buildSuggestion(c, freight, geoAvailable, requiredTons, availResult, proxResult, histResult, routeResult, capResult);
-  }
-
   private buildSuggestion(
     c: Candidate,
     freight: any,
@@ -489,56 +467,6 @@ export class AssignmentSuggestionsService {
     };
   }
 
-  // ── FACTOR 1: Availability (0-30 pts) ─────────────────────────
-  private async scoreAvailability(c: Candidate, freight: any): Promise<{ score: number; status: 'free' | 'busy_other_hours' | 'busy_now' }> {
-    const loadDate = freight.loadDate ? new Date(freight.loadDate) : null;
-    if (!loadDate) return { score: 30, status: 'free' };
-
-    const dayStart = new Date(loadDate);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(loadDate);
-    dayEnd.setHours(23, 59, 59, 999);
-
-    const where: any = {
-      tripStatus: { in: ['accepted', 'in_progress', 'loaded'] },
-      freight: { loadDate: { gte: dayStart, lte: dayEnd } },
-    };
-
-    if (c.truckId) {
-      where.truckId = c.truckId;
-    } else {
-      where.transportCompanyId = c.companyId;
-    }
-
-    const conflicts = await this.prisma.freightAssignment.findMany({
-      where,
-      select: {
-        freight: { select: { loadTime: true } },
-      },
-    });
-
-    if (conflicts.length === 0) return { score: 30, status: 'free' };
-
-    // Check time overlap
-    if (freight.loadTime) {
-      const freightHour = parseInt(freight.loadTime.split(':')[0], 10);
-      const hasOverlap = conflicts.some(cf => {
-        if (!cf.freight.loadTime) return true;
-        const conflictHour = parseInt(cf.freight.loadTime.split(':')[0], 10);
-        return Math.abs(freightHour - conflictHour) < 4;
-      });
-      if (!hasOverlap) return { score: 20, status: 'busy_other_hours' };
-    }
-
-    // For companies without trucks — use count threshold
-    if (!c.truckId) {
-      if (conflicts.length < 3) return { score: 30, status: 'free' };
-      if (conflicts.length < 6) return { score: 20, status: 'busy_other_hours' };
-    }
-
-    return { score: 5, status: 'busy_now' };
-  }
-
   // ── FACTOR 2: Proximity (0-25 pts) ────────────────────────────
   private async scoreProximity(
     c: Candidate,
@@ -603,55 +531,6 @@ export class AssignmentSuggestionsService {
     return 2;
   }
 
-  // ── FACTOR 3: History & Reliability (0-25 pts) ────────────────
-  private async scoreHistory(companyId: string, since: Date): Promise<{
-    score: number; totalTrips: number; completedTrips: number; rejectedTrips: number; completionRate: number;
-  }> {
-    const assignments = await this.prisma.freightAssignment.findMany({
-      where: { transportCompanyId: companyId, createdAt: { gte: since } },
-      select: { tripStatus: true, status: true },
-    });
-
-    const totalTrips = assignments.length;
-    if (totalTrips === 0) return { score: 10, totalTrips: 0, completedTrips: 0, rejectedTrips: 0, completionRate: 0 };
-
-    const completedTrips = assignments.filter(a => a.tripStatus === 'finished').length;
-    const rejectedTrips = assignments.filter(a => a.status === 'rejected').length;
-    const completionRate = completedTrips / totalTrips;
-    const rejectionRate = rejectedTrips / totalTrips;
-
-    let score: number;
-    if (completionRate >= 0.9 && rejectionRate < 0.05) score = 25;
-    else if (completionRate >= 0.8) score = 20;
-    else if (completionRate >= 0.65) score = 14;
-    else score = 6;
-
-    return { score, totalTrips, completedTrips, rejectedTrips, completionRate };
-  }
-
-  // ── FACTOR 4: Route Affinity (0-10 pts) ───────────────────────
-  private async scoreRouteAffinity(companyId: string, freight: any, since: Date): Promise<{ score: number; routeTrips: number }> {
-    const routeTrips = await this.prisma.freightAssignment.count({
-      where: {
-        transportCompanyId: companyId,
-        createdAt: { gte: since },
-        tripStatus: 'finished',
-        freight: {
-          originCompanyId: freight.originCompanyId,
-          ...(freight.destCompanyId ? { destCompanyId: freight.destCompanyId } : {}),
-        },
-      },
-    });
-
-    let score: number;
-    if (routeTrips >= 5) score = 10;
-    else if (routeTrips >= 3) score = 7;
-    else if (routeTrips >= 1) score = 4;
-    else score = 0;
-
-    return { score, routeTrips };
-  }
-
   // ── FACTOR 5: Truck Capacity (0-10 pts) ───────────────────────
   private scoreCapacity(c: Candidate, requiredTons: number): { score: number } {
     if (!c.hasRegisteredTrucks || c.capacity == null) return { score: 5 };
@@ -675,10 +554,10 @@ export class AssignmentSuggestionsService {
     if (relevant.length === 0) return { score: 30, status: 'free' };
 
     if (freight.loadTime) {
-      const freightHour = parseInt(freight.loadTime.split(':')[0], 10);
+      const freightHour = parseInt(freight.loadTime?.split(':')[0] ?? '8', 10);
       const hasOverlap = relevant.some(cf => {
         if (!cf.freight.loadTime) return true;
-        const conflictHour = parseInt(cf.freight.loadTime.split(':')[0], 10);
+        const conflictHour = parseInt(cf.freight.loadTime?.split(':')[0] ?? '8', 10);
         return Math.abs(freightHour - conflictHour) < 4;
       });
       if (!hasOverlap) return { score: 20, status: 'busy_other_hours' };
