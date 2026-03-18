@@ -677,16 +677,23 @@ export class FreightsService {
           if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
           assignData.driverId = driverMembership.user.id;
           assignData.driverName = driverMembership.user.name;
-          // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
-          const lockRows: any[] = await tx.$queryRaw`
-            SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+          // Lock driver's active assignments to prevent concurrent duplicate queuePositions
+          await tx.$queryRaw`
+            SELECT fa.id
             FROM "freight_assignments" fa
             JOIN "freights" f ON f.id = fa."freight_id"
             WHERE fa."driver_id"::text = ${dto.driverId}
               AND fa.status IN ('active','accepted')
               AND f.status IN ('assigned','accepted','in_progress','loaded')
             FOR UPDATE OF fa`;
-          assignData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
+          const maxRows: any[] = await tx.$queryRaw`
+            SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+            FROM "freight_assignments" fa
+            JOIN "freights" f ON f.id = fa."freight_id"
+            WHERE fa."driver_id"::text = ${dto.driverId}
+              AND fa.status IN ('active','accepted')
+              AND f.status IN ('assigned','accepted','in_progress','loaded')`;
+          assignData.queuePosition = (maxRows[0]?.maxPos ?? 0) + 1;
         }
         const assignment = await tx.freightAssignment.create({ data: assignData });
 
@@ -2106,16 +2113,23 @@ export class FreightsService {
             if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa');
             assignData.driverId = dm.user.id;
             assignData.driverName = dm.user.name;
-            // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
-            const lockRows: any[] = await tx.$queryRaw`
-              SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+            // Lock driver's active assignments to prevent concurrent duplicate queuePositions
+            await tx.$queryRaw`
+              SELECT fa.id
               FROM "freight_assignments" fa
               JOIN "freights" f ON f.id = fa."freight_id"
               WHERE fa."driver_id"::text = ${truck.driverId}
                 AND fa.status IN ('active','accepted')
                 AND f.status IN ('assigned','accepted','in_progress','loaded')
               FOR UPDATE OF fa`;
-            assignData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
+            const maxRows: any[] = await tx.$queryRaw`
+              SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+              FROM "freight_assignments" fa
+              JOIN "freights" f ON f.id = fa."freight_id"
+              WHERE fa."driver_id"::text = ${truck.driverId}
+                AND fa.status IN ('active','accepted')
+                AND f.status IN ('assigned','accepted','in_progress','loaded')`;
+            assignData.queuePosition = (maxRows[0]?.maxPos ?? 0) + 1;
           }
 
           await tx.freightAssignment.create({ data: assignData });
@@ -2511,16 +2525,23 @@ export class FreightsService {
         if (!dm) throw new BadRequestException('Chofer no encontrado');
         acceptData.driverId = dm.user.id;
         acceptData.driverName = dm.user.name;
-        // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
-        const lockRows: any[] = await tx.$queryRaw`
-          SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+        // Lock driver's active assignments to prevent concurrent duplicate queuePositions
+        await tx.$queryRaw`
+          SELECT fa.id
           FROM "freight_assignments" fa
           JOIN "freights" f ON f.id = fa."freight_id"
           WHERE fa."driver_id"::text = ${dto.driverId}
             AND fa.status IN ('active','accepted')
             AND f.status IN ('assigned','accepted','in_progress','loaded')
           FOR UPDATE OF fa`;
-        acceptData.queuePosition = (lockRows[0]?.maxPos ?? 0) + 1;
+        const maxRows: any[] = await tx.$queryRaw`
+          SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
+          FROM "freight_assignments" fa
+          JOIN "freights" f ON f.id = fa."freight_id"
+          WHERE fa."driver_id"::text = ${dto.driverId}
+            AND fa.status IN ('active','accepted')
+            AND f.status IN ('assigned','accepted','in_progress','loaded')`;
+        acceptData.queuePosition = (maxRows[0]?.maxPos ?? 0) + 1;
       }
 
       await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: acceptData });
