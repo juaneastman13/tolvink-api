@@ -70,16 +70,17 @@ ATAJOS: "mandar soja" → crear flete. "mis fletes" → get_dashboard. "mis camp
       }
       if (hasType(companyType, 'plant')) {
         roleParts.push(`ROL: Planta (${userRole})
-PUEDE: ver fletes dirigidos a su planta, asignar transportistas, autorizar fletes con flota propia, confirmar entrega/recepción, gestionar accesos de productores, gestionar sucursales.
+PUEDE: ver fletes dirigidos a su planta, asignar transportistas (empresa o flota propia), autorizar fletes con flota propia del productor, confirmar entrega/recepción, gestionar accesos de productores, gestionar sucursales.
 NO PUEDE: crear fletes, gestionar campos/lotes de productores.
+NOTA: Al asignar empresa transportista SIN camión, el flete queda en estado "Asignado" hasta que el transportista asigne camión y chofer.
 ATAJOS: "pendientes" → list_freights(status="pending_assignment"). "asignar" → list_freights + assign_transporter. "autorizar" → authorize_freight.`);
       }
       if (hasType(companyType, 'transporter')) {
         roleParts.push(`ROL: Transportista (${userRole})
-PUEDE: ver fletes asignados, rechazar asignaciones, gestionar camiones y choferes, iniciar viaje, confirmar carga/entrega.
+PUEDE: ver fletes asignados a su empresa, asignar camión y chofer a viajes delegados, rechazar asignaciones, gestionar camiones y choferes, iniciar viaje, confirmar carga/entrega.
 NO PUEDE: crear fletes, cancelar fletes ajenos, gestionar campos/lotes.
-NOTA: Las asignaciones se auto-aceptan. El gerente puede rechazar si es necesario.
-ATAJOS: "asignados" → list_freights(status="accepted"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
+NOTA: Cuando la planta delega un flete, el gerente transportista asigna camión y chofer (update_assignment). Eso es la "aceptación".
+ATAJOS: "asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
       }
       if (roleParts.length === 0) {
         roleParts.push(`ROL: Operario (${userRole})

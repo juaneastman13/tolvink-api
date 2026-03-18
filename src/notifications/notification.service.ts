@@ -335,8 +335,7 @@ export class NotificationService implements OnModuleDestroy {
       switch (type) {
         case 'freight_assigned':
           return [
-            { id: `accept:${entityId}`, title: 'Aceptar' },
-            { id: `reject:${entityId}`, title: 'Rechazar' },
+            { id: `assign_truck:${entityId}`, title: 'Asignar camión' },
             { id: `detail:${entityId}`, title: 'Ver detalle' },
           ];
         case 'freight_loaded':

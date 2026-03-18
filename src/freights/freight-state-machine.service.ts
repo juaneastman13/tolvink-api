@@ -36,6 +36,7 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
   ],
   pending_assignment: [
     { to: FreightStatus.assigned, requiredRole: ['plant'] },
+    { to: FreightStatus.accepted, requiredRole: ['producer', 'plant'] }, // Flow D: producer own fleet direct, or plant own fleet
     { to: FreightStatus.canceled, requiresReason: true },
   ],
   assigned: [

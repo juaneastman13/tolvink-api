@@ -46,6 +46,7 @@ export class IntentRouterService {
     'confirm_finished', 'start_trip', 'confirm_trip_loaded',
     'confirm_trip_finished', 'list_trucks', 'list_drivers',
     'deactivate_truck', 'deactivate_driver',
+    'update_assignment', 'assign_truck_to_freight', 'assign_truck_to_trip',
   ]);
 
   private static readonly TRACKING_TOOLS = new Set([
