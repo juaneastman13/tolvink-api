@@ -16,10 +16,10 @@ export class IntentRouterService {
   ]);
 
   private static readonly CHOFER_TOOLS = new Set([
-    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
+    'start_freight', 'confirm_loaded',
     'confirm_finished', 'get_freight_detail', 'list_freights', 'generate_tracking_link',
     'share_live_location', 'view_live_locations', 'request_location', 'confirm_action',
-    'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
+    'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
     'update_profile', 'ocr_analyze',
   ]);
 
@@ -42,8 +42,8 @@ export class IntentRouterService {
   ]);
 
   private static readonly TRANSPORTER_TOOLS = new Set([
-    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded',
-    'confirm_finished', 'respond_trip', 'start_trip', 'confirm_trip_loaded',
+    'reject_freight', 'start_freight', 'confirm_loaded',
+    'confirm_finished', 'start_trip', 'confirm_trip_loaded',
     'confirm_trip_finished', 'list_trucks', 'list_drivers',
     'deactivate_truck', 'deactivate_driver',
   ]);

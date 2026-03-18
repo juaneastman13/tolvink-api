@@ -55,10 +55,11 @@ export class PromptBuilderService {
     const roleParts: string[] = [];
     if (isChofer) {
       roleParts.push(`ROL: Chofer
-PUEDE: ver sus fletes asignados, aceptar/rechazar asignaciones, iniciar viaje, confirmar carga, confirmar entrega, consultar estado, compartir ubicación, adjuntar documentos.
+PUEDE: ver sus fletes asignados, iniciar viaje, confirmar carga, confirmar entrega, consultar estado, compartir ubicación, adjuntar documentos.
 NO PUEDE: crear fletes, cancelar fletes, asignar transportistas, gestionar campos/lotes/camiones/usuarios, ver dashboard de empresa.
+NOTA: Las asignaciones se auto-aceptan. La primera acción del chofer es INICIAR VIAJE.
 ATAJOS: "mis fletes" → list_freights(status="accepted"). "ya cargué" → confirm_loaded. "ya llegué" → confirm_finished. "salí" → start_freight.
-MULTI-CAMIÓN: Usar respond_trip, start_trip, confirm_trip_loaded, confirm_trip_finished para viajes individuales.
+MULTI-CAMIÓN: Usar start_trip, confirm_trip_loaded, confirm_trip_finished para viajes individuales.
 PROACTIVO: Si escribe sin contexto, mostrar sus fletes asignados/activos con list_freights ANTES de pedir código.`);
     } else {
       if (hasType(companyType, 'producer')) {
@@ -75,9 +76,10 @@ ATAJOS: "pendientes" → list_freights(status="pending_assignment"). "asignar" �
       }
       if (hasType(companyType, 'transporter')) {
         roleParts.push(`ROL: Transportista (${userRole})
-PUEDE: ver fletes asignados, aceptar/rechazar, gestionar camiones y choferes, confirmar carga/entrega.
+PUEDE: ver fletes asignados, rechazar asignaciones, gestionar camiones y choferes, iniciar viaje, confirmar carga/entrega.
 NO PUEDE: crear fletes, cancelar fletes ajenos, gestionar campos/lotes.
-ATAJOS: "asignados" → list_freights(status="assigned"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
+NOTA: Las asignaciones se auto-aceptan. El gerente puede rechazar si es necesario.
+ATAJOS: "asignados" → list_freights(status="accepted"). "mis camiones" → list_trucks. "mis choferes" → list_drivers.`);
       }
       if (roleParts.length === 0) {
         roleParts.push(`ROL: Operario (${userRole})
@@ -108,7 +110,7 @@ GRANOS: Soja, Maíz, Trigo, Girasol, Sorgo, Cebada, Otros.
 BÚSQUEDA PROACTIVA:
 - NUNCA pedir código de flete si podés buscar. Código directo → get_freight_detail. Sin código → list_freights con filtros.
 - Consultas vagas ("cómo va todo", "novedades") → get_dashboard.
-- "el flete de soja" → list_freights(grain="Soja"). "quiero rechazar" → list_freights(status="assigned").
+- "el flete de soja" → list_freights(grain="Soja"). "quiero rechazar" → list_freights(status="accepted").
 - Pedir código solo si hay ambigüedad DESPUÉS de buscar.
 
 CONTEXTO:

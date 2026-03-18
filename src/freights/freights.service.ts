@@ -656,11 +656,10 @@ export class FreightsService {
           data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
         });
 
-        const isOwnFleet = dto.transportCompanyId === freight.originCompanyId || dto.transportCompanyId === freight.destCompanyId;
         const assignData: any = {
           freightId,
           transportCompanyId: dto.transportCompanyId,
-          status: isOwnFleet ? AssignmentStatus.accepted : AssignmentStatus.active,
+          status: AssignmentStatus.accepted,
           assignedById: user.sub,
         };
         if (dto.truckId) {
@@ -700,7 +699,7 @@ export class FreightsService {
 
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: isOwnFleet ? FreightStatus.accepted : FreightStatus.assigned },
+          data: { status: FreightStatus.accepted },
         });
 
         if (freight.conversation?.id) {
@@ -742,7 +741,7 @@ export class FreightsService {
       throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    // Notify all participants about assignment (transporter gets Aceptar/Rechazar buttons)
+    // Notify all participants about assignment (auto-accepted)
     this.notifyAllParticipants(
       result.freight, [{ transportCompanyId: dto.transportCompanyId }],
       NotificationType.freight_assigned,
@@ -763,7 +762,7 @@ export class FreightsService {
     }
 
     // SSE (also refreshes participantCompanyIds)
-    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub);
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'accepted' }, user.sub);
 
     return result.updated;
   }
@@ -771,6 +770,13 @@ export class FreightsService {
   // ======================== RESPOND (accept/reject) ===================
 
   async respond(freightId: string, dto: RespondAssignmentDto, user: any) {
+    // Auto-accept: assignments are now auto-accepted on creation. Accept is a no-op.
+    if (dto.action === 'accepted') {
+      const freight = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { id: true, status: true } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      return freight;
+    }
+
     // Chofer can only respond to their own assigned freights
     if (user.role === 'chofer') {
       await this.assertDriverAccess(freightId, user.sub);
@@ -2091,14 +2097,13 @@ export class FreightsService {
           }
 
           tripNumber++;
-          const isTruckOwnFleet = truck.transportCompanyId === freight.originCompanyId || truck.transportCompanyId === freight.destCompanyId;
           const assignData: any = {
             freightId,
             transportCompanyId: truck.transportCompanyId,
-            status: isTruckOwnFleet ? AssignmentStatus.accepted : AssignmentStatus.active,
+            status: AssignmentStatus.accepted,
             assignedById: user.sub,
             tripNumber,
-            tripStatus: isTruckOwnFleet ? 'accepted' : 'pending',
+            tripStatus: 'accepted',
           };
 
           if (truck.tons) assignData.tons = truck.tons;
@@ -2174,7 +2179,7 @@ export class FreightsService {
       throw new BadRequestException('Error al asignar camiones. Intente nuevamente.');
     }
 
-    // Notify all participants about multi-truck assignment (transporters get Aceptar/Rechazar)
+    // Notify all participants about multi-truck assignment (auto-accepted)
     const assignmentsList = dto.trucks.map(t => ({ transportCompanyId: t.transportCompanyId }));
     const multiActionIds = new Set(dto.trucks.map(t => t.transportCompanyId));
     this.notifyAllParticipants(
@@ -2185,7 +2190,7 @@ export class FreightsService {
       user.sub,
       multiActionIds,
     );
-    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: 'assigned' }, user.sub);
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: result.freight.code, status: result.updated.status }, user.sub);
     return result.updated;
   }
 
@@ -2395,6 +2400,13 @@ export class FreightsService {
   }
 
   async respondTrip(freightId: string, assignmentId: string, dto: RespondTripDto, user: any) {
+    // Auto-accept: trips are now auto-accepted on creation. Accept is a no-op.
+    if (dto.action === 'accepted') {
+      const freight = await this.prisma.freight.findUnique({ where: { id: freightId }, select: { id: true, status: true } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      return freight;
+    }
+
     let _rtCallerIds: string[] | undefined;
     let _rtIsPlantOnly = false;
     let _rtIsTransporter = false;
