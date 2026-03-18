@@ -766,7 +766,9 @@ export class AdminService {
 
     // Sync memberships if companyId changed
     if (dto.companyId !== undefined && dto.companyId) {
-      const membershipRole = dto.role === 'admin' ? 'gerente' : 'operario';
+      const rbtObj = (dto.roleByType as any) || {};
+      const firstRbtRole = Object.values(rbtObj).find(Boolean) as string | undefined;
+      const membershipRole = firstRbtRole === 'chofer' ? 'chofer' : firstRbtRole === 'admin' ? 'gerente' : dto.role === 'admin' ? 'gerente' : 'operario';
       await this.prisma.userCompany.upsert({
         where: { userId_companyId: { userId, companyId: dto.companyId } },
         create: { userId, companyId: dto.companyId, role: membershipRole },
