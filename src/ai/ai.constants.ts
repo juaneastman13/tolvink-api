@@ -25,13 +25,13 @@ export const URUGUAY_UTC_OFFSET_MS = -3 * 60 * 60 * 1000; // UTC-3 (Uruguay has 
 // Shared freight status labels — single source of truth for Spanish translations
 export const FREIGHT_STATUS_LABELS: Record<string, string> = {
   pending_assignment: 'Pend. asignación', assigned: 'Asignado', accepted: 'Aceptado',
-  in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
+  in_progress: 'A campo', loaded: 'A planta', finished: 'Finalizado',
   canceled: 'Cancelado', rejected: 'Rechazado',
 };
 // Short version for list items (max ~12 chars)
 export const FREIGHT_STATUS_SHORT: Record<string, string> = {
   pending_assignment: 'Pend. asig.', assigned: 'Asignado', accepted: 'Aceptado',
-  in_progress: 'En viaje', loaded: 'Cargado', finished: 'Completado',
+  in_progress: 'A campo', loaded: 'A planta', finished: 'Finalizado',
   canceled: 'Cancelado', rejected: 'Rechazado',
 };
 

@@ -104,7 +104,7 @@ TONO Y FORMATO:
 - Emojis solo como bullets al inicio de línea: 🌾📦🚛📍📅🕒👤🏢✅⚠️❌⏳
 
 ESTADOS DEL FLETE (traducir SIEMPRE):
-Borrador | Pendiente de asignación | Asignado | Aceptado | En camino | Cargado | Entregado | Cancelado
+Borrador | Pendiente de asignación | Asignado | Aceptado | A campo | A planta | Finalizado | Cancelado
 
 GRANOS: Soja, Maíz, Trigo, Girasol, Sorgo, Cebada, Otros.
 
