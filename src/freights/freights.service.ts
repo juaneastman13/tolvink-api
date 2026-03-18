@@ -204,7 +204,7 @@ export class FreightsService {
         destLng = dto.customDestLng ?? dto.overrideDestLng ?? company.lng;
       }
     } else {
-      destName = dto.customDestName!;
+      destName = dto.customDestName || 'Ubicación personalizada';
       destLat = dto.customDestLat ?? null;
       destLng = dto.customDestLng ?? null;
       // Allow explicit destCompanyId for custom dests linked to a company
@@ -225,7 +225,7 @@ export class FreightsService {
     const participants: { companyId: string }[] = [{ companyId: producerCompanyId }];
     if (destCompanyId) participants.push({ companyId: destCompanyId });
 
-    const originName = lot ? lot.name : (dto.customOriginName || 'Origen personalizado');
+    const originName = dto.customOriginName || (lot ? lot.name : 'Ubicación personalizada');
     // Use nullish coalescing — Prisma Decimal(0) is falsy with ||, so use ?? and skip 0
     const lotLat = lot?.lat != null && Number(lot.lat) !== 0 ? lot.lat : null;
     const lotLng = lot?.lng != null && Number(lot.lng) !== 0 ? lot.lng : null;
