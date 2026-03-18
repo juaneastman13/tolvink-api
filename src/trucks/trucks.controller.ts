@@ -13,6 +13,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -63,7 +64,7 @@ export class CreateDriverDto {
 export class TrucksService {
   private readonly logger = new Logger(TrucksService.name);
 
-  constructor(private prisma: PrismaService, private wa: WhatsAppService) {}
+  constructor(private prisma: PrismaService, private wa: WhatsAppService, private companyRes: CompanyResolutionService) {}
 
   async create(dto: CreateTruckDto, user: any) {
     if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
@@ -110,40 +111,14 @@ export class TrucksService {
   }
 
   async list(user: any, companyId?: string) {
-    // Resolve all companies the user belongs to (memberships + companyId + activeCompanyId)
-    const userCompanies = await this.prisma.userCompany.findMany({
-      where: { userId: user.sub, active: true }, select: { companyId: true },
-    });
-    const myIds = [user.companyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean);
     const targetCompanyId = companyId || user.companyId;
-
     if (!targetCompanyId) return [];
 
-    // Check access
     const isAdmin = user.role === 'platform_admin' || user.isSuperAdmin;
-    const isOwnCompany = myIds.includes(targetCompanyId);
-
-    if (!isAdmin && !isOwnCompany) {
-      // Allow via business relationship (freight with this company as origin, dest, or transporter)
-      const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const hasRelation = await this.prisma.freightAssignment.findFirst({
-        where: {
-          OR: [
-            { transportCompanyId: targetCompanyId },
-            { freight: { originCompanyId: targetCompanyId } },
-            { freight: { destCompanyId: targetCompanyId } },
-          ],
-          freight: {
-            OR: [
-              { destCompanyId: { in: myIds } },
-              { originCompanyId: { in: myIds } },
-            ],
-            status: { notIn: ['canceled'] },
-          },
-          createdAt: { gte: cutoff },
-        },
-      });
-      if (!hasRelation) {
+    if (!isAdmin) {
+      // Resolve all companies: memberships + companyId + companyByType
+      const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
+      if (!callerCompanies.includes(targetCompanyId)) {
         throw new ForbiddenException('Sin acceso a la flota de esta empresa');
       }
     }
