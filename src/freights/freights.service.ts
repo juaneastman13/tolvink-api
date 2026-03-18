@@ -2246,7 +2246,8 @@ export class FreightsService {
   async updateAssignment(freightId: string, assignmentId: string, dto: any, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
-    if (!isPlant && !isTransporter) throw new ForbiddenException('Solo la planta o el transportista pueden editar asignaciones');
+    const isProducer = await this.hasCompanyType(user, 'producer');
+    if (!isPlant && !isTransporter && !isProducer) throw new ForbiddenException('Solo la planta, el transportista o el productor pueden editar asignaciones');
 
     const allIdsUa = await this.resolveAllCompanyIds(user);
 
@@ -2255,9 +2256,16 @@ export class FreightsService {
       if (!freight) throw new NotFoundException('Flete no encontrado');
 
       // Plant: must be dest company. Transporter: checked below against assignment.
-      if (isPlant && !isTransporter) {
+      if (isPlant && !isTransporter && !isProducer) {
         if (!freight.destCompanyId || !allIdsUa.includes(freight.destCompanyId)) {
           throw new ForbiddenException('Solo la planta destino puede editar asignaciones');
+        }
+      }
+
+      // Producer with own fleet: must be origin company
+      if (isProducer && !isPlant && !isTransporter) {
+        if (!freight.originCompanyId || !allIdsUa.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+          throw new ForbiddenException('Solo el productor origen con flota propia puede editar asignaciones');
         }
       }
 
@@ -2267,7 +2275,7 @@ export class FreightsService {
       if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
       // Transporter: must own the assignment
-      if (isTransporter && !isPlant) {
+      if (isTransporter && !isPlant && !isProducer) {
         if (!allIdsUa.includes(assignment.transportCompanyId)) {
           throw new ForbiddenException('No sos el transportista asignado a esta asignación');
         }

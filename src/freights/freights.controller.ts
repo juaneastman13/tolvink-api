@@ -256,8 +256,8 @@ export class FreightsController {
 
   @Patch(':id/assignments/:aId')
   @UseGuards(FreightAccessGuard)
-  @Roles('plant', 'transporter')
-  @ApiOperation({ summary: 'Editar asignación: planta edita, transportista asigna camión/chofer' })
+  @Roles('plant', 'transporter', 'producer')
+  @ApiOperation({ summary: 'Editar asignación: planta edita, transportista/productor (flota propia) asigna camión/chofer' })
   updateAssignment(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('aId', ParseUUIDPipe) aId: string,
