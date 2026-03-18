@@ -679,10 +679,10 @@ export class FreightsService {
           assignData.driverName = driverMembership.user.name;
           // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
           const lockRows: any[] = await tx.$queryRaw`
-            SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+            SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
             FROM "freight_assignments" fa
-            JOIN "freights" f ON f.id = fa."freightId"
-            WHERE fa."driverId" = ${dto.driverId}::uuid
+            JOIN "freights" f ON f.id = fa."freight_id"
+            WHERE fa."driver_id" = ${dto.driverId}::uuid
               AND fa.status IN ('active','accepted')
               AND f.status IN ('assigned','accepted','in_progress','loaded')
             FOR UPDATE OF fa`;
@@ -2108,10 +2108,10 @@ export class FreightsService {
             assignData.driverName = dm.user.name;
             // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
             const lockRows: any[] = await tx.$queryRaw`
-              SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+              SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
               FROM "freight_assignments" fa
-              JOIN "freights" f ON f.id = fa."freightId"
-              WHERE fa."driverId" = ${truck.driverId}::uuid
+              JOIN "freights" f ON f.id = fa."freight_id"
+              WHERE fa."driver_id" = ${truck.driverId}::uuid
                 AND fa.status IN ('active','accepted')
                 AND f.status IN ('assigned','accepted','in_progress','loaded')
               FOR UPDATE OF fa`;
@@ -2513,10 +2513,10 @@ export class FreightsService {
         acceptData.driverName = dm.user.name;
         // Lock driver's active assignments with FOR UPDATE to prevent concurrent duplicate queuePositions
         const lockRows: any[] = await tx.$queryRaw`
-          SELECT COALESCE(MAX("queuePosition"), 0) AS "maxPos"
+          SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
           FROM "freight_assignments" fa
-          JOIN "freights" f ON f.id = fa."freightId"
-          WHERE fa."driverId" = ${dto.driverId}::uuid
+          JOIN "freights" f ON f.id = fa."freight_id"
+          WHERE fa."driver_id" = ${dto.driverId}::uuid
             AND fa.status IN ('active','accepted')
             AND f.status IN ('assigned','accepted','in_progress','loaded')
           FOR UPDATE OF fa`;
