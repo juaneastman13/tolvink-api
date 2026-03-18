@@ -2087,18 +2087,6 @@ export class FreightsService {
           );
         }
 
-        // Validate total tonnage does not exceed freight total
-        const freightTotalTons = (freight as any).items?.reduce((sum: number, i: any) => sum + (Number(i.tons) || 0), 0) || 0;
-        if (freightTotalTons > 0) {
-          const existingTons = existingAssignments.reduce((sum: number, a: any) => sum + (Number(a.tons) || 0), 0);
-          const newTons = dto.trucks.reduce((sum: number, t: any) => sum + (Number(t.tons) || 0), 0);
-          if (newTons > 0 && existingTons + newTons > freightTotalTons) {
-            throw new BadRequestException(
-              `El tonelaje total asignado (${existingTons + newTons}) excede el total del flete (${freightTotalTons}).`,
-            );
-          }
-        }
-
         // Use MAX(tripNumber) to avoid collisions with canceled assignments
         const maxTripRow: any[] = await tx.$queryRaw`
           SELECT COALESCE(MAX("trip_number"), 0) AS "maxTn"
