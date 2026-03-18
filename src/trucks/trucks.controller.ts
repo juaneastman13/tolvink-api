@@ -110,41 +110,37 @@ export class TrucksService {
   }
 
   async list(user: any, companyId?: string) {
-    let targetCompanyId = user.companyId;
+    // Resolve all companies the user belongs to (memberships + companyId + activeCompanyId)
+    const userCompanies = await this.prisma.userCompany.findMany({
+      where: { userId: user.sub, active: true }, select: { companyId: true },
+    });
+    const myIds = [user.companyId, user.activeCompanyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean);
+    const targetCompanyId = companyId || user.activeCompanyId || user.companyId;
 
-    if (companyId && companyId !== user.companyId) {
-      if (user.role === 'platform_admin') {
-        targetCompanyId = companyId;
-      } else {
-        // Check if user belongs to the requested company
-        const userCompanies = await this.prisma.userCompany.findMany({
-          where: { userId: user.sub, active: true }, select: { companyId: true },
-        });
-        const myIds = [user.companyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean);
-        if (myIds.includes(companyId)) {
-          targetCompanyId = companyId;
-        } else {
-          // Allow via business relationship (active freight assignment with this company)
-          const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-          const hasRelation = await this.prisma.freightAssignment.findFirst({
-            where: {
-              transportCompanyId: companyId,
-              freight: {
-                OR: [
-                  { destCompanyId: { in: myIds } },
-                  { originCompanyId: { in: myIds } },
-                ],
-                status: { notIn: ['canceled'] },
-              },
-              createdAt: { gte: cutoff },
-            },
-          });
-          if (hasRelation) {
-            targetCompanyId = companyId;
-          } else {
-            throw new ForbiddenException('Sin acceso a la flota de esta empresa');
-          }
-        }
+    if (!targetCompanyId) return [];
+
+    // Check access
+    const isAdmin = user.role === 'platform_admin' || user.isSuperAdmin;
+    const isOwnCompany = myIds.includes(targetCompanyId);
+
+    if (!isAdmin && !isOwnCompany) {
+      // Allow via business relationship (active freight assignment with this company)
+      const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const hasRelation = await this.prisma.freightAssignment.findFirst({
+        where: {
+          transportCompanyId: targetCompanyId,
+          freight: {
+            OR: [
+              { destCompanyId: { in: myIds } },
+              { originCompanyId: { in: myIds } },
+            ],
+            status: { notIn: ['canceled'] },
+          },
+          createdAt: { gte: cutoff },
+        },
+      });
+      if (!hasRelation) {
+        throw new ForbiddenException('Sin acceso a la flota de esta empresa');
       }
     }
 

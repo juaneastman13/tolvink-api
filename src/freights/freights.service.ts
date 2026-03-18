@@ -1798,25 +1798,31 @@ export class FreightsService {
   async getAvailableDrivers(companyId: string, user?: any) {
     // Validate caller has access to this company
     if (user) {
-      const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
-      if (!callerCompanies.includes(companyId)) {
-        // Allow plant users with a business relationship (active freight assignment with this company)
-        const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-        const hasRelation = await this.prisma.freightAssignment.findFirst({
-          where: {
-            transportCompanyId: companyId,
-            freight: {
-              OR: [
-                { destCompanyId: { in: callerCompanies } },
-                { originCompanyId: { in: callerCompanies } },
-              ],
-              status: { notIn: ['canceled'] },
+      const isAdmin = user.role === 'platform_admin' || user.isSuperAdmin;
+      if (!isAdmin) {
+        const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
+        // Also include activeCompanyId (may not be in JWT companyId)
+        if (user.activeCompanyId) callerCompanies.push(user.activeCompanyId);
+        const uniqueIds = [...new Set(callerCompanies)];
+        if (!uniqueIds.includes(companyId)) {
+          // Allow via business relationship (active freight assignment with this company)
+          const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+          const hasRelation = await this.prisma.freightAssignment.findFirst({
+            where: {
+              transportCompanyId: companyId,
+              freight: {
+                OR: [
+                  { destCompanyId: { in: uniqueIds } },
+                  { originCompanyId: { in: uniqueIds } },
+                ],
+                status: { notIn: ['canceled'] },
+              },
+              createdAt: { gte: cutoff },
             },
-            createdAt: { gte: cutoff },
-          },
-        });
-        if (!hasRelation) {
-          throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
+          });
+          if (!hasRelation) {
+            throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
+          }
         }
       }
     }
