@@ -656,7 +656,7 @@ export class FreightsService {
           data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
         });
 
-        const isOwnFleet = dto.transportCompanyId === freight.originCompanyId;
+        const isOwnFleet = dto.transportCompanyId === freight.originCompanyId || dto.transportCompanyId === freight.destCompanyId;
         const assignData: any = {
           freightId,
           transportCompanyId: dto.transportCompanyId,
@@ -2091,7 +2091,7 @@ export class FreightsService {
           }
 
           tripNumber++;
-          const isTruckOwnFleet = truck.transportCompanyId === freight.originCompanyId;
+          const isTruckOwnFleet = truck.transportCompanyId === freight.originCompanyId || truck.transportCompanyId === freight.destCompanyId;
           const assignData: any = {
             freightId,
             transportCompanyId: truck.transportCompanyId,
