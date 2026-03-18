@@ -637,8 +637,10 @@ export class FreightsService {
 
   async assign(freightId: string, dto: AssignFreightDto, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
-    if (!isPlant) {
-      throw new ForbiddenException('Solo la planta puede asignar transportista');
+    const isTransporter = await this.hasCompanyType(user, 'transporter');
+    const isProducer = await this.hasCompanyType(user, 'producer');
+    if (!isPlant && !isTransporter && !isProducer) {
+      throw new ForbiddenException('Sin permisos para asignar transportista');
     }
 
     const allIds = await this.resolveAllCompanyIds(user);
@@ -661,8 +663,22 @@ export class FreightsService {
           include: { conversation: { select: { id: true } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
-        if (!freight.destCompanyId || !allIds.includes(freight.destCompanyId)) {
-          throw new ForbiddenException('Solo la planta destino del flete puede asignar transportista');
+
+        // Access check by company type
+        if (isPlant && !isTransporter && !isProducer) {
+          if (!freight.destCompanyId || !allIds.includes(freight.destCompanyId)) {
+            throw new ForbiddenException('Solo la planta destino del flete puede asignar transportista');
+          }
+        } else if (isProducer && !isPlant && !isTransporter) {
+          if (!allIds.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+            throw new ForbiddenException('Solo el productor origen con flota propia puede asignar');
+          }
+        } else if (isTransporter && !isPlant && !isProducer) {
+          const isParticipant = allIds.includes(freight.originCompanyId) ||
+            (freight.destCompanyId && allIds.includes(freight.destCompanyId));
+          if (!isParticipant) {
+            throw new ForbiddenException('Sin acceso a este flete');
+          }
         }
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
@@ -1987,7 +2003,9 @@ export class FreightsService {
 
   async assignMulti(freightId: string, dto: AssignMultiTruckDto, user: any) {
     const isPlant = await this.hasCompanyType(user, 'plant');
-    if (!isPlant) throw new ForbiddenException('Solo la planta puede asignar transportistas');
+    const isTransporter = await this.hasCompanyType(user, 'transporter');
+    const isProducer = await this.hasCompanyType(user, 'producer');
+    if (!isPlant && !isTransporter && !isProducer) throw new ForbiddenException('Sin permisos para asignar transportistas');
 
     const allIdsAm = await this.resolveAllCompanyIds(user);
 
@@ -2000,8 +2018,22 @@ export class FreightsService {
           include: { conversation: { select: { id: true } }, items: { select: { tons: true } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
-        if (!freight.destCompanyId || !allIdsAm.includes(freight.destCompanyId)) {
-          throw new ForbiddenException('Solo la planta destino del flete puede asignar transportistas');
+
+        // Access check: plant must be dest company, producer must be origin with own fleet, transporter must be assigned
+        if (isPlant && !isTransporter && !isProducer) {
+          if (!freight.destCompanyId || !allIdsAm.includes(freight.destCompanyId)) {
+            throw new ForbiddenException('Solo la planta destino del flete puede asignar transportistas');
+          }
+        } else if (isProducer && !isPlant && !isTransporter) {
+          if (!allIdsAm.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+            throw new ForbiddenException('Solo el productor origen con flota propia puede asignar');
+          }
+        } else if (isTransporter && !isPlant && !isProducer) {
+          const isParticipant = allIdsAm.includes(freight.originCompanyId) ||
+            (freight.destCompanyId && allIdsAm.includes(freight.destCompanyId));
+          if (!isParticipant) {
+            throw new ForbiddenException('Sin acceso a este flete');
+          }
         }
 
         if (!['pending_assignment', 'assigned'].includes(freight.status)) {

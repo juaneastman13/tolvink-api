@@ -141,8 +141,8 @@ export class FreightsController {
 
   @Post(':id/assign')
   @UseGuards(FreightAccessGuard)
-  @Roles('plant')
-  @ApiOperation({ summary: 'Asignar transportista (solo planta)' })
+  @Roles('plant', 'producer', 'transporter')
+  @ApiOperation({ summary: 'Asignar transportista' })
   assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignFreightDto,
@@ -219,7 +219,7 @@ export class FreightsController {
 
   @Post(':id/assign-multi')
   @UseGuards(FreightAccessGuard)
-  @Roles('plant')
+  @Roles('plant', 'producer', 'transporter')
   @ApiOperation({ summary: 'Asignar múltiples camiones a un flete' })
   assignMulti(
     @Param('id', ParseUUIDPipe) id: string,
@@ -231,7 +231,7 @@ export class FreightsController {
 
   @Post(':id/assign-truck')
   @UseGuards(FreightAccessGuard)
-  @Roles('plant')
+  @Roles('plant', 'producer', 'transporter')
   @ApiOperation({ summary: 'Agregar un camión a un flete multi-truck' })
   assignTruck(
     @Param('id', ParseUUIDPipe) id: string,
