@@ -3,7 +3,7 @@
 // With per-request caching via AsyncLocalStorage
 // =====================================================================
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { requestCache } from '../request-cache';
 import { getCompanyTypes, companyHasType } from '../company-type-helpers';
@@ -12,6 +12,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 @Injectable()
 export class CompanyResolutionService {
+  private readonly logger = new Logger(CompanyResolutionService.name);
   constructor(private prisma: PrismaService) {}
 
   private getCache(): Map<string, any> | undefined {
@@ -79,6 +80,7 @@ export class CompanyResolutionService {
     Object.values(cbt).forEach((v: any) => { if (v && typeof v === 'string' && UUID_RE.test(v)) ids.add(v); });
 
     const result = Array.from(ids);
+    this.logger.debug(`resolveAllCompanyIds user=${user.sub} memberships=${memberships.map((m: any) => m.companyId)} dbCompanyId=${dbUser?.companyId} cbt=${JSON.stringify(cbt)} result=${JSON.stringify(result)}`);
     cache?.set(key, result);
     return result;
   }

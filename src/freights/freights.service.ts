@@ -1803,6 +1803,7 @@ export class FreightsService {
         // Resolve all companies: memberships + companyId + companyByType
         const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
         if (!callerCompanies.includes(companyId)) {
+          this.logger.warn(`getAvailableDrivers access denied: user=${user.sub} jwt.companyId=${user.companyId} requested=${companyId} resolvedIds=${JSON.stringify(callerCompanies)}`);
           throw new ForbiddenException('No tiene acceso a los choferes de esta empresa');
         }
       }

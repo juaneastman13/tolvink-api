@@ -119,6 +119,7 @@ export class TrucksService {
       // Resolve all companies: memberships + companyId + companyByType
       const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
       if (!callerCompanies.includes(targetCompanyId)) {
+        this.logger.warn(`list access denied: user=${user.sub} jwt.companyId=${user.companyId} requested=${targetCompanyId} resolvedIds=${JSON.stringify(callerCompanies)}`);
         throw new ForbiddenException('Sin acceso a la flota de esta empresa');
       }
     }
