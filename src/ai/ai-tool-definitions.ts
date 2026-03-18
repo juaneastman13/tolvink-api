@@ -188,7 +188,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
   {
     name: 'start_freight',
-    description: 'Inicia el viaje de un flete aceptado. Cambia a "en camino". Prepara para confirmación.',
+    description: 'Inicia el viaje de un flete aceptado. Cambia a "a campo". Prepara para confirmación.',
     input_schema: {
       type: 'object' as const,
       properties: { code: { type: 'string', description: 'Código del flete.' } },
@@ -218,7 +218,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
   {
     name: 'cancel_freight',
-    description: 'Cancela un flete. No se puede cancelar si está en camino o cargado. Requiere motivo. Prepara para confirmación.',
+    description: 'Cancela un flete. No se puede cancelar si está a campo o a planta. Requiere motivo. Prepara para confirmación.',
     input_schema: {
       type: 'object' as const,
       properties: {

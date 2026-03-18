@@ -752,7 +752,7 @@ export class FreightsService {
             freightId: freightId,
             action: 'assigned',
             fromValue: freight.status,
-            toValue: 'assigned',
+            toValue: targetFreightStatus,
             userId: user.sub,
             metadata: { transportCompanyId: dto.transportCompanyId, assignmentId: assignment.id },
           },
@@ -821,7 +821,7 @@ export class FreightsService {
         // Read freight INSIDE transaction to prevent TOCTOU race
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
-          include: { assignments: { where: { status: 'active' } } },
+          include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
@@ -963,7 +963,7 @@ export class FreightsService {
     this.notifyAllParticipants(
       freight, (freight as any).assignments || [],
       NotificationType.freight_started,
-      'Flete en camino',
+      'Flete a campo',
       `${freight.code} inició el viaje`,
       user.sub,
     );
@@ -1271,7 +1271,7 @@ export class FreightsService {
       if (!isParticipant) throw new ForbiddenException('Solo participantes del flete pueden cancelarlo');
 
       if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
-        throw new BadRequestException('No se puede cancelar un flete en curso o cargado');
+        throw new BadRequestException('No se puede cancelar un flete a campo o a planta');
       }
 
       this.stateMachine.validateTransition(
@@ -1351,7 +1351,7 @@ export class FreightsService {
         throw new BadRequestException('El flete no está en estado que requiera autorización');
       }
 
-      // Upgrade all active assignments to accepted (producer own fleet Flow C)
+      // Upgrade all active assignments that have trucks to accepted (producer own fleet Flow C)
       for (const a of freight.assignments) {
         if ((a as any).status === AssignmentStatus.active && (a as any).truckId) {
           await (tx.freightAssignment as any).update({
@@ -1364,9 +1364,13 @@ export class FreightsService {
         }
       }
 
+      // Determine final freight status based on whether all assignments have trucks
+      const allHaveTrucks = freight.assignments.every((a: any) => a.truckId);
+      const finalStatus = allHaveTrucks ? FreightStatus.accepted : FreightStatus.assigned;
+
       const updated = await tx.freight.update({
         where: { id: freightId },
-        data: { status: FreightStatus.accepted },
+        data: { status: finalStatus },
       });
 
       await tx.auditLog.create({
@@ -1376,7 +1380,7 @@ export class FreightsService {
           freightId: freightId,
           action: 'authorized',
           fromValue: freight.status,
-          toValue: 'accepted',
+          toValue: finalStatus,
           userId: user.sub,
         },
       });
@@ -2005,6 +2009,10 @@ export class FreightsService {
         });
         const existingCount = existingAssignments.length;
 
+        if (dto.trucks.length > 20) {
+          throw new BadRequestException('Máximo 20 camiones por asignación');
+        }
+
         // Validate truckCount limit
         if (freight.isMultiTruck && freight.truckCount && existingCount + dto.trucks.length > freight.truckCount) {
           throw new BadRequestException(
@@ -2024,7 +2032,12 @@ export class FreightsService {
           }
         }
 
-        let tripNumber = existingCount;
+        // Use MAX(tripNumber) to avoid collisions with canceled assignments
+        const maxTripRow: any[] = await tx.$queryRaw`
+          SELECT COALESCE(MAX("trip_number"), 0) AS "maxTn"
+          FROM "freight_assignments"
+          WHERE "freight_id"::text = ${freightId}`;
+        let tripNumber = maxTripRow[0]?.maxTn ?? existingCount;
 
         for (const truck of dto.trucks) {
           const transport = await tx.company.findFirst({
@@ -2212,7 +2225,7 @@ export class FreightsService {
       if (canceledAssignment) {
         this.notifications.notifyCompany(
           canceledAssignment.transportCompanyId,
-          NotificationType.freight_canceled,
+          NotificationType.freight_updated,
           'Asignación cancelada',
           `${freight.code}: ${reason || 'Cancelado por planta'}`,
           freightId,
@@ -2347,7 +2360,7 @@ export class FreightsService {
         }
       } else if (statusUpgraded && !((freight as any).isMultiTruck)) {
         // Single-truck: if assignment now has truck+driver → freight accepted
-        if (freight.status === FreightStatus.assigned) {
+        if (freight.status === FreightStatus.assigned || freight.status === FreightStatus.pending_assignment) {
           freightUpdate = await tx.freight.update({ where: { id: freightId }, data: { status: FreightStatus.accepted } });
         }
       }
@@ -2358,6 +2371,8 @@ export class FreightsService {
           entityId: freightId,
           freightId: freightId,
           action: statusUpgraded ? 'assignment_truck_assigned' : 'assignment_updated',
+          fromValue: statusUpgraded ? assignment.status : undefined,
+          toValue: statusUpgraded ? 'accepted' : undefined,
           userId: user.sub,
           metadata: { assignmentId, changes: updateData },
         },
@@ -2376,7 +2391,7 @@ export class FreightsService {
         freightId,
         user.sub,
       );
-    } else if (updated.transportCompanyId) {
+    } else if (updated.transportCompanyId && isPlant) {
       this.notifications.notifyCompany(
         updated.transportCompanyId,
         NotificationType.freight_updated,
@@ -2576,7 +2591,7 @@ export class FreightsService {
     this.notifyAllParticipants(
       freight, (freight as any).assignments || [],
       NotificationType.freight_started,
-      'Camión en camino',
+      'Camión a campo',
       `${freight.code} — Camión #${assignment.tripNumber} inició viaje`,
       user.sub,
     );
@@ -2647,7 +2662,7 @@ export class FreightsService {
           if (!callerProdIds.includes(freight.originCompanyId)) {
             throw new ForbiddenException('Solo el productor de origen puede confirmar la carga');
           }
-          if (assignment.tripStatus !== 'loaded') throw new BadRequestException('El camión debe estar cargado para que el productor confirme');
+          if (assignment.tripStatus !== 'loaded') throw new BadRequestException('El camión debe estar a planta para que el productor confirme');
           if (assignment.producerLoadedConfirmedAt) throw new BadRequestException('El productor ya confirmó la carga');
 
           await (tx.freightAssignment as any).update({ where: { id: assignmentId }, data: { producerLoadedConfirmedAt: new Date() } });
@@ -2702,7 +2717,7 @@ export class FreightsService {
       if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
       if (assignment.tripStatus !== 'loaded') {
-        throw new BadRequestException(`Solo se puede finalizar un camión cargado. Estado actual: ${assignment.tripStatus}`);
+        throw new BadRequestException(`Solo se puede finalizar un camión a planta. Estado actual: ${assignment.tripStatus}`);
       }
 
       // Own fleet promotion: producer OR plant acting as transporter
@@ -2848,7 +2863,7 @@ export class FreightsService {
       const freight = await tx.freight.findUnique({ where: { id: freightId }, select: { status: true } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (freight.status !== FreightStatus.in_progress && freight.status !== FreightStatus.loaded) {
-        throw new BadRequestException('Solo se puede trackear un flete en curso o cargado');
+        throw new BadRequestException('Solo se puede trackear un flete a campo o a planta');
       }
 
       return tx.freightTracking.create({

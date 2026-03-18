@@ -518,7 +518,7 @@ export class LocationToolsService {
         liveViewUrl = `${frontendUrl}/live-freight?t=${viewToken}&mode=view`;
       }
 
-      const trackMsg = `*Flete ${freight.code} en camino*\n${freight.originName} → ${freight.destName}\n\n`
+      const trackMsg = `*Flete ${freight.code} a campo*\n${freight.originName} → ${freight.destName}\n\n`
         + `Seguimiento en vivo: ${liveViewUrl || trackingUrl}`;
 
       sends.push(this.wa.sendText(s.phone, trackMsg));

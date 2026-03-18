@@ -313,7 +313,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
             const accepted = freights.filter(f => f.status === 'accepted').length;
             const inProgress = freights.filter(f => ['in_progress', 'loaded'].includes(f.status)).length;
 
-            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes programados para hoy\n⏳ ${pending} pendientes de asignar\n🚛 ${assigned} asignados\n✅ ${accepted} aceptados\n🚀 ${inProgress} en camino`;
+            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes programados para hoy\n⏳ ${pending} pendientes de asignar\n🚛 ${assigned} asignados\n✅ ${accepted} aceptados\n🚀 ${inProgress} a campo`;
             this.sendText(user.phone!, message).catch(e => this.logger.warn(`Summary send failed: ${e.message}`));
           }
         }
@@ -339,7 +339,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
             const accepted = assignments.filter(a => a.status === 'accepted').length;
             const inProgress = assignments.filter(a => ['accepted'].includes(a.status)).length;
 
-            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes asignados\n⏳ ${pending} pendientes de responder\n✅ ${accepted} aceptados\n🚀 ${inProgress} en camino`;
+            const message = `☀️ Buenos días. Resumen del día:\n📦 ${total} fletes asignados\n⏳ ${pending} pendientes de responder\n✅ ${accepted} aceptados\n🚀 ${inProgress} a campo`;
             this.sendText(user.phone!, message).catch(e => this.logger.warn(`Summary send failed: ${e.message}`));
           }
         }

@@ -19,8 +19,8 @@ const STATUS_LABELS: Record<string, string> = {
   pending_assignment: 'Sin asignar',
   assigned: 'Asignado',
   accepted: 'Aceptado',
-  in_progress: 'En camino',
-  loaded: 'Cargado',
+  in_progress: 'A campo',
+  loaded: 'A planta',
   finished: 'Finalizado',
   canceled: 'Cancelado',
 };
@@ -901,7 +901,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const synUser = this.buildSyntheticUser(user);
 
     // Access check for freight actions
-    const freightActions = ['accept', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel', 'reassign', 'add_truck', 'remove_truck'];
+    const freightActions = ['accept', 'assign_truck', 'reject', 'start', 'confirm_loaded', 'confirm_finished', 'cancel', 'reassign', 'add_truck', 'remove_truck'];
     if (freightActions.includes(action) && entityId) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: entityId },
@@ -924,9 +924,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     try {
       switch (action) {
-        case 'accept': {
-          await this.freights.respond(entityId, { action: 'accepted' } as any, synUser);
-          await this.wa.sendText(phone, '✅ Flete aceptado.');
+        case 'accept':
+        case 'assign_truck': {
+          // Redirect to AI chat — transporter assigns truck+driver through conversation
+          const code = await this.prisma.freight.findUnique({ where: { id: entityId }, select: { code: true } }).then(f => f?.code || entityId);
+          await this.handleAiChat(phone, user, `Quiero asignar camión y chofer al flete ${code}`);
           break;
         }
         case 'reject': {
@@ -1378,7 +1380,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             `🚛 Activos: ${total}\n` +
             (pendientes > 0 ? `⏳ Pendientes: ${pendientes}\n` : '') +
             (confirmados > 0 ? `✅ Confirmados: ${confirmados}\n` : '') +
-            (enCurso > 0 ? `🔄 En curso: ${enCurso}\n` : '');
+            (enCurso > 0 ? `🔄 A campo/planta: ${enCurso}\n` : '');
         }
       } catch {
         // Non-critical — show menu without stats
