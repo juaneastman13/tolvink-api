@@ -682,7 +682,7 @@ export class FreightsService {
             SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
             FROM "freight_assignments" fa
             JOIN "freights" f ON f.id = fa."freight_id"
-            WHERE fa."driver_id" = ${dto.driverId}::uuid
+            WHERE fa."driver_id"::text = ${dto.driverId}
               AND fa.status IN ('active','accepted')
               AND f.status IN ('assigned','accepted','in_progress','loaded')
             FOR UPDATE OF fa`;
@@ -2111,7 +2111,7 @@ export class FreightsService {
               SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
               FROM "freight_assignments" fa
               JOIN "freights" f ON f.id = fa."freight_id"
-              WHERE fa."driver_id" = ${truck.driverId}::uuid
+              WHERE fa."driver_id"::text = ${truck.driverId}
                 AND fa.status IN ('active','accepted')
                 AND f.status IN ('assigned','accepted','in_progress','loaded')
               FOR UPDATE OF fa`;
@@ -2516,7 +2516,7 @@ export class FreightsService {
           SELECT COALESCE(MAX(fa."queue_position"), 0) AS "maxPos"
           FROM "freight_assignments" fa
           JOIN "freights" f ON f.id = fa."freight_id"
-          WHERE fa."driver_id" = ${dto.driverId}::uuid
+          WHERE fa."driver_id"::text = ${dto.driverId}
             AND fa.status IN ('active','accepted')
             AND f.status IN ('assigned','accepted','in_progress','loaded')
           FOR UPDATE OF fa`;

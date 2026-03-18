@@ -128,7 +128,7 @@ export class FreightsController {
   @Roles('plant')
   @ApiOperation({ summary: 'Sugerencias de asignación de transporte' })
   getAssignmentSuggestions(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.suggestions.getSuggestions(id, user.sub);
+    return this.suggestions.getSuggestions(id, user.sub || user.id);
   }
 
   @Get(':id')

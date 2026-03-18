@@ -94,6 +94,7 @@ export class AssignmentSuggestionsService {
     }
 
     // ── Permission check — user must have plant role for dest or origin company ──
+    if (!requestingUserId) throw new ForbiddenException('Usuario no identificado');
     const user = await this.prisma.user.findUnique({
       where: { id: requestingUserId },
       select: { id: true, companyId: true, role: true, isSuperAdmin: true },
