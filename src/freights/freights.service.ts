@@ -340,7 +340,7 @@ export class FreightsService {
               plate: truck.plate,
               driverId: assignDriverId,
               driverName: assignDriverName,
-              ...(isMulti ? { tripNumber: 1, tripStatus: 'pending' } : {}),
+              ...(isMulti ? { tripNumber: 1, tripStatus: 'accepted' } : {}),
             },
           });
           // Multi-truck: stay at pending_assignment until all slots filled
@@ -656,10 +656,11 @@ export class FreightsService {
           data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
         });
 
+        const isOwnFleet = dto.transportCompanyId === freight.originCompanyId;
         const assignData: any = {
           freightId,
           transportCompanyId: dto.transportCompanyId,
-          status: AssignmentStatus.active,
+          status: isOwnFleet ? AssignmentStatus.accepted : AssignmentStatus.active,
           assignedById: user.sub,
         };
         if (dto.truckId) {
@@ -699,7 +700,7 @@ export class FreightsService {
 
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: FreightStatus.assigned },
+          data: { status: isOwnFleet ? FreightStatus.accepted : FreightStatus.assigned },
         });
 
         if (freight.conversation?.id) {
@@ -1623,7 +1624,7 @@ export class FreightsService {
               driverName: assignDriverName,
             } as any,
           });
-          data.status = FreightStatus.assigned;
+          data.status = FreightStatus.accepted;
           data.assignedTruckCount = 1;
         }
       }
@@ -2090,13 +2091,14 @@ export class FreightsService {
           }
 
           tripNumber++;
+          const isTruckOwnFleet = truck.transportCompanyId === freight.originCompanyId;
           const assignData: any = {
             freightId,
             transportCompanyId: truck.transportCompanyId,
-            status: AssignmentStatus.active,
+            status: isTruckOwnFleet ? AssignmentStatus.accepted : AssignmentStatus.active,
             assignedById: user.sub,
             tripNumber,
-            tripStatus: 'pending',
+            tripStatus: isTruckOwnFleet ? 'accepted' : 'pending',
           };
 
           if (truck.tons) assignData.tons = truck.tons;
