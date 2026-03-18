@@ -830,10 +830,20 @@ export class AdminService {
       const myIds = await this.getUserCompanyIds(resolvedCaller);
       if (!myIds.includes(companyId)) throw new ForbiddenException('No podés editar esta membresía');
     }
-    return this.prisma.userCompany.update({
+    const updated = await this.prisma.userCompany.update({
       where: { userId_companyId: { userId, companyId } },
       data: { role },
+      include: { company: { select: { type: true } } },
     });
+    // Sync denormalized roleByType on user record
+    if (updated.company?.type) {
+      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { roleByType: true } });
+      const rbt = (user?.roleByType && typeof user.roleByType === 'object') ? { ...(user.roleByType as any) } : {};
+      const rbtValue = role === 'gerente' ? 'admin' : role === 'chofer' ? 'chofer' : 'operator';
+      rbt[updated.company.type] = rbtValue;
+      await this.prisma.user.update({ where: { id: userId }, data: { roleByType: rbt } });
+    }
+    return updated;
   }
 
   async removeUserCompany(userId: string, companyId: string, callerUser: any) {
