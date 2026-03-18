@@ -114,8 +114,8 @@ export class TrucksService {
     const userCompanies = await this.prisma.userCompany.findMany({
       where: { userId: user.sub, active: true }, select: { companyId: true },
     });
-    const myIds = [user.companyId, user.activeCompanyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean);
-    const targetCompanyId = companyId || user.activeCompanyId || user.companyId;
+    const myIds = [user.companyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean);
+    const targetCompanyId = companyId || user.companyId;
 
     if (!targetCompanyId) return [];
 
@@ -124,11 +124,15 @@ export class TrucksService {
     const isOwnCompany = myIds.includes(targetCompanyId);
 
     if (!isAdmin && !isOwnCompany) {
-      // Allow via business relationship (active freight assignment with this company)
+      // Allow via business relationship (freight with this company as origin, dest, or transporter)
       const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
       const hasRelation = await this.prisma.freightAssignment.findFirst({
         where: {
-          transportCompanyId: targetCompanyId,
+          OR: [
+            { transportCompanyId: targetCompanyId },
+            { freight: { originCompanyId: targetCompanyId } },
+            { freight: { destCompanyId: targetCompanyId } },
+          ],
           freight: {
             OR: [
               { destCompanyId: { in: myIds } },

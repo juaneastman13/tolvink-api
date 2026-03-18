@@ -1800,20 +1800,28 @@ export class FreightsService {
     if (user) {
       const isAdmin = user.role === 'platform_admin' || user.isSuperAdmin;
       if (!isAdmin) {
-        const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
-        // Also include activeCompanyId (may not be in JWT companyId)
-        if (user.activeCompanyId) callerCompanies.push(user.activeCompanyId);
-        const uniqueIds = [...new Set(callerCompanies)];
-        if (!uniqueIds.includes(companyId)) {
-          // Allow via business relationship (active freight assignment with this company)
+        // Direct membership check: most reliable way to verify access
+        const userCompanies = await this.prisma.userCompany.findMany({
+          where: { userId: user.sub, active: true }, select: { companyId: true },
+        });
+        const myIds = new Set([user.companyId, ...userCompanies.map(uc => uc.companyId)].filter(Boolean));
+
+        if (!myIds.has(companyId)) {
+          // Allow via business relationship (freight with this company as origin, dest, or transporter)
           const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+          const myIdArr = Array.from(myIds);
+          this.logger.warn(`getAvailableDrivers access denied: user=${user.sub} companyId=${user.companyId} requested=${companyId} myIds=[${myIdArr.join(',')}]`);
           const hasRelation = await this.prisma.freightAssignment.findFirst({
             where: {
-              transportCompanyId: companyId,
+              OR: [
+                { transportCompanyId: companyId },
+                { freight: { originCompanyId: companyId } },
+                { freight: { destCompanyId: companyId } },
+              ],
               freight: {
                 OR: [
-                  { destCompanyId: { in: uniqueIds } },
-                  { originCompanyId: { in: uniqueIds } },
+                  { destCompanyId: { in: myIdArr } },
+                  { originCompanyId: { in: myIdArr } },
                 ],
                 status: { notIn: ['canceled'] },
               },
