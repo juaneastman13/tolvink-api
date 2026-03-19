@@ -280,8 +280,9 @@ export class FreightsService {
       if (isNaN(scheduledAt.getTime())) scheduledAt = null;
     } catch { scheduledAt = null; }
 
-    const participants: { companyId: string }[] = [{ companyId: producerCompanyId }];
-    if (destCompanyId) participants.push({ companyId: destCompanyId });
+    // Deduplicate participants — plant can be both origin and dest
+    const participantIds = [...new Set([producerCompanyId, destCompanyId, dto.producerCompanyId].filter(Boolean))];
+    const participants: { companyId: string }[] = participantIds.map(id => ({ companyId: id }));
 
     const originName = dto.customOriginName || (lot ? lot.name : 'Ubicación personalizada');
     // Use nullish coalescing — Prisma Decimal(0) is falsy with ||, so use ?? and skip 0
