@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, BadRequestException } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -16,8 +16,20 @@ export class FieldsController {
 
   @Get()
   @ApiOperation({ summary: 'Listar campos del usuario con sus lotes' })
-  getFields(@CurrentUser() user: any) {
-    return this.service.getFields(user);
+  @ApiQuery({ name: 'ownerCompanyId', required: false })
+  getFields(@CurrentUser() user: any, @Query('ownerCompanyId') ownerCompanyId?: string) {
+    if (ownerCompanyId && !/^[0-9a-f-]{36}$/i.test(ownerCompanyId)) {
+      throw new BadRequestException('ownerCompanyId inválido');
+    }
+    return this.service.getFields(user, ownerCompanyId);
+  }
+
+  @Get('owners-summary')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Resumen de campos por empresa dueña (vista planta)' })
+  getOwnersSummary(@CurrentUser() user: any) {
+    return this.service.getOwnersSummary(user);
   }
 
   @Post()

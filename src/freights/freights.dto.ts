@@ -135,6 +135,11 @@ export class CreateFreightDto {
   @IsBoolean()
   useOwnFleet?: boolean;
 
+  @ApiProperty({ required: false, description: 'ID empresa productora (cuando planta crea flete en nombre de productor)' })
+  @IsOptional()
+  @IsUUID()
+  producerCompanyId?: string;
+
   @IsOptional()
   @IsNumber()
   @Min(-90) @Max(90)

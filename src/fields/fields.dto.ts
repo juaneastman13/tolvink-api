@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsArray, ValidateNested, ArrayMaxSize, MinLength, Min, Max, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsArray, ValidateNested, ArrayMaxSize, MinLength, Min, Max, MaxLength, IsUUID } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
@@ -26,6 +26,11 @@ export class CreateFieldDto {
   @IsNumber()
   @Min(-180) @Max(180)
   lng?: number;
+
+  @ApiPropertyOptional({ description: 'Empresa dueña lógica (cuando planta crea para productor)' })
+  @IsOptional()
+  @IsUUID()
+  ownerCompanyId?: string;
 }
 
 export class UpdateFieldDto {

@@ -170,8 +170,21 @@ export class FreightsService {
       throw new BadRequestException('Debe indicar planta destino o destino personalizado');
     }
 
-    const producerCompanyId = await this.resolveProducerCompanyId(user);
+    let producerCompanyId = await this.resolveProducerCompanyId(user);
     if (!producerCompanyId) throw new BadRequestException('No se encontró una empresa productora asociada a tu usuario');
+
+    // Plant-centric: when plant creates freight on behalf of producer
+    if (dto.producerCompanyId) {
+      const access = await this.prisma.companyAccess.findFirst({
+        where: {
+          grantorCompanyId: producerCompanyId,
+          granteeCompanyId: dto.producerCompanyId,
+          isActive: true,
+        },
+      });
+      if (!access) throw new BadRequestException('No hay vinculación activa con esa empresa productora');
+      // producerCompanyId stays as the plant (originCompanyId), the actual producer is stored separately
+    }
 
     let lot: any = null;
     if (dto.originLotId) {
@@ -281,6 +294,7 @@ export class FreightsService {
           code,
           status: FreightStatus.pending_assignment,
           originCompanyId: producerCompanyId,
+          producerCompanyId: dto.producerCompanyId || null,
           originLotId: lot?.id || null,
           fieldId,
           originName,
@@ -694,9 +708,28 @@ export class FreightsService {
         }
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
+        // Check if transporter is CONSULTA (READONLY) — requires truck+driver, auto-accepts
+        let isConsultaTransporter = false;
+        if (freight.destCompanyId) {
+          const transportAccess = await tx.companyAccess.findFirst({
+            where: {
+              grantorCompanyId: freight.destCompanyId,
+              granteeCompanyId: dto.transportCompanyId,
+              isActive: true,
+              accessLevel: 'READONLY',
+            },
+          });
+          if (transportAccess) {
+            isConsultaTransporter = true;
+            if (!dto.truckId || !dto.driverId) {
+              throw new BadRequestException('Para transportista CONSULTA, camión y chofer son obligatorios');
+            }
+          }
+        }
+
         // Determine target status: with truck → accepted, without → assigned (delegating to transporter)
         const hasTruck = !!dto.truckId;
-        const targetFreightStatus = hasTruck ? FreightStatus.accepted : FreightStatus.assigned;
+        const targetFreightStatus = (hasTruck || isConsultaTransporter) ? FreightStatus.accepted : FreightStatus.assigned;
         this.stateMachine.validateTransition(freight.status, targetFreightStatus, 'plant');
 
         await tx.freightAssignment.updateMany({
@@ -2107,7 +2140,27 @@ export class FreightsService {
           }
 
           tripNumber++;
-          const hasTruckAm = !!truck.truckId;
+
+          // Check CONSULTA transporter auto-accept
+          let isConsultaAm = false;
+          if (freight.destCompanyId) {
+            const taAccess = await tx.companyAccess.findFirst({
+              where: {
+                grantorCompanyId: freight.destCompanyId,
+                granteeCompanyId: truck.transportCompanyId,
+                isActive: true,
+                accessLevel: 'READONLY',
+              },
+            });
+            if (taAccess) {
+              isConsultaAm = true;
+              if (!truck.truckId || !truck.driverId) {
+                throw new BadRequestException('Para transportista CONSULTA, camión y chofer son obligatorios');
+              }
+            }
+          }
+
+          const hasTruckAm = !!truck.truckId || isConsultaAm;
           const assignData: any = {
             freightId,
             transportCompanyId: truck.transportCompanyId,

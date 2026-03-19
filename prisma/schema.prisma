@@ -88,6 +88,17 @@ enum DocumentStep {
   cancellation
 }
 
+enum GranteeType {
+  PRODUCER
+  TRANSPORTER
+}
+
+enum AccessLevel {
+  NONE
+  READONLY
+  OPERATOR
+}
+
 // ======================== COMPANIES ==================================
 
 model Company {
@@ -121,6 +132,11 @@ model Company {
   notifications          Notification[]
   plantAccessGiven       PlantProducerAccess[] @relation("PlantAccessGiven")
   producerAccessReceived PlantProducerAccess[] @relation("ProducerAccessReceived")
+  accessGranted          CompanyAccess[]       @relation("accessGranted")
+  accessReceived         CompanyAccess[]       @relation("accessReceived")
+  ownedFields            Field[]               @relation("ownedFields")
+  ownedTrucks            Truck[]               @relation("ownedTrucks")
+  producerFreights       Freight[]             @relation("producerFreights")
 
   @@map("companies")
 }
@@ -217,12 +233,16 @@ model Field {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  lots     Lot[]
-  freights Freight[]
-  shares   SharedField[]
+  ownerCompanyId String?   @map("owner_company_id")
+
+  company      Company?      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ownerCompany Company?      @relation("ownedFields", fields: [ownerCompanyId], references: [id])
+  lots         Lot[]
+  freights     Freight[]
+  shares       SharedField[]
 
   @@index([companyId])
+  @@index([companyId, ownerCompanyId])
   @@map("fields")
 }
 
@@ -360,11 +380,15 @@ model Truck {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
+  ownerCompanyId String?  @map("owner_company_id")
+
   company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ownerCompany Company?            @relation("ownedTrucks", fields: [ownerCompanyId], references: [id])
   assignedUser User?               @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignments  FreightAssignment[]
 
   @@index([companyId])
+  @@index([companyId, ownerCompanyId])
   @@index([assignedUserId])
   @@map("trucks")
 }
@@ -391,6 +415,28 @@ model PlantProducerAccess {
   @@index([producerCompanyId])
   @@index([producerUserId])
   @@map("plant_producer_access")
+}
+
+// ======================== COMPANY ACCESS (Plant-Centric) ==============
+
+model CompanyAccess {
+  id               String      @id @default(uuid())
+  grantorCompanyId String      @map("grantor_company_id")
+  granteeCompanyId String      @map("grantee_company_id")
+  granteeType      GranteeType
+  accessLevel      AccessLevel @default(OPERATOR)
+  permissions      Json?
+  invitedBy        String?     @map("invited_by")
+  isActive         Boolean     @default(true) @map("is_active")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  grantorCompany Company @relation("accessGranted", fields: [grantorCompanyId], references: [id])
+  granteeCompany Company @relation("accessReceived", fields: [granteeCompanyId], references: [id])
+
+  @@unique([grantorCompanyId, granteeCompanyId])
+  @@index([granteeCompanyId, granteeType])
+  @@map("company_access")
 }
 
 // ======================== FREIGHTS ===================================
@@ -436,6 +482,9 @@ model Freight {
   assignedTruckCount Int     @default(0) @map("assigned_truck_count")
   isMultiTruck       Boolean @default(false) @map("is_multi_truck")
 
+  // Producer company (when plant creates freight on behalf of a producer)
+  producerCompanyId String? @map("producer_company_id")
+
   // Own fleet decision (per-freight, set at creation)
   // true = producer chose own fleet, false = delegated to plant, null = N/A or legacy
   useOwnFleet Boolean? @map("use_own_fleet")
@@ -455,8 +504,9 @@ model Freight {
   plantFinishedConfirmedAt       DateTime? @map("plant_finished_confirmed_at")
 
   // Relations
-  originCompany Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
-  destCompany   Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
+  originCompany   Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
+  destCompany     Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
+  producerCompany Company? @relation("producerFreights", fields: [producerCompanyId], references: [id])
   originLot     Lot?     @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
   destPlant     Plant?   @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
   field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)

@@ -28,13 +28,29 @@ export class FieldsService {
     return id;
   }
 
-  async getFields(user: any) {
+  async getFields(user: any, ownerCompanyId?: string) {
     const companyIds = await this.resolveAllProducerCompanyIds(user);
     if (companyIds.length === 0) return [];
 
+    // Build where clause: own fields OR fields where ownerCompanyId matches
+    const ownWhere: any = {
+      active: true,
+      OR: [
+        { companyId: { in: companyIds } },
+        { ownerCompanyId: { in: companyIds } },
+      ],
+    };
+
+    // Plant filtering by specific producer
+    if (ownerCompanyId) {
+      ownWhere.OR = undefined;
+      ownWhere.companyId = { in: companyIds };
+      ownWhere.ownerCompanyId = ownerCompanyId;
+    }
+
     // Own fields
     const ownFields = await this.prisma.field.findMany({
-      where: { companyId: { in: companyIds }, active: true },
+      where: ownWhere,
       include: {
         company: { select: { id: true, name: true } },
         lots: {
@@ -84,10 +100,24 @@ export class FieldsService {
 
   async createField(user: any, dto: CreateFieldDto) {
     const companyId = await this.resolveProducerCompanyId(user);
+
+    // If ownerCompanyId is set, validate CompanyAccess between creator and owner
+    if (dto.ownerCompanyId) {
+      const access = await this.prisma.companyAccess.findFirst({
+        where: {
+          grantorCompanyId: companyId,
+          granteeCompanyId: dto.ownerCompanyId,
+          isActive: true,
+        },
+      });
+      if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+    }
+
     return this.prisma.field.create({
       data: {
         name: dto.name,
         companyId,
+        ownerCompanyId: dto.ownerCompanyId || null,
         address: dto.address || null,
         lat: dto.lat != null ? dto.lat : null,
         lng: dto.lng != null ? dto.lng : null,
@@ -167,6 +197,40 @@ export class FieldsService {
       where: { id: lotId },
       data,
     });
+  }
+
+  // ── Owners Summary (plant view) ─────────────────────────────────
+
+  async getOwnersSummary(user: any) {
+    const companyId = user.activeCompanyId;
+    if (!companyId) return [];
+
+    // Get all fields created by this plant for other companies
+    const fields = await this.prisma.field.findMany({
+      where: { companyId, ownerCompanyId: { not: null }, active: true },
+      select: {
+        ownerCompanyId: true,
+        ownerCompany: { select: { id: true, name: true } },
+        lots: { where: { active: true }, select: { id: true } },
+      },
+    });
+
+    // Group by ownerCompanyId
+    const map = new Map<string, { companyId: string; companyName: string; fieldCount: number; lotCount: number }>();
+    for (const f of fields) {
+      const ownerId = f.ownerCompanyId!;
+      const entry = map.get(ownerId) || {
+        companyId: ownerId,
+        companyName: f.ownerCompany?.name || '',
+        fieldCount: 0,
+        lotCount: 0,
+      };
+      entry.fieldCount++;
+      entry.lotCount += f.lots.length;
+      map.set(ownerId, entry);
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
   }
 
   // ── Points of Interest ──────────────────────────────────────────

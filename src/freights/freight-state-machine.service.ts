@@ -50,7 +50,7 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
     { to: FreightStatus.canceled, requiresReason: true },
   ],
   accepted: [
-    { to: FreightStatus.in_progress, requiredRole: ['transporter'] },
+    { to: FreightStatus.in_progress, requiredRole: ['transporter', 'plant'] },
     {
       to: FreightStatus.pending_assignment,
       requiredRole: ['transporter'],
@@ -59,8 +59,8 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
     { to: FreightStatus.canceled, requiresReason: true },
   ],
   in_progress: [
-    // CHANGED: in_progress → loaded (transportista confirms load)
-    { to: FreightStatus.loaded, requiredRole: ['transporter'] },
+    // CHANGED: in_progress → loaded (transportista or planta confirms load)
+    { to: FreightStatus.loaded, requiredRole: ['transporter', 'plant'] },
     // REMOVED: in_progress → finished (must go through loaded now)
     // CANNOT cancel when in_progress — business rule maintained
   ],
@@ -75,9 +75,9 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
 
 // ======================== TRIP-LEVEL TRANSITIONS (v6.0) ================
 const TRIP_TRANSITIONS: Record<TripStatus, { to: TripStatus; requiredRole?: string[] }[]> = {
-  pending:     [{ to: 'accepted', requiredRole: ['transporter'] }, { to: 'canceled' }],
-  accepted:    [{ to: 'in_progress', requiredRole: ['transporter'] }, { to: 'canceled' }],
-  in_progress: [{ to: 'loaded', requiredRole: ['transporter'] }],
+  pending:     [{ to: 'accepted', requiredRole: ['transporter', 'plant'] }, { to: 'canceled' }],
+  accepted:    [{ to: 'in_progress', requiredRole: ['transporter', 'plant'] }, { to: 'canceled' }],
+  in_progress: [{ to: 'loaded', requiredRole: ['transporter', 'plant'] }],
   loaded:      [{ to: 'finished', requiredRole: ['transporter', 'plant'] }],
   finished:    [],
   canceled:    [],

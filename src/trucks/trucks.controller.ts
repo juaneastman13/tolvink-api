@@ -36,6 +36,11 @@ export class CreateTruckDto {
   @IsOptional()
   @IsUUID()
   assignedUserId?: string;
+
+  @ApiProperty({ required: false, description: 'Empresa dueña lógica (cuando planta crea para transportista/productor)' })
+  @IsOptional()
+  @IsUUID()
+  ownerCompanyId?: string;
 }
 
 export class CreateDriverDto {
@@ -99,11 +104,24 @@ export class TrucksService {
       if (!driver) throw new BadRequestException('Chofer no encontrado en tu empresa');
     }
 
+    // If ownerCompanyId is set, validate CompanyAccess
+    if (dto.ownerCompanyId) {
+      const access = await this.prisma.companyAccess.findFirst({
+        where: {
+          grantorCompanyId: user.companyId,
+          granteeCompanyId: dto.ownerCompanyId,
+          isActive: true,
+        },
+      });
+      if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+    }
+
     return this.prisma.truck.create({
       data: {
         plate: normalizedPlate,
         model: dto.model,
         companyId: user.companyId,
+        ownerCompanyId: dto.ownerCompanyId || null,
         assignedUserId: dto.assignedUserId,
       },
       include: { assignedUser: { select: { id: true, name: true } } },
@@ -125,8 +143,16 @@ export class TrucksService {
     }
 
     if (!targetCompanyId) return [];
+
+    // Include trucks owned by this company (created by plant with ownerCompanyId)
     return this.prisma.truck.findMany({
-      where: { companyId: targetCompanyId, active: true },
+      where: {
+        active: true,
+        OR: [
+          { companyId: targetCompanyId },
+          { ownerCompanyId: targetCompanyId },
+        ],
+      },
       include: { assignedUser: { select: { id: true, name: true } } },
       orderBy: { plate: 'asc' },
     });

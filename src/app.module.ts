@@ -12,6 +12,7 @@ import { FieldsController } from './fields/fields.controller';
 import { FieldsService } from './fields/fields.service';
 import { TrucksController, TrucksService } from './trucks/trucks.controller';
 import { PlantAccessController, PlantAccessService } from './plant-access/plant-access.controller';
+import { CompanyAccessController, CompanyAccessService } from './company-access/company-access.controller';
 import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
 import { AdminController, AdminService } from './admin/admin.controller';
 import { NotificationModule } from './notifications/notification.module';
@@ -47,6 +48,7 @@ import { WebChatModule } from './web-chat/web-chat.module';
     FieldsController,
     TrucksController,
     PlantAccessController,
+    CompanyAccessController,
     ConversationsController,
     AdminController,
   ],
@@ -55,6 +57,7 @@ import { WebChatModule } from './web-chat/web-chat.module';
     FieldsService,
     TrucksService,
     PlantAccessService,
+    CompanyAccessService,
     ConversationsService,
     AdminService,
   ],
