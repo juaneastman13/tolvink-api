@@ -309,18 +309,29 @@ export class FieldsService {
   }
 
   async createPoi(user: any, dto: CreatePoiDto) {
-    const companyId = await this.resolveFieldCompanyId(user);
+    const callerCompanyId = await this.resolveFieldCompanyId(user);
+
+    // If plant creates for a linked producer, set companyId to the producer
+    let targetCompanyId = callerCompanyId;
+    if (dto.ownerCompanyId) {
+      const access = await this.prisma.companyAccess.findFirst({
+        where: { grantorCompanyId: callerCompanyId, granteeCompanyId: dto.ownerCompanyId, isActive: true },
+      });
+      if (!access) throw new BadRequestException('No hay vinculación activa con esa empresa');
+      targetCompanyId = dto.ownerCompanyId;
+    }
+
     const poi = await this.prisma.poi.create({
       data: {
         name: dto.name,
-        companyId,
+        companyId: targetCompanyId,
         address: dto.address || null,
         lat: dto.lat,
         lng: dto.lng,
         comments: dto.comments || null,
       },
     });
-    this.logger.log(`createPoi: created "${dto.name}" (id=${poi.id}) for company ${companyId}`);
+    this.logger.log(`createPoi: created "${dto.name}" (id=${poi.id}) for company ${targetCompanyId}`);
     return poi;
   }
 

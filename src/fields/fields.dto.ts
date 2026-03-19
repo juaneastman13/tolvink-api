@@ -188,6 +188,11 @@ export class CreatePoiDto {
   @IsString()
   @MaxLength(1000)
   comments?: string;
+
+  @ApiPropertyOptional({ description: 'Empresa dueña lógica (cuando planta crea para productor)' })
+  @IsOptional()
+  @IsUUID()
+  ownerCompanyId?: string;
 }
 
 export class UpdatePoiDto {

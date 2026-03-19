@@ -201,7 +201,7 @@ export class FieldsController {
 
   @Post('pois')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('producer')
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Crear una ubicación de interés' })
   createPoi(@CurrentUser() user: any, @Body() dto: CreatePoiDto) {
     return this.service.createPoi(user, dto);
