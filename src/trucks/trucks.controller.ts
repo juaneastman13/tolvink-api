@@ -137,8 +137,16 @@ export class TrucksService {
       // Resolve all companies: memberships + companyId + companyByType
       const callerCompanies = await this.companyRes.resolveAllCompanyIds(user);
       if (!callerCompanies.includes(targetCompanyId)) {
-        this.logger.warn(`list access denied: user=${user.sub} jwt.companyId=${user.companyId} requested=${targetCompanyId} resolvedIds=${JSON.stringify(callerCompanies)}`);
-        throw new ForbiddenException('Sin acceso a la flota de esta empresa');
+        // Plant-centric fallback: check CompanyAccess (plant → linked company)
+        const plantId = user.activeCompanyId || user.companyId;
+        const hasAccess = plantId ? await this.prisma.companyAccess.findFirst({
+          where: { grantorCompanyId: plantId, granteeCompanyId: targetCompanyId, isActive: true },
+          select: { id: true },
+        }) : null;
+        if (!hasAccess) {
+          this.logger.warn(`list access denied: user=${user.sub} jwt.companyId=${user.companyId} requested=${targetCompanyId} resolvedIds=${JSON.stringify(callerCompanies)}`);
+          throw new ForbiddenException('Sin acceso a la flota de esta empresa');
+        }
       }
     }
 
@@ -179,8 +187,20 @@ export class TrucksService {
 
   // ======================== DRIVER CRUD ================================
 
-  async createDriver(dto: CreateDriverDto, user: any) {
+  async createDriver(dto: CreateDriverDto, user: any, targetCompanyId?: string) {
     const body = dto;
+
+    // Resolve target company: own company or linked company (plant cross-company)
+    let driverCompanyId = user.companyId;
+    if (targetCompanyId && targetCompanyId !== user.companyId) {
+      const plantId = user.activeCompanyId || user.companyId;
+      const access = await this.prisma.companyAccess.findFirst({
+        where: { grantorCompanyId: plantId, granteeCompanyId: targetCompanyId, isActive: true },
+        select: { id: true },
+      });
+      if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+      driverCompanyId = targetCompanyId;
+    }
 
     const email = body.email?.trim().toLowerCase() || `chofer_${randomBytes(8).toString('hex')}@tolvink.internal`;
     const existing = await this.prisma.user.findUnique({ where: { email } });
@@ -197,8 +217,8 @@ export class TrucksService {
           name: body.name.trim(),
           email,
           phone: body.phone?.trim() || null,
-          companyId: user.companyId,
-          activeCompanyId: user.companyId,
+          companyId: driverCompanyId,
+          activeCompanyId: driverCompanyId,
           role: 'operator',
         },
       });
@@ -206,7 +226,7 @@ export class TrucksService {
       await tx.userCompany.create({
         data: {
           userId: newUser.id,
-          companyId: user.companyId,
+          companyId: driverCompanyId,
           role: 'chofer',
         },
       });
@@ -225,10 +245,25 @@ export class TrucksService {
     return { id: driver.id, name: driver.name, phone: driver.phone, email: driver.email };
   }
 
-  async listDrivers(user: any) {
-    if (!user.companyId) return [];
+  async listDrivers(user: any, targetCompanyId?: string) {
+    let driverCompanyId = targetCompanyId || user.companyId;
+    if (!driverCompanyId) return [];
+
+    // If requesting drivers of a different company, validate CompanyAccess
+    if (targetCompanyId && targetCompanyId !== user.companyId) {
+      const isAdmin = user.role === 'platform_admin' || user.isSuperAdmin;
+      if (!isAdmin) {
+        const plantId = user.activeCompanyId || user.companyId;
+        const access = plantId ? await this.prisma.companyAccess.findFirst({
+          where: { grantorCompanyId: plantId, granteeCompanyId: targetCompanyId, isActive: true },
+          select: { id: true },
+        }) : null;
+        if (!access) throw new ForbiddenException('Sin acceso a los choferes de esta empresa');
+      }
+    }
+
     const memberships = await this.prisma.userCompany.findMany({
-      where: { companyId: user.companyId, role: 'chofer', active: true },
+      where: { companyId: driverCompanyId, role: 'chofer', active: true },
       include: { user: { select: { id: true, name: true, phone: true, email: true, active: true } } },
     });
     return memberships.filter(m => m.user.active).map(m => ({
@@ -297,15 +332,19 @@ export class TrucksController {
   @Post('drivers')
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Registrar chofer para la empresa' })
-  createDriver(@Body() dto: CreateDriverDto, @CurrentUser() user: any) {
-    return this.service.createDriver(dto, user);
+  @ApiQuery({ name: 'companyId', required: false })
+  createDriver(@Body() dto: CreateDriverDto, @CurrentUser() user: any, @Query('companyId') companyId?: string) {
+    if (companyId && !UUID_RE.test(companyId)) throw new BadRequestException('companyId inválido');
+    return this.service.createDriver(dto, user, companyId);
   }
 
   @Get('drivers')
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar choferes de la empresa' })
-  listDrivers(@CurrentUser() user: any) {
-    return this.service.listDrivers(user);
+  @ApiQuery({ name: 'companyId', required: false })
+  listDrivers(@CurrentUser() user: any, @Query('companyId') companyId?: string) {
+    if (companyId && !UUID_RE.test(companyId)) throw new BadRequestException('companyId inválido');
+    return this.service.listDrivers(user, companyId);
   }
 
   @Patch('drivers/:id/deactivate')

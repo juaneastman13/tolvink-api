@@ -19,10 +19,36 @@ export class FieldsService {
   ) {}
 
   private async resolveAllProducerCompanyIds(user: any): Promise<string[]> {
-    return this.companyRes.resolveAllProducerCompanyIds(user);
+    const ids = await this.companyRes.resolveAllProducerCompanyIds(user);
+    // Plant-centric: if user is plant, also include linked producer companies via CompanyAccess
+    const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+    if (isPlant) {
+      const plantId = user.activeCompanyId || user.companyId;
+      if (plantId) {
+        // Include the plant's own ID (fields created by plant)
+        if (!ids.includes(plantId)) ids.push(plantId);
+        // Include linked producer companies
+        const accesses = await this.prisma.companyAccess.findMany({
+          where: { grantorCompanyId: plantId, isActive: true },
+          select: { granteeCompanyId: true },
+        });
+        for (const a of accesses) {
+          if (!ids.includes(a.granteeCompanyId)) ids.push(a.granteeCompanyId);
+        }
+      }
+    }
+    return ids;
   }
 
-  private async resolveProducerCompanyId(user: any): Promise<string> {
+  /** Resolve the "acting" company ID for field creation.
+   *  For producers: their producer company.
+   *  For plants: their plant company (fields are created with companyId=plant, ownerCompanyId=producer). */
+  private async resolveFieldCompanyId(user: any): Promise<string> {
+    const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+    if (isPlant) {
+      const plantId = user.activeCompanyId || user.companyId;
+      if (plantId) return plantId;
+    }
     const id = await this.companyRes.resolveProducerCompanyId(user);
     if (!id) throw new ForbiddenException('No tenés empresa productora asociada');
     return id;
@@ -99,7 +125,7 @@ export class FieldsService {
   }
 
   async createField(user: any, dto: CreateFieldDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
 
     // If ownerCompanyId is set, validate CompanyAccess between creator and owner
     if (dto.ownerCompanyId) {
@@ -126,7 +152,7 @@ export class FieldsService {
   }
 
   async updateField(user: any, fieldId: string, dto: UpdateFieldDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const field = await this.prisma.field.findFirst({
       where: { id: fieldId, companyId, active: true },
     });
@@ -145,7 +171,7 @@ export class FieldsService {
   }
 
   async getLots(user: any, fieldId: string) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const field = await this.prisma.field.findFirst({
       where: { id: fieldId, companyId, active: true },
     });
@@ -159,7 +185,7 @@ export class FieldsService {
   }
 
   async createLot(user: any, fieldId: string, dto: CreateLotDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const field = await this.prisma.field.findFirst({
       where: { id: fieldId, companyId, active: true },
     });
@@ -181,7 +207,7 @@ export class FieldsService {
   }
 
   async updateLot(user: any, fieldId: string, lotId: string, dto: UpdateLotDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const lot = await this.prisma.lot.findFirst({
       where: { id: lotId, fieldId, companyId, active: true },
     });
@@ -283,7 +309,7 @@ export class FieldsService {
   }
 
   async createPoi(user: any, dto: CreatePoiDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const poi = await this.prisma.poi.create({
       data: {
         name: dto.name,
@@ -661,7 +687,7 @@ export class FieldsService {
   // ── Reclassify POI to Field or Lot ────────────────────────────────
 
   async reclassifyPoi(user: any, poiId: string, dto: ReclassifyPoiDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const poi = await this.prisma.poi.findFirst({
       where: { id: poiId, companyId, active: true },
     });
@@ -1097,7 +1123,7 @@ export class FieldsService {
   }
 
   async importConfirm(user: any, dto: ImportConfirmDto) {
-    const companyId = await this.resolveProducerCompanyId(user);
+    const companyId = await this.resolveFieldCompanyId(user);
     const locations = dto.locations;
 
     if (locations.length === 0) {

@@ -188,26 +188,42 @@ export class FreightsService {
       throw new BadRequestException('Debe indicar planta destino o destino personalizado');
     }
 
-    let producerCompanyId = await this.resolveProducerCompanyId(user);
-    if (!producerCompanyId) throw new BadRequestException('No se encontró una empresa productora asociada a tu usuario');
-
     // Plant-centric: when plant creates freight on behalf of producer
-    if (dto.producerCompanyId) {
+    let producerCompanyId: string;
+    const callerIsPlant = (await this.resolveCompanyType(user)) === 'plant';
+
+    if (callerIsPlant && dto.producerCompanyId) {
+      // Plant acting on behalf of a linked producer
+      const plantCompanyId = user.activeCompanyId || user.companyId;
+      if (!plantCompanyId) throw new BadRequestException('No se pudo determinar tu empresa planta');
       const access = await this.prisma.companyAccess.findFirst({
         where: {
-          grantorCompanyId: producerCompanyId,
+          grantorCompanyId: plantCompanyId,
           granteeCompanyId: dto.producerCompanyId,
           isActive: true,
         },
       });
       if (!access) throw new BadRequestException('No hay vinculación activa con esa empresa productora');
-      // producerCompanyId stays as the plant (originCompanyId), the actual producer is stored separately
+      // The producer's company is the origin (their field, their freight)
+      producerCompanyId = dto.producerCompanyId;
+    } else if (callerIsPlant) {
+      // Plant creating freight without specifying producer — use plant's own company
+      producerCompanyId = user.activeCompanyId || user.companyId;
+      if (!producerCompanyId) throw new BadRequestException('No se pudo determinar tu empresa');
+    } else {
+      // Normal producer flow
+      producerCompanyId = await this.resolveProducerCompanyId(user);
+      if (!producerCompanyId) throw new BadRequestException('No se encontró una empresa productora asociada a tu usuario');
     }
 
     let lot: any = null;
     if (dto.originLotId) {
+      // Allow lot owned by producer OR created by plant (companyId=plant, ownerCompanyId=producer)
+      const lotCompanyIds = callerIsPlant
+        ? [producerCompanyId, user.activeCompanyId || user.companyId].filter(Boolean)
+        : [producerCompanyId];
       lot = await this.prisma.lot.findFirst({
-        where: { id: dto.originLotId, companyId: producerCompanyId, active: true },
+        where: { id: dto.originLotId, companyId: { in: lotCompanyIds }, active: true },
         include: { field: true },
       });
       if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');

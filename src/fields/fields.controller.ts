@@ -34,7 +34,7 @@ export class FieldsController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('producer')
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Crear un campo' })
   createField(@CurrentUser() user: any, @Body() dto: CreateFieldDto) {
     return this.service.createField(user, dto);
@@ -42,7 +42,7 @@ export class FieldsController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('producer')
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Editar un campo (ubicación, dirección)' })
   updateField(
     @CurrentUser() user: any,
@@ -63,7 +63,7 @@ export class FieldsController {
 
   @Post(':fieldId/lots')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('producer')
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Crear un lote dentro de un campo' })
   createLot(
     @CurrentUser() user: any,
@@ -75,7 +75,7 @@ export class FieldsController {
 
   @Patch(':fieldId/lots/:lotId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('producer')
+  @Roles('producer', 'plant')
   @ApiOperation({ summary: 'Editar un lote (hectáreas, ubicación)' })
   updateLot(
     @CurrentUser() user: any,
