@@ -168,7 +168,11 @@ export class AiService implements OnModuleDestroy {
     const synUser = this.aiContext.buildSyntheticUser(user);
     const companyType = this.aiContext.resolveCompanyType(user);
     const isWeb = phone === 'web';
-    const systemPrompt = await this.promptBuilder.build(user, companyType, isWeb);
+
+    // Resolve plant access levels for CONSULTA blocking (Strategy A + B)
+    const plantAccessMap = await this.resolveUserPlantAccess(user);
+
+    const systemPrompt = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap);
 
     // Cap message length to prevent context window abuse (5000 chars max)
     const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
@@ -335,7 +339,7 @@ export class AiService implements OnModuleDestroy {
             this.logger.log(`Executing ${toolBlocks.length} read-only tools in parallel`);
             const settled = await Promise.allSettled(toolBlocks.map(async (block: any) => {
               this.logger.log(`AI tool call (parallel): ${block.name}`);
-              const result = await this.executeTool(block.name, block.input, user, synUser, session);
+              const result = await this.executeTool(block.name, block.input, user, synUser, session, plantAccessMap);
               return { type: 'tool_result' as const, tool_use_id: block.id, content: result };
             }));
             toolResults = settled.map((s, i) =>
@@ -348,7 +352,7 @@ export class AiService implements OnModuleDestroy {
             toolResults = [];
             for (const block of toolBlocks) {
               this.logger.log(`AI tool call: ${(block as any).name}`);
-              const result = await this.executeTool((block as any).name, (block as any).input, user, synUser, session);
+              const result = await this.executeTool((block as any).name, (block as any).input, user, synUser, session, plantAccessMap);
               toolResults.push({
                 type: 'tool_result' as const,
                 tool_use_id: (block as any).id,
@@ -488,6 +492,60 @@ export class AiService implements OnModuleDestroy {
     'create_truck', 'create_user', 'update_freight', 'duplicate_freight',
   ]);
 
+  // Tools blocked for CONSULTA (READONLY) users — Strategy A pre-check
+  private static readonly CONSULTA_BLOCKED_TOOLS = new Set([
+    'prepare_freight', 'confirm_create_freight', 'confirm_action',
+    'accept_freight', 'reject_freight',
+    'start_freight', 'confirm_loaded', 'confirm_finished',
+    'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished', 'respond_trip',
+    'cancel_freight', 'assign_transporter', 'assign_truck_to_freight', 'assign_truck_to_trip',
+    'assign_multi_trucks', 'update_assignment', 'cancel_assignment',
+    'update_freight', 'duplicate_freight', 'authorize_freight',
+    'approve_pending_change', 'reject_pending_change',
+    'attach_document', 'delete_document', 'save_ocr_data',
+  ]);
+
+  /**
+   * Resolve the user's access level with ALL plants they interact with.
+   * Returns a map of plantCompanyId → accessLevel.
+   * If the user IS the plant, they get full access (null = no restriction).
+   */
+  private async resolveUserPlantAccess(user: any): Promise<Map<string, string>> {
+    const activeCoId = user.activeCompanyId || user.companyId;
+    if (!activeCoId) return new Map();
+
+    // Query all CompanyAccess records where user's company is the grantee
+    const accesses = await this.prisma.companyAccess.findMany({
+      where: {
+        granteeCompanyId: activeCoId,
+        isActive: true,
+      },
+      select: {
+        grantorCompanyId: true,
+        accessLevel: true,
+        grantorCompany: { select: { name: true } },
+      },
+    });
+
+    const map = new Map<string, string>();
+    for (const a of accesses) {
+      map.set(a.grantorCompanyId, a.accessLevel);
+    }
+    return map;
+  }
+
+  /**
+   * Check if user is CONSULTA (READONLY) with ANY plant.
+   * Returns true if ALL plant relationships are READONLY (i.e., user cannot operate with any plant).
+   */
+  private isGlobalConsulta(plantAccessMap: Map<string, string>): boolean {
+    if (plantAccessMap.size === 0) return false; // No relationships = not restricted
+    for (const level of plantAccessMap.values()) {
+      if (level !== 'READONLY') return false; // Has at least one OPERATOR relationship
+    }
+    return true;
+  }
+
   // Tools that search/filter — track in activeContext.lastSearchFilter
   private static readonly SEARCH_TOOLS = new Set([
     'list_freights', 'summarize_freights',
@@ -499,8 +557,28 @@ export class AiService implements OnModuleDestroy {
     user: any,
     synUser: any,
     session: any,
+    plantAccessMap?: Map<string, string>,
   ): Promise<string> {
     try {
+      // Strategy A: Pre-check — block action tools for CONSULTA users
+      if (plantAccessMap && AiService.CONSULTA_BLOCKED_TOOLS.has(toolName)) {
+        const isConsulta = this.isGlobalConsulta(plantAccessMap);
+        if (isConsulta) {
+          // Find any plant name for the redirect message
+          let plantName = 'la planta';
+          for (const [plantId, level] of plantAccessMap) {
+            if (level === 'READONLY') {
+              const co = await this.prisma.company.findUnique({ where: { id: plantId }, select: { name: true } });
+              if (co?.name) { plantName = co.name; break; }
+            }
+          }
+          return JSON.stringify({
+            blocked: true,
+            message: `Esta acción la gestiona ${plantName}. Contactalos directamente para coordinar. ¿Querés que te pase el estado de algún flete?`,
+          });
+        }
+      }
+
       // Track search filters in active context
       if (AiService.SEARCH_TOOLS.has(toolName) && session?.id) {
         const filterParts: string[] = [];

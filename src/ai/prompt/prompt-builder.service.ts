@@ -31,7 +31,7 @@ export class PromptBuilderService {
     return null;
   }
 
-  async build(user: any, companyType: string, isWeb = false): Promise<string> {
+  async build(user: any, companyType: string, isWeb = false, plantAccessMap?: Map<string, string>): Promise<string> {
     const name = sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
     const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
@@ -318,6 +318,37 @@ NAVEGACIÓN (web):
       basePrompt += `\n\nDATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):
 ${proactiveLines.join('\n')}
 AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión), seleccionarla automáticamente sin preguntar.`;
+    }
+
+    // Strategy B: Inject CONSULTA (READONLY) access level info into system prompt
+    if (plantAccessMap && plantAccessMap.size > 0) {
+      const readonlyPlants: string[] = [];
+      const operatorPlants: string[] = [];
+      for (const [plantId, level] of plantAccessMap) {
+        // Resolve plant name
+        try {
+          const co = await this.prisma.company.findUnique({ where: { id: plantId }, select: { name: true } });
+          const name = co?.name || plantId;
+          if (level === 'READONLY') readonlyPlants.push(name);
+          else if (level === 'OPERATOR') operatorPlants.push(name);
+        } catch { /* ignore lookup failures */ }
+      }
+
+      if (readonlyPlants.length > 0) {
+        const allReadonly = operatorPlants.length === 0;
+        const plantList = readonlyPlants.map(n => sanitizeForPrompt(n)).join(', ');
+        basePrompt += `\n\nNIVEL DE ACCESO — CONSULTA:
+El usuario tiene acceso de CONSULTA con: ${plantList}.${allReadonly ? ' Todas sus plantas son de consulta.' : ''}
+Esto significa que NO puede crear, editar, cancelar fletes, ni aceptar asignaciones, ni actualizar estados, ni adjuntar documentos con esas plantas.
+Si el usuario intenta una acción bloqueada, NO ejecutar la herramienta. Redirigir naturalmente a la planta correspondiente.
+NUNCA mencionar "permisos", "nivel de acceso", "modo consulta", "restricción" ni terminología técnica.
+Responder con naturalidad: "Eso lo gestiona [planta]. Contactalos para coordinar. ¿Querés que te pase el estado de algún flete?"
+Las consultas (ver fletes, estado, detalle, PDF, mapa) SIEMPRE funcionan sin restricción.`;
+        if (operatorPlants.length > 0) {
+          const opList = operatorPlants.map(n => sanitizeForPrompt(n)).join(', ');
+          basePrompt += `\nCon ${opList} puede operar normalmente (crear fletes, aceptar, etc.).`;
+        }
+      }
     }
 
     return basePrompt;
