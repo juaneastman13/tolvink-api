@@ -536,6 +536,7 @@ export class FreightsService {
           destPlant: { select: { id: true, name: true } },
           originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
           destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+          producerCompany: { select: { id: true, name: true } },
           requestedBy: { select: { id: true, name: true } },
           // Light mode: omit documents, pendingChanges, conversation — loaded on-demand in detail view
           assignments: {
@@ -573,6 +574,7 @@ export class FreightsService {
       field: { select: { id: true, name: true } },
       originCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
       destCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
+      producerCompany: { select: { id: true, name: true } },
       requestedBy: { select: { id: true, name: true } },
       assignments: {
         orderBy: { createdAt: 'desc' as const },
@@ -621,6 +623,7 @@ export class FreightsService {
         destPlant: { select: { id: true, name: true } },
         originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
         destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+        producerCompany: { select: { id: true, name: true } },
         requestedBy: { select: { id: true, name: true } },
         assignments: {
           where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
@@ -1473,6 +1476,7 @@ export class FreightsService {
     destPlant: { select: { id: true, name: true } },
     originCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
     destCompany: { select: { id: true, name: true, hasInternalFleet: true, types: true } },
+    producerCompany: { select: { id: true, name: true } },
     requestedBy: { select: { id: true, name: true } },
     conversation: { select: { id: true } },
     assignments: {
