@@ -97,6 +97,24 @@ export class FreightsService {
   private hasCompanyType(user: any, type: string) { return this.companyRes.hasCompanyType(user, type); }
   private resolveAllCompanyIds(user: any) { return this.companyRes.resolveAllCompanyIds(user); }
 
+  /**
+   * Plant-centric: check if caller is plant and transporter is CONSULTA (READONLY).
+   * Returns true if plant should act on behalf of the transporter.
+   */
+  private async isPlantActingForConsultaTransporter(
+    user: any, destCompanyId: string | null, transportCompanyId: string | null,
+  ): Promise<boolean> {
+    if (!destCompanyId || !transportCompanyId) return false;
+    const ct = await this.resolveCompanyType(user);
+    if (ct !== 'plant') return false;
+    const callerIds = await this.resolveAllCompanyIds(user);
+    if (!callerIds.includes(destCompanyId)) return false;
+    const access = await this.prisma.companyAccess.findFirst({
+      where: { grantorCompanyId: destCompanyId, granteeCompanyId: transportCompanyId, isActive: true, accessLevel: 'READONLY' },
+    });
+    return !!access;
+  }
+
   /** Recompute and persist the participantCompanyIds denormalized array.
    *  Called after any mutation that changes freight participants (create, assign, cancel assignment). */
   async refreshParticipantIds(freightId: string, tx?: any) {
@@ -961,7 +979,7 @@ export class FreightsService {
       }
     }
 
-    const ct = await this.resolveCompanyType(user);
+    let ct = await this.resolveCompanyType(user);
 
     const { updated: startResult, freight } = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({
@@ -974,6 +992,19 @@ export class FreightsService {
       const isOwnFleet = freight.assignments?.some(
         (a) => a.transportCompanyId === freight.originCompanyId,
       );
+      // Plant-centric: plant can start freight on behalf of CONSULTA transporter
+      if (ct === 'plant' && freight.destCompanyId) {
+        const callerIds = await this.resolveAllCompanyIds(user);
+        if (callerIds.includes(freight.destCompanyId)) {
+          const transporterCo = freight.assignments?.[0]?.transportCompanyId;
+          if (transporterCo) {
+            const access = await this.prisma.companyAccess.findFirst({
+              where: { grantorCompanyId: freight.destCompanyId, granteeCompanyId: transporterCo, isActive: true, accessLevel: 'READONLY' },
+            });
+            if (access) ct = 'transporter'; // Plant acts as transporter for CONSULTA
+          }
+        }
+      }
       const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
@@ -1045,6 +1076,27 @@ export class FreightsService {
 
     let ct = await this.resolveCompanyType(user);
 
+    // Plant-centric: plant can confirm loaded on behalf of CONSULTA transporter
+    let plantActingAsTransporter = false;
+    if (ct === 'plant') {
+      const freight = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
+      });
+      if (freight?.destCompanyId) {
+        const callerIds = await this.companyRes.resolveAllCompanyIds(user);
+        if (callerIds.includes(freight.destCompanyId)) {
+          const transporterCo = freight.assignments?.[0]?.transportCompanyId;
+          if (transporterCo) {
+            const access = await this.prisma.companyAccess.findFirst({
+              where: { grantorCompanyId: freight.destCompanyId, granteeCompanyId: transporterCo, isActive: true, accessLevel: 'READONLY' },
+            });
+            if (access) { ct = 'transporter'; plantActingAsTransporter = true; }
+          }
+        }
+      }
+    }
+
     if (ct === 'transporter' || ct === 'producer') {
       const loadedResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent TOCTOU race
@@ -1066,7 +1118,7 @@ export class FreightsService {
         if (effectiveCt === 'transporter') {
           const callerClIds = await this.resolveAllCompanyIds(user);
           const hasActiveAssignment = freight.assignments?.some(a => callerClIds.includes(a.transportCompanyId));
-          if (!hasActiveAssignment) {
+          if (!hasActiveAssignment && !plantActingAsTransporter) {
             throw new ForbiddenException('No sos el transportista asignado a este flete');
           }
 
@@ -2658,7 +2710,11 @@ export class FreightsService {
       if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
       const callerStIds = await this.resolveAllCompanyIds(user);
-      if (!callerStIds.includes(assignment.transportCompanyId)) {
+      const isCallerTransporter = callerStIds.includes(assignment.transportCompanyId);
+      // Plant-centric: plant can start trip for CONSULTA transporter
+      const isPlantForConsulta = !isCallerTransporter
+        && await this.isPlantActingForConsultaTransporter(user, freight.destCompanyId, assignment.transportCompanyId);
+      if (!isCallerTransporter && !isPlantForConsulta) {
         throw new ForbiddenException('No sos el transportista asignado a este viaje');
       }
 
@@ -2746,10 +2802,17 @@ export class FreightsService {
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
         // Own fleet promotion: producer OR plant acting as transporter
         if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
+        // Plant-centric: plant can confirm loaded for CONSULTA transporter
+        if (ct === 'plant' && await this.isPlantActingForConsultaTransporter(user, freight.destCompanyId, assignment.transportCompanyId)) {
+          ct = 'transporter';
+        }
 
         if (ct === 'transporter') {
           const callerCtlIds = await this.resolveAllCompanyIds(user);
-          if (!callerCtlIds.includes(assignment.transportCompanyId)) {
+          // Allow plant acting for CONSULTA (callerCtlIds won't include transport company, but plant was promoted above)
+          const isPlantProxy = !callerCtlIds.includes(assignment.transportCompanyId)
+            && callerCtlIds.includes(freight.destCompanyId || '');
+          if (!callerCtlIds.includes(assignment.transportCompanyId) && !isPlantProxy) {
             throw new ForbiddenException('No sos el transportista asignado a este viaje');
           }
 
