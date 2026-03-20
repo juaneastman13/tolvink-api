@@ -137,6 +137,8 @@ model Company {
   ownedFields            Field[]               @relation("ownedFields")
   ownedTrucks            Truck[]               @relation("ownedTrucks")
   producerFreights       Freight[]             @relation("producerFreights")
+  sharedLinksCreated     SharedLink[]          @relation("SharedLinkCreator")
+  sharedLinksReceived    SharedLink[]          @relation("SharedLinkTarget")
 
   @@map("companies")
 }
@@ -191,6 +193,7 @@ model User {
   sharedFieldsReceived       SharedField[]             @relation("SharedFieldSharedWith")
   sharedLotsSent             SharedLot[]               @relation("SharedLotSharedBy")
   sharedLotsReceived         SharedLot[]               @relation("SharedLotSharedWith")
+  sharedLinksCreated         SharedLink[]              @relation("SharedLinkCreatedByUser")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -521,6 +524,7 @@ model Freight {
   trackingPoints FreightTracking[]
   liveLocations  LiveLocation[]
   pendingChanges FreightPendingChange[]
+  sharedLinks    SharedLink[]
 
   @@index([loadDate])
   @@index([fieldId])
@@ -960,4 +964,45 @@ model FreightPendingChange {
   @@index([freightId, status])
   @@index([approverCompanyId, status])
   @@map("freight_pending_changes")
+}
+
+// ======================== SHARED LINKS ================================
+
+enum SharedLinkType {
+  FREIGHT
+  PORTAL
+  TICKET
+}
+
+enum LinkCreationChannel {
+  WEB
+  WHATSAPP
+}
+
+model SharedLink {
+  id               String              @id @default(uuid())
+  token            String              @unique
+  linkType         SharedLinkType      @map("link_type")
+  creatorCompanyId String              @map("creator_company_id")
+  targetCompanyId  String              @map("target_company_id")
+  freightId        String?             @map("freight_id")
+  ticketId         String?             @map("ticket_id")
+  createdById      String?             @map("created_by_id")
+  createdVia       LinkCreationChannel @default(WEB) @map("created_via")
+  expiresAt        DateTime?           @map("expires_at")
+  revokedAt        DateTime?           @map("revoked_at")
+  lastAccessedAt   DateTime?           @map("last_accessed_at")
+  accessCount      Int                 @default(0) @map("access_count")
+  createdAt        DateTime            @default(now()) @map("created_at")
+
+  creatorCompany Company  @relation("SharedLinkCreator", fields: [creatorCompanyId], references: [id])
+  targetCompany  Company  @relation("SharedLinkTarget", fields: [targetCompanyId], references: [id])
+  freight        Freight? @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  createdBy      User?    @relation("SharedLinkCreatedByUser", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([token])
+  @@index([creatorCompanyId, linkType])
+  @@index([targetCompanyId, linkType])
+  @@index([freightId])
+  @@map("shared_links")
 }

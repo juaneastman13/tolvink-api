@@ -758,6 +758,18 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
     },
   },
   {
+    name: 'generate_shared_link',
+    description: 'Genera link compartible para un flete. Permite que terceros vean el seguimiento sin login. El link dura 72 horas. Usar cuando el usuario quiere compartir un flete.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete (ej: F26-LCP.1822).' },
+        targetCompanyId: { type: 'string', description: 'ID de la empresa destinataria del link (opcional, se usa el productor del flete por defecto).' },
+      },
+      required: ['code'],
+    },
+  },
+  {
     name: 'generate_daily_map_link',
     description: 'Link con mapa interactivo de todos los fletes del día. Marcadores por estado. Usar para "panorama general" o "mapa del día".',
     input_schema: { type: 'object' as const, properties: {}, required: [] },

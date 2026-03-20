@@ -702,6 +702,7 @@ export class AiService implements OnModuleDestroy {
         case 'generate_tracking_link': return await this.locationTools.toolGenerateTrackingLink(input, user);
         case 'generate_map_link': return await this.locationTools.toolGenerateMapLink(input);
         case 'generate_report_link': return await this.locationTools.toolGenerateReportLink(input, user);
+        case 'generate_shared_link': return await this.locationTools.toolGenerateSharedLink(input, user);
         case 'generate_daily_map_link': return await this.locationTools.toolGenerateDailyMapLink(user);
         case 'generate_batch_report_link': return await this.locationTools.toolGenerateBatchReportLink(input, user);
         case 'share_live_location': return await this.locationTools.toolShareLiveLocation(input, user);

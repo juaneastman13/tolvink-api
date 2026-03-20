@@ -51,8 +51,8 @@ export class IntentRouterService {
 
   private static readonly TRACKING_TOOLS = new Set([
     'generate_tracking_link', 'generate_map_link', 'generate_report_link',
-    'generate_daily_map_link', 'share_live_location', 'view_live_locations',
-    'request_location',
+    'generate_shared_link', 'generate_daily_map_link', 'share_live_location',
+    'view_live_locations', 'request_location',
   ]);
 
   private static readonly ANALYTICS_TOOLS = new Set([

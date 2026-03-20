@@ -68,7 +68,7 @@ export const DOCUMENT_TOOLS = pick([
 // ======================== LOCATION & MAPS ========================
 export const LOCATION_TOOLS = pick([
   'generate_location_link', 'generate_tracking_link', 'generate_map_link',
-  'generate_report_link', 'generate_daily_map_link', 'generate_batch_report_link',
+  'generate_report_link', 'generate_shared_link', 'generate_daily_map_link', 'generate_batch_report_link',
   'share_live_location', 'view_live_locations', 'request_location',
 ]);
 

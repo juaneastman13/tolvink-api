@@ -22,6 +22,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
 import { OcrModule } from './ocr/ocr.module';
 import { WeighTicketsModule } from './weigh-tickets/weigh-tickets.module';
 import { WebChatModule } from './web-chat/web-chat.module';
+import { SharedLinksModule } from './shared-links/shared-links.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { WebChatModule } from './web-chat/web-chat.module';
     OcrModule,
     WeighTicketsModule,
     WebChatModule,
+    SharedLinksModule,
   ],
   controllers: [
     CatalogController,

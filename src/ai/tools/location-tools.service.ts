@@ -14,6 +14,7 @@ import { APP_URL } from '../ai.constants';
 import {
   hasType as _hasType,
 } from '../ai.utils';
+import { nanoid } from 'nanoid';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -197,6 +198,66 @@ export class LocationToolsService {
     return JSON.stringify({
       url,
       message: `Aquí tiene el enlace para descargar el informe PDF del flete ${code}. Ábralo desde cualquier dispositivo.`,
+    });
+  }
+
+  // ---- generate_shared_link ----
+  async toolGenerateSharedLink(input: any, user: any): Promise<string> {
+    const code = input.code?.toUpperCase();
+    if (!code) return JSON.stringify({ error: 'Código de flete requerido' });
+
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) return JSON.stringify({ error: 'No se pudo determinar la empresa activa.' });
+
+    // Find the freight
+    const freight = await this.prisma.freight.findFirst({
+      where: { code },
+      select: { id: true, code: true, originCompanyId: true, destCompanyId: true, producerCompanyId: true },
+    });
+    if (!freight) return JSON.stringify({ error: `No se encontró el flete ${code}` });
+
+    // Determine target company (producer by default, or use explicit param)
+    const targetCompanyId = input.targetCompanyId || freight.producerCompanyId || freight.originCompanyId || companyId;
+
+    // Check if there's already an active shared link for this freight+target
+    const existing = await this.prisma.sharedLink.findFirst({
+      where: {
+        freightId: freight.id,
+        targetCompanyId,
+        linkType: 'FREIGHT',
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+    });
+
+    if (existing) {
+      const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
+      return JSON.stringify({
+        url: `${frontendUrl}/s/${existing.token}`,
+        message: `Link de seguimiento del flete ${code}. Compartilo con quien necesite ver el estado del flete.`,
+        isReused: true,
+      });
+    }
+
+    // Create new shared link
+    const link = await this.prisma.sharedLink.create({
+      data: {
+        token: nanoid(21),
+        linkType: 'FREIGHT',
+        creatorCompanyId: companyId,
+        targetCompanyId,
+        freightId: freight.id,
+        createdById: user.id,
+        createdVia: 'WHATSAPP',
+        expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72h
+      },
+    });
+
+    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
+    return JSON.stringify({
+      url: `${frontendUrl}/s/${link.token}`,
+      message: `Link de seguimiento del flete ${code}. Válido por 72 horas. Compartilo con quien necesite ver el estado del flete.`,
+      isReused: false,
     });
   }
 

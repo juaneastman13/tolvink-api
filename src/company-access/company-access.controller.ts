@@ -104,6 +104,9 @@ export class CreateLinkedUserDto {
 @Injectable()
 export class CompanyAccessService {
   private readonly logger = new Logger(CompanyAccessService.name);
+  // In-memory cache for accessLevel lookups (key: grantorId:granteeId, value: { level, ts })
+  private accessLevelCache = new Map<string, { level: string; ts: number }>();
+  private static readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(
     private prisma: PrismaService,
@@ -127,9 +130,27 @@ export class CompanyAccessService {
   }
 
   async getAccessLevel(grantorId: string, granteeId: string): Promise<string> {
+    const cacheKey = `${grantorId}:${granteeId}`;
+    const cached = this.accessLevelCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CompanyAccessService.CACHE_TTL) return cached.level;
+
     const access = await this.getAccess(grantorId, granteeId);
-    if (!access || !access.isActive) return 'NONE';
-    return access.accessLevel;
+    const level = (!access || !access.isActive) ? 'NONE' : access.accessLevel;
+
+    this.accessLevelCache.set(cacheKey, { level, ts: Date.now() });
+    // Evict old entries if cache grows too large
+    if (this.accessLevelCache.size > 1000) {
+      const now = Date.now();
+      for (const [k, v] of this.accessLevelCache) {
+        if (now - v.ts > CompanyAccessService.CACHE_TTL) this.accessLevelCache.delete(k);
+      }
+    }
+    return level;
+  }
+
+  /** Invalidate cache for a specific grantor-grantee pair */
+  invalidateAccessLevel(grantorId: string, granteeId: string): void {
+    this.accessLevelCache.delete(`${grantorId}:${granteeId}`);
   }
 
   async isConsulta(grantorId: string, granteeId: string): Promise<boolean> {
@@ -171,10 +192,13 @@ export class CompanyAccessService {
       if (access.grantorCompanyId !== plantId) throw new ForbiddenException('Sin acceso');
     }
 
-    return this.prisma.companyAccess.update({
+    const updated = await this.prisma.companyAccess.update({
       where: { id },
       data: { accessLevel: level as any },
     });
+    // Invalidate cache
+    this.invalidateAccessLevel(access.grantorCompanyId, access.granteeCompanyId);
+    return updated;
   }
 
   async updatePermissions(id: string, permissions: Record<string, boolean>, user: any) {
