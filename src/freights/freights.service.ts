@@ -6,7 +6,7 @@ import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
 import { SseService } from '../sse/sse.service';
 import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
-import { FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
+import { Prisma, FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
 import { randomInt } from 'crypto';
 
 @Injectable()
@@ -605,6 +605,7 @@ export class FreightsService {
           producerCompany: { select: { id: true, name: true } },
           requestedBy: { select: { id: true, name: true } },
           // Light mode: omit documents, pendingChanges, conversation — loaded on-demand in detail view
+          _count: { select: { documents: true, weighTickets: true } },
           assignments: {
             where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
             orderBy: { createdAt: 'asc' },
@@ -620,9 +621,35 @@ export class FreightsService {
       this.getCachedStatusCounts(companyWhere),
     ]);
 
+    // Batch-query OCR document counts to avoid N+1
+    const freightIds = freights.map((f: any) => f.id);
+    const [ocrDocCounts, ocrTicketCounts] = freightIds.length > 0 ? await Promise.all([
+      this.prisma.freightDocument.groupBy({
+        by: ['freightId'],
+        where: { freightId: { in: freightIds }, ocrData: { not: Prisma.DbNull } },
+        _count: true,
+      }),
+      this.prisma.weighTicket.groupBy({
+        by: ['freightId'],
+        where: { freightId: { in: freightIds }, ocrConfidence: { not: null } },
+        _count: true,
+      }),
+    ]) : [[], []];
+
+    const ocrDocMap = new Map(ocrDocCounts.map((r: any) => [r.freightId, r._count]));
+    const ocrTicketMap = new Map(ocrTicketCounts.map((r: any) => [r.freightId, r._count]));
+
+    const enriched = freights.map((f: any) => ({
+      ...f,
+      documentCount: f._count?.documents || 0,
+      weighTicketCount: f._count?.weighTickets || 0,
+      ocrDocCount: ocrDocMap.get(f.id) || 0,
+      ocrTicketCount: ocrTicketMap.get(f.id) || 0,
+    }));
+
     const page = query.page || 1;
-    const nextCursor = freights.length === limit ? freights[freights.length - 1]?.id : undefined;
-    return { data: freights, total, page, limit, pages: Math.ceil(total / limit), nextCursor, statusCounts };
+    const nextCursor = enriched.length === limit ? enriched[enriched.length - 1]?.id : undefined;
+    return { data: enriched, total, page, limit, pages: Math.ceil(total / limit), nextCursor, statusCounts };
   }
 
   // ======================== FIND ONE =================================
