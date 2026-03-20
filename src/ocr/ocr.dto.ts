@@ -22,4 +22,7 @@ export interface OcrResult {
   datos: Record<string, any>;
   confianza: number;
   textoOriginal?: string;
+  structured?: boolean;
+  processedAt?: string;
+  model?: string;
 }

@@ -13,9 +13,41 @@ const SYSTEM_PROMPT = `Sos un asistente de OCR especializado en documentos de tr
 Analizá la imagen y extraé todos los datos relevantes en formato JSON estructurado.
 Respondé SOLO con JSON válido, sin texto adicional, sin markdown code fences.
 Si no podés leer algún campo, poné null en su valor.
-Incluí siempre un campo "confianza" de 0 a 1 indicando qué tan seguro estás de la extracción.
 REGLA IMPORTANTE: Nunca agrupes varios valores en un solo campo separados por ";" o ",". Cada dato debe tener su propio campo individual. Por ejemplo, en vez de "origen": "Mercedes; Soriano" usá "origenLocalidad": "Mercedes", "origenProvincia": "Soriano". Los objetos dentro de "datos" deben ser siempre valores planos (string, number, null), nunca objetos anidados ni arrays (excepto items en remitos).`;
 
+// Phase 1: Structured extraction — attempts to extract known fields
+const STRUCTURED_PROMPT = `Analizá este documento de logística agrícola. Extraé los siguientes campos en formato JSON.
+Si un campo no está presente en el documento, poné null.
+
+Campos a extraer:
+- documentNumber: número de documento, remito, carta de porte, o referencia principal
+- date: fecha del documento en formato DD/MM/AAAA. Si la fecha aparece separada (día, mes, año en campos distintos), unificarla en DD/MM/AAAA
+- origin: lugar de origen, procedencia, o punto de carga
+- destination: lugar de destino o punto de descarga
+- product: producto, grano, o tipo de mercadería
+- quantity: cantidad o peso neto como número
+- quantityUnit: unidad de la cantidad (kg, tn, toneladas, quintales, etc.)
+- producer: nombre del productor, remitente, o titular de la carga
+- transporter: nombre de la empresa transportista
+- grossWeight: peso bruto como número (si aplica)
+- tareWeight: tara como número (si aplica)
+- netWeight: peso neto como número (si aplica)
+- truckPlate: patente o matrícula del camión
+- driverName: nombre del conductor/chofer
+
+Respondé SOLO con el JSON, sin explicaciones ni markdown.`;
+
+// Phase 2: Free extraction — fallback when structured extraction yields mostly nulls
+const FREE_PROMPT = `No se pudieron extraer los campos estándar de este documento.
+Extraé TODOS los campos de texto que puedas identificar en formato JSON.
+Cada key debe ser el nombre del campo como aparece en el documento y cada value su valor.
+Incluí también:
+- documentType: qué tipo de documento es (ticket de pesaje, remito, carta de porte, factura, análisis, etc.)
+- summary: resumen de una línea del documento
+
+Respondé SOLO con el JSON, sin explicaciones ni markdown.`;
+
+// Legacy document-type-specific prompts (used when docType is explicitly provided)
 const DOC_PROMPTS: Record<string, string> = {
   carta_porte: `Extraé de esta carta de porte los siguientes datos en JSON.
 Cada campo debe ser un valor individual (nunca agrupar varios datos en un campo):
@@ -24,7 +56,7 @@ Cada campo debe ser un valor individual (nunca agrupar varios datos en un campo)
   "datos": {
     "numero": "número de carta de porte",
     "ctg": "código de trazabilidad de granos",
-    "fecha": "fecha del documento (YYYY-MM-DD)",
+    "fecha": "fecha del documento (DD/MM/AAAA)",
     "origenLocalidad": "localidad de origen",
     "origenProvincia": "provincia de origen",
     "origenEstablecimiento": "nombre del establecimiento de origen",
@@ -48,7 +80,7 @@ Cada campo debe ser un valor individual (nunca agrupar varios datos en un campo)
   "tipoDocumento": "remito",
   "datos": {
     "numero": "número de remito",
-    "fecha": "fecha (YYYY-MM-DD)",
+    "fecha": "fecha (DD/MM/AAAA)",
     "proveedor": "nombre del proveedor/remitente",
     "destinatario": "nombre del destinatario",
     "items": [{ "producto": "", "cantidad": 0, "unidad": "" }],
@@ -64,7 +96,7 @@ Cada campo debe ser un valor individual (nunca agrupar varios datos en un campo)
     "pesoBruto": 0,
     "tara": 0,
     "pesoNeto": 0,
-    "fecha": "fecha (YYYY-MM-DD)",
+    "fecha": "fecha (DD/MM/AAAA)",
     "hora": "hora (HH:MM)",
     "patente": "patente del camión",
     "producto": "tipo de producto/grano",
@@ -83,6 +115,13 @@ Respondé con JSON:
 }`,
 };
 
+// Structured fields that we check for null
+const STRUCTURED_FIELDS = [
+  'documentNumber', 'date', 'origin', 'destination', 'product',
+  'quantity', 'quantityUnit', 'producer', 'transporter',
+  'grossWeight', 'tareWeight', 'netWeight', 'truckPlate', 'driverName',
+];
+
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
@@ -100,7 +139,7 @@ export class OcrService {
     this.supabaseUrl = config.get<string>('SUPABASE_URL') || '';
   }
 
-  /** Analyze image buffer directly */
+  /** Analyze image buffer — uses two-phase extraction when no docType specified */
   async analyze(buffer: Buffer, mimeType: string, docType?: DocType): Promise<OcrResult> {
     if (!this.client) throw new BadRequestException('OCR no disponible (API key no configurada)');
     if (buffer.length > MAX_BUFFER_SIZE) throw new BadRequestException('Imagen demasiado grande (máx 10 MB)');
@@ -109,11 +148,63 @@ export class OcrService {
     }
 
     const base64 = buffer.toString('base64');
-    const prompt = DOC_PROMPTS[docType || 'general'];
 
-    this.logger.log(`OCR analyze: type=${docType || 'general'}, size=${buffer.length}, mime=${mimeType}`);
+    // If a specific docType is provided, use legacy prompts directly
+    if (docType && DOC_PROMPTS[docType]) {
+      this.logger.log(`OCR analyze (legacy): type=${docType}, size=${buffer.length}`);
+      const raw = await this.callClaude(base64, mimeType, DOC_PROMPTS[docType]);
+      const result = this.parseResponse(raw, docType);
+      result.datos._processedAt = new Date().toISOString();
+      result.datos._model = MODEL_ID;
+      return result;
+    }
 
-    const apiCall = this.client.messages.create({
+    // Phase 1: Structured extraction
+    this.logger.log(`OCR analyze (structured phase 1): size=${buffer.length}, mime=${mimeType}`);
+    const raw1 = await this.callClaude(base64, mimeType, STRUCTURED_PROMPT);
+    const parsed1 = this.parseStructuredResponse(raw1);
+
+    // Count non-null structured fields
+    const nonNullCount = STRUCTURED_FIELDS.filter(f => parsed1[f] != null && parsed1[f] !== '').length;
+    const fillRate = nonNullCount / STRUCTURED_FIELDS.length;
+    this.logger.log(`OCR phase 1: ${nonNullCount}/${STRUCTURED_FIELDS.length} fields filled (${Math.round(fillRate * 100)}%)`);
+
+    // If >20% fields filled, use structured result
+    if (fillRate > 0.2) {
+      // Normalize date field
+      if (parsed1.date) parsed1.date = this.normalizeDate(parsed1.date);
+
+      const confidence = Math.round(fillRate * 100);
+      return {
+        tipoDocumento: this.inferDocType(parsed1),
+        datos: parsed1,
+        confianza: confidence / 100,
+        textoOriginal: raw1.slice(0, 2000),
+        structured: true,
+        processedAt: new Date().toISOString(),
+        model: MODEL_ID,
+      } as any;
+    }
+
+    // Phase 2: Free extraction (fallback)
+    this.logger.log(`OCR analyze (free phase 2): structured yielded <20% fields, retrying with free extraction`);
+    const raw2 = await this.callClaude(base64, mimeType, FREE_PROMPT);
+    const parsed2 = this.parseFreeResponse(raw2);
+
+    return {
+      tipoDocumento: parsed2.documentType || 'desconocido',
+      datos: parsed2,
+      confianza: 0,
+      textoOriginal: raw2.slice(0, 2000),
+      structured: false,
+      processedAt: new Date().toISOString(),
+      model: MODEL_ID,
+    } as any;
+  }
+
+  /** Call Claude Vision API with timeout */
+  private async callClaude(base64: string, mimeType: string, prompt: string): Promise<string> {
+    const apiCall = this.client!.messages.create({
       model: MODEL_ID,
       max_tokens: MAX_TOKENS,
       system: SYSTEM_PROMPT,
@@ -139,11 +230,7 @@ export class OcrService {
     }
 
     const textBlock = (response as any).content?.find((b: any) => b.type === 'text');
-    const raw = textBlock?.text || '';
-
-    this.logger.log(`OCR response received: ${raw.length} chars`);
-
-    return this.parseResponse(raw, docType);
+    return textBlock?.text || '';
   }
 
   /** Analyze from a public Supabase URL */
@@ -217,14 +304,90 @@ export class OcrService {
     return result;
   }
 
-  /** Parse Claude response to structured OcrResult */
-  private parseResponse(raw: string, docType?: DocType): OcrResult {
-    // Strip markdown fences if present
+  /** Parse structured phase 1 response */
+  private parseStructuredResponse(raw: string): Record<string, any> {
+    const cleaned = this.stripMarkdownFences(raw);
+    try {
+      const parsed = JSON.parse(cleaned);
+      // Could be flat or nested under "data"/"datos"
+      return parsed.data || parsed.datos || parsed;
+    } catch {
+      this.logger.warn(`OCR: failed to parse structured response (${raw.length} chars)`);
+      return {};
+    }
+  }
+
+  /** Parse free phase 2 response */
+  private parseFreeResponse(raw: string): Record<string, any> {
+    const cleaned = this.stripMarkdownFences(raw);
+    try {
+      const parsed = JSON.parse(cleaned);
+      const result: Record<string, any> = {};
+      // Extract documentType and summary
+      if (parsed.documentType) result.documentType = parsed.documentType;
+      if (parsed.summary) result.summary = parsed.summary;
+      // Flatten all other fields into rawFields
+      const rawFields: Record<string, any> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k === 'documentType' || k === 'summary') continue;
+        if (v != null && v !== '') rawFields[k] = v;
+      }
+      if (Object.keys(rawFields).length > 0) result.rawFields = rawFields;
+      return result;
+    } catch {
+      this.logger.warn(`OCR: failed to parse free response (${raw.length} chars)`);
+      return { textoExtraido: raw.slice(0, 3000), _parseError: true };
+    }
+  }
+
+  /** Strip markdown fences from response */
+  private stripMarkdownFences(raw: string): string {
     let cleaned = raw.trim();
     if (cleaned.startsWith('```')) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
     }
+    return cleaned;
+  }
 
+  /** Normalize date to DD/MM/AAAA format */
+  private normalizeDate(dateStr: string): string {
+    if (!dateStr || typeof dateStr !== 'string') return dateStr;
+    const s = dateStr.trim();
+
+    // Already DD/MM/YYYY
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+    // YYYY-MM-DD → DD/MM/YYYY
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+
+    // MM/DD/YYYY → DD/MM/YYYY (if month > 12 it's already DD/MM)
+    const usMatch = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (usMatch) {
+      const first = parseInt(usMatch[1], 10);
+      const second = parseInt(usMatch[2], 10);
+      // If first > 12, it's DD/MM/YYYY already
+      if (first > 12) return s;
+      // If second > 12, it's MM/DD/YYYY
+      if (second > 12) return `${usMatch[2]}/${usMatch[1]}/${usMatch[3]}`;
+      // Ambiguous — assume DD/MM (South American convention)
+      return s;
+    }
+
+    return s;
+  }
+
+  /** Infer document type from structured data */
+  private inferDocType(data: Record<string, any>): string {
+    if (data.grossWeight != null || data.tareWeight != null || data.netWeight != null) return 'pesaje';
+    if (data.documentNumber && (data.origin || data.destination)) return 'carta_porte';
+    if (data.producer && data.product) return 'remito';
+    return 'general';
+  }
+
+  /** Parse Claude response to structured OcrResult (legacy) */
+  private parseResponse(raw: string, docType?: DocType): OcrResult {
+    const cleaned = this.stripMarkdownFences(raw);
     try {
       const parsed = JSON.parse(cleaned);
       const rawDatos = parsed.datos || parsed;
