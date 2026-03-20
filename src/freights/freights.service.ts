@@ -837,15 +837,25 @@ export class FreightsService {
         }
         this.logger.log(`assign: freight=${freightId} transporter=${dto.transportCompanyId} isConsulta=${isConsultaTransporter} hasTruck=${!!dto.truckId} grantors=${JSON.stringify(grantorCandidates)}`);
 
-        // Determine target status: with truck → accepted, without → assigned (delegating to transporter)
-        const hasTruck = !!dto.truckId;
-        const targetFreightStatus = (hasTruck || isConsultaTransporter) ? FreightStatus.accepted : FreightStatus.assigned;
-        this.stateMachine.validateTransition(freight.status, targetFreightStatus, 'plant');
+        // Block assignment on terminal states
+        if ([FreightStatus.finished, FreightStatus.canceled].includes(freight.status as FreightStatus)) {
+          throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
+        }
 
-        await tx.freightAssignment.updateMany({
-          where: { freightId, status: { in: ['active', 'accepted'] } },
-          data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
-        });
+        const hasTruck = !!dto.truckId;
+        // For early states, compute target status normally. For later states, keep current status.
+        const isEarlyState = ['pending_assignment', 'assigned'].includes(freight.status);
+        const targetFreightStatus = isEarlyState
+          ? ((hasTruck || isConsultaTransporter) ? FreightStatus.accepted : FreightStatus.assigned)
+          : freight.status as FreightStatus;
+
+        // Only cancel existing assignments if in early state (reasignment flow)
+        if (isEarlyState) {
+          await tx.freightAssignment.updateMany({
+            where: { freightId, status: { in: ['active', 'accepted'] } },
+            data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
+          });
+        }
 
         const assignData: any = {
           freightId,
@@ -2341,8 +2351,8 @@ export class FreightsService {
           }
         }
 
-        if (!['pending_assignment', 'assigned'].includes(freight.status)) {
-          throw new BadRequestException('Solo se puede asignar en estado pending_assignment o assigned');
+        if (['finished', 'canceled'].includes(freight.status)) {
+          throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
         }
 
         const existingAssignments = await (tx.freightAssignment as any).findMany({
