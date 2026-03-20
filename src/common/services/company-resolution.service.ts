@@ -45,6 +45,9 @@ export class CompanyResolutionService {
   }
 
   async resolveAllCompanyIds(user: { sub: string; companyId?: string; companyByType?: any }): Promise<string[]> {
+    if (!user?.sub || typeof user.sub !== 'string' || !UUID_RE.test(user.sub)) {
+      return user?.companyId ? [user.companyId] : [];
+    }
     const cache = this.getCache();
     const key = `allIds:${user.sub}`;
     if (cache?.has(key)) return cache.get(key);

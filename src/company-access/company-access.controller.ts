@@ -442,6 +442,12 @@ export class CompanyAccessService {
 export class CompanyAccessController {
   constructor(private service: CompanyAccessService) {}
 
+  @Get('my-access')
+  @ApiOperation({ summary: 'Acceso del usuario actual (productor/transportista)' })
+  getMyAccess(@CurrentUser() user: any) {
+    return this.service.getMyAccess(user);
+  }
+
   @Get('stats/:companyId')
   @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Stats de empresas vinculadas (fletes activos, última actividad)' })
@@ -458,12 +464,6 @@ export class CompanyAccessController {
     @Query('type') type?: string,
   ) {
     return this.service.listByGrantor(companyId, type);
-  }
-
-  @Get('my-access')
-  @ApiOperation({ summary: 'Acceso del usuario actual (productor/transportista)' })
-  getMyAccess(@CurrentUser() user: any) {
-    return this.service.getMyAccess(user);
   }
 
   @Patch(':id/level')
