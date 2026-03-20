@@ -776,7 +776,7 @@ export class FreightsService {
       ? (transport.types as string[]) : [transport.type];
     if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
-    let result: { updated: any; freight: any };
+    let result: { updated: any; freight: any; bothConsulta: boolean };
     try {
       result = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent TOCTOU race
@@ -879,9 +879,49 @@ export class FreightsService {
         }
         const assignment = await tx.freightAssignment.create({ data: assignData });
 
+        let finalFreightStatus: FreightStatus = targetFreightStatus;
+        let bothConsulta = false;
+
+        // Check if BOTH producer and transporter are CONSULTA (READONLY)
+        // When both are CONSULTA, auto-complete: accepted → in_progress → loaded
+        if (isConsultaTransporter && freight.destCompanyId) {
+          const producerCid = freight.producerCompanyId || freight.originCompanyId;
+          // Producer is CONSULTA if plant has READONLY access grant to producer
+          const producerAccess = producerCid !== freight.destCompanyId
+            ? await tx.companyAccess.findFirst({
+                where: {
+                  grantorCompanyId: freight.destCompanyId,
+                  granteeCompanyId: producerCid,
+                  isActive: true,
+                  accessLevel: 'READONLY',
+                },
+              })
+            : null;
+          bothConsulta = !!producerAccess;
+        }
+
+        const now = new Date();
+        const freightUpdateData: any = { status: finalFreightStatus };
+
+        if (bothConsulta) {
+          // Auto-complete intermediate steps: accepted → in_progress → loaded
+          finalFreightStatus = FreightStatus.loaded;
+          freightUpdateData.status = finalFreightStatus;
+          freightUpdateData.startedAt = now;
+          freightUpdateData.loadedAt = now;
+          // Pre-set transporter finished confirmation so plant only needs to confirm once
+          freightUpdateData.transporterFinishedConfirmedAt = now;
+
+          // Update assignment tripStatus to loaded
+          await tx.freightAssignment.update({
+            where: { id: assignment.id },
+            data: { tripStatus: 'loaded', startedAt: now, loadedAt: now, transporterFinishedConfirmedAt: now },
+          });
+        }
+
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: targetFreightStatus },
+          data: freightUpdateData,
         });
 
         if (freight.conversation?.id) {
@@ -915,7 +955,38 @@ export class FreightsService {
           },
         });
 
-        return { updated, freight };
+        // Log auto-completed steps if both CONSULTA
+        if (bothConsulta) {
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight', entityId: freightId, freightId,
+              action: 'auto_started',
+              fromValue: 'accepted', toValue: 'in_progress',
+              userId: user.sub,
+              metadata: { autoCompleted: true, reason: 'both_consulta' },
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight', entityId: freightId, freightId,
+              action: 'auto_loaded',
+              fromValue: 'in_progress', toValue: 'loaded',
+              userId: user.sub,
+              metadata: { autoCompleted: true, reason: 'both_consulta' },
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              entityType: 'freight', entityId: freightId, freightId,
+              action: 'auto_transporter_confirmed',
+              fromValue: 'loaded', toValue: 'loaded',
+              userId: user.sub,
+              metadata: { autoCompleted: true, reason: 'both_consulta', confirmedBy: 'transporter' },
+            },
+          });
+        }
+
+        return { updated, freight, bothConsulta };
       }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
@@ -923,15 +994,26 @@ export class FreightsService {
       throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    // Notify all participants about assignment (auto-accepted)
-    this.notifyAllParticipants(
-      result.freight, [{ transportCompanyId: dto.transportCompanyId }],
-      NotificationType.freight_assigned,
-      'Transportista asignado',
-      `${result.freight.code} → ${result.freight.destName || 'destino'}`,
-      user.sub,
-      new Set([dto.transportCompanyId]),
-    );
+    // Notifications: if both CONSULTA, send single consolidated notification (no intermediate spam)
+    if (result.bothConsulta) {
+      this.notifyAllParticipants(
+        result.freight, [{ transportCompanyId: dto.transportCompanyId }],
+        NotificationType.freight_assigned,
+        'Flete asignado y en espera de entrega',
+        `${result.freight.code} → ${result.freight.destName || 'destino'} · Pasos intermedios completados automáticamente`,
+        user.sub,
+      );
+    } else {
+      // Normal assignment notification
+      this.notifyAllParticipants(
+        result.freight, [{ transportCompanyId: dto.transportCompanyId }],
+        NotificationType.freight_assigned,
+        'Transportista asignado',
+        `${result.freight.code} → ${result.freight.destName || 'destino'}`,
+        user.sub,
+        new Set([dto.transportCompanyId]),
+      );
+    }
 
     // Notify driver personally if assigned
     if (dto.driverId) {
