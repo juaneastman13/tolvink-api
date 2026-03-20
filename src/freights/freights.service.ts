@@ -850,7 +850,18 @@ export class FreightsService {
           assignedById: user.sub,
         };
         if (dto.truckId) {
-          const truck = await tx.truck.findFirst({ where: { id: dto.truckId, companyId: dto.transportCompanyId, active: true } });
+          // Check both companyId and ownerCompanyId — plant-created trucks for CONSULTA transporters
+          // have companyId=plant but ownerCompanyId=transporter
+          const truck = await tx.truck.findFirst({
+            where: {
+              id: dto.truckId,
+              active: true,
+              OR: [
+                { companyId: dto.transportCompanyId },
+                { ownerCompanyId: dto.transportCompanyId },
+              ],
+            },
+          });
           if (truck) {
             assignData.truckId = truck.id;
             assignData.plate = truck.plate;
