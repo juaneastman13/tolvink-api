@@ -121,6 +121,13 @@ export class CompanyAccessService {
     return this.companyRes.resolvePlantCompanyId(user);
   }
 
+  /** Resolve the user's active company ID (hub = any company with linked companies) */
+  private resolveHubCompanyId(user: any): string {
+    const id = user.activeCompanyId || user.companyId;
+    if (!id) throw new ForbiddenException('No se pudo determinar la empresa activa');
+    return id;
+  }
+
   // ── Core access methods ──────────────────────────────────────
 
   async getAccess(grantorId: string, granteeId: string) {
@@ -188,8 +195,8 @@ export class CompanyAccessService {
     if (!access) throw new NotFoundException('Vinculación no encontrada');
 
     if (!this.isPlatformAdmin(user)) {
-      const plantId = await this.resolvePlantCompanyId(user);
-      if (access.grantorCompanyId !== plantId) throw new ForbiddenException('Sin acceso');
+      const hubId = this.resolveHubCompanyId(user);
+      if (access.grantorCompanyId !== hubId) throw new ForbiddenException('Sin acceso');
     }
 
     const updated = await this.prisma.companyAccess.update({
@@ -206,8 +213,8 @@ export class CompanyAccessService {
     if (!access) throw new NotFoundException('Vinculación no encontrada');
 
     if (!this.isPlatformAdmin(user)) {
-      const plantId = await this.resolvePlantCompanyId(user);
-      if (access.grantorCompanyId !== plantId) throw new ForbiddenException('Sin acceso');
+      const hubId = this.resolveHubCompanyId(user);
+      if (access.grantorCompanyId !== hubId) throw new ForbiddenException('Sin acceso');
     }
 
     // Only allow visibility permissions, never action overrides
@@ -228,8 +235,8 @@ export class CompanyAccessService {
     if (!access) throw new NotFoundException('Vinculación no encontrada');
 
     if (!this.isPlatformAdmin(user)) {
-      const plantId = await this.resolvePlantCompanyId(user);
-      if (access.grantorCompanyId !== plantId) throw new ForbiddenException('Sin acceso');
+      const hubId = this.resolveHubCompanyId(user);
+      if (access.grantorCompanyId !== hubId) throw new ForbiddenException('Sin acceso');
     }
 
     return this.prisma.companyAccess.update({
@@ -241,9 +248,9 @@ export class CompanyAccessService {
   // ── Plant creates linked company ──────────────────────────────
 
   async createLinkedCompany(dto: CreateLinkedCompanyDto, user: any) {
-    const plantId = this.isPlatformAdmin(user)
+    const hubId = this.isPlatformAdmin(user)
       ? user.activeCompanyId
-      : await this.resolvePlantCompanyId(user);
+      : this.resolveHubCompanyId(user);
 
     const companyType = dto.type === 'PRODUCER' ? 'producer' : 'transporter';
 
@@ -262,7 +269,7 @@ export class CompanyAccessService {
     // Create CompanyAccess link
     const access = await this.prisma.companyAccess.create({
       data: {
-        grantorCompanyId: plantId,
+        grantorCompanyId: hubId,
         granteeCompanyId: company.id,
         granteeType: dto.type as any,
         accessLevel: (dto.accessLevel || 'OPERATOR') as any,
@@ -270,21 +277,21 @@ export class CompanyAccessService {
       },
     });
 
-    this.logger.log(`createLinkedCompany: ${dto.name} (${dto.type}) linked to plant ${plantId}`);
+    this.logger.log(`createLinkedCompany: ${dto.name} (${dto.type}) linked to hub ${hubId}`);
     return { company, access };
   }
 
   // ── Plant creates user for linked company ─────────────────────
 
   async createLinkedUser(dto: CreateLinkedUserDto, user: any) {
-    const plantId = this.isPlatformAdmin(user)
+    const hubId = this.isPlatformAdmin(user)
       ? user.activeCompanyId
-      : await this.resolvePlantCompanyId(user);
+      : this.resolveHubCompanyId(user);
 
     // Validate CompanyAccess exists and is active
     const access = await this.prisma.companyAccess.findFirst({
       where: {
-        grantorCompanyId: plantId,
+        grantorCompanyId: hubId,
         granteeCompanyId: dto.targetCompanyId,
         isActive: true,
       },
@@ -340,7 +347,7 @@ export class CompanyAccessService {
       },
     }).catch(e => this.logger.warn(`createLinkedUser membership: ${e.message}`));
 
-    this.logger.log(`createLinkedUser: ${dto.name} (${dto.role}) for company ${dto.targetCompanyId} by plant ${plantId}`);
+    this.logger.log(`createLinkedUser: ${dto.name} (${dto.role}) for company ${dto.targetCompanyId} by hub ${hubId}`);
     return newUser;
   }
 
@@ -436,14 +443,14 @@ export class CompanyAccessController {
   constructor(private service: CompanyAccessService) {}
 
   @Get('stats/:companyId')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Stats de empresas vinculadas (fletes activos, última actividad)' })
   getLinkedStats(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.service.getLinkedCompaniesStats(companyId);
   }
 
   @Get(':companyId')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Listar vinculaciones de una planta' })
   @ApiQuery({ name: 'type', required: false, enum: ['PRODUCER', 'TRANSPORTER'] })
   listByGrantor(
@@ -460,7 +467,7 @@ export class CompanyAccessController {
   }
 
   @Patch(':id/level')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Cambiar nivel de acceso (OPERATOR ↔ READONLY)' })
   updateLevel(
     @Param('id', ParseUUIDPipe) id: string,
@@ -471,7 +478,7 @@ export class CompanyAccessController {
   }
 
   @Patch(':id/permissions')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Actualizar permisos de visibilidad' })
   updatePermissions(
     @Param('id', ParseUUIDPipe) id: string,
@@ -482,7 +489,7 @@ export class CompanyAccessController {
   }
 
   @Patch(':id/toggle')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Activar/desactivar vinculación' })
   toggleActive(
     @Param('id', ParseUUIDPipe) id: string,
@@ -492,7 +499,7 @@ export class CompanyAccessController {
   }
 
   @Post('create-company')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Crear empresa vinculada (productor o transportista)' })
   createCompany(
     @Body() dto: CreateLinkedCompanyDto,
@@ -502,7 +509,7 @@ export class CompanyAccessController {
   }
 
   @Post('create-user')
-  @Roles('plant', 'platform_admin')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Crear usuario para empresa vinculada' })
   createUser(
     @Body() dto: CreateLinkedUserDto,

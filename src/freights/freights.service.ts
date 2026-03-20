@@ -455,7 +455,37 @@ export class FreightsService {
     // SSE: notify all involved parties
     this.broadcastAndInvalidate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub);
 
+    // Fire-and-forget: calculate route if coordinates available
+    this.calculateRoute(freight.id, originLat, originLng, destLat, destLng).catch(() => {});
+
     return freight;
+  }
+
+  /** Calculate route between origin and destination using Google Directions API */
+  private async calculateRoute(freightId: string, oLat: any, oLng: any, dLat: any, dLng: any) {
+    if (!oLat || !oLng || !dLat || !dLng) return;
+    const key = this.config.get<string>('GOOGLE_DIRECTIONS_API_KEY');
+    if (!key) return;
+    try {
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${oLat},${oLng}&destination=${dLat},${dLng}&key=${key}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.status !== 'OK' || !json.routes?.[0]) return;
+      const route = json.routes[0];
+      const leg = route.legs?.[0];
+      await this.prisma.freight.update({
+        where: { id: freightId },
+        data: {
+          routePolyline: route.overview_polyline?.points || null,
+          routeDistanceKm: leg?.distance?.value ? Math.round(leg.distance.value / 100) / 10 : null,
+          routeDurationMin: leg?.duration?.value ? Math.round(leg.duration.value / 60) : null,
+          routeCalculatedAt: new Date(),
+        },
+      });
+      this.logger.log(`Route calculated for freight ${freightId}: ${leg?.distance?.text}, ${leg?.duration?.text}`);
+    } catch (e) {
+      this.logger.warn(`Route calculation failed for ${freightId}: ${e.message}`);
+    }
   }
 
   // ======================== LIST (multi-tenant) =======================

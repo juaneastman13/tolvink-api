@@ -115,6 +115,51 @@ export class WeighTicketsService {
     });
   }
 
+  // ======================== LIST ALL (cross-freight, for company) ======
+
+  async findAllForCompany(user: any, query: { type?: string; search?: string; limit?: number; offset?: number }) {
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) throw new ForbiddenException('No company context');
+
+    const where: any = {
+      freight: {
+        OR: [
+          { companyId },
+          { producerCompanyId: companyId },
+          { assignments: { some: { transportCompanyId: companyId } } },
+        ],
+      },
+    };
+    if (query.type === 'origin' || query.type === 'destination') {
+      where.type = query.type;
+    }
+    if (query.search) {
+      where.OR = [
+        { ticketNumber: { contains: query.search, mode: 'insensitive' } },
+        { freight: { code: { contains: query.search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const limit = Math.min(query.limit || 50, 100);
+    const offset = query.offset || 0;
+
+    const [items, total] = await Promise.all([
+      this.prisma.weighTicket.findMany({
+        where,
+        include: {
+          registeredBy: { select: { id: true, name: true } },
+          freight: { select: { id: true, code: true, status: true, originName: true, destName: true, items: { select: { grain: true }, take: 1 } } },
+        },
+        orderBy: { registeredAt: 'desc' },
+        take: limit,
+        skip: offset,
+      }),
+      this.prisma.weighTicket.count({ where }),
+    ]);
+
+    return { items, total };
+  }
+
   // ======================== DETAIL =====================================
 
   async findOne(freightId: string, ticketId: string) {

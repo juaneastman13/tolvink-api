@@ -9,6 +9,38 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 
+// ── Cross-freight listing (not nested under a specific freight) ─────
+@ApiTags('Weigh Tickets')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Controller('weigh-tickets')
+export class WeighTicketsListController {
+  constructor(private service: WeighTicketsService) {}
+
+  @Get()
+  @Roles('plant', 'transporter', 'producer', 'platform_admin')
+  @ApiOperation({ summary: 'Listar todos los tickets de pesaje de la empresa' })
+  @ApiQuery({ name: 'type', required: false, enum: ['origin', 'destination'] })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  findAllForCompany(
+    @CurrentUser() user: any,
+    @Query('type') type?: string,
+    @Query('search') search?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.service.findAllForCompany(user, {
+      type,
+      search,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+  }
+}
+
+// ── Per-freight CRUD ────────────────────────────────────────────────
 @ApiTags('Weigh Tickets')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)

@@ -474,8 +474,14 @@ model Freight {
   notes         String?
   cancelReason  String? @map("cancel_reason") @db.VarChar(255)
 
+  // Pre-calculated route (Google Directions, one-time on creation)
+  routePolyline     String?   @map("route_polyline") @db.Text
+  routeDistanceKm   Float?    @map("route_distance_km")
+  routeDurationMin   Int?     @map("route_duration_min")
+  routeCalculatedAt DateTime? @map("route_calculated_at")
+
   createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at") @default(now())
   startedAt  DateTime? @map("started_at")
   finishedAt DateTime? @map("finished_at")
   loadedAt   DateTime? @map("loaded_at")
