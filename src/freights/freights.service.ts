@@ -814,12 +814,15 @@ export class FreightsService {
         }
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
-        // Check if transporter is CONSULTA (READONLY) — requires truck+driver, auto-accepts
+        // Check if transporter is CONSULTA (READONLY) — requires truck, auto-accepts
+        // Use both destCompanyId and caller's company as potential grantors
         let isConsultaTransporter = false;
-        if (freight.destCompanyId) {
+        const plantCompanyId = user.activeCompanyId || user.companyId;
+        const grantorCandidates = [...new Set([freight.destCompanyId, plantCompanyId].filter(Boolean))];
+        if (grantorCandidates.length > 0) {
           const transportAccess = await tx.companyAccess.findFirst({
             where: {
-              grantorCompanyId: freight.destCompanyId,
+              grantorCompanyId: { in: grantorCandidates },
               granteeCompanyId: dto.transportCompanyId,
               isActive: true,
               accessLevel: 'READONLY',
@@ -832,6 +835,7 @@ export class FreightsService {
             }
           }
         }
+        this.logger.log(`assign: freight=${freightId} transporter=${dto.transportCompanyId} isConsulta=${isConsultaTransporter} hasTruck=${!!dto.truckId} grantors=${JSON.stringify(grantorCandidates)}`);
 
         // Determine target status: with truck → accepted, without → assigned (delegating to transporter)
         const hasTruck = !!dto.truckId;
@@ -905,13 +909,14 @@ export class FreightsService {
 
         // Check if BOTH producer and transporter are CONSULTA (READONLY)
         // When both are CONSULTA, auto-complete: accepted → in_progress → loaded
-        if (isConsultaTransporter && freight.destCompanyId) {
+        if (isConsultaTransporter && grantorCandidates.length > 0) {
           const producerCid = freight.producerCompanyId || freight.originCompanyId;
           // Producer is CONSULTA if plant has READONLY access grant to producer
-          const producerAccess = producerCid !== freight.destCompanyId
+          const producerIsPlant = grantorCandidates.includes(producerCid);
+          const producerAccess = !producerIsPlant
             ? await tx.companyAccess.findFirst({
                 where: {
-                  grantorCompanyId: freight.destCompanyId,
+                  grantorCompanyId: { in: grantorCandidates },
                   granteeCompanyId: producerCid,
                   isActive: true,
                   accessLevel: 'READONLY',
@@ -919,6 +924,7 @@ export class FreightsService {
               })
             : null;
           bothConsulta = !!producerAccess;
+          this.logger.log(`assign: bothConsulta=${bothConsulta} producerCid=${producerCid} producerIsPlant=${producerIsPlant}`);
         }
 
         const now = new Date();
@@ -1014,6 +1020,8 @@ export class FreightsService {
       this.logger.error(`assign() failed for freight ${freightId}: ${err.message}`, err.stack);
       throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
+
+    this.logger.log(`assign: completed freight=${freightId} finalStatus=${result.updated.status} bothConsulta=${result.bothConsulta} truckId=${result.updated.truckId ?? 'none'}`);
 
     // Notifications: if both CONSULTA, send single consolidated notification (no intermediate spam)
     if (result.bothConsulta) {
