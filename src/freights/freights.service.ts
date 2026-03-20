@@ -790,8 +790,8 @@ export class FreightsService {
           });
           if (transportAccess) {
             isConsultaTransporter = true;
-            if (!dto.truckId || !dto.driverId) {
-              throw new BadRequestException('Para transportista CONSULTA, camión y chofer son obligatorios');
+            if (!dto.truckId) {
+              throw new BadRequestException('Para transportista CONSULTA, camión es obligatorio');
             }
           }
         }
@@ -2258,8 +2258,8 @@ export class FreightsService {
             });
             if (taAccess) {
               isConsultaAm = true;
-              if (!truck.truckId || !truck.driverId) {
-                throw new BadRequestException('Para transportista CONSULTA, camión y chofer son obligatorios');
+              if (!truck.truckId) {
+                throw new BadRequestException('Para transportista CONSULTA, camión es obligatorio');
               }
             }
           }
