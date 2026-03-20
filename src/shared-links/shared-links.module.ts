@@ -127,17 +127,20 @@ export class SharedLinksService {
           destPlant: { select: { id: true, name: true } },
           field: { select: { id: true, name: true } },
           assignments: {
-            where: { status: 'active' },
+            where: { status: { in: ['active', 'accepted'] } },
             select: {
               transportCompanyId: true,
               plate: true,
               driverName: true,
               status: true,
+              tripStatus: true,
+              startedAt: true,
+              loadedAt: true,
               transportCompany: { select: { name: true } },
             },
           },
           auditLogs: {
-            where: { action: { in: ['created', 'status_changed', 'assigned', 'accepted', 'started', 'loaded', 'finished'] } },
+            where: { action: { in: ['created', 'status_changed', 'assigned', 'accepted', 'started', 'loaded', 'finished', 'auto_started', 'auto_loaded', 'auto_transporter_confirmed', 'trip_started', 'trip_confirm_loaded'] } },
             select: { action: true, toValue: true, createdAt: true },
             orderBy: { createdAt: 'asc' },
           },
@@ -151,30 +154,45 @@ export class SharedLinksService {
         },
       });
     } else if (link.linkType === 'PORTAL') {
-      // Load summary for portal
+      // Load summary + freight list for portal
       const targetId = link.targetCompanyId;
       const activeStatuses = ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded'] as any;
-      const [totalFreights, activeFreights, lastFreight] = await Promise.all([
+      const companyFilter = { OR: [{ originCompanyId: targetId }, { producerCompanyId: targetId }] };
+      const [totalFreights, activeFreights, lastFreight, freightList] = await Promise.all([
+        this.prisma.freight.count({ where: companyFilter }),
         this.prisma.freight.count({
-          where: { OR: [{ originCompanyId: targetId }, { producerCompanyId: targetId }] },
-        }),
-        this.prisma.freight.count({
-          where: {
-            status: { in: activeStatuses },
-            OR: [{ originCompanyId: targetId }, { producerCompanyId: targetId }],
-          },
+          where: { status: { in: activeStatuses }, ...companyFilter },
         }),
         this.prisma.freight.findFirst({
-          where: { OR: [{ originCompanyId: targetId }, { producerCompanyId: targetId }] },
+          where: companyFilter,
           orderBy: { createdAt: 'desc' },
           select: { createdAt: true },
         }),
+        this.prisma.freight.findMany({
+          where: companyFilter,
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          select: {
+            id: true, code: true, status: true, originName: true, destName: true,
+            createdAt: true, loadDate: true,
+            items: { select: { grain: true, tons: true } },
+            assignments: {
+              where: { status: { in: ['active', 'accepted'] } },
+              select: { plate: true, driverName: true, transportCompany: { select: { name: true } } },
+              take: 1,
+            },
+          },
+        }),
       ]);
+      // Calculate total tons from items
+      const totalTons = freightList.reduce((sum: number, f: any) => sum + (f.items || []).reduce((s: number, i: any) => s + (Number(i.tons) || 0), 0), 0);
       data = {
         targetCompanyName: link.targetCompany.name,
         totalFreights,
         activeFreights,
+        totalTons,
         lastFreightAt: lastFreight?.createdAt || null,
+        freights: freightList,
       };
     }
 
