@@ -3448,6 +3448,43 @@ export class FreightsService {
     });
   }
 
+  async clearOcrData(freightId: string, docId: string, user: any) {
+    const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
+
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        select: {
+          id: true, originCompanyId: true, destCompanyId: true,
+          assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
+        },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      if (user.role !== 'platform_admin') {
+        const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
+          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+        const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
+        if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
+      }
+
+      const doc = await tx.freightDocument.findFirst({ where: { id: docId, freightId } });
+      if (!doc) throw new NotFoundException('Documento no encontrado');
+
+      await tx.freightDocument.update({
+        where: { id: docId },
+        data: { ocrData: Prisma.DbNull },
+      });
+
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, freightId, action: 'ocr_data_cleared', userId: user.sub, metadata: { docId, docName: doc.name } },
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
+
+      return { ok: true };
+    });
+  }
+
   // ─── Stats by period ───────────────────────────────────────────
   async getStats(user: any, from?: string, to?: string, groupBy = 'week') {
     const companyIds = await this.resolveAllCompanyIds(user);

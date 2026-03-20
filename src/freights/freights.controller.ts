@@ -422,4 +422,16 @@ export class FreightsController {
   ) {
     return this.service.saveOcrData(id, docId, dto.ocrData, user);
   }
+
+  @Patch(':id/documents/:docId/ocr-clear')
+  @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 20 } })
+  @ApiOperation({ summary: 'Borrar datos OCR de un documento' })
+  clearOcrData(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.clearOcrData(id, docId, user);
+  }
 }
