@@ -218,6 +218,7 @@ export class FreightsService {
     }
 
     let lot: any = null;
+    let fieldForOrigin: any = null;
     if (dto.originLotId) {
       // Allow lot owned by producer OR created by plant (companyId=plant, ownerCompanyId=producer)
       const lotCompanyIds = callerIsPlant
@@ -228,6 +229,12 @@ export class FreightsService {
         include: { field: true },
       });
       if (!lot) throw new BadRequestException('Lote no encontrado o no pertenece a tu empresa');
+    } else if (dto.fieldId) {
+      // "Usar ubicación del campo" — no lot selected, use field coordinates
+      fieldForOrigin = await this.prisma.field.findFirst({
+        where: { id: dto.fieldId, active: true },
+      });
+      if (!fieldForOrigin) throw new BadRequestException('Campo no encontrado');
     } else if (!dto.overrideOriginLat || !dto.overrideOriginLng) {
       throw new BadRequestException('Debe indicar un lote de origen o una ubicación en el mapa');
     }
@@ -285,14 +292,17 @@ export class FreightsService {
     const participantIds = [...new Set([producerCompanyId, destCompanyId, dto.producerCompanyId].filter(Boolean))];
     const participants: { companyId: string }[] = participantIds.map(id => ({ companyId: id }));
 
-    const originName = dto.customOriginName || (lot ? lot.name : 'Ubicación personalizada');
+    const originName = dto.customOriginName || (lot ? lot.name : (fieldForOrigin ? fieldForOrigin.name : 'Ubicación personalizada'));
     // Use nullish coalescing — Prisma Decimal(0) is falsy with ||, so use ?? and skip 0
     const lotLat = lot?.lat != null && Number(lot.lat) !== 0 ? lot.lat : null;
     const lotLng = lot?.lng != null && Number(lot.lng) !== 0 ? lot.lng : null;
     const fieldLat = lot?.field?.lat != null && Number(lot.field.lat) !== 0 ? lot.field.lat : null;
     const fieldLng = lot?.field?.lng != null && Number(lot.field.lng) !== 0 ? lot.field.lng : null;
-    const originLat = dto.overrideOriginLat ?? lotLat ?? fieldLat ?? null;
-    const originLng = dto.overrideOriginLng ?? lotLng ?? fieldLng ?? null;
+    // fieldForOrigin: "Usar ubicación del campo" — field selected without lot
+    const directFieldLat = fieldForOrigin?.lat != null && Number(fieldForOrigin.lat) !== 0 ? fieldForOrigin.lat : null;
+    const directFieldLng = fieldForOrigin?.lng != null && Number(fieldForOrigin.lng) !== 0 ? fieldForOrigin.lng : null;
+    const originLat = dto.overrideOriginLat ?? lotLat ?? fieldLat ?? directFieldLat ?? null;
+    const originLng = dto.overrideOriginLng ?? lotLng ?? fieldLng ?? directFieldLng ?? null;
 
     // Determine useOwnFleet: explicit DTO value or infer from truckId + hasInternalFleet
     let useOwnFleet: boolean | null = null;
