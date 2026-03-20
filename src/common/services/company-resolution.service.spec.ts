@@ -33,7 +33,7 @@ describe('CompanyResolutionService', () => {
   });
 
   describe('resolveAllCompanyIds', () => {
-    const user = { sub: 'user-1', companyId: 'comp-A' };
+    const user = { sub: '00000000-0000-0000-0000-000000000001', companyId: 'comp-A' };
 
     it('returns all company IDs from memberships', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([
@@ -51,15 +51,15 @@ describe('CompanyResolutionService', () => {
     it('falls back to User.companyId and companyByType when few memberships', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
       prisma.user.findUnique.mockResolvedValue({
-        companyId: 'comp-legacy',
-        companyByType: { producer: 'comp-prod', plant: 'comp-plant' },
+        companyId: '10000000-0000-0000-0000-000000000001',
+        companyByType: { producer: '10000000-0000-0000-0000-000000000002', plant: '10000000-0000-0000-0000-000000000003' },
       });
 
-      const result = await service.resolveAllCompanyIds({ sub: 'user-1' });
+      const result = await service.resolveAllCompanyIds({ sub: '00000000-0000-0000-0000-000000000001' });
 
-      expect(result).toContain('comp-legacy');
-      expect(result).toContain('comp-prod');
-      expect(result).toContain('comp-plant');
+      expect(result).toContain('10000000-0000-0000-0000-000000000001');
+      expect(result).toContain('10000000-0000-0000-0000-000000000002');
+      expect(result).toContain('10000000-0000-0000-0000-000000000003');
     });
 
     it('caches result per request', async () => {
@@ -76,7 +76,7 @@ describe('CompanyResolutionService', () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
       prisma.user.findUnique.mockResolvedValue({ companyId: null, companyByType: {} });
 
-      const result = await service.resolveAllCompanyIds({ sub: 'u1', companyId: 'jwt-comp' });
+      const result = await service.resolveAllCompanyIds({ sub: '00000000-0000-0000-0000-000000000002', companyId: 'jwt-comp' });
 
       expect(result).toContain('jwt-comp');
     });
@@ -89,19 +89,19 @@ describe('CompanyResolutionService', () => {
         { companyId: 'comp-prod', company: { id: 'comp-prod', type: 'producer' } },
       ]);
 
-      const result = await service.resolveProducerCompanyId({ sub: 'u1' });
+      const result = await service.resolveProducerCompanyId({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect(result).toBe('comp-prod');
     });
 
-    it('falls back to JWT companyId when companyType is producer', async () => {
+    it('returns null when no producer membership exists', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
 
       const result = await service.resolveProducerCompanyId({
-        sub: 'u1', companyId: 'jwt-comp', companyType: 'producer',
+        sub: '00000000-0000-0000-0000-000000000002', companyId: 'jwt-comp', companyType: 'producer',
       });
 
-      expect(result).toBe('jwt-comp');
+      expect(result).toBeNull();
     });
 
     it('caches result', async () => {
@@ -109,8 +109,8 @@ describe('CompanyResolutionService', () => {
         { companyId: 'c1', company: { id: 'c1', type: 'producer' } },
       ]);
 
-      await service.resolveProducerCompanyId({ sub: 'u1' });
-      await service.resolveProducerCompanyId({ sub: 'u1' });
+      await service.resolveProducerCompanyId({ sub: '00000000-0000-0000-0000-000000000002' });
+      await service.resolveProducerCompanyId({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect((prisma as any).userCompany.findMany).toHaveBeenCalledTimes(1);
     });
@@ -123,23 +123,23 @@ describe('CompanyResolutionService', () => {
         { companyId: 'comp-plant', company: { id: 'comp-plant', type: 'plant' } },
       ]);
 
-      const result = await service.resolvePlantCompanyId({ sub: 'u1' });
+      const result = await service.resolvePlantCompanyId({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect(result).toBe('comp-plant');
     });
 
-    it('falls back to JWT companyId', async () => {
+    it('returns null when no plant membership exists', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
 
-      const result = await service.resolvePlantCompanyId({ sub: 'u1', companyId: 'fallback' });
+      const result = await service.resolvePlantCompanyId({ sub: '00000000-0000-0000-0000-000000000002', companyId: 'fallback' });
 
-      expect(result).toBe('fallback');
+      expect(result).toBeNull();
     });
   });
 
   describe('hasCompanyType', () => {
     it('returns true from JWT companyType', async () => {
-      const result = await service.hasCompanyType({ sub: 'u1', companyType: 'plant' }, 'plant');
+      const result = await service.hasCompanyType({ sub: '00000000-0000-0000-0000-000000000002', companyType: 'plant' }, 'plant');
 
       expect(result).toBe(true);
       expect((prisma as any).userCompany.findMany).not.toHaveBeenCalled();
@@ -150,7 +150,7 @@ describe('CompanyResolutionService', () => {
         { company: { type: 'transporter' } },
       ]);
 
-      const result = await service.hasCompanyType({ sub: 'u1' }, 'transporter');
+      const result = await service.hasCompanyType({ sub: '00000000-0000-0000-0000-000000000002' }, 'transporter');
 
       expect(result).toBe(true);
     });
@@ -160,7 +160,7 @@ describe('CompanyResolutionService', () => {
         { company: { type: 'producer' } },
       ]);
 
-      const result = await service.hasCompanyType({ sub: 'u1' }, 'plant');
+      const result = await service.hasCompanyType({ sub: '00000000-0000-0000-0000-000000000002' }, 'plant');
 
       expect(result).toBe(false);
     });
@@ -168,7 +168,7 @@ describe('CompanyResolutionService', () => {
 
   describe('resolveCompanyType', () => {
     it('returns JWT companyType if present', async () => {
-      const result = await service.resolveCompanyType({ sub: 'u1', companyType: 'producer' });
+      const result = await service.resolveCompanyType({ sub: '00000000-0000-0000-0000-000000000002', companyType: 'producer' });
 
       expect(result).toBe('producer');
     });
@@ -178,7 +178,7 @@ describe('CompanyResolutionService', () => {
         { company: { type: 'plant' } },
       ]);
 
-      const result = await service.resolveCompanyType({ sub: 'u1' });
+      const result = await service.resolveCompanyType({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect(result).toBe('plant');
     });
@@ -186,7 +186,7 @@ describe('CompanyResolutionService', () => {
     it('returns unknown when no memberships', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
 
-      const result = await service.resolveCompanyType({ sub: 'u1' });
+      const result = await service.resolveCompanyType({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect(result).toBe('unknown');
     });
@@ -200,7 +200,7 @@ describe('CompanyResolutionService', () => {
         { companyId: 'c3', company: { id: 'c3', type: 'producer' } },
       ]);
 
-      const result = await service.resolveAllProducerCompanyIds({ sub: 'u1' });
+      const result = await service.resolveAllProducerCompanyIds({ sub: '00000000-0000-0000-0000-000000000002' });
 
       expect(result).toEqual(expect.arrayContaining(['c1', 'c3']));
       expect(result).not.toContain('c2');
@@ -212,7 +212,7 @@ describe('CompanyResolutionService', () => {
         { companyId: 'c2', company: { id: 'c2', type: 'plant' } },
       ]);
 
-      const result = await service.resolveAllProducerCompanyIds({ sub: 'u1', role: 'admin' });
+      const result = await service.resolveAllProducerCompanyIds({ sub: '00000000-0000-0000-0000-000000000002', role: 'admin' });
 
       expect(result).toContain('c1');
       expect(result).toContain('c2');
@@ -221,7 +221,7 @@ describe('CompanyResolutionService', () => {
     it('falls back to JWT companyId when empty', async () => {
       (prisma as any).userCompany.findMany.mockResolvedValue([]);
 
-      const result = await service.resolveAllProducerCompanyIds({ sub: 'u1', companyId: 'fb' });
+      const result = await service.resolveAllProducerCompanyIds({ sub: '00000000-0000-0000-0000-000000000002', companyId: 'fb' });
 
       expect(result).toEqual(['fb']);
     });

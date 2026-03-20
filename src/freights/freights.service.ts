@@ -1168,7 +1168,7 @@ export class FreightsService {
       });
       if (freight) {
         const involved = [freight.originCompanyId, freight.destCompanyId,
-          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
+          ...(freight.assignments || []).map(a => a.transportCompanyId)].filter(Boolean);
         if (!allIds.some(id => involved.includes(id))) {
           throw new ForbiddenException('No tenés acceso a este flete');
         }
@@ -3353,8 +3353,8 @@ export class FreightsService {
 
       if (user.role !== 'platform_admin') {
         const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
-          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
-        const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+          ...(freight.assignments || []).map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = (freight.assignments || []).some(a => a.driverId === user.sub);
         const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
         if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
       }
@@ -3455,8 +3455,8 @@ export class FreightsService {
 
       if (user.role !== 'platform_admin') {
         const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
-          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
-        const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+          ...(freight.assignments || []).map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = (freight.assignments || []).some(a => a.driverId === user.sub);
         const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
         if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
       }
@@ -3492,8 +3492,8 @@ export class FreightsService {
 
       if (user.role !== 'platform_admin') {
         const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
-          ...freight.assignments.map(a => a.transportCompanyId)].filter(Boolean);
-        const isDriver = freight.assignments.some(a => a.driverId === user.sub);
+          ...(freight.assignments || []).map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = (freight.assignments || []).some(a => a.driverId === user.sub);
         const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
         if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
       }
