@@ -320,6 +320,72 @@ export class CompanyAccessService {
     return newUser;
   }
 
+  // ── Stats for linked companies (active freights + last activity) ─────
+
+  async getLinkedCompaniesStats(grantorId: string) {
+    const accesses = await this.prisma.companyAccess.findMany({
+      where: { grantorCompanyId: grantorId, isActive: true },
+      select: { granteeCompanyId: true },
+    });
+    const companyIds = accesses.map(a => a.granteeCompanyId);
+    if (companyIds.length === 0) return {};
+
+    const activeStatuses = ['pending_assignment', 'assigned', 'accepted', 'in_progress', 'loaded'] as any;
+
+    // Fetch active freights and last freight per company using simple queries
+    const [activeFreights, activeAssignments, lastFreights] = await Promise.all([
+      this.prisma.freight.findMany({
+        where: {
+          status: { in: activeStatuses },
+          OR: [
+            { originCompanyId: { in: companyIds } },
+            { producerCompanyId: { in: companyIds } },
+          ],
+        },
+        select: { originCompanyId: true, producerCompanyId: true },
+      }),
+      this.prisma.freightAssignment.findMany({
+        where: {
+          transportCompanyId: { in: companyIds },
+          freight: { status: { in: activeStatuses } },
+        },
+        select: { transportCompanyId: true },
+      }),
+      this.prisma.freight.findMany({
+        where: {
+          OR: [
+            { originCompanyId: { in: companyIds } },
+            { producerCompanyId: { in: companyIds } },
+          ],
+        },
+        select: { originCompanyId: true, producerCompanyId: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: companyIds.length * 3,
+      }),
+    ]);
+
+    const stats: Record<string, { activeFreights: number; lastFreightAt: string | null }> = {};
+    for (const cid of companyIds) {
+      stats[cid] = { activeFreights: 0, lastFreightAt: null };
+    }
+
+    for (const f of activeFreights) {
+      const cid = f.producerCompanyId || f.originCompanyId;
+      if (stats[cid]) stats[cid].activeFreights++;
+    }
+    for (const a of activeAssignments) {
+      if (stats[a.transportCompanyId]) stats[a.transportCompanyId].activeFreights++;
+    }
+    for (const f of lastFreights) {
+      const cid = f.producerCompanyId || f.originCompanyId;
+      if (stats[cid] && !stats[cid].lastFreightAt) {
+        stats[cid].lastFreightAt = f.createdAt.toISOString();
+      }
+    }
+
+    return stats;
+  }
+
   // ── My access (for producer/transporter) ──────────────────────
 
   async getMyAccess(user: any) {
@@ -344,6 +410,13 @@ export class CompanyAccessService {
 @Controller('company-access')
 export class CompanyAccessController {
   constructor(private service: CompanyAccessService) {}
+
+  @Get('stats/:companyId')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Stats de empresas vinculadas (fletes activos, última actividad)' })
+  getLinkedStats(@Param('companyId', ParseUUIDPipe) companyId: string) {
+    return this.service.getLinkedCompaniesStats(companyId);
+  }
 
   @Get(':companyId')
   @Roles('plant', 'platform_admin')

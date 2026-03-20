@@ -158,7 +158,7 @@ export class FreightsService {
    * everyone else gets informational "Ver detalle" only.
    */
   private notifyAllParticipants(
-    freight: { id: string; originCompanyId: string; destCompanyId?: string | null },
+    freight: { id: string; originCompanyId: string; destCompanyId?: string | null; producerCompanyId?: string | null },
     assignments: Array<{ transportCompanyId: string }> | null,
     type: NotificationType,
     title: string,
@@ -169,6 +169,7 @@ export class FreightsService {
     const companyIds = new Set<string>();
     if (freight.originCompanyId) companyIds.add(freight.originCompanyId);
     if (freight.destCompanyId) companyIds.add(freight.destCompanyId);
+    if (freight.producerCompanyId) companyIds.add(freight.producerCompanyId);
     if (assignments) {
       for (const a of assignments) {
         if (a.transportCompanyId) companyIds.add(a.transportCompanyId);
