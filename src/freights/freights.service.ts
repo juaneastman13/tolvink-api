@@ -838,7 +838,7 @@ export class FreightsService {
         this.logger.log(`assign: freight=${freightId} transporter=${dto.transportCompanyId} isConsulta=${isConsultaTransporter} hasTruck=${!!dto.truckId} grantors=${JSON.stringify(grantorCandidates)}`);
 
         // Block assignment on terminal states
-        if ([FreightStatus.finished, FreightStatus.canceled].includes(freight.status as FreightStatus)) {
+        if (freight.status === FreightStatus.finished || freight.status === FreightStatus.canceled) {
           throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
         }
 
