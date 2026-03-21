@@ -44,8 +44,10 @@ export class CreateCompanyDto {
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(255)
   address?: string;
 
-  @ApiProperty({ required: false }) @IsOptional() @MaxLength(50)
-  phone?: string;
+  @ApiProperty({ description: 'Celular uruguayo: 09XXXXXXX' })
+  @IsNotEmpty({ message: 'El teléfono es obligatorio' })
+  @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  phone: string;
 
   @ApiProperty({ required: false }) @IsOptional() @IsEmail()
   email?: string;
@@ -190,7 +192,7 @@ export class UpdateCompanyDto {
   @ApiProperty({ required: false, enum: ['producer', 'plant', 'transporter'] }) @IsOptional() @IsIn(['producer', 'plant', 'transporter']) type?: string;
   @ApiProperty({ required: false, type: [String] }) @IsOptional() @IsArray() @IsString({ each: true }) @IsIn(['producer', 'plant', 'transporter'], { each: true }) types?: string[];
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(255) address?: string;
-  @ApiProperty({ required: false }) @IsOptional() @MaxLength(50) phone?: string;
+  @ApiProperty({ required: false }) @IsOptional() @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' }) phone?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(20) rut?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() hasInternalFleet?: boolean;

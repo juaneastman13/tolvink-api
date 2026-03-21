@@ -10,7 +10,7 @@ import {
   Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery, ApiProperty } from '@nestjs/swagger';
-import { IsUUID, IsOptional, IsString, IsEnum, IsBoolean, IsObject, MinLength, MaxLength } from 'class-validator';
+import { IsUUID, IsOptional, IsString, IsEnum, IsBoolean, IsObject, MinLength, MaxLength, Matches, IsNotEmpty } from 'class-validator';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -46,6 +46,11 @@ export class CreateLinkedCompanyDto {
   @ApiProperty({ enum: ['PRODUCER', 'TRANSPORTER'] })
   @IsEnum(['PRODUCER', 'TRANSPORTER'])
   type: string;
+
+  @ApiProperty({ description: 'Celular uruguayo: 09XXXXXXX' })
+  @IsNotEmpty({ message: 'El teléfono es obligatorio' })
+  @Matches(/^09\d{7}$/, { message: 'Formato: 09XXXXXXX (9 dígitos)' })
+  phone: string;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -262,6 +267,7 @@ export class CompanyAccessService {
         name: dto.name,
         type: companyType as any,
         types: [companyType],
+        phone: dto.phone,
         email: dto.contactEmail || null,
         rut: dto.rut || null,
         hasInternalFleet: dto.hasInternalFleet || false,
