@@ -1392,12 +1392,90 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       (companyName ? `🏢 Empresa activa: ${companyName}.\n` : '') +
       (roleLabel ? `👤 Rol: ${roleLabel}.\n` : '');
 
-    const features = this.getRoleFeatureSummary(role);
+    // Resolve CompanyAccess to show per-company capabilities
+    let features = '';
+    try {
+      const accesses = await this.prisma.companyAccess.findMany({
+        where: { granteeCompanyId: activeCoId, isActive: true },
+        select: { grantorCompanyId: true, accessLevel: true, grantorCompany: { select: { name: true } } },
+        take: 50,
+      });
+
+      if (accesses.length > 0) {
+        const operatorPlants: string[] = [];
+        const readonlyPlants: string[] = [];
+        for (const a of accesses) {
+          const pName = a.grantorCompany?.name || 'Empresa';
+          if (a.accessLevel === 'READONLY') readonlyPlants.push(pName);
+          else operatorPlants.push(pName);
+        }
+
+        if (operatorPlants.length > 0 && readonlyPlants.length > 0) {
+          // Mixed: show per-group
+          features =
+            `\n📌 Con *${operatorPlants.join(', ')}* podés:\n` +
+            this.getOperatorFeatures(role) +
+            `\n📌 Con *${readonlyPlants.join(', ')}* podés:\n` +
+            this.getReadonlyFeatures();
+        } else if (readonlyPlants.length > 0 && operatorPlants.length === 0) {
+          // All READONLY
+          features =
+            `\n📌 Podés hacer estas cosas desde acá:\n` +
+            this.getReadonlyFeatures();
+        } else {
+          // All OPERATOR — show normal role features
+          features = this.getRoleFeatureSummary(role);
+        }
+      } else {
+        features = this.getRoleFeatureSummary(role);
+      }
+    } catch {
+      features = this.getRoleFeatureSummary(role);
+    }
 
     await this.wa.sendButtons(phone,
       header + statsBlock + features +
-      `\nSiguiente paso: escriba la opción o describa su pedido.`,
+      `\n¿Qué querés hacer?`,
       this.getRoleMenuButtons(role),
+    );
+  }
+
+  private getOperatorFeatures(role: string): string {
+    if (role === 'producer') {
+      return (
+        `🌾 Crear fletes de granos\n` +
+        `📋 Ver el estado y detalle de tus fletes\n` +
+        `🗺 Ver ubicación y seguimiento en mapa\n` +
+        `📅 Modificar fecha u hora de un flete\n` +
+        `❌ Cancelar fletes\n` +
+        `📎 Adjuntar documentos (fotos, remitos)\n` +
+        `📄 Duplicar un flete existente\n` +
+        `🌾 Gestionar campos y lotes\n` +
+        `🚛 Camiones y choferes\n` +
+        `👤 Tu perfil\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `📋 Ver asignaciones\n` +
+        `🚛 Aceptar o rechazar viajes\n` +
+        `🚛 Asignar camión y chofer\n` +
+        `📋 Ver estado de fletes\n` +
+        `🗺 Seguimiento en mapa\n` +
+        `📎 Adjuntar documentos\n` +
+        `🚛 Gestionar camiones y choferes\n` +
+        `👤 Tu perfil\n`
+      );
+    }
+    return this.getRoleFeatureSummary(role).replace('\n📌 Acciones principales:\n', '');
+  }
+
+  private getReadonlyFeatures(): string {
+    return (
+      `📋 Ver el estado y detalle de fletes\n` +
+      `🗺 Ver ubicación y seguimiento en mapa\n` +
+      `📄 Solicitar informes PDF\n` +
+      `👤 Tu perfil\n`
     );
   }
 

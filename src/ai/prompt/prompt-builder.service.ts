@@ -338,16 +338,17 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
       if (readonlyPlants.length > 0) {
         const allReadonly = operatorPlants.length === 0;
         const plantList = readonlyPlants.map(n => sanitizeForPrompt(n)).join(', ');
-        basePrompt += `\n\nNIVEL DE ACCESO — CONSULTA:
-El usuario tiene acceso de CONSULTA con: ${plantList}.${allReadonly ? ' Todas sus plantas son de consulta.' : ''}
-Esto significa que NO puede crear, editar, cancelar fletes, ni aceptar asignaciones, ni actualizar estados, ni adjuntar documentos con esas plantas.
-Si el usuario intenta una acción bloqueada, NO ejecutar la herramienta. Redirigir naturalmente a la planta correspondiente.
-NUNCA mencionar "permisos", "nivel de acceso", "modo consulta", "restricción" ni terminología técnica.
-Responder con naturalidad: "Eso lo gestiona [planta]. Contactalos para coordinar. ¿Querés que te pase el estado de algún flete?"
-Las consultas (ver fletes, estado, detalle, PDF, mapa) SIEMPRE funcionan sin restricción.`;
+        basePrompt += `\n\nNIVEL DE ACCESO — POR EMPRESA:`;
         if (operatorPlants.length > 0) {
           const opList = operatorPlants.map(n => sanitizeForPrompt(n)).join(', ');
-          basePrompt += `\nCon ${opList} puede operar normalmente (crear fletes, aceptar, etc.).`;
+          basePrompt += `\nCon ${opList}: puede operar normalmente (crear fletes, cancelar, adjuntar documentos, gestionar campos/lotes, etc.).`;
+        }
+        basePrompt += `\nCon ${plantList}: solo CONSULTA. Puede ver fletes, estado, detalle, PDF, mapa. NO puede crear, editar, cancelar fletes, ni aceptar asignaciones, ni actualizar estados, ni adjuntar documentos.`;
+        basePrompt += `\nCUANDO EL USUARIO PREGUNTE QUÉ PUEDE HACER: listar las capacidades diferenciadas por empresa. Ejemplo: "Con [empresa A] podés crear fletes, gestionar campos... Con [empresa B] podés consultar el estado de fletes, ver mapas y pedir informes."`;
+        basePrompt += `\nSi el usuario intenta una acción bloqueada con una empresa de consulta, NO ejecutar la herramienta. Redirigir naturalmente: "Eso lo gestiona [planta]. Contactalos para coordinar."`;
+        basePrompt += `\nNUNCA mencionar "permisos", "nivel de acceso", "modo consulta", "restricción" ni terminología técnica.`;
+        if (allReadonly) {
+          basePrompt += `\nTodas sus vinculaciones son de consulta. No puede operar con ninguna empresa.`;
         }
       }
     }
