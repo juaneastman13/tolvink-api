@@ -3386,6 +3386,30 @@ export class FreightsService {
 
   // ======================== DELETE DOCUMENT ==============================
 
+  async renameDocument(freightId: string, docId: string, name: string, user: any) {
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      throw new BadRequestException('El nombre no puede estar vacío');
+    }
+    if (name.length > 255) {
+      throw new BadRequestException('El nombre es demasiado largo (máx 255 caracteres)');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      const doc = await tx.freightDocument.findFirst({ where: { id: docId, freightId } });
+      if (!doc) throw new NotFoundException('Documento no encontrado');
+
+      await tx.freightDocument.update({ where: { id: docId }, data: { name: name.trim() } });
+
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, freightId, action: 'document_renamed', userId: user.sub, metadata: { docId, oldName: doc.name, newName: name.trim() } },
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
+
+      return { ok: true };
+    });
+  }
+
   async deleteDocument(freightId: string, docId: string, user: any) {
     return this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });

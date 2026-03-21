@@ -399,6 +399,19 @@ export class FreightsController {
     return this.service.addDocument(id, body, user);
   }
 
+  @Patch(':id/documents/:docId/rename')
+  @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 20 } })
+  @ApiOperation({ summary: 'Renombrar documento del flete' })
+  renameDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+    @Body('name') name: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.renameDocument(id, docId, name, user);
+  }
+
   @Delete(':id/documents/:docId')
   @UseGuards(FreightAccessGuard)
   @ApiOperation({ summary: 'Eliminar documento/foto del flete' })
