@@ -419,6 +419,54 @@ export class CompanyAccessService {
 
   // ── My access (for producer/transporter) ──────────────────────
 
+  async listUnified(grantorId: string) {
+    // 1. CompanyAccess records (primary source)
+    const caRecords = await this.prisma.companyAccess.findMany({
+      where: { grantorCompanyId: grantorId },
+      include: {
+        granteeCompany: {
+          select: { id: true, name: true, type: true, types: true, email: true, phone: true, hasInternalFleet: true, rut: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // 2. PlantProducerAccess records (legacy)
+    const ppaRecords = await this.prisma.plantProducerAccess.findMany({
+      where: { plantCompanyId: grantorId },
+      include: {
+        producerCompany: {
+          select: { id: true, name: true, type: true, types: true, email: true, phone: true, hasInternalFleet: true },
+        },
+      },
+    });
+
+    // 3. Deduplicate: CompanyAccess takes priority
+    const caCompanyIds = new Set(caRecords.map(r => r.granteeCompanyId));
+    const unified: any[] = caRecords.map(r => ({
+      ...r,
+      accessSource: 'company_access',
+    }));
+
+    for (const ppa of ppaRecords) {
+      if (caCompanyIds.has(ppa.producerCompanyId)) continue; // already in CompanyAccess
+      unified.push({
+        id: ppa.id,
+        grantorCompanyId: ppa.plantCompanyId,
+        granteeCompanyId: ppa.producerCompanyId,
+        granteeType: 'PRODUCER',
+        accessLevel: 'OPERATOR',
+        isActive: ppa.active,
+        createdAt: ppa.createdAt,
+        updatedAt: ppa.updatedAt,
+        granteeCompany: ppa.producerCompany,
+        accessSource: 'plant_producer_access',
+      });
+    }
+
+    return unified;
+  }
+
   async getMyAccess(user: any) {
     const companyId = user.activeCompanyId;
     if (!companyId) return [];
@@ -453,6 +501,13 @@ export class CompanyAccessController {
   @ApiOperation({ summary: 'Stats de empresas vinculadas (fletes activos, última actividad)' })
   getLinkedStats(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.service.getLinkedCompaniesStats(companyId);
+  }
+
+  @Get('unified/:companyId')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
+  @ApiOperation({ summary: 'Lista unificada: CompanyAccess + PlantProducerAccess' })
+  listUnified(@Param('companyId', ParseUUIDPipe) companyId: string) {
+    return this.service.listUnified(companyId);
   }
 
   @Get(':companyId')
