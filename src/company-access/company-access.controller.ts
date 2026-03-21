@@ -36,6 +36,17 @@ export class UpdatePermissionsDto {
   permissions: Record<string, boolean>;
 }
 
+export class LinkExistingCompanyDto {
+  @ApiProperty({ description: 'ID de la empresa existente a vincular' })
+  @IsUUID()
+  companyId: string;
+
+  @ApiProperty({ required: false, enum: ['OPERATOR', 'READONLY'] })
+  @IsOptional()
+  @IsEnum(['OPERATOR', 'READONLY'])
+  accessLevel?: string;
+}
+
 export class CreateLinkedCompanyDto {
   @ApiProperty()
   @IsString()
@@ -492,6 +503,86 @@ export class CompanyAccessService {
       take: 100,
     });
   }
+
+  // ── Search all companies (for linking existing) ────────────────
+
+  async searchCompanies(search: string, user: any) {
+    if (!search || search.trim().length < 2) return [];
+
+    const hubId = this.isPlatformAdmin(user)
+      ? user.activeCompanyId
+      : this.resolveHubCompanyId(user);
+
+    // Get already-linked company IDs
+    const linked = await this.prisma.companyAccess.findMany({
+      where: { grantorCompanyId: hubId },
+      select: { granteeCompanyId: true },
+    });
+    const linkedIds = new Set(linked.map(l => l.granteeCompanyId));
+    // Also exclude the hub itself
+    linkedIds.add(hubId);
+
+    const companies = await this.prisma.company.findMany({
+      where: {
+        OR: [
+          { name: { contains: search.trim(), mode: 'insensitive' } },
+          { rut: { contains: search.trim(), mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, name: true, type: true, types: true, phone: true, rut: true },
+      orderBy: { name: 'asc' },
+      take: 50,
+    });
+
+    return companies.filter(c => !linkedIds.has(c.id));
+  }
+
+  // ── Link existing company ─────────────────────────────────────
+
+  async linkExistingCompany(dto: LinkExistingCompanyDto, user: any) {
+    const hubId = this.isPlatformAdmin(user)
+      ? user.activeCompanyId
+      : this.resolveHubCompanyId(user);
+
+    // Verify company exists
+    const company = await this.prisma.company.findUnique({
+      where: { id: dto.companyId },
+      select: { id: true, name: true, type: true },
+    });
+    if (!company) throw new NotFoundException('Empresa no encontrada');
+
+    // Check not already linked
+    const existing = await this.prisma.companyAccess.findFirst({
+      where: { grantorCompanyId: hubId, granteeCompanyId: dto.companyId },
+    });
+    if (existing) {
+      if (existing.isActive) throw new BadRequestException('Esta empresa ya está vinculada');
+      // Reactivate if was deactivated
+      const reactivated = await this.prisma.companyAccess.update({
+        where: { id: existing.id },
+        data: { isActive: true, accessLevel: (dto.accessLevel || 'OPERATOR') as any },
+      });
+      this.invalidateAccessLevel(hubId, dto.companyId);
+      this.logger.log(`linkExisting: reactivated ${company.name} for hub ${hubId}`);
+      return { company, access: reactivated, reactivated: true };
+    }
+
+    // Determine grantee type
+    const granteeType = company.type === 'producer' ? 'PRODUCER' : 'TRANSPORTER';
+
+    const access = await this.prisma.companyAccess.create({
+      data: {
+        grantorCompanyId: hubId,
+        granteeCompanyId: company.id,
+        granteeType: granteeType as any,
+        accessLevel: (dto.accessLevel || 'OPERATOR') as any,
+        invitedBy: user.sub,
+      },
+    });
+
+    this.logger.log(`linkExisting: ${company.name} (${granteeType}) linked to hub ${hubId}`);
+    return { company, access };
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -521,6 +612,17 @@ export class CompanyAccessController {
   @ApiOperation({ summary: 'Lista unificada: CompanyAccess + PlantProducerAccess' })
   listUnified(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.service.listUnified(companyId);
+  }
+
+  @Get('search-companies')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
+  @ApiOperation({ summary: 'Buscar empresas existentes para vincular' })
+  @ApiQuery({ name: 'search', required: true })
+  searchCompanies(
+    @Query('search') search: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.searchCompanies(search, user);
   }
 
   @Get(':companyId')
@@ -564,6 +666,16 @@ export class CompanyAccessController {
     @CurrentUser() user: any,
   ) {
     return this.service.toggleActive(id, user);
+  }
+
+  @Post('link-existing')
+  @Roles('plant', 'producer', 'transporter', 'platform_admin')
+  @ApiOperation({ summary: 'Vincular empresa existente' })
+  linkExisting(
+    @Body() dto: LinkExistingCompanyDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.linkExistingCompany(dto, user);
   }
 
   @Post('create-company')
