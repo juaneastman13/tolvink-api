@@ -126,9 +126,12 @@ export class SharedLinksService {
           destCompany: { select: { id: true, name: true } },
           destPlant: { select: { id: true, name: true } },
           field: { select: { id: true, name: true } },
+          producerCompany: { select: { id: true, name: true } },
           assignments: {
             where: { status: { in: ['active', 'accepted'] } },
             select: {
+              id: true,
+              tripNumber: true,
               transportCompanyId: true,
               plate: true,
               driverName: true,
@@ -136,7 +139,7 @@ export class SharedLinksService {
               tripStatus: true,
               startedAt: true,
               loadedAt: true,
-              transportCompany: { select: { name: true } },
+              transportCompany: { select: { id: true, name: true } },
             },
           },
           auditLogs: {
