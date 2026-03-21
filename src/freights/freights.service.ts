@@ -786,7 +786,7 @@ export class FreightsService {
       ? (transport.types as string[]) : [transport.type];
     if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
-    let result: { updated: any; freight: any; bothConsulta: boolean };
+    let result: { updated: any; freight: any; bothConsulta: boolean; assignment: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent TOCTOU race
@@ -864,22 +864,24 @@ export class FreightsService {
           assignedById: user.sub,
         };
         if (dto.truckId) {
-          // Check both companyId and ownerCompanyId — plant-created trucks for CONSULTA transporters
-          // have companyId=plant but ownerCompanyId=transporter
+          // Check companyId, ownerCompanyId, and caller's company (plant may own truck directly)
+          const callerCompanyId = user.activeCompanyId || user.companyId;
+          const truckCompanyCandidates = [...new Set([dto.transportCompanyId, callerCompanyId].filter(Boolean))];
           const truck = await tx.truck.findFirst({
             where: {
               id: dto.truckId,
               active: true,
               OR: [
-                { companyId: dto.transportCompanyId },
-                { ownerCompanyId: dto.transportCompanyId },
+                { companyId: { in: truckCompanyCandidates } },
+                { ownerCompanyId: { in: truckCompanyCandidates } },
               ],
             },
           });
-          if (truck) {
-            assignData.truckId = truck.id;
-            assignData.plate = truck.plate;
+          if (!truck) {
+            throw new BadRequestException('Camión no encontrado o no pertenece a la empresa');
           }
+          assignData.truckId = truck.id;
+          assignData.plate = truck.plate;
         }
         if (dto.driverId) {
           const driverMembership = await tx.userCompany.findFirst({
@@ -1023,7 +1025,7 @@ export class FreightsService {
           });
         }
 
-        return { updated, freight, bothConsulta };
+        return { updated, freight, bothConsulta, assignment };
       }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
@@ -1031,7 +1033,7 @@ export class FreightsService {
       throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    this.logger.log(`assign: completed freight=${freightId} finalStatus=${result.updated.status} bothConsulta=${result.bothConsulta} truckId=${result.updated.truckId ?? 'none'}`);
+    this.logger.log(`assign: completed freight=${freightId} finalStatus=${result.updated.status} bothConsulta=${result.bothConsulta} truckId=${result.assignment.truckId ?? 'none'} plate=${result.assignment.plate ?? 'none'}`);
 
     // Notifications: if both CONSULTA, send single consolidated notification (no intermediate spam)
     if (result.bothConsulta) {
