@@ -677,7 +677,7 @@ export class FreightsService {
       field: { select: { id: true, name: true } },
       originCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
       destCompany: { select: { id: true, name: true, type: true, hasInternalFleet: true, types: true } },
-      producerCompany: { select: { id: true, name: true } },
+      producerCompany: { select: { id: true, name: true, phone: true } },
       requestedBy: { select: { id: true, name: true } },
       assignments: {
         orderBy: { createdAt: 'desc' as const },
