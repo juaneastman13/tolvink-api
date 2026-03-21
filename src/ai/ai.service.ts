@@ -597,6 +597,14 @@ export class AiService implements OnModuleDestroy {
 
       const result = await this._executeToolInner(toolName, input, user, synUser, session);
 
+      // Strip action buttons from freight detail for CONSULTA users
+      if (toolName === 'get_freight_detail' && plantAccessMap && this.isGlobalConsulta(plantAccessMap) && session?.id) {
+        const effects = this.sessionManager.getSideEffects(session.id);
+        if (effects?._pendingSelection) delete effects._pendingSelection;
+        if (effects?._pendingButtons) delete effects._pendingButtons;
+        this.sessionManager.setSideEffects(session.id, effects);
+      }
+
       // Track completed actions in active context
       if (AiService.ACTION_TOOLS.has(toolName) && session?.id) {
         const code = input.code || '';
