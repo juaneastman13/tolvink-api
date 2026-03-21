@@ -1858,21 +1858,41 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       '0' + normalized.slice(3), // 598 → 0xx
     ];
 
+    const userInclude = {
+      company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } },
+      memberships: {
+        where: { active: true },
+        include: { company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } } },
+      },
+    };
+
+    // 1) Direct lookup by user phone
     const user = await this.prisma.user.findFirst({
       where: {
         active: true,
         OR: variants.map(p => ({ phone: p })),
       },
-      include: {
-        company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } },
-        memberships: {
-          where: { active: true },
-          include: { company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } } },
-        },
-      },
+      include: userInclude,
     });
 
-    return user;
+    if (user) return user;
+
+    // 2) Fallback: lookup by company phone → find first active user of that company
+    const company = await this.prisma.company.findFirst({
+      where: { OR: variants.map(p => ({ phone: p })) },
+      select: { id: true },
+    });
+
+    if (company) {
+      const companyUser = await this.prisma.user.findFirst({
+        where: { active: true, companyId: company.id },
+        include: userInclude,
+        orderBy: { createdAt: 'asc' },
+      });
+      if (companyUser) return companyUser;
+    }
+
+    return null;
   }
 
   // ======================== BUILD SYNTHETIC USER ========================
