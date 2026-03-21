@@ -294,7 +294,16 @@ export class FreightActionToolsService {
           select: { plantCompanyId: true },
           take: 100,
         });
-        const plantCompanyIds = [...new Set(accesses.map(a => a.plantCompanyId))];
+        // CompanyAccess: plants that granted access to this producer
+        const caRecords = await this.prisma.companyAccess.findMany({
+          where: { granteeCompanyId: producerCompanyId, isActive: true },
+          select: { grantorCompanyId: true },
+          take: 200,
+        });
+        const plantCompanyIds = [...new Set([
+          ...accesses.map(a => a.plantCompanyId),
+          ...caRecords.map(r => r.grantorCompanyId),
+        ])];
         if (plantCompanyIds.length > 0) {
           const companies = await this.prisma.company.findMany({
             where: { id: { in: plantCompanyIds }, active: true },

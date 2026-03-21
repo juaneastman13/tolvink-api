@@ -121,9 +121,16 @@ export class TransportToolsService {
       select: { producerCompanyId: true, plantCompanyId: true },
       take: 500,
     });
-    const relatedCompanyIds = [...new Set(accessRecords.map(a =>
-      a.producerCompanyId === ownCompanyId ? a.plantCompanyId : a.producerCompanyId,
-    ))];
+    // CompanyAccess: both directions (grantor and grantee)
+    const caRecords = await this.prisma.companyAccess.findMany({
+      where: { OR: [{ granteeCompanyId: ownCompanyId }, { grantorCompanyId: ownCompanyId }], isActive: true },
+      select: { grantorCompanyId: true, granteeCompanyId: true },
+      take: 200,
+    });
+    const relatedCompanyIds = [...new Set([
+      ...accessRecords.map(a => a.producerCompanyId === ownCompanyId ? a.plantCompanyId : a.producerCompanyId),
+      ...caRecords.map(r => r.grantorCompanyId === ownCompanyId ? r.granteeCompanyId : r.grantorCompanyId),
+    ])];
     const freightRelated = await this.prisma.freightAssignment.findMany({
       where: {
         transportCompanyId: { not: null },

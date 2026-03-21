@@ -111,7 +111,20 @@ export class CatalogController implements OnModuleDestroy {
           take: 200,
         });
 
-        const companyIds = [...new Set(accessRecords.map(r => r.plantCompanyId))];
+        // CompanyAccess: plants that granted access to this producer
+        const companyAccessRecords = await this.prisma.companyAccess.findMany({
+          where: {
+            granteeCompanyId: { in: producerCompanyIds },
+            isActive: true,
+          },
+          select: { grantorCompanyId: true },
+          take: 200,
+        });
+
+        const companyIds = [...new Set([
+          ...accessRecords.map(r => r.plantCompanyId),
+          ...companyAccessRecords.map(r => r.grantorCompanyId),
+        ])];
         if (companyIds.length === 0) return [];
 
         const companies = await this.prisma.company.findMany({
@@ -184,6 +197,13 @@ export class CatalogController implements OnModuleDestroy {
           take: 200,
         });
 
+        // CompanyAccess: plants that granted access to this producer
+        const caRecords = await this.prisma.companyAccess.findMany({
+          where: { granteeCompanyId: { in: producerCompanyIds }, isActive: true },
+          select: { grantorCompanyId: true },
+          take: 200,
+        });
+
         const allowedBranchIds: string[] = [];
         const fullAccessCompanyIds: string[] = [];
 
@@ -194,6 +214,10 @@ export class CatalogController implements OnModuleDestroy {
           } else {
             fullAccessCompanyIds.push(record.plantCompanyId);
           }
+        }
+        // CompanyAccess grants full access to all branches of the plant
+        for (const ca of caRecords) {
+          fullAccessCompanyIds.push(ca.grantorCompanyId);
         }
 
         if (allowedBranchIds.length === 0 && fullAccessCompanyIds.length === 0) {

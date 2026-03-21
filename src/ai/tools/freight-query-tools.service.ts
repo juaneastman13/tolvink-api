@@ -542,7 +542,17 @@ export class FreightQueryToolsService {
       take: 500,
     });
 
-    const plantCompanyIds = [...new Set(accessRecords.map(ar => ar.plantCompanyId))];
+    // CompanyAccess: plants that granted access to this producer
+    const companyAccessRecords = await this.prisma.companyAccess.findMany({
+      where: { granteeCompanyId: producerCompanyId, isActive: true },
+      select: { grantorCompanyId: true },
+      take: 200,
+    });
+
+    const plantCompanyIds = [...new Set([
+      ...accessRecords.map(ar => ar.plantCompanyId),
+      ...companyAccessRecords.map(r => r.grantorCompanyId),
+    ])];
     if (plantCompanyIds.length === 0) {
       return JSON.stringify({ plants: [], message: 'No tiene plantas habilitadas' });
     }
