@@ -296,7 +296,47 @@ export class CompanyAccessService {
       },
     });
 
-    this.logger.log(`createLinkedCompany: ${dto.name} (${dto.type}) linked to hub ${hubId}`);
+    // Auto-create default user with company phone so WhatsApp works
+    let autoUser = null;
+    if (dto.phone) {
+      // Check if a user with this phone already exists
+      const existingUser = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
+      if (existingUser) {
+        // Link existing user to the new company via membership
+        const existingMembership = await this.prisma.userCompany.findFirst({
+          where: { userId: existingUser.id, companyId: company.id },
+        });
+        if (!existingMembership) {
+          await this.prisma.userCompany.create({
+            data: { userId: existingUser.id, companyId: company.id, role: 'gerente' },
+          }).catch(e => this.logger.warn(`createLinkedCompany auto-link user: ${e.message}`));
+        }
+        autoUser = existingUser;
+      } else {
+        // Create new user with company phone
+        const genEmail = `${dto.name.toLowerCase().replace(/\s+/g, '.')}.${Date.now()}@tolvink.generated`;
+        const hash = await bcrypt.hash('Tolvink2026', BCRYPT_ROUNDS);
+        autoUser = await this.prisma.user.create({
+          data: {
+            name: dto.name,
+            email: genEmail,
+            phone: dto.phone,
+            passwordHash: hash,
+            role: 'admin',
+            companyId: company.id,
+            activeCompanyId: company.id,
+            userTypes: [],
+          },
+        }).catch(e => { this.logger.warn(`createLinkedCompany auto-create user: ${e.message}`); return null; });
+        if (autoUser) {
+          await this.prisma.userCompany.create({
+            data: { userId: autoUser.id, companyId: company.id, role: 'gerente' },
+          }).catch(e => this.logger.warn(`createLinkedCompany auto-membership: ${e.message}`));
+        }
+      }
+    }
+
+    this.logger.log(`createLinkedCompany: ${dto.name} (${dto.type}) linked to hub ${hubId}${autoUser ? ` [auto-user: ${autoUser.id}]` : ''}`);
     return { company, access };
   }
 
