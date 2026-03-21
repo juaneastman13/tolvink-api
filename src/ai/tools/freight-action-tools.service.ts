@@ -1227,6 +1227,13 @@ export class FreightActionToolsService {
         }
 
         case 'grant_producer_access': {
+          // Primary: upsert CompanyAccess (new system)
+          await this.prisma.companyAccess.upsert({
+            where: { grantorCompanyId_granteeCompanyId: { grantorCompanyId: params.plantCompanyId, granteeCompanyId: params.producerCompanyId } },
+            update: { isActive: true },
+            create: { grantorCompanyId: params.plantCompanyId, granteeCompanyId: params.producerCompanyId, granteeType: 'PRODUCER' as any, accessLevel: 'OPERATOR' as any, isActive: true },
+          });
+          // LEGACY dual-write: PlantProducerAccess — to be removed after full migration
           const existing = await this.prisma.plantProducerAccess.findFirst({
             where: { plantCompanyId: params.plantCompanyId, producerCompanyId: params.producerCompanyId, producerUserId: params.producerUserId || null },
           });
@@ -1242,6 +1249,12 @@ export class FreightActionToolsService {
         }
 
         case 'revoke_producer_access': {
+          // Primary: deactivate CompanyAccess (new system)
+          await this.prisma.companyAccess.updateMany({
+            where: { grantorCompanyId: params.plantCompanyId, granteeCompanyId: params.producerCompanyId },
+            data: { isActive: false },
+          });
+          // LEGACY dual-write: PlantProducerAccess — to be removed after full migration
           await this.prisma.plantProducerAccess.update({ where: { id: params.accessId }, data: { active: false } });
           result = JSON.stringify({ status: 'revoked', message: `Acceso del productor "${params.producerName}" revocado.` });
           break;

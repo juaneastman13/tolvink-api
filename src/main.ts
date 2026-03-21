@@ -28,7 +28,7 @@ async function bootstrap() {
     logger.log('Sentry initialized');
   }
 
-  // Validate critical env vars at startup
+  // Startup validation — server must not start without critical env vars
   const required = ['DATABASE_URL', 'DIRECT_URL', 'JWT_SECRET', 'WHATSAPP_APP_SECRET'];
   for (const key of required) {
     if (!process.env[key]) {

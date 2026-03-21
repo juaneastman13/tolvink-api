@@ -1199,7 +1199,7 @@ export class AdminService {
 
         await this.prisma.userCompany.create({
           data: { userId: user.id, companyId: company.id, role: roleDef.membershipRole },
-        }).catch(() => {});
+        }).catch((err) => this.logger.warn(`[importUsers] membership create failed: ${err.message}`));
 
         results.imported++;
       } catch (e: any) {

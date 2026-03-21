@@ -3,7 +3,7 @@
 // Sends messages with native interactive buttons and lists
 // =====================================================================
 
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { SelectionItem, SelectionConfig, SelectionResult } from '../common/selection-helpers';
@@ -284,6 +284,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       take: 500,
     });
 
+    // N+1: queries freights per user's companies — low volume (daily cron, max 500 users), batch later
     for (const user of users) {
       try {
         // Collect all companies and their resolved types (prefer types[] array, fallback to type)
@@ -578,7 +579,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   // ======================== DOWNLOAD MEDIA =================================
 
   async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
-    if (!this.enabled) throw new Error('WhatsApp not configured');
+    if (!this.enabled) throw new InternalServerErrorException('WhatsApp not configured');
 
     // Step 1: Get media URL from Meta
     const metaRes = await fetch(`${META_API}/${mediaId}`, {
@@ -587,7 +588,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     });
     if (!metaRes.ok) {
       const errBody = await metaRes.text();
-      throw new Error(`Media metadata fetch failed (${metaRes.status}): ${errBody.slice(0, 200)}`);
+      throw new BadRequestException(`Media metadata fetch failed (${metaRes.status}): ${errBody.slice(0, 200)}`);
     }
     const metaData = await metaRes.json() as any;
     const url = metaData.url;
@@ -598,13 +599,13 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     try {
       const parsed = new URL(url);
       if (parsed.protocol !== 'https:') {
-        throw new Error('Non-HTTPS media URL rejected');
+        throw new BadRequestException('Non-HTTPS media URL rejected');
       }
       if (!ALLOWED_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`))) {
-        throw new Error(`Unexpected media host: ${parsed.hostname}`);
+        throw new BadRequestException(`Unexpected media host: ${parsed.hostname}`);
       }
     } catch (e) {
-      if (e instanceof TypeError) throw new Error(`Invalid media URL from Meta`);
+      if (e instanceof TypeError) throw new BadRequestException(`Invalid media URL from Meta`);
       throw e;
     }
 
@@ -614,17 +615,17 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       signal: AbortSignal.timeout(30_000),
     });
     if (!fileRes.ok) {
-      throw new Error(`Media download failed (${fileRes.status})`);
+      throw new BadRequestException(`Media download failed (${fileRes.status})`);
     }
     const MAX_MEDIA_SIZE = 25 * 1024 * 1024; // 25MB
     const contentLength = parseInt(fileRes.headers.get('content-length') || '0', 10);
     if (contentLength > MAX_MEDIA_SIZE) {
-      throw new Error(`Media too large: ${contentLength} bytes (max ${MAX_MEDIA_SIZE})`);
+      throw new BadRequestException(`Media too large: ${contentLength} bytes (max ${MAX_MEDIA_SIZE})`);
     }
 
     // Stream response body and abort if accumulated bytes exceed MAX_MEDIA_SIZE
     const reader = fileRes.body?.getReader();
-    if (!reader) throw new Error('No se pudo leer la respuesta de media');
+    if (!reader) throw new BadRequestException('No se pudo leer la respuesta de media');
     const chunks: Uint8Array[] = [];
     let totalSize = 0;
     while (true) {
@@ -633,7 +634,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       totalSize += value.length;
       if (totalSize > MAX_MEDIA_SIZE) {
         reader.cancel();
-        throw new Error(`Media download exceeded limit: ${totalSize} bytes (max ${MAX_MEDIA_SIZE})`);
+        throw new BadRequestException(`Media download exceeded limit: ${totalSize} bytes (max ${MAX_MEDIA_SIZE})`);
       }
       chunks.push(value);
     }
@@ -649,7 +650,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     const supabaseKey = this.config.get<string>('SUPABASE_SERVICE_KEY');
 
     if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY)');
+      throw new InternalServerErrorException('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY)');
     }
 
     const bucket = 'freight-docs';
@@ -665,7 +666,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
 
     if (!res.ok) {
       const errBody = await res.text();
-      throw new Error(`Storage upload failed (${res.status}): ${errBody.slice(0, 200)}`);
+      throw new BadRequestException(`Storage upload failed (${res.status}): ${errBody.slice(0, 200)}`);
     }
 
     return `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`;

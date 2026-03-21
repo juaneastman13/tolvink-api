@@ -108,6 +108,7 @@ export class CatalogController implements OnModuleDestroy {
             ...userFilter,
           },
           select: { plantCompanyId: true },
+          take: 200,
         });
 
         const companyIds = [...new Set(accessRecords.map(r => r.plantCompanyId))];
@@ -180,6 +181,7 @@ export class CatalogController implements OnModuleDestroy {
             ...userFilter,
           },
           select: { plantCompanyId: true, allowedBranchIds: true },
+          take: 200,
         });
 
         const allowedBranchIds: string[] = [];
@@ -292,6 +294,7 @@ export class CatalogController implements OnModuleDestroy {
             producerUserId: true,
             producerUser: { select: { id: true, name: true, phone: true } },
           },
+          take: 200,
         });
 
         // Group by company: track company-wide vs user-specific access
@@ -340,6 +343,7 @@ export class CatalogController implements OnModuleDestroy {
         where: { active: true },
         select: { id: true, name: true, address: true, phone: true, type: true, types: true },
         orderBy: { name: 'asc' },
+        take: 200,
       });
       return all.filter(c => {
         const cTypes = Array.isArray(c.types) && (c.types as string[]).length > 0

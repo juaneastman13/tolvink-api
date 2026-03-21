@@ -20,6 +20,7 @@ export interface DbUserForSynthetic {
 }
 
 export function buildSyntheticUser(dbUser: DbUserForSynthetic): any {
+  // Internal assertion — should never reach production
   if (!dbUser) throw new Error('buildSyntheticUser: dbUser is required');
   const companyByType = (dbUser.companyByType as any) || {};
   const userTypes = Array.isArray(dbUser.userTypes) ? dbUser.userTypes : [];

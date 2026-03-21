@@ -466,7 +466,7 @@ export class FreightsService {
     this.broadcastAndInvalidate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub);
 
     // Fire-and-forget: calculate route if coordinates available
-    this.calculateRoute(freight.id, originLat, originLng, destLat, destLng).catch(() => {});
+    this.calculateRoute(freight.id, originLat, originLng, destLat, destLng).catch((err) => this.logger.warn(`[createFreight] route calculation failed: ${err.message}`));
 
     return freight;
   }
@@ -2381,6 +2381,7 @@ export class FreightsService {
           WHERE "freight_id"::text = ${freightId}`;
         let tripNumber = maxTripRow[0]?.maxTn ?? existingCount;
 
+        // N+1: low volume (typically 1-5 trucks per assignment), within transaction — batch later
         for (const truck of dto.trucks) {
           const transport = await tx.company.findFirst({
             where: { id: truck.transportCompanyId, active: true },

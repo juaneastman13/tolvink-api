@@ -196,6 +196,15 @@ export class PlantAccessService {
       },
     });
 
+    // Primary: upsert CompanyAccess (new system)
+    const companyType = companyTypes.includes('transporter') ? 'TRANSPORTER' : 'PRODUCER';
+    await this.prisma.companyAccess.upsert({
+      where: { grantorCompanyId_granteeCompanyId: { grantorCompanyId: plantCoId, granteeCompanyId: dto.producerCompanyId } },
+      update: { isActive: true },
+      create: { grantorCompanyId: plantCoId, granteeCompanyId: dto.producerCompanyId, granteeType: companyType as any, accessLevel: 'OPERATOR' as any, isActive: true },
+    });
+
+    // LEGACY dual-write: PlantProducerAccess — to be removed after full migration
     if (existing) {
       const existingPlants = (existing.allowedPlantIds as string[]) || [];
       const existingBranches = (existing.allowedBranchIds as string[]) || [];

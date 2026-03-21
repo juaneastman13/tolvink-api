@@ -15,6 +15,7 @@ import { WhatsAppModule } from '../whatsapp/whatsapp.module';
       useFactory: (config: ConfigService) => {
         const secret = config.getOrThrow('JWT_SECRET');
         if (secret.length < 32) {
+          // Startup validation — server must not start without valid JWT_SECRET
           throw new Error('JWT_SECRET must be at least 32 characters');
         }
         return {

@@ -177,6 +177,7 @@ export class CompanyAccessService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
   }
 
@@ -187,6 +188,7 @@ export class CompanyAccessService {
         grantorCompany: { select: { id: true, name: true, type: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
   }
 
@@ -357,6 +359,7 @@ export class CompanyAccessService {
     const accesses = await this.prisma.companyAccess.findMany({
       where: { grantorCompanyId: grantorId, isActive: true },
       select: { granteeCompanyId: true },
+      take: 100,
     });
     const companyIds = accesses.map(a => a.granteeCompanyId);
     if (companyIds.length === 0) return {};
@@ -429,6 +432,7 @@ export class CompanyAccessService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
 
     // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
@@ -440,6 +444,7 @@ export class CompanyAccessService {
           select: { id: true, name: true, type: true, types: true, email: true, phone: true, hasInternalFleet: true },
         },
       },
+      take: 100,
     });
 
     // 3. Deduplicate: CompanyAccess takes priority
@@ -478,6 +483,7 @@ export class CompanyAccessService {
         grantorCompany: { select: { id: true, name: true, type: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
   }
 }

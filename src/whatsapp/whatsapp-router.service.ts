@@ -136,7 +136,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         // P2-6: Send feedback instead of silent drop (once per window)
         if (rate.count === 30) {
           this.wa.sendText(phone, 'Estás enviando muchos mensajes. Esperá un momento antes de continuar.')
-            .catch(() => {});
+            .catch((err) => this.logger.warn(`[rateLimit] feedback send failed: ${err.message}`));
         }
         return;
       }
@@ -489,12 +489,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         this.prisma.whatsAppSession.update({
           where: { id: session.id },
           data: { expiresAt: newExpiry },
-        }).catch(() => {});
+        }).catch((err) => this.logger.warn(`[session] extend failed: ${err.message}`));
         session.expiresAt = newExpiry;
       }
 
       // Show "typing" indicator so user sees the bot is working
-      this.wa.sendTypingIndicator(phone).catch(() => {});
+      this.wa.sendTypingIndicator(phone).catch((err) => this.logger.debug(`[typing] indicator failed: ${err.message}`));
 
       const result = await this.ai.chat(phone, text, user, session);
       const reply = result.text;
@@ -611,7 +611,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // P2002 = duplicate GPS write (race condition) — silently ignore
       if (err?.code === 'P2002') return;
       this.logger.error(`GPS tracking save failed for user ${user.id}: ${err.message}`);
-      await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch(() => {});
+      await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch((err2) => this.logger.warn(`[gps] error feedback send failed: ${err2.message}`));
     });
 
     // Forward as text to AI so Claude knows the user shared a location (no raw coords — policy)

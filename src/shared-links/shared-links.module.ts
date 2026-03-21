@@ -113,7 +113,7 @@ export class SharedLinksService {
     await this.prisma.sharedLink.update({
       where: { id: link.id },
       data: { accessCount: { increment: 1 }, lastAccessedAt: new Date() },
-    }).catch(() => {});
+    }).catch((err) => this.logger.warn(`[validateLink] access count update failed: ${err.message}`));
 
     // Load data based on link type
     let data: any = null;
