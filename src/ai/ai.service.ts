@@ -503,6 +503,9 @@ export class AiService implements OnModuleDestroy {
     'update_freight', 'duplicate_freight', 'authorize_freight',
     'approve_pending_change', 'reject_pending_change',
     'attach_document', 'delete_document', 'save_ocr_data',
+    'create_field', 'create_lot', 'update_field', 'update_lot', 'delete_field', 'delete_lot',
+    'create_truck', 'create_driver', 'update_truck', 'update_driver', 'delete_truck', 'delete_driver',
+    'generate_location_link',
   ]);
 
   /**

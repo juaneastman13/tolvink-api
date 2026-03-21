@@ -343,9 +343,9 @@ AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión),
           const opList = operatorPlants.map(n => sanitizeForPrompt(n)).join(', ');
           basePrompt += `\nCon ${opList}: puede operar normalmente (crear fletes, cancelar, adjuntar documentos, gestionar campos/lotes, etc.).`;
         }
-        basePrompt += `\nCon ${plantList}: solo CONSULTA. Puede ver fletes, estado, detalle, PDF, mapa. NO puede crear, editar, cancelar fletes, ni aceptar asignaciones, ni actualizar estados, ni adjuntar documentos.`;
+        basePrompt += `\nCon ${plantList}: solo CONSULTA. Puede ver fletes, estado, detalle, PDF, mapa. NO puede crear, editar, cancelar fletes, ni aceptar asignaciones, ni actualizar estados, ni adjuntar documentos, ni crear/editar campos, lotes, camiones o choferes.`;
         basePrompt += `\nCUANDO EL USUARIO PREGUNTE QUÉ PUEDE HACER: listar las capacidades diferenciadas por empresa. Ejemplo: "Con [empresa A] podés crear fletes, gestionar campos... Con [empresa B] podés consultar el estado de fletes, ver mapas y pedir informes."`;
-        basePrompt += `\nSi el usuario intenta una acción bloqueada con una empresa de consulta, NO ejecutar la herramienta. Redirigir naturalmente: "Eso lo gestiona [planta]. Contactalos para coordinar."`;
+        basePrompt += `\nSi el usuario intenta una acción bloqueada con una empresa de consulta, NO iniciar el flujo ni pedir datos. Responder inmediatamente: "Eso lo gestiona [planta]. Contactalos para coordinar. ¿Te ayudo con otra cosa?"`;
         basePrompt += `\nNUNCA mencionar "permisos", "nivel de acceso", "modo consulta", "restricción" ni terminología técnica.`;
         if (allReadonly) {
           basePrompt += `\nTodas sus vinculaciones son de consulta. No puede operar con ninguna empresa.`;
