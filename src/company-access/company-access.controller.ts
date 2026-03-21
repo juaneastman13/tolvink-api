@@ -325,10 +325,34 @@ export class CompanyAccessService {
     const existing = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) throw new BadRequestException('Email ya registrado');
 
-    // Check phone uniqueness
+    // Check phone — if user already exists, link them instead of creating new
     if (dto.phone) {
-      const phoneExists = await this.prisma.user.findFirst({ where: { phone: dto.phone } });
-      if (phoneExists) throw new BadRequestException('Teléfono ya registrado');
+      const phoneUser = await this.prisma.user.findFirst({
+        where: { phone: dto.phone },
+        select: { id: true, name: true, email: true, phone: true, role: true, companyId: true, active: true },
+      });
+      if (phoneUser) {
+        // Check if already has membership in this company
+        const existingMembership = await this.prisma.userCompany.findFirst({
+          where: { userId: phoneUser.id, companyId: dto.targetCompanyId },
+        });
+        if (existingMembership) {
+          // Reactivate if inactive
+          if (!existingMembership.active) {
+            await this.prisma.userCompany.update({
+              where: { id: existingMembership.id },
+              data: { active: true },
+            });
+          }
+        } else {
+          const membershipRole = dto.role || 'operario';
+          await this.prisma.userCompany.create({
+            data: { userId: phoneUser.id, companyId: dto.targetCompanyId, role: membershipRole },
+          }).catch(e => this.logger.warn(`createLinkedUser link existing membership: ${e.message}`));
+        }
+        this.logger.log(`createLinkedUser: linked existing user ${phoneUser.name} (phone ${dto.phone}) to company ${dto.targetCompanyId} by hub ${hubId}`);
+        return { ...phoneUser, linked: true };
+      }
     }
 
     // Hash password
