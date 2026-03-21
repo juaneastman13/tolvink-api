@@ -423,6 +423,19 @@ export class FreightsController {
     return this.service.saveOcrData(id, docId, dto.ocrData, user);
   }
 
+  @Patch(':id/documents/:docId/ocr-edit')
+  @UseGuards(FreightAccessGuard)
+  @Throttle({ default: { ttl: 60000, limit: 20 } })
+  @ApiOperation({ summary: 'Editar manualmente datos OCR de un documento' })
+  editOcrData(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('docId', ParseUUIDPipe) docId: string,
+    @Body() dto: SaveOcrDataDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.editOcrData(id, docId, dto.ocrData, user);
+  }
+
   @Patch(':id/documents/:docId/ocr-clear')
   @UseGuards(FreightAccessGuard)
   @Throttle({ default: { ttl: 60000, limit: 20 } })

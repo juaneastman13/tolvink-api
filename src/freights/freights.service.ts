@@ -3477,6 +3477,69 @@ export class FreightsService {
     });
   }
 
+  async editOcrData(freightId: string, docId: string, ocrData: any, user: any) {
+    // Validate ocrData shape
+    if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
+      throw new BadRequestException('ocrData debe ser un objeto JSON');
+    }
+    const serialized = JSON.stringify(ocrData);
+    if (serialized.length > 50_000) {
+      throw new BadRequestException('ocrData demasiado grande (máx 50KB)');
+    }
+
+    const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
+
+    return this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        select: {
+          id: true, originCompanyId: true, destCompanyId: true,
+          assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true, driverId: true } },
+        },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+
+      if (user.role !== 'platform_admin') {
+        const freightCompanies = [freight.originCompanyId, freight.destCompanyId,
+          ...(freight.assignments || []).map(a => a.transportCompanyId)].filter(Boolean);
+        const isDriver = (freight.assignments || []).some(a => a.driverId === user.sub);
+        const hasAccess = isDriver || allIds.some(id => freightCompanies.includes(id));
+        if (!hasAccess) throw new ForbiddenException('No tiene acceso a este flete');
+      }
+
+      const doc = await tx.freightDocument.findFirst({ where: { id: docId, freightId } });
+      if (!doc) throw new NotFoundException('Documento no encontrado');
+
+      // Build history: save previous ocrData snapshot (without its own history to avoid bloat)
+      const prevOcr = (doc.ocrData as any) || {};
+      const prevHistory: any[] = Array.isArray(prevOcr._editHistory) ? prevOcr._editHistory : [];
+      // Snapshot previous datos (exclude _editHistory and _editMeta to keep history lean)
+      const { _editHistory: _h, _editMeta: _m, ...prevSnapshot } = prevOcr;
+      const newHistory = [
+        ...prevHistory.slice(-9), // Keep last 10 versions max
+        { datos: prevSnapshot, editedAt: prevOcr._editMeta?.editedAt || doc.updatedAt?.toISOString(), editedBy: prevOcr._editMeta?.editedBy || null },
+      ];
+
+      // Merge edit metadata into ocrData
+      const updatedOcrData = {
+        ...ocrData,
+        _editMeta: { editedAt: new Date().toISOString(), editedBy: user.sub, editedByName: user.name || null },
+        _editHistory: newHistory,
+      };
+
+      await tx.freightDocument.update({
+        where: { id: docId },
+        data: { ocrData: updatedOcrData },
+      });
+
+      await tx.auditLog.create({
+        data: { entityType: 'freight', entityId: freightId, freightId, action: 'ocr_data_edited', userId: user.sub, metadata: { docId, docName: doc.name } },
+      }).catch(e => this.logger.warn('Audit log failed: ' + e.message));
+
+      return { ok: true, editedAt: updatedOcrData._editMeta.editedAt };
+    });
+  }
+
   async clearOcrData(freightId: string, docId: string, user: any) {
     const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
