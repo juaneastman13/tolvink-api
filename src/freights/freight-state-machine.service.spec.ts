@@ -151,13 +151,17 @@ describe('FreightStateMachine', () => {
       ).not.toThrow();
     });
 
-    it('in_progress → loaded requires transporter', () => {
+    it('in_progress → loaded requires transporter or plant', () => {
       expect(() =>
-        sm.validateTransition(FreightStatus.in_progress, FreightStatus.loaded, 'plant'),
+        sm.validateTransition(FreightStatus.in_progress, FreightStatus.loaded, 'producer'),
       ).toThrow(BadRequestException);
 
       expect(() =>
         sm.validateTransition(FreightStatus.in_progress, FreightStatus.loaded, 'transporter'),
+      ).not.toThrow();
+
+      expect(() =>
+        sm.validateTransition(FreightStatus.in_progress, FreightStatus.loaded, 'plant'),
       ).not.toThrow();
     });
 

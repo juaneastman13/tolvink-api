@@ -431,6 +431,7 @@ export class FreightQueryToolsService {
       this.prisma.freight.findMany({
         where: { ...where, createdAt: { gte: monthStart, lte: monthEnd } },
         select: { id: true, status: true, items: { select: { tons: true } } },
+        take: 100,
       }),
     ]);
 
@@ -534,6 +535,7 @@ export class FreightQueryToolsService {
       return JSON.stringify({ error: 'No es productor', plants: [] });
     }
 
+    // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
     const accessRecords = await this.prisma.plantProducerAccess.findMany({
       where: { producerCompanyId, active: true },
       select: { plantCompanyId: true },
@@ -673,6 +675,7 @@ export class FreightQueryToolsService {
       where: { companyId: producerCompanyId, active: true },
       include: { lots: { where: { active: true } } },
       orderBy: { name: 'asc' },
+      take: 100,
     });
 
     if (fields.length === 0) {

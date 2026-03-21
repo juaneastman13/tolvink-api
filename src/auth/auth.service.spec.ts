@@ -3,10 +3,12 @@ import { UnauthorizedException, ConflictException, BadRequestException } from '@
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../database/prisma.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 
 // Mock bcryptjs
 jest.mock('bcryptjs', () => ({
   hash: jest.fn().mockResolvedValue('hashed-pw'),
+  hashSync: jest.fn().mockReturnValue('$2a$10$dummyhashvalue'),
   compare: jest.fn().mockResolvedValue(true),
 }));
 
@@ -25,6 +27,7 @@ describe('AuthService', () => {
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     userCompany: {
       create: jest.fn(),
@@ -34,9 +37,20 @@ describe('AuthService', () => {
     refreshToken: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      count: jest.fn().mockResolvedValue(0),
       delete: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    auditLog: { create: jest.fn().mockResolvedValue({}) },
+    $transaction: jest.fn((cb: any) => {
+      // Create a tx proxy that delegates to mockPrisma
+      const tx: any = {};
+      for (const k of Object.keys(mockPrisma)) {
+        if (k !== '$transaction') tx[k] = mockPrisma[k];
+      }
+      return cb(tx);
+    }),
   };
 
   const mockUser = {
@@ -50,6 +64,9 @@ describe('AuthService', () => {
     companyId: 'comp-1',
     activeCompanyId: 'comp-1',
     userTypes: ['producer'],
+    passwordHash: '$2a$10$dummyhashvalue',
+    failedLoginAttempts: 0,
+    lockedUntil: null,
     company: { id: 'comp-1', name: 'Farm Co', type: 'producer', hasInternalFleet: false },
     memberships: [{
       id: 'uc-1',
@@ -74,6 +91,7 @@ describe('AuthService', () => {
         AuthService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: JwtService, useValue: mockJwt },
+        { provide: WhatsAppService, useValue: { sendText: jest.fn().mockResolvedValue(true) } },
       ],
     }).compile();
 
@@ -87,10 +105,10 @@ describe('AuthService', () => {
   // ================================================================
   describe('login', () => {
     it('succeeds with email', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser });
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
       prisma.user.update.mockResolvedValue(mockUser);
 
-      const result = await service.login({ email: 'test@test.com' });
+      const result = await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(result).toHaveProperty('access_token', 'mock-jwt-token');
       expect(result).toHaveProperty('refresh_token');
@@ -99,10 +117,10 @@ describe('AuthService', () => {
     });
 
     it('succeeds with phone', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser });
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
       prisma.user.update.mockResolvedValue(mockUser);
 
-      const result = await service.login({ phone: '099123456' });
+      const result = await service.login({ phone: '099123456', password: 'secret123' });
 
       expect(result.access_token).toBe('mock-jwt-token');
     });
@@ -112,25 +130,25 @@ describe('AuthService', () => {
     });
 
     it('throws when user not found', async () => {
-      prisma.user.findFirst.mockResolvedValue(null);
+      prisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.login({ email: 'x@x.com' })).rejects.toThrow(UnauthorizedException);
+      await expect(service.login({ email: 'x@x.com', password: 'secret123' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('throws when user inactive', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser, active: false });
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser, active: false });
 
-      await expect(service.login({ email: 'test@test.com' })).rejects.toThrow(UnauthorizedException);
+      await expect(service.login({ email: 'test@test.com', password: 'secret123' })).rejects.toThrow(UnauthorizedException);
     });
 
     it('auto-migrates user without memberships', async () => {
       const userNoMemberships = { ...mockUser, memberships: [] };
-      prisma.user.findFirst.mockResolvedValue(userNoMemberships);
+      prisma.user.findUnique.mockResolvedValue(userNoMemberships);
       prisma.userCompany.create.mockResolvedValue({});
       prisma.userCompany.findMany.mockResolvedValue(mockUser.memberships);
       prisma.user.update.mockResolvedValue(mockUser);
 
-      const result = await service.login({ email: 'test@test.com' });
+      const result = await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(prisma.userCompany.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -145,10 +163,10 @@ describe('AuthService', () => {
 
     it('sets activeCompanyId if not set', async () => {
       const userNoActive = { ...mockUser, activeCompanyId: null };
-      prisma.user.findFirst.mockResolvedValue(userNoActive);
+      prisma.user.findUnique.mockResolvedValue(userNoActive);
       prisma.user.update.mockResolvedValue(mockUser);
 
-      await service.login({ email: 'test@test.com' });
+      await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -159,10 +177,10 @@ describe('AuthService', () => {
     });
 
     it('updates lastLogin', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser });
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
       prisma.user.update.mockResolvedValue(mockUser);
 
-      await service.login({ email: 'test@test.com' });
+      await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -171,30 +189,50 @@ describe('AuthService', () => {
       );
     });
 
-    it('JWT payload includes sub, role, companyId, companyType', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser });
+    it('JWT payload includes sub, role, companyId, companyType, companyTypes', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
       prisma.user.update.mockResolvedValue(mockUser);
 
-      await service.login({ email: 'test@test.com' });
+      await service.login({ email: 'test@test.com', password: 'secret123' });
 
-      expect(mockJwt.signAsync).toHaveBeenCalledWith({
-        sub: 'user-1',
-        role: 'gerente',
-        companyId: 'comp-1',
-        companyType: 'producer',
-      });
+      expect(mockJwt.signAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: 'user-1',
+          role: 'gerente',
+          companyId: 'comp-1',
+          companyType: 'producer',
+        }),
+        expect.objectContaining({ expiresIn: expect.any(String) }),
+      );
     });
 
     it('superAdmin gets platform_admin role in JWT', async () => {
       const superAdmin = { ...mockUser, isSuperAdmin: true };
-      prisma.user.findFirst.mockResolvedValue(superAdmin);
+      prisma.user.findUnique.mockResolvedValue(superAdmin);
       prisma.user.update.mockResolvedValue(superAdmin);
 
-      await service.login({ email: 'test@test.com' });
+      await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(mockJwt.signAsync).toHaveBeenCalledWith(
         expect.objectContaining({ role: 'platform_admin' }),
+        expect.anything(),
       );
+    });
+
+    it('throws when no password provided', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
+
+      await expect(
+        service.login({ email: 'test@test.com' } as any),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('throws when user has no passwordHash', async () => {
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser, passwordHash: null });
+
+      await expect(
+        service.login({ email: 'test@test.com', password: 'secret123' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 
@@ -206,6 +244,7 @@ describe('AuthService', () => {
       name: 'New User',
       email: 'new@test.com',
       phone: '099999999',
+      password: 'secret123',
       userTypes: ['producer'],
     };
 
@@ -237,7 +276,7 @@ describe('AuthService', () => {
       await expect(service.register(dto as any)).rejects.toThrow(ConflictException);
     });
 
-    it('hashes password when provided', async () => {
+    it('hashes password', async () => {
       prisma.user.findUnique.mockResolvedValue(null);
       prisma.user.findFirst.mockResolvedValue(null);
       prisma.user.create.mockResolvedValue({ ...mockUser, memberships: [] });
@@ -247,20 +286,6 @@ describe('AuthService', () => {
       expect(prisma.user.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ passwordHash: 'hashed-pw' }),
-        }),
-      );
-    });
-
-    it('passwordHash is null when no password', async () => {
-      prisma.user.findUnique.mockResolvedValue(null);
-      prisma.user.findFirst.mockResolvedValue(null);
-      prisma.user.create.mockResolvedValue({ ...mockUser, memberships: [] });
-
-      await service.register(dto as any);
-
-      expect(prisma.user.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ passwordHash: null }),
         }),
       );
     });
@@ -275,6 +300,7 @@ describe('AuthService', () => {
         companyId: 'comp-2',
         company: { id: 'comp-2', name: 'Plant Co', type: 'plant', hasInternalFleet: false },
       });
+      prisma.user.findUnique.mockResolvedValue({ activeCompanyId: 'comp-1', companyId: 'comp-1' });
       prisma.user.update.mockResolvedValue({
         ...mockUser,
         activeCompanyId: 'comp-2',
@@ -293,7 +319,7 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('access_token');
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { activeCompanyId: 'comp-2' },
+          data: expect.objectContaining({ activeCompanyId: 'comp-2' }),
         }),
       );
     });
@@ -419,10 +445,10 @@ describe('AuthService', () => {
           },
         ],
       };
-      prisma.user.findFirst.mockResolvedValue(multiUser);
+      prisma.user.findUnique.mockResolvedValue(multiUser);
       prisma.user.update.mockResolvedValue(multiUser);
 
-      const result = await service.login({ email: 'test@test.com' });
+      const result = await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(result.user.userTypes).toContain('producer');
       expect(result.user.userTypes).toContain('plant');
@@ -431,10 +457,10 @@ describe('AuthService', () => {
     });
 
     it('includes companies array', async () => {
-      prisma.user.findFirst.mockResolvedValue({ ...mockUser });
+      prisma.user.findUnique.mockResolvedValue({ ...mockUser });
       prisma.user.update.mockResolvedValue(mockUser);
 
-      const result = await service.login({ email: 'test@test.com' });
+      const result = await service.login({ email: 'test@test.com', password: 'secret123' });
 
       expect(result.user.companies).toHaveLength(1);
       expect(result.user.companies[0]).toHaveProperty('companyId', 'comp-1');

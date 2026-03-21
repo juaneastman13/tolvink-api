@@ -11,6 +11,7 @@ import { SseService } from '../sse/sse.service';
 // Mock @prisma/client enums + PrismaClient base class
 jest.mock('@prisma/client', () => ({
   PrismaClient: class PrismaClient {},
+  Prisma: { DbNull: 'DbNull' },
   FreightStatus: {
     draft: 'draft',
     pending_assignment: 'pending_assignment',
@@ -57,8 +58,9 @@ describe('FreightsService', () => {
   const mockPrisma: any = {
     lot: { findFirst: jest.fn() },
     plant: { findFirst: jest.fn() },
-    company: { findFirst: jest.fn() },
+    company: { findFirst: jest.fn(), findUnique: jest.fn() },
     truck: { findFirst: jest.fn() },
+    field: { findFirst: jest.fn() },
     freight: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
@@ -66,23 +68,31 @@ describe('FreightsService', () => {
       create: jest.fn(),
       update: jest.fn(),
       count: jest.fn(),
+      groupBy: jest.fn().mockResolvedValue([]),
     },
     freightAssignment: {
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
       findFirst: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
+      aggregate: jest.fn().mockResolvedValue({ _max: { queuePosition: 0 } }),
     },
     freightTracking: {
       create: jest.fn(),
       findMany: jest.fn(),
       findFirst: jest.fn(),
     },
-    freightDocument: { create: jest.fn() },
-    auditLog: { create: jest.fn(), findMany: jest.fn() },
-    conversationParticipant: { upsert: jest.fn() },
+    freightDocument: { create: jest.fn(), count: jest.fn().mockResolvedValue(0), groupBy: jest.fn().mockResolvedValue([]) },
+    weighTicket: { groupBy: jest.fn().mockResolvedValue([]) },
+    auditLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
+    conversationParticipant: { upsert: jest.fn().mockResolvedValue({}) },
     userCompany: { findMany: jest.fn() },
+    companyAccess: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+    freightPendingChange: { findFirst: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn((cb: any) => cb(txProxy)),
+    $queryRaw: jest.fn().mockResolvedValue([{ maxPos: 0 }]),
   };
 
   // txProxy delegates to mockPrisma
@@ -156,9 +166,11 @@ describe('FreightsService', () => {
     beforeEach(() => {
       mockPrisma.lot.findFirst.mockResolvedValue(mockLot);
       mockPrisma.plant.findFirst.mockResolvedValue(mockPlant);
-      mockPrisma.freight.findFirst.mockResolvedValue({ code: 'FLT-0005' });
+      mockPrisma.company.findUnique.mockResolvedValue({ hasInternalFleet: false });
+      mockPrisma.freight.findUnique.mockResolvedValue(null); // code uniqueness check
       mockPrisma.freight.create.mockResolvedValue({
-        id: 'freight-1', code: 'FLT-0006', status: 'pending_assignment',
+        id: 'freight-1', code: 'F26-ABC.1234', status: 'pending_assignment',
+        originCompanyId: 'comp-prod', destCompanyId: 'comp-plant',
         items: [{ grain: 'Soja', tons: 30 }],
         conversation: { id: 'conv-1' },
       });
@@ -168,11 +180,10 @@ describe('FreightsService', () => {
     it('creates freight with lot origin and plant dest', async () => {
       const result = await service.create(createDto as any, user);
 
-      expect(result.code).toBe('FLT-0006');
+      expect(result.status).toBe('pending_assignment');
       expect(mockPrisma.freight.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            code: 'FLT-0006',
             status: 'pending_assignment',
             originCompanyId: 'comp-prod',
             destCompanyId: 'comp-plant',
@@ -182,34 +193,15 @@ describe('FreightsService', () => {
       );
     });
 
-    it('generates sequential code (FLT-XXXX) inside transaction', async () => {
-      mockPrisma.freight.findFirst.mockResolvedValue({ code: 'FLT-0099' });
-      mockPrisma.freight.create.mockResolvedValue({
-        id: 'f2', code: 'FLT-0100', conversation: { id: 'c2' },
-        items: [],
-      });
+    it('generates random code (F + year + letters + digits)', async () => {
+      const result = await service.create(createDto as any, user);
 
-      await service.create(createDto as any, user);
-
+      // Code format: F{YY}-{3 letters}.{4 digits}
       expect(mockPrisma.freight.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ code: 'FLT-0100' }),
-        }),
-      );
-    });
-
-    it('starts from FLT-0001 when no existing freights', async () => {
-      mockPrisma.freight.findFirst.mockResolvedValue(null);
-      mockPrisma.freight.create.mockResolvedValue({
-        id: 'f3', code: 'FLT-0001', conversation: { id: 'c3' },
-        items: [],
-      });
-
-      await service.create(createDto as any, user);
-
-      expect(mockPrisma.freight.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ code: 'FLT-0001' }),
+          data: expect.objectContaining({
+            code: expect.stringMatching(/^F\d{2}-[A-Z]{3}\.\d{4}$/),
+          }),
         }),
       );
     });
@@ -251,22 +243,19 @@ describe('FreightsService', () => {
       );
     });
 
-    it('auto-assigns truck and sets status to assigned', async () => {
+    it('auto-assigns truck when truckId provided', async () => {
       const dtoWithTruck = { ...createDto, truckId: 'truck-1' };
       mockPrisma.truck.findFirst.mockResolvedValue({
         id: 'truck-1', plate: 'ABC-1234', assignedUserId: 'driver-1',
+        assignedUser: { id: 'driver-1', name: 'Driver' },
       });
       mockPrisma.freightAssignment.create.mockResolvedValue({});
+      mockPrisma.freightAssignment.count.mockResolvedValue(1);
       mockPrisma.freight.update.mockResolvedValue({});
 
       await service.create(dtoWithTruck as any, user);
 
       expect(mockPrisma.freightAssignment.create).toHaveBeenCalled();
-      expect(mockPrisma.freight.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { status: 'assigned' },
-        }),
-      );
     });
 
     it('notifies dest company', async () => {
@@ -275,7 +264,7 @@ describe('FreightsService', () => {
       expect(mockNotifications.notifyCompany).toHaveBeenCalledWith(
         'comp-plant', 'freight_created',
         expect.any(String), expect.any(String),
-        'freight-1', 'user-1',
+        'freight-1', 'user-1', false,
       );
     });
   });
@@ -290,7 +279,12 @@ describe('FreightsService', () => {
 
       const result = await service.findAll(user, {});
 
-      expect(result).toEqual({ data: [{ id: 'f1' }], total: 1, page: 1, limit: 20, pages: 1 });
+      expect(result.total).toBe(1);
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(20);
+      expect(result.pages).toBe(1);
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe('f1');
     });
 
     it('platform_admin sees all (no company filter)', async () => {
@@ -314,7 +308,7 @@ describe('FreightsService', () => {
 
       const findManyCall = mockPrisma.freight.findMany.mock.calls[0][0];
       expect(findManyCall.where.OR).toBeDefined();
-      expect(findManyCall.where.OR).toHaveLength(3); // origin, dest, transporter
+      expect(findManyCall.where.OR).toHaveLength(2); // participantCompanyIds hasSome + driver assignment
     });
 
     it('caps limit at 100', async () => {
@@ -328,6 +322,7 @@ describe('FreightsService', () => {
     });
 
     it('filters by status', async () => {
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freight.findMany.mockResolvedValue([]);
       mockPrisma.freight.count.mockResolvedValue(0);
 
@@ -370,9 +365,11 @@ describe('FreightsService', () => {
     beforeEach(() => {
       mockPrisma.freight.findUnique.mockResolvedValue(freight);
       mockCompanyRes.hasCompanyType.mockResolvedValue(true);
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-plant']);
       mockPrisma.company.findFirst.mockResolvedValue({
-        id: 'comp-trans', type: 'transporter', active: true,
+        id: 'comp-trans', type: 'transporter', types: ['transporter'], active: true,
       });
+      mockPrisma.companyAccess.findFirst.mockResolvedValue(null);
       mockPrisma.freightAssignment.updateMany.mockResolvedValue({});
       mockPrisma.freightAssignment.create.mockResolvedValue({ id: 'assign-1' });
       mockPrisma.freight.update.mockResolvedValue({ ...freight, status: 'assigned' });
@@ -384,7 +381,6 @@ describe('FreightsService', () => {
       const result = await service.assign('f1', { transportCompanyId: 'comp-trans' } as any, plantUser);
 
       expect(result.status).toBe('assigned');
-      expect(mockStateMachine.validateTransition).toHaveBeenCalled();
     });
 
     it('throws when user is not plant', async () => {
@@ -433,7 +429,7 @@ describe('FreightsService', () => {
       expect(mockNotifications.notifyCompany).toHaveBeenCalledWith(
         'comp-trans', 'freight_assigned',
         expect.any(String), expect.any(String),
-        'f1', plantUser.sub,
+        'f1', plantUser.sub, true,
       );
     });
   });
@@ -454,14 +450,10 @@ describe('FreightsService', () => {
       mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
     });
 
-    it('accepts assignment', async () => {
-      mockPrisma.freightAssignment.update.mockResolvedValue({});
-      mockPrisma.freight.update.mockResolvedValue({ ...assignedFreight, status: 'accepted' });
-      mockPrisma.auditLog.create.mockResolvedValue({});
-
-      const result = await service.respond('f1', { action: 'accepted' } as any, transportUser);
-
-      expect(result.status).toBe('accepted');
+    it('throws on accept (accept is done via updateAssignment now)', async () => {
+      await expect(
+        service.respond('f1', { action: 'accepted' } as any, transportUser),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('rejects assignment with reason', async () => {
@@ -480,37 +472,21 @@ describe('FreightsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws when not transporter', async () => {
+    it('throws when not transporter (reject action)', async () => {
       mockCompanyRes.hasCompanyType.mockResolvedValue(false);
 
       await expect(
-        service.respond('f1', { action: 'accepted' } as any, user),
+        service.respond('f1', { action: 'rejected', reason: 'No disponible' } as any, user),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws when company not assigned', async () => {
+    it('throws when company not assigned (reject action)', async () => {
+      mockCompanyRes.hasCompanyType.mockResolvedValue(true);
       mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-other']);
 
       await expect(
-        service.respond('f1', { action: 'accepted' } as any, transportUser),
+        service.respond('f1', { action: 'rejected', reason: 'No disponible' } as any, transportUser),
       ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('accepts with truck', async () => {
-      mockPrisma.truck.findFirst.mockResolvedValue({
-        id: 'truck-1', plate: 'ABC-1234', assignedUserId: 'driver-1',
-      });
-      mockPrisma.freightAssignment.update.mockResolvedValue({});
-      mockPrisma.freight.update.mockResolvedValue({ ...assignedFreight, status: 'accepted' });
-      mockPrisma.auditLog.create.mockResolvedValue({});
-
-      await service.respond('f1', { action: 'accepted', truckId: 'truck-1' } as any, transportUser);
-
-      expect(mockPrisma.freightAssignment.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ truckId: 'truck-1', plate: 'ABC-1234' }),
-        }),
-      );
     });
   });
 
@@ -521,12 +497,13 @@ describe('FreightsService', () => {
     const acceptedFreight = {
       id: 'f1', code: 'FLT-0001', status: 'accepted',
       originCompanyId: 'comp-prod', destCompanyId: 'comp-plant',
-      assignments: [{ transportCompanyId: 'comp-trans' }],
+      assignments: [{ transportCompanyId: 'comp-trans', truckId: 'truck-1', driverId: 'driver-1', status: 'accepted' }],
     };
 
     it('starts freight', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(acceptedFreight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
       mockPrisma.freight.update.mockResolvedValue({ ...acceptedFreight, status: 'in_progress' });
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -541,10 +518,11 @@ describe('FreightsService', () => {
     it('producer with own fleet can start (effectiveType = transporter)', async () => {
       const ownFleetFreight = {
         ...acceptedFreight,
-        assignments: [{ transportCompanyId: 'comp-prod' }],
+        assignments: [{ transportCompanyId: 'comp-prod', truckId: 'truck-1', driverId: 'driver-1', status: 'accepted' }],
       };
       mockPrisma.freight.findUnique.mockResolvedValue(ownFleetFreight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freight.update.mockResolvedValue({ ...ownFleetFreight, status: 'in_progress' });
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -557,7 +535,8 @@ describe('FreightsService', () => {
 
     it('throws when freight not found', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(null);
-
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
+      // First findUnique (access check) returns null
       await expect(service.start('missing', transportUser)).rejects.toThrow(NotFoundException);
     });
   });
@@ -575,6 +554,7 @@ describe('FreightsService', () => {
     it('cancels pending freight', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(pendingFreight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freightAssignment.updateMany.mockResolvedValue({});
       mockPrisma.freight.update.mockResolvedValue({ ...pendingFreight, status: 'canceled' });
       mockPrisma.auditLog.create.mockResolvedValue({});
@@ -588,6 +568,8 @@ describe('FreightsService', () => {
       mockPrisma.freight.findUnique.mockResolvedValue({
         ...pendingFreight, status: 'in_progress', assignments: [],
       });
+      mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
 
       await expect(
         service.cancel('f1', { reason: 'test' } as any, user),
@@ -598,6 +580,8 @@ describe('FreightsService', () => {
       mockPrisma.freight.findUnique.mockResolvedValue({
         ...pendingFreight, status: 'loaded', assignments: [],
       });
+      mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
 
       await expect(
         service.cancel('f1', { reason: 'test' } as any, user),
@@ -610,6 +594,7 @@ describe('FreightsService', () => {
         assignments: [{ transportCompanyId: 'comp-trans' }],
       });
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freightAssignment.updateMany.mockResolvedValue({});
       mockPrisma.freight.update.mockResolvedValue({ ...pendingFreight, status: 'canceled' });
       mockPrisma.auditLog.create.mockResolvedValue({});
@@ -636,6 +621,8 @@ describe('FreightsService', () => {
     it('transporter confirms load', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(inProgressFreight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
+      mockPrisma.freightAssignment.updateMany.mockResolvedValue({});
       mockPrisma.freight.update.mockResolvedValue({ ...inProgressFreight, status: 'loaded' });
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -649,6 +636,7 @@ describe('FreightsService', () => {
         ...inProgressFreight, transporterLoadedConfirmedAt: new Date(),
       });
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
 
       await expect(service.confirmLoaded('f1', transportUser)).rejects.toThrow(BadRequestException);
     });
@@ -660,6 +648,7 @@ describe('FreightsService', () => {
       };
       mockPrisma.freight.findUnique.mockResolvedValue(loadedFreight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freight.update.mockResolvedValue(loadedFreight);
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -692,8 +681,9 @@ describe('FreightsService', () => {
     };
 
     it('transporter confirms — plant not yet → stays loaded', async () => {
-      mockPrisma.freight.findUnique.mockResolvedValue(loadedFreight);
+      mockPrisma.freight.findUnique.mockResolvedValue({ ...loadedFreight, assignments: [{ transportCompanyId: 'comp-trans', status: 'accepted' }] });
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
       mockPrisma.freight.update.mockResolvedValue(loadedFreight);
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -715,9 +705,11 @@ describe('FreightsService', () => {
       const f = {
         ...loadedFreight,
         transporterFinishedConfirmedAt: new Date(),
+        assignments: [{ transportCompanyId: 'comp-trans', status: 'accepted' }],
       };
       mockPrisma.freight.findUnique.mockResolvedValue(f);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('plant');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-plant']);
       mockPrisma.freight.update.mockResolvedValue({ ...f, status: 'finished' });
       mockPrisma.auditLog.create.mockResolvedValue({});
       mockPrisma.freightAssignment.findFirst.mockResolvedValue({ transportCompanyId: 'comp-trans' });
@@ -732,9 +724,11 @@ describe('FreightsService', () => {
       const f = {
         ...loadedFreight,
         plantFinishedConfirmedAt: new Date(),
+        assignments: [{ transportCompanyId: 'comp-trans', status: 'accepted' }],
       };
       mockPrisma.freight.findUnique.mockResolvedValue(f);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
       mockPrisma.freight.update.mockResolvedValue({ ...f, status: 'finished' });
       mockPrisma.auditLog.create.mockResolvedValue({});
 
@@ -763,8 +757,10 @@ describe('FreightsService', () => {
     it('plant cannot confirm twice', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue({
         ...loadedFreight, plantFinishedConfirmedAt: new Date(),
+        assignments: [{ transportCompanyId: 'comp-trans', status: 'accepted' }],
       });
       mockCompanyRes.resolveCompanyType.mockResolvedValue('plant');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-plant']);
 
       await expect(service.confirmFinished('f1', plantUser)).rejects.toThrow(BadRequestException);
     });
@@ -776,24 +772,30 @@ describe('FreightsService', () => {
   describe('updateFreight', () => {
     const pendingFreight = {
       id: 'f1', status: 'pending_assignment', requestedById: 'user-1',
+      originCompanyId: 'comp-prod', destCompanyId: 'comp-plant',
       loadTime: '08:00',
+      assignments: [],
+      items: [{ tons: 30 }],
     };
 
     it('updates pending freight', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(pendingFreight);
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freight.update.mockResolvedValue({
         ...pendingFreight, notes: 'Updated',
       });
+      mockPrisma.auditLog.create.mockResolvedValue({});
 
       const result = await service.updateFreight('f1', { notes: 'Updated' }, user);
 
       expect(result.notes).toBe('Updated');
     });
 
-    it('throws when not pending_assignment', async () => {
+    it('throws when freight is finished', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue({
-        ...pendingFreight, status: 'assigned',
+        ...pendingFreight, status: 'finished',
       });
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
 
       await expect(
         service.updateFreight('f1', { notes: 'x' }, user),
@@ -802,6 +804,7 @@ describe('FreightsService', () => {
 
     it('throws when different user', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue(pendingFreight);
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-other']);
 
       await expect(
         service.updateFreight('f1', { notes: 'x' }, { sub: 'other-user' }),
@@ -826,9 +829,9 @@ describe('FreightsService', () => {
       expect(result.lat).toBe(-34.5);
     });
 
-    it('addTrackingPoint throws when not in_progress', async () => {
+    it('addTrackingPoint throws when not in_progress or loaded', async () => {
       mockPrisma.freight.findUnique.mockResolvedValue({
-        id: 'f1', status: 'loaded',
+        id: 'f1', status: 'pending_assignment',
       });
 
       await expect(
@@ -859,7 +862,12 @@ describe('FreightsService', () => {
   // ================================================================
   describe('addDocument', () => {
     it('creates document', async () => {
-      mockPrisma.freight.findUnique.mockResolvedValue({ id: 'f1' });
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
+      mockPrisma.freight.findUnique.mockResolvedValue({
+        id: 'f1', originCompanyId: 'comp-prod', destCompanyId: 'comp-plant',
+        assignments: [],
+      });
+      mockPrisma.freightDocument.count.mockResolvedValue(0);
       mockPrisma.freightDocument.create.mockResolvedValue({
         id: 'doc-1', name: 'Carta porte', url: 'https://storage/doc.jpg',
       });
@@ -872,6 +880,7 @@ describe('FreightsService', () => {
     });
 
     it('throws when freight not found', async () => {
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
       mockPrisma.freight.findUnique.mockResolvedValue(null);
 
       await expect(

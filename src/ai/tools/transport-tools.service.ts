@@ -115,6 +115,7 @@ export class TransportToolsService {
       if (ownCompany?.hasInternalFleet) hasOwnFleet = true;
     }
 
+    // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
     const accessRecords = await this.prisma.plantProducerAccess.findMany({
       where: { OR: [{ producerCompanyId: ownCompanyId }, { plantCompanyId: ownCompanyId }], active: true },
       select: { producerCompanyId: true, plantCompanyId: true },
@@ -130,6 +131,7 @@ export class TransportToolsService {
       },
       distinct: ['transportCompanyId'],
       select: { transportCompanyId: true },
+      take: 100,
     });
     for (const fr of freightRelated) {
       if (fr.transportCompanyId) relatedCompanyIds.push(fr.transportCompanyId);
@@ -509,6 +511,7 @@ export class TransportToolsService {
     const trucks = await this.prisma.truck.findMany({
       where: { assignedUserId: { in: driverIds }, active: true },
       select: { assignedUserId: true, plate: true, model: true },
+      take: 100,
     });
     const truckByDriver = new Map(trucks.map(t => [t.assignedUserId, t]));
 

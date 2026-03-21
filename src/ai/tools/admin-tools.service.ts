@@ -458,10 +458,12 @@ export class AdminToolsService {
   async toolListEnabledPlants(user: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     if (!producerCompanyId) return JSON.stringify({ error: 'No se pudo determinar su empresa productora.' });
+    // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
     const accesses = await this.prisma.plantProducerAccess.findMany({
       where: { producerCompanyId, active: true },
       include: { plantCompany: { select: { id: true, name: true, address: true } } },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
     if (accesses.length === 0) return JSON.stringify({ total: 0, message: 'No hay plantas habilitadas.' });
     const plants = accesses.map((a: any) => ({
@@ -484,6 +486,7 @@ export class AdminToolsService {
         producerUser: { select: { id: true, name: true, phone: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: 100,
     });
     if (accesses.length === 0) return JSON.stringify({ total: 0, message: 'No hay productores habilitados.' });
     const producers = accesses.map((a: any) => ({

@@ -271,6 +271,7 @@ NAVEGACIÓN (web):
               proactiveLines.push(`Campo único: ${f.name}${lotNames ? ` (lotes: ${lotNames})` : ' (sin lotes)'}`);
             }
 
+            // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
             const accesses = await this.prisma.plantProducerAccess.findMany({
               where: { producerCompanyId: producerCoId, active: true },
               select: { plantCompany: { select: { name: true } } },

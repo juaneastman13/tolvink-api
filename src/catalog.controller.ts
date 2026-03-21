@@ -100,6 +100,7 @@ export class CatalogController implements OnModuleDestroy {
           ? {}
           : { OR: [{ producerUserId: null }, { producerUserId: user.sub }] as any[] };
 
+        // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
         const accessRecords = await this.prisma.plantProducerAccess.findMany({
           where: {
             producerCompanyId: { in: producerCompanyIds },

@@ -1,4 +1,5 @@
 // =====================================================================
+// LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
 // TOLVINK — PlantProducerAccess Controller + Service
 // Plants enable/disable which producer USERS can send freights
 // Platform admins can manage access for ALL companies

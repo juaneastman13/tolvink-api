@@ -525,6 +525,7 @@ export class AiService implements OnModuleDestroy {
         accessLevel: true,
         grantorCompany: { select: { name: true } },
       },
+      take: 100,
     });
 
     const map = new Map<string, string>();

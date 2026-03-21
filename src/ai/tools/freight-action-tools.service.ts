@@ -3,7 +3,7 @@
 // Extracted from ai.service.ts for modularity
 // =====================================================================
 
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
@@ -288,9 +288,11 @@ export class FreightActionToolsService {
     // ── AUTO-RESOLVE: destination name → plant ID ──
     if (!input.destPlantId && input.destName) {
       if (producerCompanyId) {
+        // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
         const accesses = await this.prisma.plantProducerAccess.findMany({
           where: { producerCompanyId, active: true },
           select: { plantCompanyId: true },
+          take: 100,
         });
         const plantCompanyIds = [...new Set(accesses.map(a => a.plantCompanyId))];
         if (plantCompanyIds.length > 0) {
@@ -505,6 +507,7 @@ export class FreightActionToolsService {
       const truckForDriver = await this.prisma.truck.findMany({
         where: { companyId: driverCompany, active: true, assignedUserId: { not: null } },
         select: { assignedUserId: true, plate: true, model: true },
+        take: 100,
       });
       const truckByDriverId = new Map(truckForDriver.map(t => [t.assignedUserId, t]));
       for (const m of driverMembers) {
@@ -949,13 +952,13 @@ export class FreightActionToolsService {
           // Validate role value before writing
           const validUcRoles = ['operario', 'gerente', 'chofer'];
           if (!validUcRoles.includes(params.newRole)) {
-            throw new Error(`Rol inválido: ${params.newRole}. Valores válidos: ${validUcRoles.join(', ')}`);
+            throw new BadRequestException(`Rol inválido: ${params.newRole}. Valores válidos: ${validUcRoles.join(', ')}`);
           }
           // Re-validate membership still exists and belongs to the expected company
           const membership = await this.prisma.userCompany.findFirst({
             where: { id: params.membershipId, companyId: params.companyId, userId: params.targetUserId, active: true },
           });
-          if (!membership) throw new Error('Membresía no encontrada o ya fue modificada');
+          if (!membership) throw new NotFoundException('Membresía no encontrada o ya fue modificada');
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { role: params.newRole } });
           const roleMapping: Record<string, string> = { gerente: 'admin', operario: 'operator', chofer: 'operator' };
           await this.prisma.user.update({ where: { id: params.targetUserId }, data: { role: (roleMapping[params.newRole] || 'operator') as any } });
@@ -967,7 +970,7 @@ export class FreightActionToolsService {
           const membershipCheck = await this.prisma.userCompany.findFirst({
             where: { id: params.membershipId, companyId: params.companyId || synUser.companyId, userId: params.targetUserId, active: true },
           });
-          if (!membershipCheck) throw new Error('Membresía no encontrada o ya fue modificada');
+          if (!membershipCheck) throw new NotFoundException('Membresía no encontrada o ya fue modificada');
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
           const otherActive = await this.prisma.userCompany.count({ where: { userId: params.targetUserId, active: true } });
           if (otherActive === 0) {
@@ -1079,12 +1082,12 @@ export class FreightActionToolsService {
           // Re-validate: membership belongs to caller's company and caller is admin
           const reactivateCoId = user.activeCompanyId || user.companyId;
           if (!this.aiContext.isCallerAdminForCompany(user, reactivateCoId)) {
-            throw new Error('No tiene permisos de administrador para esta acción.');
+            throw new ForbiddenException('No tiene permisos de administrador para esta acción.');
           }
           const memberCheck = await this.prisma.userCompany.findFirst({
             where: { id: params.membershipId, companyId: reactivateCoId, userId: params.targetUserId, active: false },
           });
-          if (!memberCheck) throw new Error('Membresía no encontrada o ya fue modificada.');
+          if (!memberCheck) throw new NotFoundException('Membresía no encontrada o ya fue modificada.');
           await this.prisma.userCompany.update({
             where: { id: params.membershipId },
             data: { active: true },
@@ -1681,6 +1684,7 @@ export class FreightActionToolsService {
       where: { freightId: freight.id, status: 'pending' },
       include: { requestedBy: { select: { name: true } } },
       orderBy: { createdAt: 'asc' },
+      take: 100,
     });
 
     if (pendingChanges.length === 0) return JSON.stringify({ error: `El flete ${freight.code} no tiene cambios pendientes de aprobación.` });
@@ -1715,6 +1719,7 @@ export class FreightActionToolsService {
       where: { freightId: freight.id, status: 'pending' },
       include: { requestedBy: { select: { name: true } } },
       orderBy: { createdAt: 'asc' },
+      take: 100,
     });
 
     if (pendingChanges.length === 0) return JSON.stringify({ error: `El flete ${freight.code} no tiene cambios pendientes.` });

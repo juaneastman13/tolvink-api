@@ -431,6 +431,7 @@ export class CompanyAccessService {
       orderBy: { createdAt: 'desc' },
     });
 
+    // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
     // 2. PlantProducerAccess records (legacy)
     const ppaRecords = await this.prisma.plantProducerAccess.findMany({
       where: { plantCompanyId: grantorId },

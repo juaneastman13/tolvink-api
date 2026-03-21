@@ -108,6 +108,7 @@ describe('Freight State Machine — Integration Tests', () => {
       plant: { findFirst: jest.fn() },
       company: { findFirst: jest.fn() },
       truck: { findFirst: jest.fn() },
+      field: { findFirst: jest.fn() },
       freight: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
@@ -126,10 +127,12 @@ describe('Freight State Machine — Integration Tests', () => {
         aggregate: jest.fn().mockResolvedValue({ _max: { queuePosition: 0 } }),
       },
       freightTracking: { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
-      freightDocument: { create: jest.fn() },
+      freightDocument: { create: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       auditLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
       conversationParticipant: { upsert: jest.fn().mockResolvedValue({}) },
       userCompany: { findMany: jest.fn() },
+      companyAccess: { findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+      freightPendingChange: { findFirst: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
       $transaction: jest.fn((cb: any) => cb(txProxy)),
       $queryRaw: jest.fn().mockResolvedValue([{ maxPos: 0 }]),
     };
@@ -201,26 +204,17 @@ describe('Freight State Machine — Integration Tests', () => {
       expect(result.status).toBe('assigned');
     });
 
-    it('assigned → accepted (transportista acepta)', async () => {
-      const freight = makeFreight({
-        status: 'assigned',
-        assignments: [makeAssignment()],
-      });
-      mockPrisma.freight.findUnique.mockResolvedValue(freight);
-      mockCompanyRes.hasCompanyType.mockResolvedValue(true); // is transporter
-      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-trans']);
-      mockPrisma.freightAssignment.update.mockResolvedValue({});
-      mockPrisma.freight.update.mockResolvedValue({ ...freight, status: 'accepted' });
-
-      const result = await service.respond('f1', { action: 'accepted' } as any, transportUser);
-
-      expect(result.status).toBe('accepted');
+    it('assigned → accepted (now done via updateAssignment, respond(accepted) throws)', async () => {
+      // respond('accepted') is no longer valid — trips accept by assigning truck+driver
+      await expect(
+        service.respond('f1', { action: 'accepted' } as any, transportUser),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('accepted → in_progress (transportista inicia viaje)', async () => {
       const freight = makeFreight({
         status: 'accepted',
-        assignments: [makeAssignment({ status: 'accepted' })],
+        assignments: [makeAssignment({ status: 'accepted', truckId: 'truck-1', driverId: 'driver-1' })],
       });
       mockPrisma.freight.findUnique.mockResolvedValue(freight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('transporter');
@@ -294,18 +288,16 @@ describe('Freight State Machine — Integration Tests', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('productor NO puede aceptar asignación (solo transportista)', async () => {
-      mockCompanyRes.hasCompanyType.mockResolvedValue(false);
-
+    it('productor NO puede aceptar asignación (respond(accepted) throws for all)', async () => {
       await expect(
         service.respond('f1', { action: 'accepted' } as any, producerUser),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('productor NO puede iniciar viaje (solo transportista)', async () => {
       const freight = makeFreight({
         status: 'accepted',
-        assignments: [makeAssignment({ status: 'accepted' })],
+        assignments: [makeAssignment({ status: 'accepted', truckId: 'truck-1', driverId: 'driver-1' })],
       });
       mockPrisma.freight.findUnique.mockResolvedValue(freight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
@@ -322,6 +314,8 @@ describe('Freight State Machine — Integration Tests', () => {
       });
       mockPrisma.freight.findUnique.mockResolvedValue(freight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('plant');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-plant']);
+      mockPrisma.companyAccess.findFirst.mockResolvedValue(null); // not CONSULTA
 
       await expect(service.confirmLoaded('f1', plantUser)).rejects.toThrow(ForbiddenException);
     });
@@ -1011,7 +1005,7 @@ describe('Freight State Machine — Integration Tests', () => {
     describe('getAllowedTransitions', () => {
       it.each([
         ['draft', ['pending_assignment', 'canceled']],
-        ['pending_assignment', ['assigned', 'canceled']],
+        ['pending_assignment', ['assigned', 'accepted', 'canceled']],
         ['assigned', ['accepted', 'pending_assignment', 'canceled']],
         ['accepted', ['in_progress', 'pending_assignment', 'canceled']],
         ['in_progress', ['loaded']],
@@ -1037,15 +1031,15 @@ describe('Freight State Machine — Integration Tests', () => {
         expect(() => stateMachine.validateTransition('assigned' as any, 'accepted' as any, 'producer')).toThrow();
       });
 
-      it('accepted → in_progress requiere transporter', () => {
+      it('accepted → in_progress requiere transporter o plant', () => {
         expect(() => stateMachine.validateTransition('accepted' as any, 'in_progress' as any, 'transporter')).not.toThrow();
-        expect(() => stateMachine.validateTransition('accepted' as any, 'in_progress' as any, 'plant')).toThrow();
+        expect(() => stateMachine.validateTransition('accepted' as any, 'in_progress' as any, 'plant')).not.toThrow();
         expect(() => stateMachine.validateTransition('accepted' as any, 'in_progress' as any, 'producer')).toThrow();
       });
 
-      it('in_progress → loaded requiere transporter', () => {
+      it('in_progress → loaded requiere transporter o plant', () => {
         expect(() => stateMachine.validateTransition('in_progress' as any, 'loaded' as any, 'transporter')).not.toThrow();
-        expect(() => stateMachine.validateTransition('in_progress' as any, 'loaded' as any, 'plant')).toThrow();
+        expect(() => stateMachine.validateTransition('in_progress' as any, 'loaded' as any, 'plant')).not.toThrow();
         expect(() => stateMachine.validateTransition('in_progress' as any, 'loaded' as any, 'producer')).toThrow();
       });
 
