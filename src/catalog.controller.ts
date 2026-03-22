@@ -146,7 +146,28 @@ export class CatalogController implements OnModuleDestroy {
         }));
       }
 
-      // Non-producer (plant/other): return plant-type companies as destinations
+      // Plant user: only their own plant company as destination
+      const isPlantUser = await this.companyRes.hasCompanyType(user, 'plant');
+      if (isPlantUser) {
+        const plantCoId = await this.companyRes.resolvePlantCompanyId(user);
+        if (!plantCoId) return [];
+        const allPlantIds = await this.companyRes.resolveAllCompanyIds(user);
+        // Filter to only plant-type companies the user belongs to
+        const ownPlants = await this.prisma.company.findMany({
+          where: { id: { in: allPlantIds }, active: true, OR: [{ type: 'plant' }, { types: { array_contains: 'plant' } }] },
+          select: { id: true, name: true, address: true, lat: true, lng: true },
+          orderBy: { name: 'asc' },
+          take: t,
+          skip: s,
+        });
+        return ownPlants.map(c => ({
+          id: c.id, name: c.name, address: c.address,
+          lat: c.lat, lng: c.lng, companyId: c.id,
+        }));
+      }
+
+      // Only platform_admin gets full plant list; others get empty
+      if (user.role !== 'platform_admin') return [];
       const allCos = await this.prisma.company.findMany({
         where: { active: true, OR: [{ type: 'plant' }, { types: { array_contains: 'plant' } }] },
         select: { id: true, name: true, address: true, lat: true, lng: true, type: true, types: true },
@@ -159,12 +180,8 @@ export class CatalogController implements OnModuleDestroy {
         return cTypes.includes('plant');
       });
       return plantCos.slice(s, s + t).map(c => ({
-        id: c.id,
-        name: c.name,
-        address: c.address,
-        lat: c.lat,
-        lng: c.lng,
-        companyId: c.id,
+        id: c.id, name: c.name, address: c.address,
+        lat: c.lat, lng: c.lng, companyId: c.id,
       }));
     });
   }
