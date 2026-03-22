@@ -2549,7 +2549,7 @@ export class FreightsService {
 
           if (truck.tons) assignData.tons = truck.tons;
           if (truck.truckId) {
-            const t = await tx.truck.findFirst({ where: { id: truck.truckId, companyId: truck.transportCompanyId, active: true } });
+            const t = await tx.truck.findFirst({ where: { id: truck.truckId, active: true, OR: [{ companyId: truck.transportCompanyId }, { ownerCompanyId: truck.transportCompanyId }] } });
             if (t) { assignData.truckId = t.id; assignData.plate = t.plate; }
           }
 
