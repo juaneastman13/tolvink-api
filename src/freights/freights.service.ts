@@ -2489,11 +2489,11 @@ export class FreightsService {
           throw new BadRequestException('Máximo 20 camiones por asignación');
         }
 
-        // Validate truckCount limit
-        if (freight.isMultiTruck && freight.truckCount && existingCount + dto.trucks.length > freight.truckCount) {
-          throw new BadRequestException(
-            `El flete permite ${freight.truckCount} camiones, ya tiene ${existingCount} asignados. Solo puede agregar ${freight.truckCount - existingCount} más.`,
-          );
+        // Auto-extend truckCount if needed ("+/−" buttons update truckCount concurrently)
+        const neededCount = existingCount + dto.trucks.length;
+        if (freight.isMultiTruck && freight.truckCount && neededCount > freight.truckCount) {
+          await tx.freight.update({ where: { id: freightId }, data: { truckCount: neededCount } });
+          this.logger.log(`assignMulti: auto-extended truckCount ${freight.truckCount} → ${neededCount} freight=${freightId}`);
         }
 
         // Use MAX(tripNumber) to avoid collisions with canceled assignments
