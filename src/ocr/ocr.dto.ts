@@ -25,4 +25,5 @@ export interface OcrResult {
   structured?: boolean;
   processedAt?: string;
   model?: string;
+  lowConfidence?: boolean;
 }

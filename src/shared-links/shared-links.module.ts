@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Patch, Param, Body, Query,
   UseGuards, ParseUUIDPipe,
-  Injectable, BadRequestException, NotFoundException, Logger, Module,
+  Injectable, BadRequestException, ForbiddenException, NotFoundException, Logger, Module,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiProperty } from '@nestjs/swagger';
 import { IsString, IsOptional, IsEnum, IsUUID } from 'class-validator';
@@ -53,6 +53,20 @@ export class SharedLinksService {
     const creatorCompanyId = user.activeCompanyId || user.companyId;
     if (!creatorCompanyId) throw new BadRequestException('No se pudo determinar tu empresa');
 
+    // Block CONSULTA (READONLY) users from creating shared links
+    if (user.role !== 'platform_admin' && user.userType !== 'plant') {
+      const readonlyAccess = await this.prisma.companyAccess.findFirst({
+        where: {
+          granteeCompanyId: creatorCompanyId,
+          isActive: true,
+          accessLevel: 'READONLY',
+        },
+      });
+      if (readonlyAccess) {
+        throw new ForbiddenException('Usuario CONSULTA no puede crear links compartidos');
+      }
+    }
+
     // Check for existing active link for same resource+target
     const existing = await this.prisma.sharedLink.findFirst({
       where: {
@@ -74,10 +88,9 @@ export class SharedLinksService {
       return { ...existing, isReused: true };
     }
 
-    // Create new link
-    const expiresAt = dto.linkType === 'FREIGHT'
-      ? new Date(Date.now() + 72 * 60 * 60 * 1000) // 72h
-      : null; // PORTAL and TICKET don't expire
+    // Create new link with TTL per type
+    const TTL_MAP = { FREIGHT: 72 * 3600_000, PORTAL: 30 * 24 * 3600_000, TICKET: 7 * 24 * 3600_000 };
+    const expiresAt = new Date(Date.now() + (TTL_MAP[dto.linkType] || 72 * 3600_000));
 
     const link = await this.prisma.sharedLink.create({
       data: {
@@ -106,8 +119,14 @@ export class SharedLinksService {
     });
 
     if (!link) return { valid: false, reason: 'not_found' };
-    if (link.revokedAt) return { valid: false, reason: 'revoked' };
-    if (link.expiresAt && link.expiresAt < new Date()) return { valid: false, reason: 'expired' };
+    if (link.revokedAt) {
+      this.logger.warn(`Shared link access denied: token=${token.slice(0,8)}..., reason=revoked`);
+      return { valid: false, reason: 'revoked' };
+    }
+    if (link.expiresAt && link.expiresAt < new Date()) {
+      this.logger.warn(`Shared link access denied: token=${token.slice(0,8)}..., reason=expired`);
+      return { valid: false, reason: 'expired' };
+    }
 
     // Increment access count
     await this.prisma.sharedLink.update({
@@ -302,12 +321,14 @@ export class SharedLinksController {
   }
 
   @Patch(':id/revoke')
+  @Roles('producer', 'plant', 'transporter')
   @ApiOperation({ summary: 'Revocar link' })
   revoke(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.revokeLink(id, user);
   }
 
   @Post(':id/regenerate')
+  @Roles('producer', 'plant', 'transporter')
   @ApiOperation({ summary: 'Regenerar link (revoca el anterior)' })
   regenerate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.regenerateLink(id, user);

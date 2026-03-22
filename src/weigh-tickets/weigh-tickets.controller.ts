@@ -101,8 +101,9 @@ export class WeighTicketsController {
   remove(
     @Param('id', ParseUUIDPipe) freightId: string,
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.service.remove(freightId, ticketId);
+    return this.service.remove(freightId, ticketId, user);
   }
 
   @Post(':ticketId/ocr')

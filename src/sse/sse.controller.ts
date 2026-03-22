@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req, OnModuleDestroy } from '@nestjs/common';
+import { Controller, Get, Post, Query, Res, Logger, UnauthorizedException, UseGuards, Req, OnModuleDestroy, HttpException, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { Response, Request } from 'express';
@@ -10,6 +10,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 // In-memory single-use tickets: ticketId → { user, expiresAt }
 const sseTickets = new Map<string, { user: any; expiresAt: number }>();
 const TICKET_TTL_MS = 30_000; // 30 seconds
+
+// Per-user rate limiting for ticket creation
+const ticketRateMap = new Map<string, { count: number; resetAt: number }>();
+const TICKET_RATE_LIMIT = 10; // max tickets per window
+const TICKET_RATE_WINDOW_MS = 60_000; // 60 seconds
 
 @ApiTags('SSE')
 @Controller('sse')
@@ -40,6 +45,26 @@ export class SseController implements OnModuleDestroy {
   @ApiOperation({ summary: 'Get a short-lived SSE ticket (avoids JWT in URL)' })
   async getTicket(@Req() req: Request) {
     const user = (req as any).user;
+    const userId = user.sub || user.id;
+
+    // Per-user rate limiting for ticket creation
+    const now = Date.now();
+    const userRate = ticketRateMap.get(userId);
+    if (userRate && now < userRate.resetAt) {
+      if (userRate.count >= TICKET_RATE_LIMIT) {
+        throw new HttpException('Demasiadas solicitudes de ticket SSE', HttpStatus.TOO_MANY_REQUESTS);
+      }
+      userRate.count++;
+    } else {
+      ticketRateMap.set(userId, { count: 1, resetAt: now + TICKET_RATE_WINDOW_MS });
+    }
+    // Periodic cleanup of rate map
+    if (ticketRateMap.size > 1000) {
+      for (const [k, v] of ticketRateMap) {
+        if (now >= v.resetAt) ticketRateMap.delete(k);
+      }
+    }
+
     // Bound ticket map — evict expired first, then oldest by insertion order if still over cap
     if (sseTickets.size > 5_000) {
       const now = Date.now();

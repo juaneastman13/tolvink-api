@@ -181,6 +181,7 @@ export class OcrService {
         confianza: confidence / 100,
         textoOriginal: raw1.slice(0, 2000),
         structured: true,
+        ...(fillRate < 0.15 ? { lowConfidence: true } : {}),
         processedAt: new Date().toISOString(),
         model: MODEL_ID,
       } as any;
@@ -197,6 +198,7 @@ export class OcrService {
       confianza: 0,
       textoOriginal: raw2.slice(0, 2000),
       structured: false,
+      lowConfidence: true, // Phase 2 fallback always flags low confidence
       processedAt: new Date().toISOString(),
       model: MODEL_ID,
     } as any;
@@ -282,6 +284,9 @@ export class OcrService {
       }
       if (parsed.protocol !== 'https:') {
         throw new BadRequestException('Solo se aceptan URLs HTTPS');
+      }
+      if (!parsed.pathname.startsWith('/storage/v1/object/')) {
+        throw new BadRequestException('URL no permitida — solo se aceptan archivos de storage');
       }
     } catch (e) {
       if (e instanceof BadRequestException) throw e;
@@ -391,11 +396,13 @@ export class OcrService {
     try {
       const parsed = JSON.parse(cleaned);
       const rawDatos = parsed.datos || parsed;
+      const confianza = typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : 0.5;
       return {
         tipoDocumento: parsed.tipoDocumento || docType || 'desconocido',
         datos: this.flattenDatos(rawDatos),
-        confianza: typeof parsed.confianza === 'number' ? Math.min(1, Math.max(0, parsed.confianza)) : 0.5,
+        confianza,
         textoOriginal: raw.slice(0, 2000),
+        ...(confianza < 0.15 ? { lowConfidence: true } : {}),
       };
     } catch {
       this.logger.warn(`OCR: failed to parse JSON response (${raw.length} chars)`);
@@ -403,6 +410,7 @@ export class OcrService {
         tipoDocumento: docType || 'desconocido',
         datos: { textoExtraido: raw.slice(0, 3000), _parseError: true },
         confianza: 0.05,
+        lowConfidence: true,
         textoOriginal: raw.slice(0, 2000),
       };
     }

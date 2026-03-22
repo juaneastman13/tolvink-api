@@ -215,7 +215,8 @@ export class WeighTicketsService {
 
   // ======================== DELETE =====================================
 
-  async remove(freightId: string, ticketId: string) {
+  async remove(freightId: string, ticketId: string, user: any) {
+    await this.assertNotConsulta(freightId, user);
     const ticket = await this.prisma.weighTicket.findFirst({
       where: { id: ticketId, freightId },
     });

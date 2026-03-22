@@ -23,6 +23,10 @@ export class WhatsAppController implements OnModuleDestroy {
   private readonly processedMessages = new Map<string, number>();
   private readonly DEDUP_TTL_MS = 60_000; // 1 minute
   private readonly dedupCleanupTimer: ReturnType<typeof setInterval>;
+  // Per-phone rate limiting for incoming messages
+  private readonly phoneRateMap = new Map<string, { count: number; resetAt: number }>();
+  private readonly PHONE_RATE_LIMIT = 20; // max messages per window
+  private readonly PHONE_RATE_WINDOW_MS = 60_000; // 60 seconds
 
   private readonly internalKey: string | undefined;
 
@@ -140,11 +144,34 @@ export class WhatsAppController implements OnModuleDestroy {
         }
         if (this.processedMessages.size > 5000) {
           this.logger.warn(`Dedup map overflow (${this.processedMessages.size}), evicting oldest`);
-          const iter = this.processedMessages.keys();
-          while (this.processedMessages.size > 4000) {
-            const oldest = iter.next().value;
-            if (oldest) this.processedMessages.delete(oldest); else break;
+          const cutoff = Date.now() - 120_000; // 2 minutes
+          for (const [k, v] of this.processedMessages) {
+            if (v < cutoff) this.processedMessages.delete(k);
           }
+          // If still over, remove oldest
+          if (this.processedMessages.size > 4000) {
+            const entries = [...this.processedMessages.entries()].sort((a, b) => a[1] - b[1]);
+            entries.slice(0, entries.length - 4000).forEach(([k]) => this.processedMessages.delete(k));
+          }
+        }
+      }
+
+      // Per-phone rate limiting — prevent abuse/spam from a single number
+      const now = Date.now();
+      const phoneRate = this.phoneRateMap.get(phone);
+      if (phoneRate && now < phoneRate.resetAt) {
+        if (phoneRate.count >= this.PHONE_RATE_LIMIT) {
+          this.logger.warn(`Per-phone rate limit exceeded for ${maskedPhone} (${phoneRate.count}/${this.PHONE_RATE_LIMIT} in 60s)`);
+          return; // Already responded 200 to Meta above
+        }
+        phoneRate.count++;
+      } else {
+        this.phoneRateMap.set(phone, { count: 1, resetAt: now + this.PHONE_RATE_WINDOW_MS });
+      }
+      // Periodic cleanup of phone rate map (piggyback on dedup cleanup interval)
+      if (this.phoneRateMap.size > 1000) {
+        for (const [p, r] of this.phoneRateMap) {
+          if (now >= r.resetAt) this.phoneRateMap.delete(p);
         }
       }
 

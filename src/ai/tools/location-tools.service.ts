@@ -458,11 +458,15 @@ export class LocationToolsService {
     const requesterName = user.name?.split(' ')[0] || 'Un participante';
     const msg = `*Solicitud de ubicación*\n${requesterName} solicita su ubicación para el flete ${freight.code} (${freight.originName} → ${freight.destName}).\n\nEnvíe su ubicación en este chat (adjuntar → Ubicación).`;
 
-    let sent = 0;
-    for (const [, target] of allTargets) {
-      await this.wa.sendText(target.phone, msg).catch((err) => this.logger.warn(`[requestLocation] send to ${target.phone} failed: ${err.message}`));
-      sent++;
-    }
+    const results = await Promise.allSettled(
+      [...allTargets.values()].map((target) =>
+        this.wa.sendText(target.phone, msg).catch((err) => {
+          this.logger.warn(`[requestLocation] send to ${target.phone} failed: ${err.message}`);
+          throw err;
+        }),
+      ),
+    );
+    const sent = results.filter((r) => r.status === 'fulfilled').length;
 
     return JSON.stringify({
       status: 'ok',

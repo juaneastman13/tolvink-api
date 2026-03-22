@@ -23,7 +23,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { JwtAuthGuard, invalidateUserActiveCache } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 // ======================== DTOs =======================================
@@ -766,6 +766,11 @@ export class AdminService {
       },
     });
 
+    // Invalidate JWT active cache when user is deactivated
+    if (dto.active === false) {
+      invalidateUserActiveCache(userId);
+    }
+
     // Sync memberships if companyId changed
     if (dto.companyId !== undefined && dto.companyId) {
       const rbtObj = (dto.roleByType as any) || {};
@@ -858,6 +863,9 @@ export class AdminService {
       where: { userId, companyId },
       data: { active: false },
     });
+
+    // Invalidate JWT active cache when user's company membership is deactivated
+    invalidateUserActiveCache(userId);
 
     // Sync user.companyByType — remove this company from it
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { userTypes: true, companyByType: true, companyId: true, activeCompanyId: true } });

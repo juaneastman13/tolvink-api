@@ -5,7 +5,7 @@ import { PrismaService } from '../../database/prisma.service';
 
 // Short-lived in-memory cache for user active/role checks (avoids DB hit per request)
 const userActiveCache = new Map<string, { active: boolean; role: string; ts: number }>();
-const USER_CACHE_TTL = 15_000; // 15 seconds
+const USER_CACHE_TTL = 5_000; // 5 seconds
 const CACHE_CLEANUP_INTERVAL = 5 * 60_000; // 5 minutes
 
 // Periodic cleanup of expired cache entries

@@ -170,6 +170,8 @@ export class AiService implements OnModuleDestroy {
     const isWeb = phone === 'web';
 
     // Resolve plant access levels for CONSULTA blocking (Strategy A + B)
+    // NOTE: This is freshly queried on every chat() call, so session recovery
+    // (lines below) does NOT carry over a stale plantAccessMap.
     const plantAccessMap = await this.resolveUserPlantAccess(user);
 
     const systemPrompt = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap);
@@ -597,8 +599,8 @@ export class AiService implements OnModuleDestroy {
 
       const result = await this._executeToolInner(toolName, input, user, synUser, session);
 
-      // Strip action buttons from freight detail for CONSULTA users
-      if (toolName === 'get_freight_detail' && plantAccessMap && this.isGlobalConsulta(plantAccessMap) && session?.id) {
+      // Strategy B: Strip action buttons/selection from read-only results for CONSULTA users
+      if ((toolName === 'get_freight_detail' || toolName === 'list_freights' || toolName === 'list_my_freights') && plantAccessMap && this.isGlobalConsulta(plantAccessMap) && session?.id) {
         const effects = this.sessionManager.getSideEffects(session.id);
         if (effects?._pendingSelection) delete effects._pendingSelection;
         if (effects?._pendingButtons) delete effects._pendingButtons;

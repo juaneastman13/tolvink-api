@@ -331,8 +331,11 @@ export class FreightsService {
       select: { hasInternalFleet: true },
     });
     if (dto.useOwnFleet != null) {
-      // Only accept useOwnFleet=true if the company actually has internal fleet
-      useOwnFleet = dto.useOwnFleet === true && !originCompany?.hasInternalFleet ? null : dto.useOwnFleet;
+      // Reject useOwnFleet=true if the company doesn't have internal fleet
+      if (dto.useOwnFleet === true && !originCompany?.hasInternalFleet) {
+        throw new BadRequestException('La empresa no tiene flota propia habilitada. Contactá al administrador.');
+      }
+      useOwnFleet = dto.useOwnFleet;
     } else if (originCompany?.hasInternalFleet) {
       useOwnFleet = !!dto.truckId;
     }
@@ -864,6 +867,11 @@ export class FreightsService {
           throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
         }
 
+        // Block if plant approval is required but not yet given (unless caller IS the plant)
+        if (freight.needsPlantApproval && !freight.plantApprovedAt && !isPlant) {
+          throw new BadRequestException('Este flete requiere aprobación de la planta destino antes de poder asignar transporte');
+        }
+
         const hasTruck = !!dto.truckId;
         // For early states, compute target status normally. For later states, keep current status.
         const isEarlyState = ['pending_assignment', 'assigned'].includes(freight.status);
@@ -877,6 +885,14 @@ export class FreightsService {
             where: { freightId, status: { in: ['active', 'accepted'] } },
             data: { status: AssignmentStatus.canceled, reason: 'Reasignado' },
           });
+        } else {
+          // For non-early states on single-truck freights, block new assignments if active ones exist
+          const existingActive = await tx.freightAssignment.count({
+            where: { freightId, status: { in: ['active', 'accepted'] } },
+          });
+          if (existingActive > 0) {
+            throw new BadRequestException('Este flete ya tiene una asignación activa. No se puede agregar otra en este estado.');
+          }
         }
 
         const assignData: any = {
@@ -1128,6 +1144,11 @@ export class FreightsService {
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
 
+        // Only allow rejection in assigned/accepted states — cannot regress from in_progress/loaded/finished
+        if (!['pending_assignment', 'assigned', 'accepted'].includes(freight.status)) {
+          throw new BadRequestException(`No se puede rechazar un flete en estado "${freight.status}". Solo se permite en estados previos al inicio del viaje.`);
+        }
+
         const assignment = freight.assignments[0];
         if (!assignment || (!allIds.includes(assignment.transportCompanyId) && assignment.driverId !== user.sub)) {
           throw new ForbiddenException('Tu empresa no está asignada a este flete');
@@ -1209,6 +1230,11 @@ export class FreightsService {
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if ((freight as any).isMultiTruck) throw new BadRequestException('Para fletes multi-camión, usar endpoints multi-truck');
+
+      // Block start if plant approval is required but not yet given
+      if (freight.needsPlantApproval && !freight.plantApprovedAt) {
+        throw new BadRequestException('Este flete requiere aprobación de la planta destino antes de poder iniciar');
+      }
 
       const isOwnFleet = freight.assignments?.some(
         (a) => a.transportCompanyId === freight.originCompanyId,
@@ -1450,7 +1476,40 @@ export class FreightsService {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
     await this.assertNotConsultaProducer(freightId, user);
 
-    const ct = await this.resolveCompanyType(user);
+    let ct = await this.resolveCompanyType(user);
+
+    // Plant-centric: plant can confirm finished on behalf of CONSULTA transporter
+    let plantActingAsTransporter = false;
+    if (ct === 'plant') {
+      const freightCheck = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
+      });
+      if (freightCheck?.destCompanyId) {
+        const callerIds = await this.companyRes.resolveAllCompanyIds(user);
+        if (callerIds.includes(freightCheck.destCompanyId)) {
+          const transporterCo = freightCheck.assignments?.[0]?.transportCompanyId;
+          if (transporterCo) {
+            const access = await this.prisma.companyAccess.findFirst({
+              where: { grantorCompanyId: freightCheck.destCompanyId, granteeCompanyId: transporterCo, isActive: true, accessLevel: 'READONLY' },
+            });
+            if (access) { ct = 'transporter'; plantActingAsTransporter = true; }
+          }
+        }
+      }
+    }
+
+    // Producer own-fleet promotion: if producer and freight uses own fleet, act as transporter
+    if (ct === 'producer') {
+      const freightCheck = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: { originCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
+      });
+      if (freightCheck) {
+        const isOwnFleet = freightCheck.assignments?.some(a => a.transportCompanyId === freightCheck.originCompanyId);
+        if (isOwnFleet) ct = 'transporter';
+      }
+    }
 
     if (ct === 'transporter') {
       const tFinishResult = await this.prisma.$transaction(async (tx) => {
@@ -1470,7 +1529,7 @@ export class FreightsService {
 
         const callerCfIds = await this.resolveAllCompanyIds(user);
         const hasAssignment = freight.assignments?.some(a => callerCfIds.includes(a.transportCompanyId));
-        if (!hasAssignment) {
+        if (!hasAssignment && !plantActingAsTransporter) {
             throw new ForbiddenException('No sos el transportista asignado a este flete');
         }
 
@@ -1686,6 +1745,12 @@ export class FreightsService {
       if (!freight.destCompanyId || !allIdsAuth.includes(freight.destCompanyId)) {
         throw new ForbiddenException('Solo la planta destino puede autorizar este flete');
       }
+
+      // If plant approval is required but not yet given, auto-approve as part of authorize
+      if (freight.needsPlantApproval && !freight.plantApprovedAt) {
+        await tx.freight.update({ where: { id: freightId }, data: { plantApprovedAt: new Date() } });
+      }
+
       // Accept both assigned (legacy) and pending_assignment (Flow C: producer own fleet pending approval)
       if (freight.status !== FreightStatus.assigned && freight.status !== FreightStatus.pending_assignment) {
         throw new BadRequestException('El flete no está en estado que requiera autorización');
@@ -2427,6 +2492,11 @@ export class FreightsService {
 
         if (['finished', 'canceled'].includes(freight.status)) {
           throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
+        }
+
+        // Block if plant approval is required but not yet given (unless caller IS the plant)
+        if (freight.needsPlantApproval && !freight.plantApprovedAt && !isPlant) {
+          throw new BadRequestException('Este flete requiere aprobación de la planta destino antes de poder asignar transporte');
         }
 
         const existingAssignments = await (tx.freightAssignment as any).findMany({

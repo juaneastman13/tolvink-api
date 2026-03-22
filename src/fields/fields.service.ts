@@ -43,6 +43,20 @@ export class FieldsService {
   /** Resolve the "acting" company ID for field creation.
    *  For producers: their producer company.
    *  For plants: their plant company (fields are created with companyId=plant, ownerCompanyId=producer). */
+  /** Block CONSULTA (READONLY) users from mutations.
+   *  Fields don't have a destCompanyId, so we check if the user's activeCompanyId
+   *  has ANY READONLY CompanyAccess as grantee. */
+  private async assertNotConsulta(user: any): Promise<void> {
+    const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+    if (isPlant || user.role === 'platform_admin') return;
+    const activeCompanyId = user.activeCompanyId || user.companyId;
+    if (!activeCompanyId) return;
+    const access = await this.prisma.companyAccess.findFirst({
+      where: { granteeCompanyId: activeCompanyId, isActive: true, accessLevel: 'READONLY' },
+    });
+    if (access) throw new ForbiddenException('Usuario CONSULTA no puede realizar esta acción');
+  }
+
   private async resolveFieldCompanyId(user: any): Promise<string> {
     const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
     if (isPlant) {
@@ -125,6 +139,7 @@ export class FieldsService {
   }
 
   async createField(user: any, dto: CreateFieldDto) {
+    await this.assertNotConsulta(user);
     const companyId = await this.resolveFieldCompanyId(user);
 
     // If ownerCompanyId is set, validate CompanyAccess between creator and owner
@@ -154,6 +169,7 @@ export class FieldsService {
   }
 
   async updateField(user: any, fieldId: string, dto: UpdateFieldDto) {
+    await this.assertNotConsulta(user);
     const companyId = await this.resolveFieldCompanyId(user);
     const field = await this.prisma.field.findFirst({
       where: { id: fieldId, companyId, active: true },
@@ -187,6 +203,7 @@ export class FieldsService {
   }
 
   async createLot(user: any, fieldId: string, dto: CreateLotDto) {
+    await this.assertNotConsulta(user);
     const companyId = await this.resolveFieldCompanyId(user);
     const field = await this.prisma.field.findFirst({
       where: { id: fieldId, companyId, active: true },
@@ -209,6 +226,7 @@ export class FieldsService {
   }
 
   async updateLot(user: any, fieldId: string, lotId: string, dto: UpdateLotDto) {
+    await this.assertNotConsulta(user);
     const companyId = await this.resolveFieldCompanyId(user);
     const lot = await this.prisma.lot.findFirst({
       where: { id: lotId, fieldId, companyId, active: true },
@@ -311,6 +329,7 @@ export class FieldsService {
   }
 
   async createPoi(user: any, dto: CreatePoiDto) {
+    await this.assertNotConsulta(user);
     const callerCompanyId = await this.resolveFieldCompanyId(user);
 
     // If plant creates for a linked producer, set companyId to the producer
@@ -338,6 +357,7 @@ export class FieldsService {
   }
 
   async updatePoi(user: any, poiId: string, dto: UpdatePoiDto) {
+    await this.assertNotConsulta(user);
     const companyIds = await this.resolveAllProducerCompanyIds(user);
     const poi = await this.prisma.poi.findFirst({
       where: { id: poiId, companyId: { in: companyIds }, active: true },
@@ -358,6 +378,7 @@ export class FieldsService {
   }
 
   async deletePoi(user: any, poiId: string) {
+    await this.assertNotConsulta(user);
     const companyIds = await this.resolveAllProducerCompanyIds(user);
 
     // Check if this is a shared POI (shared with me, not mine)
@@ -533,6 +554,7 @@ export class FieldsService {
   }
 
   async deleteField(user: any, fieldId: string) {
+    await this.assertNotConsulta(user);
     const companyIds = await this.resolveAllProducerCompanyIds(user);
 
     // Check if shared with me
@@ -656,6 +678,7 @@ export class FieldsService {
   }
 
   async deleteLot(user: any, lotId: string) {
+    await this.assertNotConsulta(user);
     const companyIds = await this.resolveAllProducerCompanyIds(user);
 
     // Check if shared with me

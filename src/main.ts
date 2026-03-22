@@ -66,6 +66,9 @@ async function bootstrap() {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
+        // NOTE: 'unsafe-inline' is required for styles because the React frontend
+        // uses inline styles extensively (theme.jsx, component style props). Removing
+        // it would break the app. Won't-fix unless migrating to CSS-in-JS with nonces.
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'https://maps.googleapis.com', 'https://maps.gstatic.com'],
         connectSrc: ["'self'", 'https://mlmecljidioymujsazrs.supabase.co', 'https://maps.googleapis.com', 'https://graph.facebook.com'],

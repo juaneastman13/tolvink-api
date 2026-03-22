@@ -309,7 +309,7 @@ describe('WeighTicketsService', () => {
       mockPrisma.weighTicket.findFirst.mockResolvedValue(mockTicket);
       mockPrisma.weighTicket.delete.mockResolvedValue(mockTicket);
 
-      const result = await service.remove(freightId, ticketId);
+      const result = await service.remove(freightId, ticketId, plantUser);
 
       expect(result).toEqual({ deleted: true });
       expect(mockPrisma.weighTicket.delete).toHaveBeenCalledWith({ where: { id: ticketId } });
@@ -318,7 +318,7 @@ describe('WeighTicketsService', () => {
     it('should throw NotFoundException if ticket not found', async () => {
       mockPrisma.weighTicket.findFirst.mockResolvedValue(null);
 
-      await expect(service.remove(freightId, 'bad-id')).rejects.toThrow(NotFoundException);
+      await expect(service.remove(freightId, 'bad-id', plantUser)).rejects.toThrow(NotFoundException);
     });
   });
 

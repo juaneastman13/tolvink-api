@@ -28,6 +28,7 @@ export class FreightsController {
   }
 
   @Get()
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Listar fletes (filtrado por empresa)' })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'page', required: false })
@@ -69,6 +70,7 @@ export class FreightsController {
   }
 
   @Get('stats')
+  @Roles('producer', 'plant', 'transporter')
   @ApiOperation({ summary: 'Estadísticas de fletes por período' })
   @ApiQuery({ name: 'from', required: false, description: 'Fecha desde (YYYY-MM-DD)' })
   @ApiQuery({ name: 'to', required: false, description: 'Fecha hasta (YYYY-MM-DD)' })
@@ -110,6 +112,7 @@ export class FreightsController {
 
   @Get(':id/summary')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Resumen liviano de flete (sin documentos, pendingChanges, historial completo)' })
   findOneSummary(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOneSummary(id);
@@ -117,6 +120,7 @@ export class FreightsController {
 
   @Get(':id/detail-extra')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Solo documentos, conversación y cambios pendientes (complemento del listado)' })
   findOneDetailExtra(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOneDetailExtra(id);
@@ -133,6 +137,7 @@ export class FreightsController {
 
   @Get(':id')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Detalle de flete' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     // FreightAccessGuard already enforces company-level access; user passed to mark assignments as seen
@@ -181,7 +186,7 @@ export class FreightsController {
 
   @Post(':id/confirm-finished')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant', 'chofer')
+  @Roles('transporter', 'producer', 'plant', 'chofer')
   @ApiOperation({ summary: 'Confirmar finalización (requiere ambos: transportista + planta)' })
   confirmFinished(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.confirmFinished(id, user);
@@ -189,7 +194,7 @@ export class FreightsController {
 
   @Post(':id/finish')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant', 'chofer')
+  @Roles('transporter', 'producer', 'plant', 'chofer')
   @ApiOperation({ summary: 'Finalizar viaje — redirige a confirm-finished (cross-confirmation)' })
   finish(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.confirmFinished(id, user);
@@ -315,7 +320,7 @@ export class FreightsController {
 
   @Post(':id/assignments/:aId/confirm-finished')
   @UseGuards(FreightAccessGuard)
-  @Roles('transporter', 'plant', 'chofer')
+  @Roles('transporter', 'producer', 'plant', 'chofer')
   @ApiOperation({ summary: 'Confirmar entrega de un camión específico' })
   confirmTripFinished(
     @Param('id', ParseUUIDPipe) id: string,
@@ -370,6 +375,7 @@ export class FreightsController {
 
   @Get(':id/tracking/participants')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Última posición de cada participante' })
   getParticipantPositions(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getParticipantPositions(id);
@@ -377,6 +383,7 @@ export class FreightsController {
 
   @Get(':id/tracking/last')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Última posición del camión' })
   getLastPosition(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getLastPosition(id);
@@ -384,6 +391,7 @@ export class FreightsController {
 
   @Get(':id/tracking')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Obtener puntos de tracking' })
   getTracking(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getTrackingPoints(id);
@@ -391,6 +399,7 @@ export class FreightsController {
 
   @Get(':id/audit')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Historial de cambios del flete' })
   getAuditLog(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.getAuditLog(id);
@@ -398,6 +407,7 @@ export class FreightsController {
 
   @Post(':id/documents')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Registrar documento/foto del flete' })
   addDocument(
     @Param('id', ParseUUIDPipe) id: string,
@@ -409,6 +419,7 @@ export class FreightsController {
 
   @Patch(':id/documents/:docId/rename')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @Throttle({ default: { ttl: 60000, limit: 20 } })
   @ApiOperation({ summary: 'Renombrar documento del flete' })
   renameDocument(
@@ -422,6 +433,7 @@ export class FreightsController {
 
   @Delete(':id/documents/:docId')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @ApiOperation({ summary: 'Eliminar documento/foto del flete' })
   deleteDocument(
     @Param('id', ParseUUIDPipe) id: string,
@@ -433,6 +445,7 @@ export class FreightsController {
 
   @Patch(':id/documents/:docId/ocr')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @Throttle({ default: { ttl: 60000, limit: 20 } })
   @ApiOperation({ summary: 'Guardar datos OCR de un documento' })
   saveOcrData(
@@ -446,6 +459,7 @@ export class FreightsController {
 
   @Patch(':id/documents/:docId/ocr-edit')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @Throttle({ default: { ttl: 60000, limit: 20 } })
   @ApiOperation({ summary: 'Editar manualmente datos OCR de un documento' })
   editOcrData(
@@ -459,6 +473,7 @@ export class FreightsController {
 
   @Patch(':id/documents/:docId/ocr-clear')
   @UseGuards(FreightAccessGuard)
+  @Roles('producer', 'plant', 'transporter', 'chofer')
   @Throttle({ default: { ttl: 60000, limit: 20 } })
   @ApiOperation({ summary: 'Borrar datos OCR de un documento' })
   clearOcrData(

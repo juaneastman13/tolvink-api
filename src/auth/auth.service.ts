@@ -309,6 +309,7 @@ export class AuthService {
 
     const valid = await bcrypt.compare(dto.code, resetCode.codeHash);
     if (!valid) {
+      await bcrypt.compare('dummy', DUMMY_HASH); // timing equalization
       throw new UnauthorizedException('Código incorrecto.');
     }
 

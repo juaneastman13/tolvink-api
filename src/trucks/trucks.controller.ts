@@ -14,7 +14,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { JwtAuthGuard, invalidateUserActiveCache } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -71,8 +71,22 @@ export class TrucksService {
 
   constructor(private prisma: PrismaService, private wa: WhatsAppService, private companyRes: CompanyResolutionService) {}
 
+  /** Block CONSULTA (READONLY) users from mutations. */
+  private async assertNotConsulta(user: any): Promise<void> {
+    const isPlant = await this.companyRes.hasCompanyType(user, 'plant');
+    if (isPlant || user.role === 'platform_admin') return;
+    const activeCompanyId = user.activeCompanyId || user.companyId;
+    if (!activeCompanyId) return;
+    const access = await this.prisma.companyAccess.findFirst({
+      where: { granteeCompanyId: activeCompanyId, isActive: true, accessLevel: 'READONLY' },
+    });
+    if (access) throw new ForbiddenException('Usuario CONSULTA no puede realizar esta acción');
+  }
+
   async create(dto: CreateTruckDto, user: any) {
-    if (!user.companyId) throw new BadRequestException('No se pudo determinar tu empresa');
+    await this.assertNotConsulta(user);
+    const effectiveCompanyId = user.activeCompanyId || user.companyId;
+    if (!effectiveCompanyId) throw new BadRequestException('No se pudo determinar tu empresa');
     // Allow transporters, producers, and plants (own fleet)
     const ct = user.companyType;
     const cts = Array.isArray(user.companyTypes) ? user.companyTypes : [];
@@ -86,7 +100,7 @@ export class TrucksService {
     const existing = await this.prisma.truck.findUnique({ where: { plate: normalizedPlate } });
     if (existing) {
       // Allow reactivation of same-company deactivated truck
-      if (!existing.active && existing.companyId === user.companyId) {
+      if (!existing.active && existing.companyId === effectiveCompanyId) {
         return this.prisma.truck.update({
           where: { id: existing.id },
           data: { active: true, model: dto.model || existing.model, assignedUserId: dto.assignedUserId || existing.assignedUserId },
@@ -99,7 +113,7 @@ export class TrucksService {
     // Validate assigned user belongs to same company
     if (dto.assignedUserId) {
       const driver = await this.prisma.user.findFirst({
-        where: { id: dto.assignedUserId, companyId: user.companyId, active: true },
+        where: { id: dto.assignedUserId, companyId: effectiveCompanyId, active: true },
       });
       if (!driver) throw new BadRequestException('Chofer no encontrado en tu empresa');
     }
@@ -108,7 +122,7 @@ export class TrucksService {
     if (dto.ownerCompanyId) {
       const access = await this.prisma.companyAccess.findFirst({
         where: {
-          grantorCompanyId: user.companyId,
+          grantorCompanyId: effectiveCompanyId,
           granteeCompanyId: dto.ownerCompanyId,
           isActive: true,
         },
@@ -120,7 +134,7 @@ export class TrucksService {
       data: {
         plate: normalizedPlate,
         model: dto.model,
-        companyId: user.companyId,
+        companyId: effectiveCompanyId,
         ownerCompanyId: dto.ownerCompanyId || null,
         assignedUserId: dto.assignedUserId,
       },
@@ -167,8 +181,10 @@ export class TrucksService {
   }
 
   async deactivate(truckId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const effectiveCompanyId = user.activeCompanyId || user.companyId;
     const truck = await this.prisma.truck.findFirst({
-      where: { id: truckId, companyId: user.companyId },
+      where: { id: truckId, OR: [{ companyId: effectiveCompanyId }, { ownerCompanyId: effectiveCompanyId }] },
     });
     if (!truck) throw new NotFoundException('Camión no encontrado');
 
@@ -188,6 +204,7 @@ export class TrucksService {
   // ======================== DRIVER CRUD ================================
 
   async createDriver(dto: CreateDriverDto, user: any, targetCompanyId?: string) {
+    await this.assertNotConsulta(user);
     const body = dto;
 
     // Resolve target company: own company or linked company (plant cross-company)
@@ -275,9 +292,24 @@ export class TrucksService {
     }));
   }
 
-  async deactivateDriver(driverId: string, user: any) {
+  async deactivateDriver(driverId: string, user: any, targetCompanyId?: string) {
+    await this.assertNotConsulta(user);
+
+    // Resolve company: own company or linked company (plant cross-company)
+    let driverCompanyId = user.companyId;
+    if (targetCompanyId && targetCompanyId !== user.companyId) {
+      const plantId = user.activeCompanyId || user.companyId;
+      const access = await this.prisma.companyAccess.findFirst({
+        where: { grantorCompanyId: plantId, granteeCompanyId: targetCompanyId, isActive: true },
+        select: { id: true, accessLevel: true },
+      });
+      if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+      if (access.accessLevel === 'READONLY') throw new ForbiddenException('Acceso CONSULTA no permite desactivar choferes');
+      driverCompanyId = targetCompanyId;
+    }
+
     const membership = await this.prisma.userCompany.findFirst({
-      where: { userId: driverId, companyId: user.companyId, role: 'chofer' },
+      where: { userId: driverId, companyId: driverCompanyId, role: 'chofer' },
     });
     if (!membership) throw new NotFoundException('Chofer no encontrado');
 
@@ -292,6 +324,10 @@ export class TrucksService {
       where: { id: membership.id },
       data: { active: false },
     });
+
+    // Invalidate JWT active cache so deactivated driver is rejected immediately
+    invalidateUserActiveCache(driverId);
+
     return { ok: true };
   }
 }
@@ -351,7 +387,9 @@ export class TrucksController {
   @Patch('drivers/:id/deactivate')
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Desactivar chofer' })
-  deactivateDriver(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.deactivateDriver(id, user);
+  @ApiQuery({ name: 'companyId', required: false })
+  deactivateDriver(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('companyId') companyId?: string) {
+    if (companyId && !UUID_RE.test(companyId)) throw new BadRequestException('companyId inválido');
+    return this.service.deactivateDriver(id, user, companyId);
   }
 }
