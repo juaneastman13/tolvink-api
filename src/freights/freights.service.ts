@@ -98,6 +98,28 @@ export class FreightsService {
   private resolveAllCompanyIds(user: any) { return this.companyRes.resolveAllCompanyIds(user); }
 
   /**
+   * Plant-centric: check if the calling user's company is CONSULTA (READONLY) for the freight's destination.
+   * Throws ForbiddenException if so. Used as guard for action endpoints.
+   */
+  private async assertNotConsultaProducer(freightId: string, user: any): Promise<void> {
+    const ct = await this.resolveCompanyType(user);
+    if (ct === 'plant') return; // plants are never CONSULTA for their own freights
+    const activeCompanyId = user.activeCompanyId;
+    if (!activeCompanyId) return;
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { destCompanyId: true },
+    });
+    if (!freight?.destCompanyId) return; // no dest company = no CONSULTA check possible
+    const access = await this.prisma.companyAccess.findFirst({
+      where: { grantorCompanyId: freight.destCompanyId, granteeCompanyId: activeCompanyId, isActive: true, accessLevel: 'READONLY' },
+    });
+    if (access) {
+      throw new ForbiddenException('Usuario CONSULTA no puede realizar esta acción');
+    }
+  }
+
+  /**
    * Plant-centric: check if caller is plant and transporter is CONSULTA (READONLY).
    * Returns true if plant should act on behalf of the transporter.
    */
@@ -768,6 +790,7 @@ export class FreightsService {
   // ======================== ASSIGN ===================================
 
   async assign(freightId: string, dto: AssignFreightDto, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
     const isProducer = await this.hasCompanyType(user, 'producer');
@@ -1159,6 +1182,7 @@ export class FreightsService {
 
   async start(freightId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    await this.assertNotConsultaProducer(freightId, user);
 
     // Verify caller's company is involved in this freight
     if (user.role !== 'chofer') {
@@ -1271,6 +1295,7 @@ export class FreightsService {
 
   async confirmLoaded(freightId: string, user: any, loadedTons?: number) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    await this.assertNotConsultaProducer(freightId, user);
 
     let ct = await this.resolveCompanyType(user);
 
@@ -1424,6 +1449,7 @@ export class FreightsService {
 
   async confirmFinished(freightId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    await this.assertNotConsultaProducer(freightId, user);
 
     const ct = await this.resolveCompanyType(user);
 
@@ -1569,6 +1595,7 @@ export class FreightsService {
 
   async cancel(freightId: string, dto: CancelFreightDto, user: any) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden cancelar fletes');
+    await this.assertNotConsultaProducer(freightId, user);
 
     const cancelCt = await this.resolveCompanyType(user);
 
@@ -2883,6 +2910,7 @@ export class FreightsService {
   }
 
   async startTrip(freightId: string, assignmentId: string, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
         where: { id: assignmentId, freightId, driverId: user.sub, status: { in: ['active', 'accepted'] } },
@@ -2982,6 +3010,7 @@ export class FreightsService {
 
   async confirmTripLoaded(freightId: string, assignmentId: string, user: any, loadedTons?: number) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    await this.assertNotConsultaProducer(freightId, user);
 
     let ct = await this.resolveCompanyType(user);
 
@@ -3089,6 +3118,7 @@ export class FreightsService {
 
   async confirmTripFinished(freightId: string, assignmentId: string, user: any) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    await this.assertNotConsultaProducer(freightId, user);
 
     let ct = await this.resolveCompanyType(user);
 
