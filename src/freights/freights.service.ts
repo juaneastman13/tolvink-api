@@ -811,7 +811,7 @@ export class FreightsService {
       ? (transport.types as string[]) : [transport.type];
     if (!tTypes.includes('transporter') && !transport.hasInternalFleet) throw new BadRequestException('La empresa no es transportista');
 
-    let result: { updated: any; freight: any; bothConsulta: boolean; assignment: any };
+    let result: { updated: any; freight: any; isConsultaTransporter: boolean; assignment: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent TOCTOU race
@@ -955,38 +955,17 @@ export class FreightsService {
         const assignment = await tx.freightAssignment.create({ data: assignData });
 
         let finalFreightStatus: FreightStatus = targetFreightStatus;
-        let bothConsulta = false;
-
-        // Check if BOTH producer and transporter are CONSULTA (READONLY)
-        // When both are CONSULTA, auto-complete: accepted → in_progress → loaded
-        if (isConsultaTransporter && grantorCandidates.length > 0) {
-          const producerCid = freight.producerCompanyId || freight.originCompanyId;
-          // Producer is CONSULTA if plant has READONLY access grant to producer
-          const producerIsPlant = grantorCandidates.includes(producerCid);
-          const producerAccess = !producerIsPlant
-            ? await tx.companyAccess.findFirst({
-                where: {
-                  grantorCompanyId: { in: grantorCandidates },
-                  granteeCompanyId: producerCid,
-                  isActive: true,
-                  accessLevel: 'READONLY',
-                },
-              })
-            : null;
-          bothConsulta = !!producerAccess;
-          this.logger.log(`assign: bothConsulta=${bothConsulta} producerCid=${producerCid} producerIsPlant=${producerIsPlant}`);
-        }
 
         const now = new Date();
         const freightUpdateData: any = { status: finalFreightStatus };
 
-        if (bothConsulta) {
-          // Auto-complete intermediate steps: accepted → in_progress → loaded
+        // CONSULTA transporter: auto-complete to "A planta" (loaded) — plant confirms delivery
+        if (isConsultaTransporter) {
           finalFreightStatus = FreightStatus.loaded;
           freightUpdateData.status = finalFreightStatus;
           freightUpdateData.startedAt = now;
           freightUpdateData.loadedAt = now;
-          // Pre-set transporter finished confirmation so plant only needs to confirm once
+          // Pre-set transporter finished confirmation so plant only needs to confirm delivery
           freightUpdateData.transporterFinishedConfirmedAt = now;
 
           // Update assignment tripStatus to loaded
@@ -994,6 +973,7 @@ export class FreightsService {
             where: { id: assignment.id },
             data: { tripStatus: 'loaded', startedAt: now, loadedAt: now, transporterFinishedConfirmedAt: now },
           });
+          this.logger.log(`assign: CONSULTA transporter auto-complete to loaded freight=${freightId}`);
         }
 
         const updated = await tx.freight.update({
@@ -1032,15 +1012,15 @@ export class FreightsService {
           },
         });
 
-        // Log auto-completed steps if both CONSULTA
-        if (bothConsulta) {
+        // Log auto-completed steps if CONSULTA transporter
+        if (isConsultaTransporter) {
           await tx.auditLog.create({
             data: {
               entityType: 'freight', entityId: freightId, freightId,
               action: 'auto_started',
               fromValue: 'accepted', toValue: 'in_progress',
               userId: user.sub,
-              metadata: { autoCompleted: true, reason: 'both_consulta' },
+              metadata: { autoCompleted: true, reason: 'consulta_transporter' },
             },
           });
           await tx.auditLog.create({
@@ -1049,7 +1029,7 @@ export class FreightsService {
               action: 'auto_loaded',
               fromValue: 'in_progress', toValue: 'loaded',
               userId: user.sub,
-              metadata: { autoCompleted: true, reason: 'both_consulta' },
+              metadata: { autoCompleted: true, reason: 'consulta_transporter' },
             },
           });
           await tx.auditLog.create({
@@ -1058,12 +1038,12 @@ export class FreightsService {
               action: 'auto_transporter_confirmed',
               fromValue: 'loaded', toValue: 'loaded',
               userId: user.sub,
-              metadata: { autoCompleted: true, reason: 'both_consulta', confirmedBy: 'transporter' },
+              metadata: { autoCompleted: true, reason: 'consulta_transporter', confirmedBy: 'transporter' },
             },
           });
         }
 
-        return { updated, freight, bothConsulta, assignment };
+        return { updated, freight, isConsultaTransporter, assignment };
       }, { timeout: 15000 });
     } catch (err) {
       if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) throw err;
@@ -1071,15 +1051,15 @@ export class FreightsService {
       throw new InternalServerErrorException('Error al asignar transportista. Intente nuevamente.');
     }
 
-    this.logger.log(`assign: completed freight=${freightId} finalStatus=${result.updated.status} bothConsulta=${result.bothConsulta} truckId=${result.assignment.truckId ?? 'none'} plate=${result.assignment.plate ?? 'none'}`);
+    this.logger.log(`assign: completed freight=${freightId} finalStatus=${result.updated.status} isConsultaTransporter=${result.isConsultaTransporter} truckId=${result.assignment.truckId ?? 'none'} plate=${result.assignment.plate ?? 'none'}`);
 
-    // Notifications: if both CONSULTA, send single consolidated notification (no intermediate spam)
-    if (result.bothConsulta) {
+    // Notifications: if CONSULTA transporter, send consolidated notification (no intermediate spam)
+    if (result.isConsultaTransporter) {
       this.notifyAllParticipants(
         result.freight, [{ transportCompanyId: dto.transportCompanyId }],
         NotificationType.freight_assigned,
         'Flete asignado y en espera de entrega',
-        `${result.freight.code} → ${result.freight.destName || 'destino'} · Pasos intermedios completados automáticamente`,
+        `${result.freight.code} → ${result.freight.destName || 'destino'} · Transportista CONSULTA — directo a planta`,
         user.sub,
       );
     } else {
@@ -2600,7 +2580,17 @@ export class FreightsService {
             assignData.queuePosition = (maxRows[0]?.maxPos ?? 0) + 1;
           }
 
-          await tx.freightAssignment.create({ data: assignData });
+          const createdAssignment = await tx.freightAssignment.create({ data: assignData });
+
+          // CONSULTA transporter: auto-complete to "A planta" (loaded) — plant confirms delivery
+          if (isConsultaAm) {
+            const now = new Date();
+            await tx.freightAssignment.update({
+              where: { id: createdAssignment.id },
+              data: { tripStatus: 'loaded', startedAt: now, loadedAt: now, transporterFinishedConfirmedAt: now },
+            });
+            this.logger.log(`assignMulti: CONSULTA transporter auto-complete to loaded tripNumber=${tripNumber} freight=${freightId}`);
+          }
 
           if (freight.conversation?.id) {
             await tx.conversationParticipant.upsert({
@@ -2616,9 +2606,21 @@ export class FreightsService {
         // Recompute count from DB to avoid race conditions with concurrent assignments
         const activeCount = await tx.freightAssignment.count({ where: { freightId, status: { in: ['active', 'accepted'] } } });
         const newStatus = await this.deriveFreightStatus(tx, freightId);
+        const freightUpdateData: any = { status: newStatus, assignedTruckCount: activeCount, isMultiTruck: true };
+
+        // If derived status reached loaded (all CONSULTA trucks), set freight-level timestamps
+        if (newStatus === FreightStatus.loaded || newStatus === FreightStatus.in_progress) {
+          const now = new Date();
+          if (!freight.startedAt) freightUpdateData.startedAt = now;
+          if (newStatus === FreightStatus.loaded && !freight.loadedAt) {
+            freightUpdateData.loadedAt = now;
+            if (!freight.transporterFinishedConfirmedAt) freightUpdateData.transporterFinishedConfirmedAt = now;
+          }
+        }
+
         const updated = await tx.freight.update({
           where: { id: freightId },
-          data: { status: newStatus, assignedTruckCount: activeCount, isMultiTruck: true } as any,
+          data: freightUpdateData as any,
         });
 
         await tx.auditLog.create({
