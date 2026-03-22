@@ -542,9 +542,9 @@ export class FreightQueryToolsService {
       take: 500,
     });
 
-    // CompanyAccess: plants that granted access to this producer
+    // CompanyAccess: plants that granted OPERATOR access to this producer
     const companyAccessRecords = await this.prisma.companyAccess.findMany({
-      where: { granteeCompanyId: producerCompanyId, isActive: true },
+      where: { granteeCompanyId: producerCompanyId, isActive: true, accessLevel: 'OPERATOR' },
       select: { grantorCompanyId: true },
       take: 200,
     });

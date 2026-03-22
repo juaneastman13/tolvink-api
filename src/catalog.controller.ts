@@ -111,11 +111,13 @@ export class CatalogController implements OnModuleDestroy {
           take: 200,
         });
 
-        // CompanyAccess: plants that granted access to this producer
+        // CompanyAccess: plants that granted OPERATOR access to this producer
+        // READONLY (CONSULTA) plants are excluded — user can't create freights to them
         const companyAccessRecords = await this.prisma.companyAccess.findMany({
           where: {
             granteeCompanyId: { in: producerCompanyIds },
             isActive: true,
+            accessLevel: 'OPERATOR',
           },
           select: { grantorCompanyId: true },
           take: 200,
@@ -197,9 +199,9 @@ export class CatalogController implements OnModuleDestroy {
           take: 200,
         });
 
-        // CompanyAccess: plants that granted access to this producer
+        // CompanyAccess: plants that granted OPERATOR access to this producer
         const caRecords = await this.prisma.companyAccess.findMany({
-          where: { granteeCompanyId: { in: producerCompanyIds }, isActive: true },
+          where: { granteeCompanyId: { in: producerCompanyIds }, isActive: true, accessLevel: 'OPERATOR' },
           select: { grantorCompanyId: true },
           take: 200,
         });
