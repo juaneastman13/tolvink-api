@@ -1120,8 +1120,10 @@ export class AdminService {
 
   // ==================== BULK IMPORT ====================
 
-  async importCompanies(rows: any[]) {
+  async importCompanies(rows: any[], callerCompanyId?: string) {
     const typeMap: Record<string, string> = { planta: 'plant', productor: 'producer', transportista: 'transporter' };
+    const granteeTypeMap: Record<string, string> = { producer: 'PRODUCER', transporter: 'TRANSPORTER' };
+    const validAccessLevels = ['OPERATOR', 'READONLY'];
     const results: { imported: number; errors: { row: number; name: string; error: string }[] } = { imported: 0, errors: [] };
 
     for (let i = 0; i < rows.length; i++) {
@@ -1133,11 +1135,17 @@ export class AdminService {
       const type = typeMap[rawType];
       if (!type) { results.errors.push({ row: i + 1, name, error: `Tipo inválido: ${r.type || '(vacío)'}` }); continue; }
 
+      const accessLevel = r.accessLevel?.toString().trim();
+      if (!accessLevel || !validAccessLevels.includes(accessLevel)) {
+        results.errors.push({ row: i + 1, name, error: `Acceso inválido: ${r.access || '(vacío)'} — debe ser USO o CONSULTA` });
+        continue;
+      }
+
       const existing = await this.prisma.company.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
       if (existing) { results.errors.push({ row: i + 1, name, error: 'Empresa ya existe' }); continue; }
 
       try {
-        await this.prisma.company.create({
+        const company = await this.prisma.company.create({
           data: {
             name,
             type: type as CompanyType,
@@ -1148,6 +1156,19 @@ export class AdminService {
             hasInternalFleet: r.hasInternalFleet === true,
           },
         });
+
+        // Create CompanyAccess linking caller's company to the new company
+        if (callerCompanyId && granteeTypeMap[type]) {
+          await this.prisma.companyAccess.create({
+            data: {
+              grantorCompanyId: callerCompanyId,
+              granteeCompanyId: company.id,
+              granteeType: granteeTypeMap[type] as any,
+              accessLevel: accessLevel as any,
+            },
+          });
+        }
+
         results.imported++;
       } catch (e: any) {
         results.errors.push({ row: i + 1, name, error: e.message?.slice(0, 120) || 'Error desconocido' });
@@ -1156,12 +1177,14 @@ export class AdminService {
     return results;
   }
 
-  async importUsers(rows: any[]) {
+  async importUsers(rows: any[], callerCompanyId?: string) {
     const roleMap: Record<string, { userRole: string; membershipRole: string }> = {
       operario: { userRole: 'operator', membershipRole: 'operario' },
       gerente: { userRole: 'admin', membershipRole: 'gerente' },
       chofer: { userRole: 'operator', membershipRole: 'chofer' },
     };
+    const granteeTypeMap: Record<string, string> = { producer: 'PRODUCER', transporter: 'TRANSPORTER' };
+    const validAccessLevels = ['OPERATOR', 'READONLY'];
     const results: { imported: number; errors: { row: number; email: string; error: string }[] } = { imported: 0, errors: [] };
 
     for (let i = 0; i < rows.length; i++) {
@@ -1178,6 +1201,12 @@ export class AdminService {
 
       const roleDef = roleMap[rawRole];
       if (!roleDef) { results.errors.push({ row: i + 1, email, error: `Rol inválido: ${r.role || '(vacío)'}` }); continue; }
+
+      const accessLevel = r.accessLevel?.toString().trim();
+      if (!accessLevel || !validAccessLevels.includes(accessLevel)) {
+        results.errors.push({ row: i + 1, email, error: `Acceso inválido: ${r.access || '(vacío)'} — debe ser USO o CONSULTA` });
+        continue;
+      }
 
       const company = await this.prisma.company.findFirst({ where: { name: { equals: companyName, mode: 'insensitive' }, active: true } });
       if (!company) { results.errors.push({ row: i + 1, email, error: `Empresa no encontrada: ${companyName}` }); continue; }
@@ -1210,6 +1239,20 @@ export class AdminService {
         await this.prisma.userCompany.create({
           data: { userId: user.id, companyId: company.id, role: roleDef.membershipRole },
         }).catch((err) => this.logger.warn(`[importUsers] membership create failed: ${err.message}`));
+
+        // Create/update CompanyAccess between caller's company and user's company
+        if (callerCompanyId && callerCompanyId !== company.id && granteeTypeMap[companyType]) {
+          await this.prisma.companyAccess.upsert({
+            where: { grantorCompanyId_granteeCompanyId: { grantorCompanyId: callerCompanyId, granteeCompanyId: company.id } },
+            create: {
+              grantorCompanyId: callerCompanyId,
+              granteeCompanyId: company.id,
+              granteeType: granteeTypeMap[companyType] as any,
+              accessLevel: accessLevel as any,
+            },
+            update: { accessLevel: accessLevel as any },
+          }).catch((err) => this.logger.warn(`[importUsers] CompanyAccess upsert failed: ${err.message}`));
+        }
 
         results.imported++;
       } catch (e: any) {
@@ -1547,7 +1590,7 @@ export class AdminController {
     await this.svc.assertPlatformAdmin(u);
     if (!Array.isArray(body.companies) || body.companies.length === 0) throw new BadRequestException('Lista de empresas vacía');
     if (body.companies.length > 200) throw new BadRequestException('Máximo 200 empresas por importación');
-    return this.svc.importCompanies(body.companies);
+    return this.svc.importCompanies(body.companies, u.companyId || null);
   }
 
   @Post('import/users')
@@ -1557,6 +1600,6 @@ export class AdminController {
     await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!Array.isArray(body.users) || body.users.length === 0) throw new BadRequestException('Lista de usuarios vacía');
     if (body.users.length > 200) throw new BadRequestException('Máximo 200 usuarios por importación');
-    return this.svc.importUsers(body.users);
+    return this.svc.importUsers(body.users, u.companyId || null);
   }
 }
