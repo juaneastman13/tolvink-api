@@ -10,11 +10,13 @@ const MAX_CATALOG = 500;
 // Module-level ref so clearTransportCache() works without a class instance
 let _cacheRef: Map<string, { data: any; ts: number }> | null = null;
 
-/** Invalidate all transport-related cache entries (called after access changes) */
+/** Invalidate access-sensitive cache entries (called after access changes) */
 export function clearTransportCache() {
   if (!_cacheRef) return;
   for (const key of _cacheRef.keys()) {
-    if (key.startsWith('transport:')) _cacheRef.delete(key);
+    if (key.startsWith('transport:') || key.startsWith('lots:') || key.startsWith('plants:') || key.startsWith('branches:') || key.startsWith('all:')) {
+      _cacheRef.delete(key);
+    }
   }
 }
 
@@ -323,7 +325,7 @@ export class CatalogController implements OnModuleDestroy {
   async transportCompanies(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
     const s = parseInt(skip || '0', 10) || 0;
-    const key = `transport:${user.companyId}:${s}:${t}`;
+    const key = `transport:${user.sub}:${user.companyId}:${s}:${t}`;
 
     return this.cached(key, async () => {
       const isPlant = await this.companyRes.hasCompanyType(user, 'plant');

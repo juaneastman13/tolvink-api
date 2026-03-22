@@ -135,8 +135,10 @@ export class FieldsService {
           granteeCompanyId: dto.ownerCompanyId,
           isActive: true,
         },
+        select: { id: true, accessLevel: true },
       });
       if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+      if (access.accessLevel === 'READONLY') throw new ForbiddenException('Acceso CONSULTA no permite crear campos para esa empresa');
     }
 
     return this.prisma.field.create({

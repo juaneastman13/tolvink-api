@@ -196,9 +196,10 @@ export class TrucksService {
       const plantId = user.activeCompanyId || user.companyId;
       const access = await this.prisma.companyAccess.findFirst({
         where: { grantorCompanyId: plantId, granteeCompanyId: targetCompanyId, isActive: true },
-        select: { id: true },
+        select: { id: true, accessLevel: true },
       });
       if (!access) throw new ForbiddenException('No hay vinculación activa con esa empresa');
+      if (access.accessLevel === 'READONLY') throw new ForbiddenException('Acceso CONSULTA no permite crear choferes');
       driverCompanyId = targetCompanyId;
     }
 

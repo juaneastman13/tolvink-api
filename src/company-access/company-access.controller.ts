@@ -133,6 +133,15 @@ export class CompanyAccessService {
     return user.role === 'platform_admin';
   }
 
+  /** Verify the caller belongs to the queried company. Throws if not. */
+  assertCompanyAccess(companyId: string, user: any): void {
+    if (this.isPlatformAdmin(user)) return;
+    const userCompanyId = user.activeCompanyId || user.companyId;
+    if (userCompanyId !== companyId) {
+      throw new ForbiddenException('Sin acceso a esta empresa');
+    }
+  }
+
   private async resolvePlantCompanyId(user: any): Promise<string> {
     return this.companyRes.resolvePlantCompanyId(user);
   }
@@ -347,15 +356,17 @@ export class CompanyAccessService {
       ? user.activeCompanyId
       : this.resolveHubCompanyId(user);
 
-    // Validate CompanyAccess exists and is active
+    // Validate CompanyAccess exists, is active, and is OPERATOR
     const access = await this.prisma.companyAccess.findFirst({
       where: {
         grantorCompanyId: hubId,
         granteeCompanyId: dto.targetCompanyId,
         isActive: true,
       },
+      select: { id: true, accessLevel: true },
     });
     if (!access) throw new BadRequestException('No hay vinculación activa con esa empresa');
+    if (access.accessLevel === 'READONLY') throw new ForbiddenException('Acceso CONSULTA no permite crear usuarios para esa empresa');
 
     // Generate email if not provided
     const email = dto.email || `${dto.name.toLowerCase().replace(/\s+/g, '.')}.${Date.now()}@tolvink.generated`;
@@ -609,14 +620,15 @@ export class CompanyAccessService {
 
     const companies = await this.prisma.company.findMany({
       where: {
+        active: true,
         OR: [
           { name: { contains: search.trim(), mode: 'insensitive' } },
-          { rut: { contains: search.trim(), mode: 'insensitive' } },
         ],
       },
-      select: { id: true, name: true, type: true, types: true, phone: true, rut: true },
+      // Only return non-sensitive fields (no phone, no rut)
+      select: { id: true, name: true, type: true, types: true },
       orderBy: { name: 'asc' },
-      take: 50,
+      take: 20,
     });
 
     return companies.filter(c => !linkedIds.has(c.id));
@@ -688,14 +700,16 @@ export class CompanyAccessController {
   @Get('stats/:companyId')
   @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Stats de empresas vinculadas (fletes activos, última actividad)' })
-  getLinkedStats(@Param('companyId', ParseUUIDPipe) companyId: string) {
+  getLinkedStats(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() user: any) {
+    this.service.assertCompanyAccess(companyId, user);
     return this.service.getLinkedCompaniesStats(companyId);
   }
 
   @Get('unified/:companyId')
   @Roles('plant', 'producer', 'transporter', 'platform_admin')
   @ApiOperation({ summary: 'Lista unificada: CompanyAccess + PlantProducerAccess' })
-  listUnified(@Param('companyId', ParseUUIDPipe) companyId: string) {
+  listUnified(@Param('companyId', ParseUUIDPipe) companyId: string, @CurrentUser() user: any) {
+    this.service.assertCompanyAccess(companyId, user);
     return this.service.listUnified(companyId);
   }
 
@@ -716,8 +730,10 @@ export class CompanyAccessController {
   @ApiQuery({ name: 'type', required: false, enum: ['PRODUCER', 'TRANSPORTER'] })
   listByGrantor(
     @Param('companyId', ParseUUIDPipe) companyId: string,
+    @CurrentUser() user: any,
     @Query('type') type?: string,
   ) {
+    this.service.assertCompanyAccess(companyId, user);
     return this.service.listByGrantor(companyId, type);
   }
 

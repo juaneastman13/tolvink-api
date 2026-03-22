@@ -113,7 +113,8 @@ export class WeighTicketsController {
   runOcr(
     @Param('id', ParseUUIDPipe) freightId: string,
     @Param('ticketId', ParseUUIDPipe) ticketId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.service.runOcr(freightId, ticketId);
+    return this.service.runOcr(freightId, ticketId, user);
   }
 }

@@ -1776,6 +1776,7 @@ export class FreightsService {
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
+    await this.assertNotConsultaProducer(freightId, user);
 
     const allIds = await this.resolveAllCompanyIds(user);
 
@@ -2039,6 +2040,7 @@ export class FreightsService {
   // ======================== PENDING CHANGES ==============================
 
   async approvePendingChange(freightId: string, changeId: string, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     const allIds = await this.resolveAllCompanyIds(user);
 
     return this.prisma.$transaction(async (tx) => {
@@ -2110,6 +2112,7 @@ export class FreightsService {
   }
 
   async rejectPendingChange(freightId: string, changeId: string, user: any, reason?: string) {
+    await this.assertNotConsultaProducer(freightId, user);
     const allIds = await this.resolveAllCompanyIds(user);
 
     return this.prisma.$transaction(async (tx) => {
@@ -2630,6 +2633,7 @@ export class FreightsService {
   }
 
   async updateAssignment(freightId: string, assignmentId: string, dto: { transportCompanyId?: string; truckId?: string | null; driverId?: string | null; tons?: number }, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
     const isProducer = await this.hasCompanyType(user, 'producer');
@@ -2816,6 +2820,7 @@ export class FreightsService {
   }
 
   async respondTrip(freightId: string, assignmentId: string, dto: RespondTripDto, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     // Accept is no longer valid — trips are accepted by assigning truck+driver via updateAssignment
     if (dto.action === 'accepted') {
       throw new BadRequestException('Los viajes se aceptan automáticamente al asignar camión y chofer. Usá el endpoint PATCH /assignments/:id para asignar.');
@@ -3270,6 +3275,7 @@ export class FreightsService {
     body: { lat: number; lng: number; speed?: number; heading?: number },
     user: any,
   ) {
+    await this.assertNotConsultaProducer(freightId, user);
     // Validate coordinate bounds
     if (typeof body.lat !== 'number' || typeof body.lng !== 'number' ||
         !isFinite(body.lat) || !isFinite(body.lng) ||
@@ -3353,6 +3359,7 @@ export class FreightsService {
     body: { name: string; url: string; type?: string; step?: string },
     user: any,
   ) {
+    await this.assertNotConsultaProducer(freightId, user);
     // Resolve company IDs outside tx (doesn't change concurrently)
     const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
@@ -3420,6 +3427,7 @@ export class FreightsService {
   // ======================== DELETE DOCUMENT ==============================
 
   async renameDocument(freightId: string, docId: string, name: string, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       throw new BadRequestException('El nombre no puede estar vacío');
     }
@@ -3444,6 +3452,7 @@ export class FreightsService {
   }
 
   async deleteDocument(freightId: string, docId: string, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     return this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
@@ -3473,6 +3482,7 @@ export class FreightsService {
   // ======================== SAVE OCR DATA ================================
 
   async saveOcrData(freightId: string, docId: string, ocrData: any, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     // Validate ocrData shape and size
     if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
       throw new BadRequestException('ocrData debe ser un objeto JSON');
@@ -3535,6 +3545,7 @@ export class FreightsService {
   }
 
   async editOcrData(freightId: string, docId: string, ocrData: any, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     // Validate ocrData shape
     if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
       throw new BadRequestException('ocrData debe ser un objeto JSON');
@@ -3598,6 +3609,7 @@ export class FreightsService {
   }
 
   async clearOcrData(freightId: string, docId: string, user: any) {
+    await this.assertNotConsultaProducer(freightId, user);
     const allIds = user.role !== 'platform_admin' ? await this.resolveAllCompanyIds(user) : [];
 
     return this.prisma.$transaction(async (tx) => {

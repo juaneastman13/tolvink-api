@@ -60,6 +60,7 @@ export class WeighTicketsService {
   // ======================== CREATE =====================================
 
   async create(freightId: string, dto: CreateWeighTicketDto, user: any) {
+    await this.assertNotConsulta(freightId, user);
     const type = dto.type || 'destination';
 
     // Validate role vs ticket type
@@ -177,6 +178,7 @@ export class WeighTicketsService {
   // ======================== UPDATE =====================================
 
   async update(freightId: string, ticketId: string, dto: UpdateWeighTicketDto, user: any) {
+    await this.assertNotConsulta(freightId, user);
     const ticket = await this.prisma.weighTicket.findFirst({
       where: { id: ticketId, freightId },
     });
@@ -226,7 +228,8 @@ export class WeighTicketsService {
 
   // ======================== OCR =======================================
 
-  async runOcr(freightId: string, ticketId: string) {
+  async runOcr(freightId: string, ticketId: string, user?: any) {
+    if (user) await this.assertNotConsulta(freightId, user);
     const ticket = await this.prisma.weighTicket.findFirst({
       where: { id: ticketId, freightId },
     });
@@ -318,5 +321,22 @@ export class WeighTicketsService {
     if (Array.isArray(user.companyTypes)) user.companyTypes.forEach((t: string) => types.add(t));
     if (user.role === 'platform_admin') types.add('platform_admin');
     return types;
+  }
+
+  /** Block CONSULTA (READONLY) users from mutating weigh tickets */
+  private async assertNotConsulta(freightId: string, user: any): Promise<void> {
+    const userTypes = this.resolveUserTypes(user);
+    if (userTypes.has('plant') || userTypes.has('platform_admin')) return;
+    const activeCompanyId = user.activeCompanyId;
+    if (!activeCompanyId) return;
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { destCompanyId: true },
+    });
+    if (!freight?.destCompanyId) return;
+    const access = await this.prisma.companyAccess.findFirst({
+      where: { grantorCompanyId: freight.destCompanyId, granteeCompanyId: activeCompanyId, isActive: true, accessLevel: 'READONLY' },
+    });
+    if (access) throw new ForbiddenException('Usuario CONSULTA no puede realizar esta acción');
   }
 }
