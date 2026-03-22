@@ -617,6 +617,48 @@ export class AdminService {
     });
   }
 
+  async searchLinkableUsers(search: string, callerUser: any) {
+    const myIds = await this.getUserCompanyIds(callerUser);
+    if (myIds.length === 0) return [];
+
+    // Find users NOT already in caller's companies
+    const users = await this.prisma.user.findMany({
+      where: {
+        AND: [
+          {
+            OR: [
+              { name: { contains: search, mode: 'insensitive' } },
+              { email: { contains: search, mode: 'insensitive' } },
+              { phone: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+          // Exclude users already in my companies
+          {
+            NOT: {
+              OR: [
+                { companyId: { in: myIds } },
+                { memberships: { some: { companyId: { in: myIds }, active: true } } },
+              ],
+            },
+          },
+        ],
+        active: true,
+      },
+      select: {
+        id: true, name: true, email: true, phone: true,
+        userTypes: true, companyByType: true,
+        company: { select: { id: true, name: true, type: true } },
+        memberships: {
+          where: { active: true },
+          select: { company: { select: { name: true, type: true } } },
+        },
+      },
+      orderBy: { name: 'asc' },
+      take: 20,
+    });
+    return users;
+  }
+
   async createUser(dto: CreateUserDto, preHashedPassword?: string) {
 
     dto.email = dto.email.toLowerCase().trim();
@@ -1374,6 +1416,16 @@ export class AdminController {
   }
 
   // --- Users ---
+  @Get('users/search-linkable')
+  @ApiOperation({ summary: 'Buscar usuarios vinculables (no pertenecen a mi empresa)' })
+  @ApiQuery({ name: 'search', required: true })
+  async searchLinkableUsers(@CurrentUser() u: any, @Query('search') search?: string) {
+    if (!search || search.trim().length < 2) return [];
+    await this.svc.assertCompanyOrPlatformAdmin(u);
+    const fullUser = await this.svc.resolveFullUser(u);
+    return this.svc.searchLinkableUsers(search.trim(), fullUser);
+  }
+
   @Get('users')
   @ApiOperation({ summary: 'Listar usuarios' })
   @ApiQuery({ name: 'search', required: false })
