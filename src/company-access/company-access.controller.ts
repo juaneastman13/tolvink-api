@@ -558,7 +558,8 @@ export class CompanyAccessService {
     const companyId = user.activeCompanyId;
     if (!companyId) return [];
 
-    return this.prisma.companyAccess.findMany({
+    // CompanyAccess records (new model)
+    const caRecords = await this.prisma.companyAccess.findMany({
       where: { granteeCompanyId: companyId, isActive: true },
       include: {
         grantorCompany: { select: { id: true, name: true, type: true } },
@@ -566,6 +567,26 @@ export class CompanyAccessService {
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
+
+    // LEGACY: PlantProducerAccess — synthesize as CompanyAccess-like records
+    const caGrantorIds = new Set(caRecords.map(r => r.grantorCompanyId));
+    const ppaRecords = await this.prisma.plantProducerAccess.findMany({
+      where: { producerCompanyId: companyId, active: true },
+      select: { plantCompanyId: true, plantCompany: { select: { id: true, name: true, type: true } } },
+      take: 100,
+    });
+    const legacyRecords = ppaRecords
+      .filter(r => !caGrantorIds.has(r.plantCompanyId)) // don't duplicate
+      .map(r => ({
+        id: `legacy-${r.plantCompanyId}`,
+        grantorCompanyId: r.plantCompanyId,
+        granteeCompanyId: companyId,
+        accessLevel: 'OPERATOR', // legacy = full access
+        isActive: true,
+        grantorCompany: r.plantCompany,
+      }));
+
+    return [...caRecords, ...legacyRecords];
   }
 
   // ── Search all companies (for linking existing) ────────────────
