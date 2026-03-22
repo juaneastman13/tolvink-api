@@ -215,6 +215,14 @@ export class FreightsController {
     return this.service.authorize(id, user);
   }
 
+  @Post(':id/approve-producer')
+  @UseGuards(FreightAccessGuard)
+  @Roles('plant')
+  @ApiOperation({ summary: 'Aprobar flete creado por productor (solo planta)' })
+  approveProducer(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.approveProducerFreight(id, user);
+  }
+
   // ======================== MULTI-TRUCK ENDPOINTS (v6.0) ================
 
   @Post(':id/assign-multi')

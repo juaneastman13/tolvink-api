@@ -24,9 +24,7 @@ export class FreightsService {
 
   private _broadcastConsecutiveErrors = 0;
 
-  /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs.
-   *  TODO: Add AI conversation cache invalidation after assignment changes (assign, assignMulti, updateAssignment, respond)
-   *  to prevent stale context in AI responses. */
+  /** Broadcast freight update, invalidate status counts cache, and refresh participant IDs. */
   private broadcastAndInvalidate(freightId: string, data: any, excludeUserId?: string) {
     this.invalidateStatusCounts();
     this.refreshParticipantIds(freightId).catch(e => this.logger.error('refreshParticipantIds failed', e.message));
@@ -379,6 +377,7 @@ export class FreightsService {
           requestedById: user.sub,
           notes: dto.notes,
           useOwnFleet,
+          needsPlantApproval: !callerIsPlant && !!destCompanyId,
           truckCount: Math.max(1, dto.truckCount || 1),
           assignedTruckCount: 0,
           isMultiTruck: Math.max(1, dto.truckCount || 1) > 1,
@@ -1741,6 +1740,49 @@ export class FreightsService {
     );
 
     this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: 'accepted' }, user.sub);
+
+    return updated;
+  }
+
+  // ======================== APPROVE PRODUCER FREIGHT (plant approves freight created by producer) ===
+
+  async approveProducerFreight(freightId: string, user: any) {
+    const isPlant = await this.hasCompanyType(user, 'plant');
+    if (!isPlant) {
+      throw new ForbiddenException('Solo la planta puede aprobar fletes de productores');
+    }
+
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({ where: { id: freightId } });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (!freight.needsPlantApproval) throw new BadRequestException('Este flete no requiere aprobación de planta');
+      if (freight.plantApprovedAt) throw new BadRequestException('Este flete ya fue aprobado');
+      if (!freight.destCompanyId || !allIds.includes(freight.destCompanyId)) {
+        throw new ForbiddenException('Solo la planta destino puede aprobar este flete');
+      }
+
+      const result = await tx.freight.update({
+        where: { id: freightId },
+        data: { plantApprovedAt: new Date() },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight',
+          entityId: freightId,
+          freightId,
+          action: 'plant_approved',
+          toValue: 'approved',
+          userId: user.sub,
+        },
+      });
+
+      return result;
+    });
+
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: updated.code, needsPlantApproval: true, plantApprovedAt: updated.plantApprovedAt }, user.sub);
 
     return updated;
   }

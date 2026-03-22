@@ -434,8 +434,8 @@ model CompanyAccess {
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
-  grantorCompany Company @relation("accessGranted", fields: [grantorCompanyId], references: [id])
-  granteeCompany Company @relation("accessReceived", fields: [granteeCompanyId], references: [id])
+  grantorCompany Company @relation("accessGranted", fields: [grantorCompanyId], references: [id], onDelete: Cascade)
+  granteeCompany Company @relation("accessReceived", fields: [granteeCompanyId], references: [id], onDelete: Cascade)
 
   @@unique([grantorCompanyId, granteeCompanyId])
   @@index([granteeCompanyId, granteeType])
@@ -512,6 +512,10 @@ model Freight {
   transporterFinishedConfirmedAt DateTime? @map("transporter_finished_confirmed_at")
   plantFinishedConfirmedAt       DateTime? @map("plant_finished_confirmed_at")
 
+  // Producer → Plant approval
+  needsPlantApproval             Boolean   @default(false) @map("needs_plant_approval")
+  plantApprovedAt                DateTime? @map("plant_approved_at")
+
   // Relations
   originCompany   Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
   destCompany     Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
@@ -539,6 +543,7 @@ model Freight {
   @@index([destCompanyId])
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
+  @@index([status, destCompanyId, createdAt])
   @@index([status, loadDate])
   @@index([scheduledAt])
   @@index([destName, originName, createdAt])
@@ -1001,8 +1006,8 @@ model SharedLink {
   accessCount      Int                 @default(0) @map("access_count")
   createdAt        DateTime            @default(now()) @map("created_at")
 
-  creatorCompany Company  @relation("SharedLinkCreator", fields: [creatorCompanyId], references: [id])
-  targetCompany  Company  @relation("SharedLinkTarget", fields: [targetCompanyId], references: [id])
+  creatorCompany Company  @relation("SharedLinkCreator", fields: [creatorCompanyId], references: [id], onDelete: Cascade)
+  targetCompany  Company  @relation("SharedLinkTarget", fields: [targetCompanyId], references: [id], onDelete: Cascade)
   freight        Freight? @relation(fields: [freightId], references: [id], onDelete: Cascade)
   createdBy      User?    @relation("SharedLinkCreatedByUser", fields: [createdById], references: [id], onDelete: SetNull)
 
