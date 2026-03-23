@@ -22,6 +22,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     await this.connectWithRetry();
     await this.ensurePoisTable();
+    await this.ensureFreightItemTonsNullable();
   }
 
   /** Create pois table if it doesn't exist — fallback for when prisma migrate deploy doesn't run */
@@ -54,6 +55,21 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       this.logger.log('ensurePoisTable: pois table ready');
     } catch (err) {
       this.logger.warn('ensurePoisTable failed: ' + err.message);
+    }
+  }
+
+  private async ensureFreightItemTonsNullable(): Promise<void> {
+    try {
+      const [col] = await this.$queryRaw<any[]>`
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'freight_items' AND column_name = 'tons'
+      `;
+      if (col && col.is_nullable === 'NO') {
+        await this.$executeRaw`ALTER TABLE "freight_items" ALTER COLUMN "tons" DROP NOT NULL`;
+        this.logger.log('ensureFreightItemTonsNullable: tons column made nullable');
+      }
+    } catch (err) {
+      this.logger.warn('ensureFreightItemTonsNullable failed: ' + err.message);
     }
   }
 
