@@ -3313,8 +3313,8 @@ export class FreightsService {
         const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
 
         const updateData: any = { transporterFinishedConfirmedAt: new Date() };
-        if (isOwnFleet) updateData.plantFinishedConfirmedAt = new Date();
-        const bothConfirmed = plantAlsoConfirmed || isOwnFleet;
+        // Own fleet: do NOT auto-confirm plant side — plant must confirm separately
+        const bothConfirmed = plantAlsoConfirmed;
         if (bothConfirmed) {
           updateData.tripStatus = 'finished';
           updateData.finishedAt = new Date();
