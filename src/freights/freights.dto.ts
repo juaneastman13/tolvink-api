@@ -16,16 +16,17 @@ export class FreightItemDto {
   @IsEnum(['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'])
   grain: string;
 
-  @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)' })
+  @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)', required: false })
+  @IsOptional()
   @IsNumber()
   @Min(0.1, { message: 'Cantidad debe ser mayor a 0' })
   @Max(100000)
   @Type(() => Number)
-  tons: number;
+  tons?: number;
 
-  @ApiProperty({ required: false, enum: ['toneladas', 'cantidad', 'metros', 'm3'], default: 'toneladas' })
+  @ApiProperty({ required: false, enum: ['toneladas', 'kg', 'cantidad', 'metros', 'm3'], default: 'toneladas' })
   @IsOptional()
-  @IsEnum(['toneladas', 'cantidad', 'metros', 'm3'])
+  @IsEnum(['toneladas', 'kg', 'cantidad', 'metros', 'm3'])
   unit?: string;
 
   @ApiProperty({ required: false, description: 'Importe' })
