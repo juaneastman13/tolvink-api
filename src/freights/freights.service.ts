@@ -3190,8 +3190,17 @@ export class FreightsService {
         if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
-        // Own fleet promotion: producer OR plant acting as transporter
-        if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
+        // Own fleet promotion: only promote if caller is the origin company
+        if (isOwnFleet && (ct === 'producer' || ct === 'plant')) {
+          const callerOwnFleetIdsL = await this.resolveAllCompanyIds(user);
+          if (callerOwnFleetIdsL.includes(freight.originCompanyId) && !callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
+            ct = 'transporter';
+          }
+          if (callerOwnFleetIdsL.includes(freight.originCompanyId) && callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
+            const activeCompanyId = user.companyId || user.activeCompanyId;
+            ct = activeCompanyId === freight.destCompanyId ? 'plant' : 'transporter';
+          }
+        }
         // Plant-centric: plant can confirm loaded for CONSULTA transporter
         if (ct === 'plant' && await this.isPlantActingForConsultaTransporter(user, freight.destCompanyId, assignment.transportCompanyId)) {
           ct = 'transporter';
@@ -3300,9 +3309,21 @@ export class FreightsService {
         throw new BadRequestException(`Solo se puede finalizar un camión a planta. Estado actual: ${assignment.tripStatus}`);
       }
 
-      // Own fleet promotion: producer OR plant acting as transporter
+      // Own fleet promotion: only promote if caller is the ORIGIN company (not the dest plant)
       const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
-      if ((ct === 'producer' || ct === 'plant') && isOwnFleet) ct = 'transporter';
+      if (isOwnFleet && (ct === 'producer' || ct === 'plant')) {
+        const callerOwnFleetIds = await this.resolveAllCompanyIds(user);
+        // Only promote to transporter if caller owns the origin company (i.e. is the producer/fleet owner)
+        // Dest plant should NOT be promoted — they need to confirm as plant
+        if (callerOwnFleetIds.includes(freight.originCompanyId) && !callerOwnFleetIds.includes(freight.destCompanyId || '__none__')) {
+          ct = 'transporter';
+        }
+        // If caller has BOTH origin and dest, check which company is active
+        if (callerOwnFleetIds.includes(freight.originCompanyId) && callerOwnFleetIds.includes(freight.destCompanyId || '__none__')) {
+          const activeCompanyId = user.companyId || user.activeCompanyId;
+          ct = activeCompanyId === freight.destCompanyId ? 'plant' : 'transporter';
+        }
+      }
 
       if (ct === 'transporter') {
         const callerCtfIds = await this.resolveAllCompanyIds(user);
