@@ -793,6 +793,7 @@ export class FreightsService {
 
   async assign(freightId: string, dto: AssignFreightDto, user: any) {
     await this.assertNotConsultaProducer(freightId, user);
+    const callerId = user.sub;
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
     const isProducer = await this.hasCompanyType(user, 'producer');
@@ -922,13 +923,28 @@ export class FreightsService {
           assignData.plate = truck.plate;
         }
         if (dto.driverId) {
+          // Allow caller to assign themselves as driver ("yo soy el chofer")
+          const isSelfDriver = dto.driverId === callerId;
           const driverMembership = await tx.userCompany.findFirst({
-            where: { userId: dto.driverId, companyId: dto.transportCompanyId, role: 'chofer', active: true },
+            where: isSelfDriver
+              ? { userId: dto.driverId, companyId: dto.transportCompanyId, active: true }
+              : { userId: dto.driverId, companyId: dto.transportCompanyId, role: 'chofer', active: true },
             include: { user: { select: { id: true, name: true } } },
           });
-          if (!driverMembership) throw new BadRequestException('Chofer no encontrado en la empresa');
-          assignData.driverId = driverMembership.user.id;
-          assignData.driverName = driverMembership.user.name;
+          if (!driverMembership) {
+            // Fallback: if self-driver, look up user directly
+            if (isSelfDriver) {
+              const selfUser = await tx.user.findUnique({ where: { id: dto.driverId }, select: { id: true, name: true } });
+              if (!selfUser) throw new BadRequestException('Chofer no encontrado en la empresa');
+              assignData.driverId = selfUser.id;
+              assignData.driverName = selfUser.name;
+            } else {
+              throw new BadRequestException('Chofer no encontrado en la empresa');
+            }
+          } else {
+            assignData.driverId = driverMembership.user.id;
+            assignData.driverName = driverMembership.user.name;
+          }
           // Lock driver's active assignments to prevent concurrent duplicate queuePositions
           await tx.$queryRaw`
             SELECT fa.id
@@ -2436,6 +2452,7 @@ export class FreightsService {
   }
 
   async assignMulti(freightId: string, dto: AssignMultiTruckDto, user: any) {
+    const callerId = user.sub;
     const isPlant = await this.hasCompanyType(user, 'plant');
     const isTransporter = await this.hasCompanyType(user, 'transporter');
     const isProducer = await this.hasCompanyType(user, 'producer');
@@ -2554,13 +2571,26 @@ export class FreightsService {
           }
 
           if (truck.driverId) {
+            const isSelfDriverAm = truck.driverId === callerId;
             const dm = await tx.userCompany.findFirst({
-              where: { userId: truck.driverId, companyId: truck.transportCompanyId, role: 'chofer', active: true },
+              where: isSelfDriverAm
+                ? { userId: truck.driverId, companyId: truck.transportCompanyId, active: true }
+                : { userId: truck.driverId, companyId: truck.transportCompanyId, role: 'chofer', active: true },
               include: { user: { select: { id: true, name: true } } },
             });
-            if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa');
-            assignData.driverId = dm.user.id;
-            assignData.driverName = dm.user.name;
+            if (!dm) {
+              if (isSelfDriverAm) {
+                const selfUser = await tx.user.findUnique({ where: { id: truck.driverId }, select: { id: true, name: true } });
+                if (!selfUser) throw new BadRequestException('Chofer no encontrado en la empresa');
+                assignData.driverId = selfUser.id;
+                assignData.driverName = selfUser.name;
+              } else {
+                throw new BadRequestException('Chofer no encontrado en la empresa');
+              }
+            } else {
+              assignData.driverId = dm.user.id;
+              assignData.driverName = dm.user.name;
+            }
             // Lock driver's active assignments to prevent concurrent duplicate queuePositions
             await tx.$queryRaw`
               SELECT fa.id
@@ -2830,13 +2860,26 @@ export class FreightsService {
 
       if (dto.driverId) {
         const companyId = dto.transportCompanyId || assignment.transportCompanyId;
+        const isSelfDriverUa = dto.driverId === user.sub;
         const dm = await (tx as any).userCompany.findFirst({
-          where: { userId: dto.driverId, companyId, role: 'chofer', active: true },
+          where: isSelfDriverUa
+            ? { userId: dto.driverId, companyId, active: true }
+            : { userId: dto.driverId, companyId, role: 'chofer', active: true },
           include: { user: { select: { id: true, name: true } } },
         });
-        if (!dm) throw new BadRequestException('Chofer no encontrado en la empresa transportista');
-        updateData.driverId = dm.user.id;
-        updateData.driverName = dm.user.name;
+        if (!dm) {
+          if (isSelfDriverUa) {
+            const selfUser = await tx.user.findUnique({ where: { id: dto.driverId }, select: { id: true, name: true } });
+            if (!selfUser) throw new BadRequestException('Chofer no encontrado en la empresa transportista');
+            updateData.driverId = selfUser.id;
+            updateData.driverName = selfUser.name;
+          } else {
+            throw new BadRequestException('Chofer no encontrado en la empresa transportista');
+          }
+        } else {
+          updateData.driverId = dm.user.id;
+          updateData.driverName = dm.user.name;
+        }
       } else if (dto.driverId === null) {
         updateData.driverId = null;
         updateData.driverName = null;
