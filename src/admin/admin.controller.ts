@@ -482,7 +482,6 @@ export class AdminService {
       delete dto.type;
       delete dto.types;
       delete dto.rut;
-      delete dto.hasInternalFleet;
     }
 
     const data: any = {};
