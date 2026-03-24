@@ -2410,11 +2410,14 @@ export class FreightsService {
 
   async getQueueBoard(user: any) {
     const allIds = await this.resolveAllCompanyIds(user);
+    // Use activeCompanyId for filtering (single company context)
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const filterIds = activeCoId ? [activeCoId] : allIds;
 
     // All active freights where this company is destination (plant perspective)
     const freights = await this.prisma.freight.findMany({
       where: {
-        destCompanyId: { in: allIds },
+        destCompanyId: { in: filterIds },
         status: { notIn: ['draft', 'canceled', 'finished'] },
       },
       select: {
@@ -2444,7 +2447,7 @@ export class FreightsService {
       tons: f.items[0]?.tons || null,
       assignments: f.assignments.map(a => ({
         ...a,
-        isOwnFleet: allIds.includes(a.transportCompanyId),
+        isOwnFleet: filterIds.includes(a.transportCompanyId),
       })),
     }));
 
@@ -2456,15 +2459,15 @@ export class FreightsService {
     });
     const busySet = new Set(busyTruckIds.map(a => a.truckId).filter(Boolean));
 
-    // Own fleet trucks
+    // Own fleet trucks (only active company)
     const ownTrucks = await this.prisma.truck.findMany({
-      where: { companyId: { in: allIds }, active: true },
+      where: { companyId: { in: filterIds }, active: true },
       select: { id: true, plate: true, model: true, companyId: true },
     });
 
     // Linked transporter trucks (via PlantProducerAccess where plant=us)
     const linkedAccess = await this.prisma.plantProducerAccess.findMany({
-      where: { plantCompanyId: { in: allIds }, active: true },
+      where: { plantCompanyId: { in: filterIds }, active: true },
       select: { producerCompanyId: true },
     });
     // Also check companies that have active assignments to our freights (transporters)
@@ -2472,7 +2475,7 @@ export class FreightsService {
     const externalCompanyIds = [...new Set([
       ...linkedAccess.map(a => a.producerCompanyId),
       ...transporterIds,
-    ])].filter(id => !allIds.includes(id));
+    ])].filter(id => !filterIds.includes(id));
 
     const externalTrucks = externalCompanyIds.length > 0 ? await this.prisma.truck.findMany({
       where: { companyId: { in: externalCompanyIds }, active: true },
@@ -2493,7 +2496,7 @@ export class FreightsService {
     const grouped = allTrucks.reduce((acc, t) => {
       const co = companyMap.get(t.companyId);
       const key = t.companyId;
-      if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: allIds.includes(key), trucks: [] };
+      if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: filterIds.includes(key), trucks: [] };
       acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model, busy: busySet.has(t.id) });
       return acc;
     }, {} as Record<string, any>);
