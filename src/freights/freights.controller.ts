@@ -128,6 +128,13 @@ export class FreightsController {
     return this.service.moveAssignment(assignmentId, dto.targetFreightId, user, dto.position);
   }
 
+  @Get('trucks/:truckId/queue')
+  @Roles('plant', 'transporter', 'producer')
+  @ApiOperation({ summary: 'Cola de fletes de un camión' })
+  getTruckQueue(@Param('truckId', ParseUUIDPipe) truckId: string, @CurrentUser() user: any) {
+    return this.service.getTruckQueue(truckId, user);
+  }
+
   @Patch('queue-board/reorder')
   @Roles('plant', 'platform_admin')
   @ApiOperation({ summary: 'Reordenar assignments dentro de un flete' })

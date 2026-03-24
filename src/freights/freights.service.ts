@@ -2451,13 +2451,15 @@ export class FreightsService {
       })),
     }));
 
-    // Available trucks: own fleet + linked transporters not in active assignments
-    const busyTruckIds = await this.prisma.freightAssignment.findMany({
+    // Count active assignments per truck (for queue badge)
+    const truckAssignments = await this.prisma.freightAssignment.findMany({
       where: { status: { in: ['active', 'accepted'] }, truckId: { not: null } },
       select: { truckId: true },
-      distinct: ['truckId'],
     });
-    const busySet = new Set(busyTruckIds.map(a => a.truckId).filter(Boolean));
+    const truckAssignCount = new Map<string, number>();
+    for (const a of truckAssignments) {
+      if (a.truckId) truckAssignCount.set(a.truckId, (truckAssignCount.get(a.truckId) || 0) + 1);
+    }
 
     // Own fleet trucks (only active company)
     const ownTrucks = await this.prisma.truck.findMany({
@@ -2501,7 +2503,8 @@ export class FreightsService {
       const co = companyMap.get(t.companyId);
       const key = t.companyId;
       if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: filterIds.includes(key), trucks: [] };
-      acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model, busy: busySet.has(t.id) });
+      const assignCount = truckAssignCount.get(t.id) || 0;
+      acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model, assignCount });
       return acc;
     }, {} as Record<string, any>);
 
@@ -2512,6 +2515,51 @@ export class FreightsService {
     });
 
     return { freights: result, availableTrucks: availableGroups };
+  }
+
+  async getTruckQueue(truckId: string, user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    // Verify truck belongs to user's company or a linked transporter
+    const truck = await this.prisma.truck.findUnique({
+      where: { id: truckId },
+      select: { id: true, plate: true, model: true, companyId: true },
+    });
+    if (!truck) throw new NotFoundException('Camión no encontrado');
+
+    const assignments = await this.prisma.freightAssignment.findMany({
+      where: {
+        truckId,
+        status: { in: ['active', 'accepted'] },
+      },
+      select: {
+        id: true, tripStatus: true, queuePosition: true, tripNumber: true, tons: true,
+        freight: {
+          select: {
+            id: true, code: true, status: true, originName: true, destName: true,
+            loadDate: true, items: { select: { grain: true, tons: true }, take: 1 },
+          },
+        },
+      },
+      orderBy: { queuePosition: 'asc' },
+    });
+
+    return {
+      truck: { id: truck.id, plate: truck.plate, model: truck.model },
+      queue: assignments.map((a, i) => ({
+        assignmentId: a.id,
+        position: i + 1,
+        tripStatus: a.tripStatus,
+        freightId: a.freight.id,
+        freightCode: a.freight.code,
+        freightStatus: a.freight.status,
+        originName: a.freight.originName,
+        destName: a.freight.destName,
+        loadDate: a.freight.loadDate,
+        grain: a.freight.items[0]?.grain || null,
+        tons: a.freight.items[0]?.tons || null,
+      })),
+    };
   }
 
   async moveAssignment(assignmentId: string, targetFreightId: string, user: any, position?: number) {
