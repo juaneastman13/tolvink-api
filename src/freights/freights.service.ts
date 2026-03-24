@@ -2480,21 +2480,21 @@ export class FreightsService {
     }) : [];
 
     const allTrucks = [...ownTrucks, ...externalTrucks];
-    const availableTrucks = allTrucks.filter(t => !busySet.has(t.id));
 
     // Get company names for grouping
-    const companyIds = [...new Set(availableTrucks.map(t => t.companyId))];
+    const companyIds = [...new Set(allTrucks.map(t => t.companyId))];
     const companies = companyIds.length > 0 ? await this.prisma.company.findMany({
       where: { id: { in: companyIds } },
       select: { id: true, name: true, type: true, types: true },
     }) : [];
     const companyMap = new Map(companies.map(c => [c.id, c]));
 
-    const grouped = availableTrucks.reduce((acc, t) => {
+    // Return ALL trucks with busy flag (not just available)
+    const grouped = allTrucks.reduce((acc, t) => {
       const co = companyMap.get(t.companyId);
       const key = t.companyId;
       if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: allIds.includes(key), trucks: [] };
-      acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model });
+      acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model, busy: busySet.has(t.id) });
       return acc;
     }, {} as Record<string, any>);
 
