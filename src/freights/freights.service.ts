@@ -2465,17 +2465,21 @@ export class FreightsService {
       select: { id: true, plate: true, model: true, companyId: true },
     });
 
-    // Linked transporter trucks (via PlantProducerAccess where plant=us)
-    const linkedAccess = await this.prisma.plantProducerAccess.findMany({
-      where: { plantCompanyId: { in: filterIds }, active: true },
-      select: { producerCompanyId: true },
-    });
-    // Also check companies that have active assignments to our freights (transporters)
+    // External transporter trucks: only companies of type 'transporter' (not producers with own fleet)
     const transporterIds = [...new Set(result.flatMap(f => f.assignments.map(a => a.transportCompanyId)))];
-    const externalCompanyIds = [...new Set([
-      ...linkedAccess.map(a => a.producerCompanyId),
-      ...transporterIds,
-    ])].filter(id => !filterIds.includes(id));
+    const candidateExternalIds = [...new Set(transporterIds)].filter(id => !filterIds.includes(id));
+
+    // Filter to only transporter-type companies (exclude producers with own fleet)
+    let externalCompanyIds: string[] = [];
+    if (candidateExternalIds.length > 0) {
+      const externalCompanies = await this.prisma.company.findMany({
+        where: { id: { in: candidateExternalIds }, active: true },
+        select: { id: true, type: true, types: true },
+      });
+      externalCompanyIds = externalCompanies
+        .filter(c => c.type === 'transporter' || (Array.isArray(c.types) && (c.types as string[]).includes('transporter')))
+        .map(c => c.id);
+    }
 
     const externalTrucks = externalCompanyIds.length > 0 ? await this.prisma.truck.findMany({
       where: { companyId: { in: externalCompanyIds }, active: true },
