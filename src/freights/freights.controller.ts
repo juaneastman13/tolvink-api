@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
 import { AssignmentSuggestionsService } from './assignment-suggestions.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto, MoveAssignmentDto, ReorderAssignmentsDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -108,6 +108,34 @@ export class FreightsController {
     @CurrentUser() user: any,
   ) {
     return this.service.reorderDriverQueue(driverId, dto.orderedFreightIds, user);
+  }
+
+  @Get('queue-board')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Tablero de colas de camiones para planta' })
+  getQueueBoard(@CurrentUser() user: any) {
+    return this.service.getQueueBoard(user);
+  }
+
+  @Post('assignments/:assignmentId/move')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Mover assignment a otro flete' })
+  moveAssignment(
+    @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
+    @Body() dto: MoveAssignmentDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.moveAssignment(assignmentId, dto.targetFreightId, user, dto.position);
+  }
+
+  @Patch('queue-board/reorder')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Reordenar assignments dentro de un flete' })
+  reorderAssignments(
+    @Body() dto: ReorderAssignmentsDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reorderAssignments(dto.orderedAssignmentIds, user);
   }
 
   @Get(':id/summary')

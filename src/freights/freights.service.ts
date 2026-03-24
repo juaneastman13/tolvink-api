@@ -2406,6 +2406,180 @@ export class FreightsService {
     return { ok: true };
   }
 
+  // ======================== QUEUE BOARD ================================
+
+  async getQueueBoard(user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    // Freights where this company is destination (plant perspective) with at least 1 active assignment
+    const freights = await this.prisma.freight.findMany({
+      where: {
+        destCompanyId: { in: allIds },
+        status: { notIn: ['draft', 'canceled', 'finished'] },
+        assignments: { some: { status: { in: ['active', 'accepted'] } } },
+      },
+      select: {
+        id: true, code: true, status: true, originName: true, destName: true,
+        loadDate: true, truckCount: true, assignedTruckCount: true, isMultiTruck: true,
+        items: { select: { grain: true, tons: true }, take: 1 },
+        originCompany: { select: { id: true, name: true } },
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          orderBy: { queuePosition: 'asc' },
+          select: {
+            id: true, tripNumber: true, tripStatus: true, queuePosition: true,
+            plate: true, driverName: true, tons: true,
+            transportCompanyId: true,
+            transportCompany: { select: { id: true, name: true } },
+            truck: { select: { id: true, plate: true, model: true } },
+          },
+        },
+      },
+      orderBy: [{ loadDate: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    // Mark own-fleet vs external for each assignment
+    const result = freights.map(f => ({
+      ...f,
+      grain: f.items[0]?.grain || null,
+      tons: f.items[0]?.tons || null,
+      assignments: f.assignments.map(a => ({
+        ...a,
+        isOwnFleet: allIds.includes(a.transportCompanyId),
+      })),
+    }));
+
+    return { freights: result };
+  }
+
+  async moveAssignment(assignmentId: string, targetFreightId: string, user: any, position?: number) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Find the assignment with its current freight
+      const assignment: any = await tx.freightAssignment.findUnique({
+        where: { id: assignmentId },
+        include: { freight: { select: { id: true, code: true, destCompanyId: true, truckCount: true, assignedTruckCount: true } } },
+      });
+      if (!assignment) throw new NotFoundException('Asignación no encontrada');
+
+      // Only pre-in_progress trips can be moved
+      if (!['pending', 'accepted'].includes(assignment.tripStatus)) {
+        throw new BadRequestException('Solo se pueden mover viajes pendientes o aceptados');
+      }
+
+      // Validate plant access on source freight
+      if (!allIds.includes(assignment.freight.destCompanyId)) {
+        throw new ForbiddenException('No tiene acceso al flete origen');
+      }
+
+      // 2. Validate target freight
+      const targetFreight: any = await tx.freight.findUnique({
+        where: { id: targetFreightId },
+        select: { id: true, code: true, destCompanyId: true, truckCount: true, assignedTruckCount: true, status: true },
+      });
+      if (!targetFreight) throw new NotFoundException('Flete destino no encontrado');
+      if (!allIds.includes(targetFreight.destCompanyId)) {
+        throw new ForbiddenException('No tiene acceso al flete destino');
+      }
+
+      // Check capacity
+      const targetActiveCount = await tx.freightAssignment.count({
+        where: { freightId: targetFreightId, status: { in: ['active', 'accepted'] } },
+      });
+      if (targetActiveCount >= targetFreight.truckCount) {
+        throw new BadRequestException(`El flete ${targetFreight.code} ya tiene ${targetActiveCount}/${targetFreight.truckCount} camiones asignados`);
+      }
+
+      const sourceFreightId = assignment.freightId;
+
+      // 3. Get next trip number for target freight
+      const maxTripNum: any = await tx.freightAssignment.aggregate({
+        _max: { tripNumber: true },
+        where: { freightId: targetFreightId },
+      });
+
+      // 4. Move the assignment
+      await tx.freightAssignment.update({
+        where: { id: assignmentId },
+        data: {
+          freightId: targetFreightId,
+          tripNumber: (maxTripNum._max.tripNumber ?? 0) + 1,
+          queuePosition: position || (targetActiveCount + 1),
+          tripStatus: 'pending', // Reset to pending when moved
+        },
+      });
+
+      // 5. Recompute both freights
+      const sourceActiveCount = await tx.freightAssignment.count({
+        where: { freightId: sourceFreightId, status: { in: ['active', 'accepted'] } },
+      });
+      const sourceStatus = await this.deriveFreightStatus(tx, sourceFreightId);
+      await tx.freight.update({
+        where: { id: sourceFreightId },
+        data: { status: sourceStatus, assignedTruckCount: sourceActiveCount },
+      });
+
+      const newTargetActiveCount = await tx.freightAssignment.count({
+        where: { freightId: targetFreightId, status: { in: ['active', 'accepted'] } },
+      });
+      const targetStatus = await this.deriveFreightStatus(tx, targetFreightId);
+      await tx.freight.update({
+        where: { id: targetFreightId },
+        data: { status: targetStatus, assignedTruckCount: newTargetActiveCount },
+      });
+
+      // 6. Audit log
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight', entityId: targetFreightId, freightId: targetFreightId,
+          action: 'assignment_moved',
+          fromValue: JSON.stringify({ freightId: sourceFreightId, freightCode: assignment.freight.code }),
+          toValue: JSON.stringify({ freightId: targetFreightId, freightCode: targetFreight.code }),
+          userId: user.sub,
+        },
+      });
+
+      return { ok: true, sourceFreightId, targetFreightId };
+    });
+  }
+
+  async reorderAssignments(orderedAssignmentIds: string[], user: any) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    return this.prisma.$transaction(async (tx) => {
+      // Validate all assignments belong to same freight and user has access
+      const assignments: any[] = await tx.freightAssignment.findMany({
+        where: { id: { in: orderedAssignmentIds }, status: { in: ['active', 'accepted'] } },
+        select: { id: true, freightId: true, freight: { select: { destCompanyId: true } } },
+      });
+
+      if (assignments.length !== orderedAssignmentIds.length) {
+        throw new BadRequestException('Algunos assignments no se encontraron o no están activos');
+      }
+
+      const freightIds = new Set(assignments.map(a => a.freightId));
+      if (freightIds.size !== 1) {
+        throw new BadRequestException('Todos los assignments deben pertenecer al mismo flete');
+      }
+
+      const destCompanyId = assignments[0].freight.destCompanyId;
+      if (!allIds.includes(destCompanyId)) {
+        throw new ForbiddenException('No tiene acceso a este flete');
+      }
+
+      // Update queue positions
+      for (let i = 0; i < orderedAssignmentIds.length; i++) {
+        await tx.freightAssignment.update({
+          where: { id: orderedAssignmentIds[i] },
+          data: { queuePosition: i + 1 },
+        });
+      }
+
+      return { ok: true };
+    });
+  }
+
   // ======================== MULTI-TRUCK (v6.0) ==========================
 
   private async deriveFreightStatus(tx: any, freightId: string): Promise<FreightStatus> {

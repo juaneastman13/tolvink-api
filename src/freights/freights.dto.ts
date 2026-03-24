@@ -416,6 +416,27 @@ export class ReorderQueueDto {
   orderedFreightIds: string[];
 }
 
+export class MoveAssignmentDto {
+  @ApiProperty({ description: 'ID del flete destino' })
+  @IsUUID()
+  targetFreightId: string;
+
+  @ApiProperty({ required: false, description: 'Posición en cola destino' })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  position?: number;
+}
+
+export class ReorderAssignmentsDto {
+  @ApiProperty({ description: 'IDs de assignments en nuevo orden' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @IsUUID('4', { each: true })
+  orderedAssignmentIds: string[];
+}
+
 export class CancelAssignmentDto {
   @ApiProperty({ description: 'Motivo de cancelación', maxLength: 500 })
   @IsNotEmpty({ message: 'Motivo obligatorio' })
