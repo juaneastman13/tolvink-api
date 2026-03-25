@@ -380,7 +380,7 @@ export class FreightsService {
           requestedById: user.sub,
           notes: dto.notes,
           useOwnFleet,
-          needsPlantApproval: !callerIsPlant && !!destCompanyId,
+          needsPlantApproval: !callerIsPlant && !!destCompanyId && !!useOwnFleet,
           truckCount: Math.max(1, dto.truckCount || 1),
           assignedTruckCount: 0,
           isMultiTruck: Math.max(1, dto.truckCount || 1) > 1,
