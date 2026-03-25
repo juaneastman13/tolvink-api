@@ -642,7 +642,7 @@ export class FreightsService {
           _count: { select: { documents: true, weighTickets: true } },
           assignments: {
             where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
-            orderBy: { createdAt: 'asc' },
+            orderBy: [{ queuePosition: 'asc' }, { createdAt: 'asc' }],
             include: {
               transportCompany: { select: { id: true, name: true } },
               driver: { select: { id: true, name: true, phone: true } },
@@ -754,7 +754,7 @@ export class FreightsService {
         requestedBy: { select: { id: true, name: true } },
         assignments: {
           where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } },
-          orderBy: { createdAt: 'asc' as const },
+          orderBy: [{ queuePosition: 'asc' as const }, { createdAt: 'asc' as const }],
           include: {
             transportCompany: { select: { id: true, name: true } },
             driver: { select: { id: true, name: true, phone: true } },
@@ -2427,7 +2427,7 @@ export class FreightsService {
         originCompany: { select: { id: true, name: true } },
         assignments: {
           where: { status: { in: ['active', 'accepted'] } },
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ queuePosition: 'asc' }, { createdAt: 'asc' }],
           select: {
             id: true, tripNumber: true, tripStatus: true, queuePosition: true,
             plate: true, driverName: true, tons: true,
