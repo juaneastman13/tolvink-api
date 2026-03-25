@@ -1166,7 +1166,7 @@ export class FreightsService {
             entityId: freightId,
             freightId: freightId,
             action: 'rejected',
-            fromValue: 'assigned',
+            fromValue: freight.status,
             toValue: 'pending_assignment',
             userId: user.sub,
             reason: dto.reason,
