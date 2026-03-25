@@ -135,6 +135,17 @@ export class FreightsController {
     return this.service.getTruckQueue(truckId, user);
   }
 
+  @Patch('trucks/:truckId/queue/reorder')
+  @Roles('plant', 'platform_admin')
+  @ApiOperation({ summary: 'Reordenar cola de fletes de un camión' })
+  reorderTruckQueue(
+    @Param('truckId', ParseUUIDPipe) truckId: string,
+    @Body() dto: ReorderAssignmentsDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.reorderTruckQueue(truckId, dto.orderedAssignmentIds, user);
+  }
+
   @Patch('queue-board/reorder')
   @Roles('plant', 'platform_admin')
   @ApiOperation({ summary: 'Reordenar assignments dentro de un flete' })

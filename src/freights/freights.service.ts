@@ -2543,6 +2543,7 @@ export class FreightsService {
       where: {
         truckId,
         status: { in: ['active', 'accepted'] },
+        tripStatus: { notIn: ['finished', 'canceled'] },
       },
       select: {
         id: true, tripStatus: true, queuePosition: true, tripNumber: true, tons: true,
@@ -2572,6 +2573,32 @@ export class FreightsService {
         tons: a.freight.items[0]?.tons || null,
       })),
     };
+  }
+
+  async reorderTruckQueue(truckId: string, orderedAssignmentIds: string[], user: any) {
+    return this.prisma.$transaction(async (tx) => {
+      // Validate all assignments belong to this truck and are reorderable (pre-in_progress)
+      const assignments: any[] = await tx.freightAssignment.findMany({
+        where: { id: { in: orderedAssignmentIds }, truckId, status: { in: ['active', 'accepted'] } },
+        select: { id: true, tripStatus: true },
+      });
+      if (assignments.length !== orderedAssignmentIds.length) {
+        throw new BadRequestException('Algunos viajes no se encontraron o no pertenecen a este camión');
+      }
+      // Only pending/accepted can be reordered; in_progress/loaded must stay in place
+      for (const a of assignments) {
+        if (a.tripStatus === 'in_progress' || a.tripStatus === 'loaded') {
+          throw new BadRequestException('No se pueden reordenar viajes ya iniciados');
+        }
+      }
+      for (let i = 0; i < orderedAssignmentIds.length; i++) {
+        await tx.freightAssignment.update({
+          where: { id: orderedAssignmentIds[i] },
+          data: { queuePosition: i + 1 },
+        });
+      }
+      return { ok: true };
+    });
   }
 
   async moveAssignment(assignmentId: string, targetFreightId: string, user: any, position?: number) {
