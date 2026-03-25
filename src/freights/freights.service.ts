@@ -2498,11 +2498,23 @@ export class FreightsService {
     }) : [];
     const companyMap = new Map(companies.map(c => [c.id, c]));
 
-    // Return ALL trucks with busy flag (not just available)
+    // Fetch access levels for external companies (OPERATOR=USO=draggable, READONLY=CONSULTA=view-only)
+    const accessMap = new Map<string, string>();
+    if (externalCompanyIds.length > 0) {
+      const accesses = await this.prisma.companyAccess.findMany({
+        where: { grantorCompanyId: { in: filterIds }, granteeCompanyId: { in: externalCompanyIds }, isActive: true },
+        select: { granteeCompanyId: true, accessLevel: true },
+      });
+      for (const a of accesses) accessMap.set(a.granteeCompanyId, a.accessLevel);
+    }
+
+    // Return ALL trucks grouped by company with access level
     const grouped = allTrucks.reduce((acc, t) => {
       const co = companyMap.get(t.companyId);
       const key = t.companyId;
-      if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: filterIds.includes(key), trucks: [] };
+      const isOwn = filterIds.includes(key);
+      const accessLevel = isOwn ? 'OPERATOR' : (accessMap.get(key) || 'READONLY');
+      if (!acc[key]) acc[key] = { companyId: key, companyName: co?.name || 'Desconocida', isOwnFleet: isOwn, accessLevel, trucks: [] };
       const assignCount = truckAssignCount.get(t.id) || 0;
       acc[key].trucks.push({ id: t.id, plate: t.plate, model: t.model, assignCount });
       return acc;
