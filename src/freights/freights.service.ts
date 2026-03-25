@@ -2427,7 +2427,7 @@ export class FreightsService {
         originCompany: { select: { id: true, name: true } },
         assignments: {
           where: { status: { in: ['active', 'accepted'] } },
-          orderBy: { queuePosition: 'asc' },
+          orderBy: { createdAt: 'asc' },
           select: {
             id: true, tripNumber: true, tripStatus: true, queuePosition: true,
             plate: true, driverName: true, tons: true,
