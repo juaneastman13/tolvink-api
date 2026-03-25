@@ -2700,7 +2700,7 @@ export class FreightsService {
       // Validate all assignments belong to same freight and user has access
       const assignments: any[] = await tx.freightAssignment.findMany({
         where: { id: { in: orderedAssignmentIds }, status: { in: ['active', 'accepted'] } },
-        select: { id: true, freightId: true, freight: { select: { destCompanyId: true } } },
+        select: { id: true, freightId: true, freight: { select: { destCompanyId: true, originCompanyId: true } } },
       });
 
       if (assignments.length !== orderedAssignmentIds.length) {
@@ -2712,8 +2712,8 @@ export class FreightsService {
         throw new BadRequestException('Todos los assignments deben pertenecer al mismo flete');
       }
 
-      const destCompanyId = assignments[0].freight.destCompanyId;
-      if (!allIds.includes(destCompanyId)) {
+      const f = assignments[0].freight;
+      if (!allIds.includes(f.destCompanyId) && !allIds.includes(f.originCompanyId)) {
         throw new ForbiddenException('No tiene acceso a este flete');
       }
 
