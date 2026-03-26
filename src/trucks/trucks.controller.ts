@@ -426,7 +426,8 @@ export class TrucksService {
     await this.assertTruckOwnership(truckId, companyId);
     const { type, name, fileUrl, fileName, mimeType, issuedAt, expiresAt, notes, expenseId, incomeId, freightId, movementId } = body;
     if (!fileUrl || !fileName || !type) throw new BadRequestException('fileUrl, fileName y type son obligatorios');
-    return this.prisma.truckDocument.create({
+    const isImage = (mimeType || '').startsWith('image/') || /\.(jpg|jpeg|png|webp|gif)$/i.test(fileName);
+    const doc = await this.prisma.truckDocument.create({
       data: {
         truckId, companyId, type, name: name || null,
         fileUrl, fileName, mimeType: mimeType || null,
@@ -435,8 +436,16 @@ export class TrucksService {
         notes: notes || null, uploadedById: user.sub,
         expenseId: expenseId || null, incomeId: incomeId || null,
         freightId: freightId || null, movementId: movementId || null,
+        ocrStatus: isImage ? 'pending' : null,
       },
     });
+    // Auto-launch OCR for images
+    if (isImage) {
+      this.runOcrAsync(doc.id, fileUrl, type).catch(err => {
+        this.logger.warn(`Auto-OCR failed for doc ${doc.id}: ${err.message}`);
+      });
+    }
+    return doc;
   }
 
   async updateDocument(truckId: string, docId: string, user: any, body: any) {
