@@ -9,6 +9,7 @@ import { PrismaService } from '../database/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { SseService } from '../sse/sse.service';
 import OpenAI from 'openai';
+import { OcrService } from '../ocr/ocr.service';
 
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const WEB_PHONE = 'web'; // Distinguishes web sessions from WhatsApp
@@ -27,6 +28,7 @@ export class WebChatService {
     private ai: AiService,
     private sse: SseService,
     private config: ConfigService,
+    private ocr: OcrService,
   ) {
     const openaiKey = this.config.get<string>('OPENAI_API_KEY');
     if (openaiKey) {
@@ -231,7 +233,7 @@ export class WebChatService {
     }
   }
 
-  /** Process a file uploaded by the user — sets pendingDocument and notifies AI */
+  /** Process a file uploaded by the user — runs OCR for images, sets pendingDocument */
   async handleFileMessage(jwtUser: any, doc: { url: string; name: string; type: string }): Promise<void> {
     const dbUser = await this.validateUser(jwtUser);
     if (!dbUser) return;
@@ -250,14 +252,30 @@ export class WebChatService {
       },
     });
 
-    // Reload session with updated state
     const updatedSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
 
     const isImage = doc.type === 'photo' || /\.(jpg|jpeg|png|webp|gif|heic|heif)$/i.test(doc.name);
-    const label = isImage ? 'imagen' : 'documento';
+
+    // For images: run OCR and include result in the message so AI can process inline
+    let messageText: string;
+    if (isImage) {
+      try {
+        const ocrResult = await this.ocr.analyzeFromUrl(doc.url);
+        const ocrSummary = ocrResult?.rawText
+          ? `Contenido detectado: ${ocrResult.rawText.slice(0, 500)}`
+          : 'No se detectó texto en la imagen.';
+        const docTypeLabel = ocrResult?.docType ? ` (tipo: ${ocrResult.docType})` : '';
+        messageText = `Subí una imagen: ${doc.name}${docTypeLabel}. ${ocrSummary}`;
+      } catch (e) {
+        this.logger.warn(`OCR failed for ${doc.name}: ${e.message}`);
+        messageText = `Subí una imagen: ${doc.name}`;
+      }
+    } else {
+      messageText = `Subí un documento: ${doc.name}`;
+    }
 
     try {
-      await this.processAndEmitWithSession(dbUser, `Adjunté un ${label}: ${doc.name}`, updatedSession);
+      await this.processAndEmitWithSession(dbUser, messageText, updatedSession);
     } catch (e) {
       this.logger.error(`Web file error for user=${dbUser.id}: ${e.message}`, e.stack?.slice(0, 300));
       this.sse.emitToUser(dbUser.id, 'ai:response', {
@@ -306,7 +324,8 @@ export class WebChatService {
         if (!text) return null;
         // Strip injected system context prefixes from user messages (e.g. [Contexto activo: ...], [FLETE ACTIVO: ...], [Sistema: ...])
         if (m.role === 'user') {
-          text = text.replace(/^\[(?:Contexto activo|FLETE ACTIVO|Sistema|Audio transcripto)[^\]]*\]\s*/g, '').trim();
+          // Strip ALL injected system context prefixes (may be stacked: [Sistema: ...]\n\n[FLETE ACTIVO: ...]\n\nactual message)
+          text = text.replace(/\[(?:Contexto activo|FLETE ACTIVO|Sistema|Audio transcripto)[^\]]*\]\s*/g, '').trim();
         }
         if (!text) return null;
         return { id: `${session.id}-${i}`, role: m.role, text };
