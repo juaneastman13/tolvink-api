@@ -339,48 +339,43 @@ export class TrucksService {
       where: { id: truckId, OR: [{ companyId }, { ownerCompanyId: companyId }] },
       include: {
         assignedUser: { select: { id: true, name: true, phone: true } },
-        documents: { where: { companyId }, orderBy: { createdAt: 'desc' } },
       },
     });
     if (!truck) throw new NotFoundException('Camión no encontrado');
 
+    const isOwn = truck.companyId === companyId;
+
+    // Linked trucks: return basic info only
+    if (!isOwn) {
+      return { ...truck, isOwn: false, documents: [], activeFreights: [], totalFreights: 0, totalTons: 0, docsSummary: { total: 0, expired: 0, expiringSoon: 0, valid: 0 } };
+    }
+
+    // Own trucks: full detail
+    const docs = await this.prisma.truckDocument.findMany({ where: { truckId, companyId }, orderBy: { createdAt: 'desc' } });
     const now = new Date();
     const in30days = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-    const docs = (truck as any).documents.map((d: any) => {
+    const docsWithStatus = docs.map((d: any) => {
       let expiryStatus = 'no_expiry';
-      if (d.expiresAt) {
-        if (d.expiresAt < now) expiryStatus = 'expired';
-        else if (d.expiresAt < in30days) expiryStatus = 'expiring_soon';
-        else expiryStatus = 'valid';
-      }
+      if (d.expiresAt) { if (d.expiresAt < now) expiryStatus = 'expired'; else if (d.expiresAt < in30days) expiryStatus = 'expiring_soon'; else expiryStatus = 'valid'; }
       return { ...d, expiryStatus };
     });
 
-    // Freight stats via assignments
     const [activeAssignments, totalFreights, totalTons] = await Promise.all([
       this.prisma.freightAssignment.findMany({
         where: { truckId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
         include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
-        orderBy: { createdAt: 'desc' },
-        take: 10,
+        orderBy: { createdAt: 'desc' }, take: 10,
       }),
       this.prisma.freightAssignment.count({ where: { truckId } }),
       this.prisma.freightAssignment.aggregate({ where: { truckId, tripStatus: 'finished' }, _sum: { loadedTons: true } }),
     ]);
 
     return {
-      ...truck,
-      documents: docs,
+      ...truck, isOwn: true,
+      documents: docsWithStatus,
       activeFreights: activeAssignments.map((a: any) => ({ ...a.freight, tripStatus: a.tripStatus })),
-      totalFreights,
-      totalTons: totalTons._sum.loadedTons || 0,
-      docsSummary: {
-        total: docs.length,
-        expired: docs.filter((d: any) => d.expiryStatus === 'expired').length,
-        expiringSoon: docs.filter((d: any) => d.expiryStatus === 'expiring_soon').length,
-        valid: docs.filter((d: any) => d.expiryStatus === 'valid').length,
-      },
+      totalFreights, totalTons: totalTons._sum.loadedTons || 0,
+      docsSummary: { total: docsWithStatus.length, expired: docsWithStatus.filter((d: any) => d.expiryStatus === 'expired').length, expiringSoon: docsWithStatus.filter((d: any) => d.expiryStatus === 'expiring_soon').length, valid: docsWithStatus.filter((d: any) => d.expiryStatus === 'valid').length },
     };
   }
 
@@ -388,7 +383,7 @@ export class TrucksService {
 
   async listDocuments(truckId: string, user: any, linkedTo?: string, docType?: string) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const where: any = { truckId, companyId };
     if (docType) where.type = docType;
     if (linkedTo === 'expense') where.expenseId = { not: null };
@@ -427,7 +422,7 @@ export class TrucksService {
   async addDocument(truckId: string, user: any, body: any) {
     await this.assertNotConsulta(user);
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const { type, name, fileUrl, fileName, mimeType, issuedAt, expiresAt, notes, expenseId, incomeId, freightId, movementId } = body;
     if (!fileUrl || !fileName || !type) throw new BadRequestException('fileUrl, fileName y type son obligatorios');
     return this.prisma.truckDocument.create({
@@ -490,7 +485,7 @@ export class TrucksService {
 
   async listExpenses(truckId: string, user: any, from?: string, to?: string) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const where: any = { truckId, companyId };
     if (from || to) {
       where.date = {};
@@ -507,7 +502,7 @@ export class TrucksService {
   async addExpense(truckId: string, user: any, body: any) {
     await this.assertNotConsulta(user);
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const { type, description, amount, currency, date, freightId, receiptUrl, receiptName } = body;
     if (!type || amount == null || !date) throw new BadRequestException('type, amount y date son obligatorios');
     return this.prisma.truckExpense.create({
@@ -551,7 +546,7 @@ export class TrucksService {
 
   async getExpenseSummary(truckId: string, user: any) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -601,7 +596,7 @@ export class TrucksService {
 
   async getFreightHistory(truckId: string, user: any, take = 20, skip = 0) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const assignments = await this.prisma.freightAssignment.findMany({
       where: { truckId, tripStatus: 'finished' },
       include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
@@ -632,7 +627,7 @@ export class TrucksService {
 
   async listIncomes(truckId: string, user: any, from?: string, to?: string, status?: string) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const where: any = { truckId, companyId };
     if (from || to) { where.date = {}; if (from) where.date.gte = new Date(from); if (to) where.date.lte = new Date(to); }
     if (status) where.status = status;
@@ -644,7 +639,7 @@ export class TrucksService {
   async addIncome(truckId: string, user: any, body: any) {
     await this.assertNotConsulta(user);
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     if (!body.concept || body.amount == null || !body.date) throw new BadRequestException('concept, amount y date son obligatorios');
     if (body.freightId) await this.validateFreightLink(body.freightId, truckId, companyId);
     return this.prisma.truckIncome.create({
@@ -682,7 +677,7 @@ export class TrucksService {
 
   async getIncomeSummary(truckId: string, user: any) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const [paid, pending, overdue] = await Promise.all([
       this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PAID' }, _sum: { amount: true } }),
       this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PENDING' }, _sum: { amount: true } }),
@@ -695,7 +690,7 @@ export class TrucksService {
 
   async listMovements(truckId: string, user: any, from?: string, to?: string, type?: string) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const where: any = { truckId, companyId };
     if (from || to) { where.departureAt = {}; if (from) where.departureAt.gte = new Date(from); if (to) where.departureAt.lte = new Date(to); }
     if (type) where.type = type;
@@ -707,7 +702,7 @@ export class TrucksService {
   async addMovement(truckId: string, user: any, body: any) {
     await this.assertNotConsulta(user);
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     if (!body.type) throw new BadRequestException('type es obligatorio');
     // Validate field/lot ownership
     await this.validateLocationRefs(companyId, body.originFieldId, body.originLotId, body.destFieldId, body.destLotId);
@@ -784,7 +779,7 @@ export class TrucksService {
 
   async getEconomicSummary(truckId: string, user: any, from?: string, to?: string) {
     const companyId = user.activeCompanyId || user.companyId;
-    await this.assertTruckAccess(truckId, companyId);
+    await this.assertTruckOwnership(truckId, companyId);
     const dateFilter = (from || to) ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
 
     const [incPaid, incPending, incOverdue, expTotal, expByType, freightTrips, movements] = await Promise.all([
@@ -934,6 +929,15 @@ export class TrucksService {
       where: { id: truckId, OR: [{ companyId }, { ownerCompanyId: companyId }] },
     });
     if (!truck) throw new NotFoundException('Camión no encontrado');
+    return truck;
+  }
+
+  /** Strict check: only the truck's actual company can manage its internal data */
+  private async assertTruckOwnership(truckId: string, companyId: string) {
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: truckId, companyId },
+    });
+    if (!truck) throw new ForbiddenException('Solo podés gestionar camiones de tu empresa');
     return truck;
   }
 }
