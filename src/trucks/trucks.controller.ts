@@ -616,6 +616,7 @@ export class TrucksService {
       date: a.finishedAt || a.freight.scheduledAt,
       grain: a.freight.items?.[0]?.grain,
       tons: a.loadedTons || a.freight.items?.[0]?.tons,
+      kmTotal: a.kmTotal ? Number(a.kmTotal) : null,
     }));
   }
 
@@ -637,6 +638,7 @@ export class TrucksService {
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckAccess(truckId, companyId);
     if (!body.concept || body.amount == null || !body.date) throw new BadRequestException('concept, amount y date son obligatorios');
+    if (body.freightId) await this.validateFreightLink(body.freightId, truckId, companyId);
     return this.prisma.truckIncome.create({
       data: {
         truckId, companyId, concept: body.concept, amount: body.amount,
@@ -653,6 +655,7 @@ export class TrucksService {
     const companyId = user.activeCompanyId || user.companyId;
     const inc = await this.prisma.truckIncome.findFirst({ where: { id: incomeId, truckId, companyId } });
     if (!inc) throw new NotFoundException('Ingreso no encontrado');
+    if (body.freightId) await this.validateFreightLink(body.freightId, truckId, companyId);
     const data: any = {};
     for (const k of ['concept','amount','currency','date','freightId','invoiceNumber','invoiceUrl','status','notes']) {
       if (body[k] !== undefined) data[k] = k === 'date' ? new Date(body[k]) : (body[k] || null);
@@ -698,6 +701,8 @@ export class TrucksService {
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckAccess(truckId, companyId);
     if (!body.type) throw new BadRequestException('type es obligatorio');
+    // Validate field/lot ownership
+    await this.validateLocationRefs(companyId, body.originFieldId, body.originLotId, body.destFieldId, body.destLotId);
     const mov = await this.prisma.truckMovement.create({
       data: {
         truckId, companyId, type: body.type, description: body.description || null,
@@ -722,6 +727,7 @@ export class TrucksService {
     const companyId = user.activeCompanyId || user.companyId;
     const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, companyId } });
     if (!mov) throw new NotFoundException('Movimiento no encontrado');
+    await this.validateLocationRefs(companyId, body.originFieldId, body.originLotId, body.destFieldId, body.destLotId);
     const data: any = {};
     for (const k of ['type','description','originName','destName','kmDriven','fuelLiters','fuelCost','tollCost','driverId','notes','originLat','originLng','originFieldId','originLotId','destLat','destLng','destFieldId','destLotId']) {
       if (body[k] !== undefined) data[k] = body[k] || null;
@@ -882,6 +888,36 @@ export class TrucksService {
         where: { id: truckId },
         data: { currentOdometer: truck.currentOdometer + Math.round(additionalKm), lastOdometerDate: new Date() },
       });
+    }
+  }
+
+  /** Validate that field/lot IDs belong to the user's company */
+  private async validateLocationRefs(companyId: string, originFieldId?: string, originLotId?: string, destFieldId?: string, destLotId?: string) {
+    for (const fId of [originFieldId, destFieldId]) {
+      if (fId) {
+        const field = await this.prisma.field.findFirst({ where: { id: fId, OR: [{ companyId }, { ownerCompanyId: companyId }] } });
+        if (!field) throw new ForbiddenException('Campo de ubicación no pertenece a tu empresa');
+      }
+    }
+    for (const lId of [originLotId, destLotId]) {
+      if (lId) {
+        const lot = await this.prisma.lot.findFirst({ where: { id: lId, companyId } });
+        if (!lot) throw new ForbiddenException('Lote no pertenece a tu empresa');
+      }
+    }
+  }
+
+  /** Validate that a freight involves this truck and company */
+  private async validateFreightLink(freightId: string, truckId: string, companyId: string) {
+    const assignment = await this.prisma.freightAssignment.findFirst({
+      where: { freightId, truckId, transportCompanyId: companyId },
+    });
+    if (!assignment) {
+      // Also check if freight belongs to company even without truck assignment
+      const freight = await this.prisma.freight.findFirst({
+        where: { id: freightId, participantCompanyIds: { has: companyId } },
+      });
+      if (!freight) throw new ForbiddenException('Flete no pertenece a tu empresa o camión');
     }
   }
 
