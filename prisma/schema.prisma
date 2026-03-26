@@ -436,6 +436,10 @@ model TruckDocument {
   incomeId     String?           @map("income_id")
   freightId    String?           @map("freight_id")
   movementId   String?           @map("movement_id")
+  // OCR
+  ocrData      Json?             @map("ocr_data")
+  ocrStatus    String?           @map("ocr_status") @db.VarChar(20) // pending, processing, completed, failed
+  ocrProcessedAt DateTime?       @map("ocr_processed_at")
   createdAt    DateTime          @default(now()) @map("created_at")
   updatedAt    DateTime          @updatedAt @map("updated_at")
 

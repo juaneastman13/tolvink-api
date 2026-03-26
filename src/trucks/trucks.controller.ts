@@ -14,6 +14,7 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
+import { OcrService } from '../ocr/ocr.service';
 import { JwtAuthGuard, invalidateUserActiveCache } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -69,7 +70,7 @@ export class CreateDriverDto {
 export class TrucksService {
   private readonly logger = new Logger(TrucksService.name);
 
-  constructor(private prisma: PrismaService, private wa: WhatsAppService, private companyRes: CompanyResolutionService) {}
+  constructor(private prisma: PrismaService, private wa: WhatsAppService, private companyRes: CompanyResolutionService, private ocr: OcrService) {}
 
   /** Block CONSULTA (READONLY) users from mutations. */
   private async assertNotConsulta(user: any): Promise<void> {
@@ -933,6 +934,65 @@ export class TrucksService {
   }
 
   /** Strict check: only the truck's actual company can manage its internal data */
+  // ======================== OCR ==========================================
+
+  async processDocOcr(truckId: string, docId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckOwnership(truckId, companyId);
+    const doc = await this.prisma.truckDocument.findFirst({ where: { id: docId, truckId, companyId } });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    if (!doc.fileUrl) throw new BadRequestException('El documento no tiene archivo');
+
+    // Mark as processing
+    await this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrStatus: 'processing' } });
+
+    // Process async (don't block response)
+    this.runOcrAsync(docId, doc.fileUrl, doc.type).catch(err => {
+      this.logger.error(`OCR async error doc=${docId}: ${err.message}`);
+    });
+
+    return { status: 'processing', message: 'Procesando documento con IA...' };
+  }
+
+  private async runOcrAsync(docId: string, fileUrl: string, docType: string) {
+    try {
+      const result = await this.ocr.analyzeFromUrl(fileUrl);
+      const update: any = {
+        ocrData: result,
+        ocrStatus: 'completed',
+        ocrProcessedAt: new Date(),
+      };
+      // Auto-fill expiresAt if OCR detected expiry date and doc doesn't have one
+      const doc = await this.prisma.truckDocument.findUnique({ where: { id: docId } });
+      if (!doc?.expiresAt && result?.datos) {
+        const expiryField = result.datos.fechaVencimiento || result.datos.vigenciaHasta || result.datos.validoHasta || result.datos.expiry;
+        if (expiryField) {
+          try {
+            const parsed = new Date(expiryField);
+            if (!isNaN(parsed.getTime())) update.expiresAt = parsed;
+          } catch {}
+        }
+      }
+      await this.prisma.truckDocument.update({ where: { id: docId }, data: update });
+      this.logger.log(`OCR completed for truck doc ${docId}: type=${result?.tipoDocumento}`);
+    } catch (err) {
+      await this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrStatus: 'failed' } });
+      this.logger.error(`OCR failed for truck doc ${docId}: ${err.message}`);
+    }
+  }
+
+  async getDocOcr(truckId: string, docId: string, user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckOwnership(truckId, companyId);
+    const doc = await this.prisma.truckDocument.findFirst({
+      where: { id: docId, truckId, companyId },
+      select: { ocrData: true, ocrStatus: true, ocrProcessedAt: true, type: true, fileName: true },
+    });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    return doc;
+  }
+
   private async assertTruckOwnership(truckId: string, companyId: string) {
     const truck = await this.prisma.truck.findFirst({
       where: { id: truckId, companyId },
@@ -1209,5 +1269,21 @@ export class TrucksController {
   @ApiQuery({ name: 'to', required: false })
   getEconomicSummary(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string) {
     return this.service.getEconomicSummary(id, user, from, to);
+  }
+
+  // ======================== DOCUMENT OCR ===================================
+
+  @Post(':id/documents/:docId/ocr')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Procesar documento con OCR/IA' })
+  processDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any) {
+    return this.service.processDocOcr(id, docId, user);
+  }
+
+  @Get(':id/documents/:docId/ocr')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Obtener resultado de OCR' })
+  getDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any) {
+    return this.service.getDocOcr(id, docId, user);
   }
 }
