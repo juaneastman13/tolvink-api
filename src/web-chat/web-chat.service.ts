@@ -232,7 +232,7 @@ export class WebChatService {
   }
 
   /** Get conversation history for the current session */
-  async getHistory(jwtUser: any): Promise<{ messages: any[] }> {
+  async getHistory(jwtUser: any): Promise<{ messages: any[]; navigate?: any }> {
     // Load fresh user from DB to get current activeCompanyId (JWT may be stale)
     const freshUser = await this.loadFullUser(jwtUser.sub);
     const companyId = freshUser?.activeCompanyId || freshUser?.companyId || jwtUser.companyId;
