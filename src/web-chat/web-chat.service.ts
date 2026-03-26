@@ -231,6 +231,42 @@ export class WebChatService {
     }
   }
 
+  /** Process a file uploaded by the user — sets pendingDocument and notifies AI */
+  async handleFileMessage(jwtUser: any, doc: { url: string; name: string; type: string }): Promise<void> {
+    const dbUser = await this.validateUser(jwtUser);
+    if (!dbUser) return;
+
+    this.sse.emitToUser(dbUser.id, 'ai:thinking', {});
+
+    const companyId = dbUser.activeCompanyId || dbUser.companyId || undefined;
+    const session = await this.getOrCreateSession(dbUser.id, companyId);
+
+    // Store pendingDocument in session so AI knows to use attach_document
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: { ...state, pendingDocument: { url: doc.url, name: doc.name, type: doc.type } },
+      },
+    });
+
+    // Reload session with updated state
+    const updatedSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
+
+    const isImage = doc.type === 'photo' || /\.(jpg|jpeg|png|webp|gif|heic|heif)$/i.test(doc.name);
+    const label = isImage ? 'imagen' : 'documento';
+
+    try {
+      await this.processAndEmitWithSession(dbUser, `Adjunté un ${label}: ${doc.name}`, updatedSession);
+    } catch (e) {
+      this.logger.error(`Web file error for user=${dbUser.id}: ${e.message}`, e.stack?.slice(0, 300));
+      this.sse.emitToUser(dbUser.id, 'ai:response', {
+        text: 'No fue posible procesar el archivo. Intentá de nuevo.',
+        error: true,
+      });
+    }
+  }
+
   /** Get conversation history for the current session */
   async getHistory(jwtUser: any): Promise<{ messages: any[]; navigate?: any }> {
     // Load fresh user from DB to get current activeCompanyId (JWT may be stale)

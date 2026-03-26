@@ -23,6 +23,7 @@ import { WebChatService } from './web-chat.service';
 
 const MAX_TEXT_LENGTH = 2000;
 const MAX_AUDIO_SIZE = 24 * 1024 * 1024; // 24MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const IDEMPOTENCY_TTL_MS = 60_000; // 1 minute
 
 // Simple in-memory dedup set with TTL cleanup
@@ -100,6 +101,26 @@ export class WebChatController {
     // Fire-and-forget: respond immediately, result comes via SSE
     this.service.handleAudioMessage(user, file.buffer, file.mimetype).catch((e) => {
       this.logger.error(`handleAudioMessage error: ${e.message}`);
+    });
+
+    return { ok: true };
+  }
+
+  @Post('file')
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: 'Notify AI agent of a file upload (URL from Supabase)' })
+  async sendFile(
+    @CurrentUser() user: any,
+    @Body() body: { url: string; name: string; type: string },
+  ) {
+    const url = body?.url?.trim();
+    const name = body?.name?.trim();
+    const type = body?.type || 'document';
+    if (!url || !name) throw new BadRequestException('URL y nombre requeridos');
+    if (url.length > 500) throw new BadRequestException('URL demasiado larga');
+
+    this.service.handleFileMessage(user, { url, name, type }).catch((e) => {
+      this.logger.error(`handleFileMessage error: ${e.message}`);
     });
 
     return { ok: true };
