@@ -298,6 +298,8 @@ NAVEGACIÓN (web):
 - navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, reports, locations, trucks, menu, chats, documents, analytics, queue, mydata, notifs, linked, admin.
 - Usarlo ADEMÁS de la respuesta informativa cuando tiene sentido visual.
 - "Quiero ver mis fletes" → texto + navigate_app(screen="list"). Tras crear flete → navigate_app(screen="detail", freightId=ID).
+- "Mis camiones" / "Ver mi flota" → texto + navigate_app(screen="trucks").
+- "Resumen del ABC1234" → respuesta + navigate_app(screen="trucks") para que vea el detalle.
 - NO navegar por defecto en cada respuesta — solo cuando el usuario pide ver algo o una acción se completó.` : ''}`;
 
     // P1 fix: append proactive data summary so AI can reference without extra tool calls
