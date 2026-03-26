@@ -546,6 +546,34 @@ export class TrucksService {
 
   // ======================== TRUCK FREIGHT HISTORY ==========================
 
+  /** Fleet-wide document expiry alerts — used by HomeScreen */
+  async getFleetAlerts(user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    const now = new Date();
+    const in7days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    const expiredDocs = await this.prisma.truckDocument.findMany({
+      where: { companyId, expiresAt: { lte: in7days } },
+      select: { truckId: true, expiresAt: true },
+    });
+
+    const truckExpired = new Set<string>();
+    const truckExpiring = new Set<string>();
+    for (const d of expiredDocs) {
+      if (d.expiresAt && d.expiresAt < now) truckExpired.add(d.truckId);
+      else truckExpiring.add(d.truckId);
+    }
+    // Remove trucks that are already in expired from expiring
+    for (const t of truckExpired) truckExpiring.delete(t);
+
+    return {
+      trucksWithExpired: truckExpired.size,
+      trucksWithExpiring: truckExpiring.size,
+      totalExpiredDocs: expiredDocs.filter(d => d.expiresAt && d.expiresAt < now).length,
+      totalExpiringDocs: expiredDocs.filter(d => d.expiresAt && d.expiresAt >= now).length,
+    };
+  }
+
   async getFreightHistory(truckId: string, user: any, take = 20, skip = 0) {
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckAccess(truckId, companyId);
@@ -638,7 +666,14 @@ export class TrucksController {
     return this.service.deactivateDriver(id, user, companyId);
   }
 
-  // ======================== EXPIRING DOCUMENTS (before :id routes) ========
+  // ======================== FLEET ALERTS (before :id routes) ==============
+
+  @Get('alerts')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Alertas de documentos vencidos/por vencer de la flota' })
+  getFleetAlerts(@CurrentUser() user: any) {
+    return this.service.getFleetAlerts(user);
+  }
 
   @Get('documents/expiring')
   @Roles('transporter', 'producer', 'plant')
