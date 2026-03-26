@@ -1002,6 +1002,15 @@ export class TrucksService {
     return doc;
   }
 
+  async updateDocOcr(truckId: string, docId: string, user: any, ocrData: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckOwnership(truckId, companyId);
+    const doc = await this.prisma.truckDocument.findFirst({ where: { id: docId, truckId, companyId } });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    return this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrData, ocrStatus: 'completed' } });
+  }
+
   private async assertTruckOwnership(truckId: string, companyId: string) {
     const truck = await this.prisma.truck.findFirst({
       where: { id: truckId, companyId },
@@ -1294,5 +1303,12 @@ export class TrucksController {
   @ApiOperation({ summary: 'Obtener resultado de OCR' })
   getDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any) {
     return this.service.getDocOcr(id, docId, user);
+  }
+
+  @Patch(':id/documents/:docId/ocr')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Editar datos OCR del documento' })
+  updateDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateDocOcr(id, docId, user, body.ocrData);
   }
 }
