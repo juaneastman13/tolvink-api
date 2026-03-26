@@ -609,6 +609,7 @@ export class TrucksService {
       take, skip,
     });
     return assignments.map((a: any) => ({
+      assignmentId: a.id,
       freightId: a.freight.id,
       code: a.freight.code,
       origin: a.freight.originName,
@@ -616,7 +617,14 @@ export class TrucksService {
       date: a.finishedAt || a.freight.scheduledAt,
       grain: a.freight.items?.[0]?.grain,
       tons: a.loadedTons || a.freight.items?.[0]?.tons,
+      kmLoaded: a.kmLoaded ? Number(a.kmLoaded) : null,
+      kmEmpty: a.kmEmpty ? Number(a.kmEmpty) : null,
       kmTotal: a.kmTotal ? Number(a.kmTotal) : null,
+      fuelLiters: a.fuelLiters ? Number(a.fuelLiters) : null,
+      fuelCostPerLiter: a.fuelCostPerLiter ? Number(a.fuelCostPerLiter) : null,
+      tollCost: a.tollCost ? Number(a.tollCost) : null,
+      odometerStart: a.odometerStart,
+      odometerEnd: a.odometerEnd,
     }));
   }
 
