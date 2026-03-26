@@ -295,7 +295,8 @@ LINKS:
 - PDF: generate_report_link.${isWeb ? `
 
 NAVEGACIÓN (web):
-- navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, reports, locations, trucks, menu, chats, documents, analytics, queue, mydata, notifs, linked, admin.
+- navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, locations, trucks, menu, documents, analytics, queue, mydata, notifs, linked, admin.
+- NO navegar a chats ni reports — esas funciones están temporalmente deshabilitadas.
 - Usarlo ADEMÁS de la respuesta informativa cuando tiene sentido visual.
 - "Quiero ver mis fletes" → texto + navigate_app(screen="list"). Tras crear flete → navigate_app(screen="detail", freightId=ID).
 - "Mis camiones" / "Ver mi flota" → texto + navigate_app(screen="trucks").
