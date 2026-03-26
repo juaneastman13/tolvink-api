@@ -799,6 +799,52 @@ export class TrucksService {
     };
   }
 
+  // ======================== FLEET SUMMARY =================================
+
+  async getFleetSummary(user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const trucks = await this.prisma.truck.findMany({
+      where: { companyId, active: true },
+      select: { id: true, plate: true },
+    });
+    const truckIds = trucks.map(t => t.id);
+    if (truckIds.length === 0) return { totalIncome: 0, totalExpense: 0, net: 0, totalKm: 0, totalTrips: 0, expiredDocs: 0, trucks: [] };
+
+    const [incAgg, expAgg, freightAgg, movAgg, expiredDocs] = await Promise.all([
+      this.prisma.truckIncome.groupBy({ by: ['truckId'], where: { companyId, status: 'PAID', date: { gte: startOfMonth } }, _sum: { amount: true } }),
+      this.prisma.truckExpense.groupBy({ by: ['truckId'], where: { companyId, date: { gte: startOfMonth } }, _sum: { amount: true } }),
+      this.prisma.freightAssignment.groupBy({ by: ['truckId'], where: { truckId: { in: truckIds }, tripStatus: 'finished', finishedAt: { gte: startOfMonth } }, _sum: { kmTotal: true }, _count: true }),
+      this.prisma.truckMovement.groupBy({ by: ['truckId'], where: { companyId, departureAt: { gte: startOfMonth } }, _sum: { kmDriven: true }, _count: true }),
+      this.prisma.truckDocument.count({ where: { companyId, expiresAt: { lt: now } } }),
+    ]);
+
+    // Build per-truck map
+    const byTruck: Record<string, any> = {};
+    for (const t of trucks) byTruck[t.id] = { id: t.id, plate: t.plate, income: 0, expense: 0, km: 0, trips: 0 };
+    for (const r of incAgg) { if (byTruck[r.truckId]) byTruck[r.truckId].income = Number(r._sum.amount || 0); }
+    for (const r of expAgg) { if (byTruck[r.truckId]) byTruck[r.truckId].expense = Number(r._sum.amount || 0); }
+    for (const r of freightAgg) { if (byTruck[r.truckId]) { byTruck[r.truckId].km += Number(r._sum.kmTotal || 0); byTruck[r.truckId].trips += r._count; } }
+    for (const r of movAgg) { if (byTruck[r.truckId]) { byTruck[r.truckId].km += Number(r._sum.kmDriven || 0); byTruck[r.truckId].trips += r._count; } }
+
+    const arr = Object.values(byTruck) as any[];
+    arr.forEach((t: any) => t.net = t.income - t.expense);
+    arr.sort((a: any, b: any) => b.net - a.net);
+
+    return {
+      totalIncome: arr.reduce((s: number, t: any) => s + t.income, 0),
+      totalExpense: arr.reduce((s: number, t: any) => s + t.expense, 0),
+      net: arr.reduce((s: number, t: any) => s + t.net, 0),
+      totalKm: Math.round(arr.reduce((s: number, t: any) => s + t.km, 0)),
+      totalTrips: arr.reduce((s: number, t: any) => s + t.trips, 0),
+      expiredDocs,
+      bestTruck: arr[0]?.net > 0 ? { plate: arr[0].plate, net: arr[0].net } : null,
+      trucks: arr,
+    };
+  }
+
   // ======================== HELPERS ======================================
 
   private async updateOdometer(truckId: string, additionalKm: number) {
@@ -888,6 +934,13 @@ export class TrucksController {
   @ApiOperation({ summary: 'Alertas de documentos vencidos/por vencer de la flota' })
   getFleetAlerts(@CurrentUser() user: any) {
     return this.service.getFleetAlerts(user);
+  }
+
+  @Get('fleet-summary')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Resumen económico de toda la flota (mes actual)' })
+  getFleetSummary(@CurrentUser() user: any) {
+    return this.service.getFleetSummary(user);
   }
 
   @Get('documents/expiring')
