@@ -104,6 +104,10 @@ export class AiService implements OnModuleDestroy {
     }
   }
 
+  // Cache system prompts per session (avoids 5-10 DB queries per message)
+  private _promptCache = new Map<string, { prompt: string; ts: number }>();
+  private readonly PROMPT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   onModuleDestroy() { clearInterval(this.rateCleanupTimer); }
 
   isEnabled(): boolean {
@@ -169,12 +173,23 @@ export class AiService implements OnModuleDestroy {
     const companyType = this.aiContext.resolveCompanyType(user);
     const isWeb = phone === 'web';
 
-    // Resolve plant access levels for CONSULTA blocking (Strategy A + B)
-    // NOTE: This is freshly queried on every chat() call, so session recovery
-    // (lines below) does NOT carry over a stale plantAccessMap.
+    // Resolve plant access (needed for both prompt and tool execution)
     const plantAccessMap = await this.resolveUserPlantAccess(user);
 
-    const systemPrompt = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap);
+    // Build system prompt (cached per session, 5min TTL — avoids 5-10 DB queries per message)
+    const promptCacheKey = `${session.id}:${companyType}:${isWeb}`;
+    const cachedPrompt = this._promptCache.get(promptCacheKey);
+    let systemPrompt: string;
+    if (cachedPrompt && Date.now() - cachedPrompt.ts < this.PROMPT_CACHE_TTL) {
+      systemPrompt = cachedPrompt.prompt;
+    } else {
+      systemPrompt = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap);
+      this._promptCache.set(promptCacheKey, { prompt: systemPrompt, ts: Date.now() });
+      if (this._promptCache.size > 500) {
+        const now = Date.now();
+        for (const [k, v] of this._promptCache) { if (now - v.ts > this.PROMPT_CACHE_TTL) this._promptCache.delete(k); }
+      }
+    }
 
     // Cap message length to prevent context window abuse (5000 chars max)
     const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
@@ -273,7 +288,7 @@ export class AiService implements OnModuleDestroy {
         this.logger.log(`Sending to Claude (loop ${loopCount}, model=${modelForLoop}), messages: ${currentMessages.length}`);
         const createParams = {
           model: modelForLoop,
-          max_tokens: isWeb ? 2400 : MODEL_MAX_TOKENS,
+          max_tokens: MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           tools: filteredTools.map((t, i, arr) =>

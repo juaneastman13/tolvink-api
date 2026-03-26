@@ -116,27 +116,7 @@ export class WebChatService {
 
     const result = await this.ai.chat(WEB_PHONE, text, synUser, session, onDelta);
 
-    // Handle pending selection (set by AI tools like switch_company)
-    const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
-    const latestState = (freshSession?.flowState as any) || {};
-    if (latestState._pendingSelection) {
-      const { _pendingSelection, ...cleanState } = latestState;
-      const selButtons = (_pendingSelection.items || []).slice(0, 10).map((item: any) => ({
-        id: item.id || item.title,
-        title: item.title || item.name || String(item.id),
-      }));
-      await this.prisma.whatsAppSession.update({
-        where: { id: session.id },
-        data: { flowState: cleanState },
-      });
-      this.sse.emitToUser(dbUser.id, 'ai:response', {
-        text: result.text,
-        buttons: selButtons,
-        navigate: result.navigate || undefined,
-      });
-      return;
-    }
-
+    // Buttons (including pending selections) are already merged by ai.chat()
     this.sse.emitToUser(dbUser.id, 'ai:response', {
       text: result.text,
       buttons: result.buttons || [],
