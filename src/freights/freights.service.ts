@@ -3499,7 +3499,7 @@ export class FreightsService {
 
     let ct = await this.resolveCompanyType(user);
 
-    if (ct === 'transporter' || ct === 'producer' || ct === 'plant') {
+    if (ct.includes('transporter') || ct.includes('producer') || ct.includes('plant')) {
       const result = await this.prisma.$transaction(async (tx) => {
         // Read INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
@@ -3514,7 +3514,7 @@ export class FreightsService {
 
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
         // Own fleet promotion: only promote if caller is the origin company
-        if (isOwnFleet && (ct === 'producer' || ct === 'plant')) {
+        if (isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
           const callerOwnFleetIdsL = await this.resolveAllCompanyIds(user);
           if (callerOwnFleetIdsL.includes(freight.originCompanyId) && !callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
             ct = 'transporter';
@@ -3525,8 +3525,15 @@ export class FreightsService {
           }
         }
         // Plant-centric: plant can confirm loaded for CONSULTA transporter
-        if (ct === 'plant' && await this.isPlantActingForConsultaTransporter(user, freight.destCompanyId, assignment.transportCompanyId)) {
+        if (ct.includes('plant') && await this.isPlantActingForConsultaTransporter(user, freight.destCompanyId, assignment.transportCompanyId)) {
           ct = 'transporter';
+        }
+        // Normalize multi-type to effective single type for this operation
+        if (ct !== 'transporter' && ct !== 'producer' && ct !== 'plant') {
+          const callerNormIds = await this.resolveAllCompanyIds(user);
+          if (ct.includes('transporter') && callerNormIds.includes(assignment.transportCompanyId)) ct = 'transporter';
+          else if (ct.includes('producer') && callerNormIds.includes(freight.originCompanyId)) ct = 'producer';
+          else if (ct.includes('plant') && callerNormIds.includes(freight.destCompanyId || '')) ct = 'plant';
         }
 
         if (ct === 'transporter') {
