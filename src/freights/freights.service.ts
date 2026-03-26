@@ -1463,7 +1463,7 @@ export class FreightsService {
       return loadedResult.updated;
     }
 
-    throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
+    throw new ForbiddenException(`Solo transportista o productor pueden confirmar carga (tipo empresa: ${ct})`);
   }
 
   // ======================== CONFIRM FINISHED ==========================
@@ -3614,7 +3614,7 @@ export class FreightsService {
       return result;
     }
 
-    throw new ForbiddenException('Solo transportista o productor pueden confirmar carga');
+    throw new ForbiddenException(`Solo transportista o productor pueden confirmar carga (tipo empresa: ${ct})`);
   }
 
   async confirmTripFinished(freightId: string, assignmentId: string, user: any) {
