@@ -139,6 +139,8 @@ model Company {
   producerFreights       Freight[]             @relation("producerFreights")
   sharedLinksCreated     SharedLink[]          @relation("SharedLinkCreator")
   sharedLinksReceived    SharedLink[]          @relation("SharedLinkTarget")
+  truckDocuments         TruckDocument[]       @relation("TruckDocCompany")
+  truckExpenses          TruckExpense[]        @relation("TruckExpCompany")
 
   @@map("companies")
 }
@@ -194,6 +196,8 @@ model User {
   sharedLotsSent             SharedLot[]               @relation("SharedLotSharedBy")
   sharedLotsReceived         SharedLot[]               @relation("SharedLotSharedWith")
   sharedLinksCreated         SharedLink[]              @relation("SharedLinkCreatedByUser")
+  truckDocsUploaded          TruckDocument[]           @relation("TruckDocUploader")
+  truckExpensesCreated       TruckExpense[]            @relation("TruckExpCreator")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -389,11 +393,92 @@ model Truck {
   ownerCompany Company?            @relation("ownedTrucks", fields: [ownerCompanyId], references: [id])
   assignedUser User?               @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignments  FreightAssignment[]
+  documents    TruckDocument[]
+  expenses     TruckExpense[]
 
   @@index([companyId])
   @@index([companyId, ownerCompanyId])
   @@index([assignedUserId])
   @@map("trucks")
+}
+
+// ======================== TRUCK DOCUMENTS ==============================
+
+model TruckDocument {
+  id           String            @id @default(uuid())
+  truckId      String            @map("truck_id")
+  companyId    String            @map("company_id")
+  type         TruckDocumentType
+  name         String?           @db.VarChar(255)
+  fileUrl      String            @map("file_url") @db.VarChar(500)
+  fileName     String            @map("file_name") @db.VarChar(255)
+  mimeType     String?           @map("mime_type") @db.VarChar(100)
+  issuedAt     DateTime?         @map("issued_at")
+  expiresAt    DateTime?         @map("expires_at")
+  notes        String?           @db.Text
+  uploadedById String            @map("uploaded_by_id")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+
+  truck      Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company    Company @relation("TruckDocCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation("TruckDocUploader", fields: [uploadedById], references: [id])
+
+  @@index([truckId, companyId])
+  @@index([expiresAt])
+  @@map("truck_documents")
+}
+
+enum TruckDocumentType {
+  VTV_ITV
+  INSURANCE
+  TRANSPORT_LICENSE
+  GREEN_CARD
+  DRIVER_LICENSE
+  RUAT
+  SENASA
+  FUMIGATION
+  OTHER
+}
+
+// ======================== TRUCK EXPENSES ================================
+
+model TruckExpense {
+  id          String           @id @default(uuid())
+  truckId     String           @map("truck_id")
+  companyId   String           @map("company_id")
+  freightId   String?          @map("freight_id")
+  type        TruckExpenseType
+  description String?          @db.VarChar(500)
+  amount      Decimal          @db.Decimal(12, 2)
+  currency    String           @default("UYU") @db.VarChar(3)
+  date        DateTime
+  receiptUrl  String?          @map("receipt_url") @db.VarChar(500)
+  receiptName String?          @map("receipt_name") @db.VarChar(255)
+  createdById String           @map("created_by_id")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  truck     Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company   Company  @relation("TruckExpCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  freight   Freight? @relation(fields: [freightId], references: [id], onDelete: SetNull)
+  createdBy User     @relation("TruckExpCreator", fields: [createdById], references: [id])
+
+  @@index([truckId, companyId])
+  @@index([date])
+  @@map("truck_expenses")
+}
+
+enum TruckExpenseType {
+  FUEL
+  TOLL
+  MAINTENANCE
+  TIRE
+  INSURANCE
+  FINE
+  PARKING
+  MEAL
+  OTHER
 }
 
 // ======================== PLANT-PRODUCER ACCESS ======================
@@ -535,6 +620,7 @@ model Freight {
   liveLocations  LiveLocation[]
   pendingChanges FreightPendingChange[]
   sharedLinks    SharedLink[]
+  truckExpenses  TruckExpense[]
 
   @@index([loadDate])
   @@index([fieldId])

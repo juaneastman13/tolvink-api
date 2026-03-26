@@ -330,6 +330,251 @@ export class TrucksService {
 
     return { ok: true };
   }
+
+  // ======================== TRUCK DETAIL ================================
+
+  async getDetail(truckId: string, user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: truckId, OR: [{ companyId }, { ownerCompanyId: companyId }] },
+      include: {
+        assignedUser: { select: { id: true, name: true, phone: true } },
+        documents: { where: { companyId }, orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!truck) throw new NotFoundException('Camión no encontrado');
+
+    const now = new Date();
+    const in30days = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    const docs = (truck as any).documents.map((d: any) => {
+      let expiryStatus = 'no_expiry';
+      if (d.expiresAt) {
+        if (d.expiresAt < now) expiryStatus = 'expired';
+        else if (d.expiresAt < in30days) expiryStatus = 'expiring_soon';
+        else expiryStatus = 'valid';
+      }
+      return { ...d, expiryStatus };
+    });
+
+    // Freight stats via assignments
+    const [activeAssignments, totalFreights, totalTons] = await Promise.all([
+      this.prisma.freightAssignment.findMany({
+        where: { truckId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
+        include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledDate: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.freightAssignment.count({ where: { truckId } }),
+      this.prisma.freightAssignment.aggregate({ where: { truckId, tripStatus: 'finished' }, _sum: { loadedTons: true } }),
+    ]);
+
+    return {
+      ...truck,
+      documents: docs,
+      activeFreights: activeAssignments.map(a => ({ ...a.freight, tripStatus: a.tripStatus })),
+      totalFreights,
+      totalTons: totalTons._sum.loadedTons || 0,
+      docsSummary: {
+        total: docs.length,
+        expired: docs.filter((d: any) => d.expiryStatus === 'expired').length,
+        expiringSoon: docs.filter((d: any) => d.expiryStatus === 'expiring_soon').length,
+        valid: docs.filter((d: any) => d.expiryStatus === 'valid').length,
+      },
+    };
+  }
+
+  // ======================== TRUCK DOCUMENTS ==============================
+
+  async listDocuments(truckId: string, user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const docs = await this.prisma.truckDocument.findMany({
+      where: { truckId, companyId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const now = new Date();
+    const in30days = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    return docs.map(d => {
+      let expiryStatus = 'no_expiry';
+      if (d.expiresAt) {
+        if (d.expiresAt < now) expiryStatus = 'expired';
+        else if (d.expiresAt < in30days) expiryStatus = 'expiring_soon';
+        else expiryStatus = 'valid';
+      }
+      return { ...d, expiryStatus };
+    });
+  }
+
+  async addDocument(truckId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const { type, name, fileUrl, fileName, mimeType, issuedAt, expiresAt, notes } = body;
+    if (!fileUrl || !fileName || !type) throw new BadRequestException('fileUrl, fileName y type son obligatorios');
+    return this.prisma.truckDocument.create({
+      data: {
+        truckId, companyId, type, name: name || null,
+        fileUrl, fileName, mimeType: mimeType || null,
+        issuedAt: issuedAt ? new Date(issuedAt) : null,
+        expiresAt: expiresAt ? new Date(expiresAt) : null,
+        notes: notes || null, uploadedById: user.sub,
+      },
+    });
+  }
+
+  async updateDocument(truckId: string, docId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const doc = await this.prisma.truckDocument.findFirst({ where: { id: docId, truckId, companyId } });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    const data: any = {};
+    if (body.name !== undefined) data.name = body.name;
+    if (body.expiresAt !== undefined) data.expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+    if (body.issuedAt !== undefined) data.issuedAt = body.issuedAt ? new Date(body.issuedAt) : null;
+    if (body.notes !== undefined) data.notes = body.notes;
+    if (body.fileUrl) { data.fileUrl = body.fileUrl; data.fileName = body.fileName || doc.fileName; }
+    return this.prisma.truckDocument.update({ where: { id: docId }, data });
+  }
+
+  async deleteDocument(truckId: string, docId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const doc = await this.prisma.truckDocument.findFirst({ where: { id: docId, truckId, companyId } });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    await this.prisma.truckDocument.delete({ where: { id: docId } });
+    return { ok: true };
+  }
+
+  async getExpiringDocuments(user: any, days: number) {
+    const companyId = user.activeCompanyId || user.companyId;
+    const deadline = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const docs = await this.prisma.truckDocument.findMany({
+      where: { companyId, expiresAt: { lte: deadline } },
+      include: { truck: { select: { id: true, plate: true, model: true } } },
+      orderBy: { expiresAt: 'asc' },
+    });
+    return docs.map(d => ({
+      ...d,
+      expiryStatus: d.expiresAt && d.expiresAt < now ? 'expired' : 'expiring_soon',
+    }));
+  }
+
+  // ======================== TRUCK EXPENSES ================================
+
+  async listExpenses(truckId: string, user: any, from?: string, to?: string) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const where: any = { truckId, companyId };
+    if (from || to) {
+      where.date = {};
+      if (from) where.date.gte = new Date(from);
+      if (to) where.date.lte = new Date(to);
+    }
+    return this.prisma.truckExpense.findMany({
+      where,
+      include: { freight: { select: { id: true, code: true } } },
+      orderBy: { date: 'desc' },
+    });
+  }
+
+  async addExpense(truckId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const { type, description, amount, currency, date, freightId, receiptUrl, receiptName } = body;
+    if (!type || amount == null || !date) throw new BadRequestException('type, amount y date son obligatorios');
+    return this.prisma.truckExpense.create({
+      data: {
+        truckId, companyId, type,
+        description: description || null,
+        amount, currency: currency || 'UYU',
+        date: new Date(date),
+        freightId: freightId || null,
+        receiptUrl: receiptUrl || null,
+        receiptName: receiptName || null,
+        createdById: user.sub,
+      },
+    });
+  }
+
+  async updateExpense(truckId: string, expenseId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expenseId, truckId, companyId } });
+    if (!exp) throw new NotFoundException('Gasto no encontrado');
+    const data: any = {};
+    if (body.type !== undefined) data.type = body.type;
+    if (body.description !== undefined) data.description = body.description;
+    if (body.amount !== undefined) data.amount = body.amount;
+    if (body.currency !== undefined) data.currency = body.currency;
+    if (body.date !== undefined) data.date = new Date(body.date);
+    if (body.freightId !== undefined) data.freightId = body.freightId || null;
+    if (body.receiptUrl !== undefined) { data.receiptUrl = body.receiptUrl; data.receiptName = body.receiptName || exp.receiptName; }
+    return this.prisma.truckExpense.update({ where: { id: expenseId }, data });
+  }
+
+  async deleteExpense(truckId: string, expenseId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expenseId, truckId, companyId } });
+    if (!exp) throw new NotFoundException('Gasto no encontrado');
+    await this.prisma.truckExpense.delete({ where: { id: expenseId } });
+    return { ok: true };
+  }
+
+  async getExpenseSummary(truckId: string, user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    const [byType, thisMonth, prevMonth] = await Promise.all([
+      this.prisma.truckExpense.groupBy({ by: ['type'], where: { truckId, companyId }, _sum: { amount: true } }),
+      this.prisma.truckExpense.aggregate({ where: { truckId, companyId, date: { gte: startOfMonth } }, _sum: { amount: true } }),
+      this.prisma.truckExpense.aggregate({ where: { truckId, companyId, date: { gte: startOfPrevMonth, lt: startOfMonth } }, _sum: { amount: true } }),
+    ]);
+
+    return {
+      byType: byType.map(t => ({ type: t.type, total: t._sum.amount || 0 })),
+      thisMonth: thisMonth._sum.amount || 0,
+      prevMonth: prevMonth._sum.amount || 0,
+    };
+  }
+
+  // ======================== TRUCK FREIGHT HISTORY ==========================
+
+  async getFreightHistory(truckId: string, user: any, take = 20, skip = 0) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const assignments = await this.prisma.freightAssignment.findMany({
+      where: { truckId, tripStatus: 'finished' },
+      include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledDate: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+      orderBy: { finishedAt: 'desc' },
+      take, skip,
+    });
+    return assignments.map(a => ({
+      freightId: a.freight.id,
+      code: a.freight.code,
+      origin: a.freight.originName,
+      dest: a.freight.destName,
+      date: a.finishedAt || a.freight.scheduledDate,
+      grain: a.freight.items?.[0]?.grain,
+      tons: a.loadedTons || a.freight.items?.[0]?.tons,
+    }));
+  }
+
+  // ======================== HELPERS ======================================
+
+  private async assertTruckAccess(truckId: string, companyId: string) {
+    const truck = await this.prisma.truck.findFirst({
+      where: { id: truckId, OR: [{ companyId }, { ownerCompanyId: companyId }] },
+    });
+    if (!truck) throw new NotFoundException('Camión no encontrado');
+    return truck;
+  }
 }
 
 // ======================== CONTROLLER =================================
@@ -391,5 +636,104 @@ export class TrucksController {
   deactivateDriver(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('companyId') companyId?: string) {
     if (companyId && !UUID_RE.test(companyId)) throw new BadRequestException('companyId inválido');
     return this.service.deactivateDriver(id, user, companyId);
+  }
+
+  // ======================== EXPIRING DOCUMENTS (before :id routes) ========
+
+  @Get('documents/expiring')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Documentos próximos a vencer' })
+  @ApiQuery({ name: 'days', required: false })
+  getExpiringDocuments(@CurrentUser() user: any, @Query('days') days?: string) {
+    return this.service.getExpiringDocuments(user, days ? parseInt(days, 10) : 30);
+  }
+
+  // ======================== TRUCK DETAIL ==================================
+
+  @Get(':id')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Detalle del camión con docs, fletes y gastos' })
+  getDetail(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.getDetail(id, user);
+  }
+
+  // ======================== TRUCK DOCUMENTS ================================
+
+  @Get(':id/documents')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Listar documentos del camión' })
+  listDocuments(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.listDocuments(id, user);
+  }
+
+  @Post(':id/documents')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Agregar documento al camión' })
+  addDocument(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.addDocument(id, user, body);
+  }
+
+  @Patch(':id/documents/:docId')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Actualizar documento del camión' })
+  updateDocument(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateDocument(id, docId, user, body);
+  }
+
+  @Patch(':id/documents/:docId/delete')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Eliminar documento del camión' })
+  deleteDocument(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any) {
+    return this.service.deleteDocument(id, docId, user);
+  }
+
+  // ======================== TRUCK EXPENSES =================================
+
+  @Get(':id/expenses')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Listar gastos del camión' })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  listExpenses(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.listExpenses(id, user, from, to);
+  }
+
+  @Post(':id/expenses')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Registrar gasto del camión' })
+  addExpense(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.addExpense(id, user, body);
+  }
+
+  @Patch(':id/expenses/:expenseId')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Editar gasto del camión' })
+  updateExpense(@Param('id', ParseUUIDPipe) id: string, @Param('expenseId', ParseUUIDPipe) expenseId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateExpense(id, expenseId, user, body);
+  }
+
+  @Patch(':id/expenses/:expenseId/delete')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Eliminar gasto del camión' })
+  deleteExpense(@Param('id', ParseUUIDPipe) id: string, @Param('expenseId', ParseUUIDPipe) expenseId: string, @CurrentUser() user: any) {
+    return this.service.deleteExpense(id, expenseId, user);
+  }
+
+  @Get(':id/expenses/summary')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Resumen de gastos del camión' })
+  getExpenseSummary(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.getExpenseSummary(id, user);
+  }
+
+  // ======================== TRUCK FREIGHT HISTORY ===========================
+
+  @Get(':id/freights')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Historial de fletes del camión' })
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  getFreightHistory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
+    return this.service.getFreightHistory(id, user, take ? parseInt(take, 10) : 20, skip ? parseInt(skip, 10) : 0);
   }
 }
