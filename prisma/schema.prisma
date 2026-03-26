@@ -141,6 +141,8 @@ model Company {
   sharedLinksReceived    SharedLink[]          @relation("SharedLinkTarget")
   truckDocuments         TruckDocument[]       @relation("TruckDocCompany")
   truckExpenses          TruckExpense[]        @relation("TruckExpCompany")
+  truckIncomes           TruckIncome[]         @relation("TruckIncCompany")
+  truckMovements         TruckMovement[]       @relation("TruckMovCompany")
 
   @@map("companies")
 }
@@ -198,6 +200,9 @@ model User {
   sharedLinksCreated         SharedLink[]              @relation("SharedLinkCreatedByUser")
   truckDocsUploaded          TruckDocument[]           @relation("TruckDocUploader")
   truckExpensesCreated       TruckExpense[]            @relation("TruckExpCreator")
+  truckIncomesCreated        TruckIncome[]             @relation("TruckIncCreator")
+  truckMovementsCreated      TruckMovement[]           @relation("TruckMovCreator")
+  truckMovementsAsDrv        TruckMovement[]           @relation("TruckMovDriver")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -392,9 +397,14 @@ model Truck {
   company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   ownerCompany Company?            @relation("ownedTrucks", fields: [ownerCompanyId], references: [id])
   assignedUser User?               @relation("TruckAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  currentOdometer  Int?      @map("current_odometer")
+  lastOdometerDate DateTime? @map("last_odometer_date")
+
   assignments  FreightAssignment[]
   documents    TruckDocument[]
   expenses     TruckExpense[]
+  incomes      TruckIncome[]
+  movements    TruckMovement[]
 
   @@index([companyId])
   @@index([companyId, ownerCompanyId])
@@ -467,6 +477,82 @@ model TruckExpense {
   @@index([truckId, companyId])
   @@index([date])
   @@map("truck_expenses")
+}
+
+// ======================== TRUCK INCOMES =================================
+
+model TruckIncome {
+  id            String       @id @default(uuid())
+  truckId       String       @map("truck_id")
+  companyId     String       @map("company_id")
+  freightId     String?      @map("freight_id")
+  concept       String       @db.VarChar(500)
+  amount        Decimal      @db.Decimal(12, 2)
+  currency      String       @default("UYU") @db.VarChar(3)
+  date          DateTime
+  invoiceNumber String?      @map("invoice_number") @db.VarChar(100)
+  invoiceUrl    String?      @map("invoice_url") @db.VarChar(500)
+  status        IncomeStatus @default(PENDING)
+  notes         String?      @db.Text
+  createdById   String       @map("created_by_id")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  truck     Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company   Company  @relation("TruckIncCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  freight   Freight? @relation("TruckIncFreight", fields: [freightId], references: [id], onDelete: SetNull)
+  createdBy User     @relation("TruckIncCreator", fields: [createdById], references: [id])
+
+  @@index([truckId, companyId])
+  @@index([truckId, date])
+  @@index([freightId])
+  @@map("truck_incomes")
+}
+
+enum IncomeStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+// ======================== TRUCK MOVEMENTS ================================
+
+model TruckMovement {
+  id          String       @id @default(uuid())
+  truckId     String       @map("truck_id")
+  companyId   String       @map("company_id")
+  driverId    String?      @map("driver_id")
+  type        MovementType
+  description String?      @db.VarChar(500)
+  originName  String?      @map("origin_name") @db.VarChar(255)
+  destName    String?      @map("dest_name") @db.VarChar(255)
+  departureAt DateTime?    @map("departure_at")
+  arrivalAt   DateTime?    @map("arrival_at")
+  kmDriven    Decimal?     @map("km_driven") @db.Decimal(10, 1)
+  fuelLiters  Decimal?     @map("fuel_liters") @db.Decimal(10, 1)
+  fuelCost    Decimal?     @map("fuel_cost") @db.Decimal(12, 2)
+  tollCost    Decimal?     @map("toll_cost") @db.Decimal(12, 2)
+  notes       String?      @db.Text
+  createdById String       @map("created_by_id")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  truck     Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company   Company @relation("TruckMovCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  driver    User?   @relation("TruckMovDriver", fields: [driverId], references: [id])
+  createdBy User    @relation("TruckMovCreator", fields: [createdById], references: [id])
+
+  @@index([truckId, companyId])
+  @@index([truckId, departureAt])
+  @@map("truck_movements")
+}
+
+enum MovementType {
+  REPOSITIONING
+  MAINTENANCE_TRIP
+  INTERNAL_TRANSFER
+  PERSONAL
+  OTHER
 }
 
 enum TruckExpenseType {
@@ -621,6 +707,7 @@ model Freight {
   pendingChanges FreightPendingChange[]
   sharedLinks    SharedLink[]
   truckExpenses  TruckExpense[]
+  truckIncomes   TruckIncome[]    @relation("TruckIncFreight")
 
   @@index([loadDate])
   @@index([fieldId])
@@ -685,6 +772,20 @@ model FreightAssignment {
   producerLoadedConfirmedAt      DateTime?  @map("trip_producer_loaded_confirmed_at")
   transporterFinishedConfirmedAt DateTime?  @map("trip_transporter_finished_confirmed_at")
   plantFinishedConfirmedAt       DateTime?  @map("trip_plant_finished_confirmed_at")
+
+  // Trip data (economics) — filled post-trip
+  kmLoaded          Decimal?  @map("km_loaded") @db.Decimal(10, 1)
+  kmEmpty           Decimal?  @map("km_empty") @db.Decimal(10, 1)
+  kmTotal           Decimal?  @map("km_total") @db.Decimal(10, 1)
+  departureAt       DateTime? @map("trip_departure_at")
+  arrivalAt         DateTime? @map("trip_arrival_at")
+  loadingMinutes    Int?      @map("loading_minutes")
+  unloadingMinutes  Int?      @map("unloading_minutes")
+  fuelLiters        Decimal?  @map("fuel_liters") @db.Decimal(10, 1)
+  fuelCostPerLiter  Decimal?  @map("fuel_cost_per_liter") @db.Decimal(8, 2)
+  tollCost          Decimal?  @map("toll_cost") @db.Decimal(12, 2)
+  odometerStart     Int?      @map("odometer_start")
+  odometerEnd       Int?      @map("odometer_end")
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")

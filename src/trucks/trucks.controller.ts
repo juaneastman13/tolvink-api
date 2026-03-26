@@ -594,7 +594,222 @@ export class TrucksService {
     }));
   }
 
+  // ======================== TRUCK INCOMES ================================
+
+  async listIncomes(truckId: string, user: any, from?: string, to?: string, status?: string) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const where: any = { truckId, companyId };
+    if (from || to) { where.date = {}; if (from) where.date.gte = new Date(from); if (to) where.date.lte = new Date(to); }
+    if (status) where.status = status;
+    return this.prisma.truckIncome.findMany({
+      where, include: { freight: { select: { id: true, code: true } } }, orderBy: { date: 'desc' },
+    });
+  }
+
+  async addIncome(truckId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    if (!body.concept || body.amount == null || !body.date) throw new BadRequestException('concept, amount y date son obligatorios');
+    return this.prisma.truckIncome.create({
+      data: {
+        truckId, companyId, concept: body.concept, amount: body.amount,
+        currency: body.currency || 'UYU', date: new Date(body.date),
+        freightId: body.freightId || null, invoiceNumber: body.invoiceNumber || null,
+        invoiceUrl: body.invoiceUrl || null, status: body.status || 'PENDING',
+        notes: body.notes || null, createdById: user.sub,
+      },
+    });
+  }
+
+  async updateIncome(truckId: string, incomeId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incomeId, truckId, companyId } });
+    if (!inc) throw new NotFoundException('Ingreso no encontrado');
+    const data: any = {};
+    for (const k of ['concept','amount','currency','date','freightId','invoiceNumber','invoiceUrl','status','notes']) {
+      if (body[k] !== undefined) data[k] = k === 'date' ? new Date(body[k]) : (body[k] || null);
+    }
+    return this.prisma.truckIncome.update({ where: { id: incomeId }, data });
+  }
+
+  async deleteIncome(truckId: string, incomeId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incomeId, truckId, companyId } });
+    if (!inc) throw new NotFoundException('Ingreso no encontrado');
+    await this.prisma.truckIncome.delete({ where: { id: incomeId } });
+    return { ok: true };
+  }
+
+  async getIncomeSummary(truckId: string, user: any) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const [paid, pending, overdue] = await Promise.all([
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PAID' }, _sum: { amount: true } }),
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PENDING' }, _sum: { amount: true } }),
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'OVERDUE' }, _sum: { amount: true } }),
+    ]);
+    return { paid: paid._sum.amount || 0, pending: pending._sum.amount || 0, overdue: overdue._sum.amount || 0 };
+  }
+
+  // ======================== TRUCK MOVEMENTS ==============================
+
+  async listMovements(truckId: string, user: any, from?: string, to?: string, type?: string) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const where: any = { truckId, companyId };
+    if (from || to) { where.departureAt = {}; if (from) where.departureAt.gte = new Date(from); if (to) where.departureAt.lte = new Date(to); }
+    if (type) where.type = type;
+    return this.prisma.truckMovement.findMany({
+      where, include: { driver: { select: { id: true, name: true } } }, orderBy: { departureAt: 'desc' },
+    });
+  }
+
+  async addMovement(truckId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    if (!body.type) throw new BadRequestException('type es obligatorio');
+    const mov = await this.prisma.truckMovement.create({
+      data: {
+        truckId, companyId, type: body.type, description: body.description || null,
+        originName: body.originName || null, destName: body.destName || null,
+        departureAt: body.departureAt ? new Date(body.departureAt) : null,
+        arrivalAt: body.arrivalAt ? new Date(body.arrivalAt) : null,
+        kmDriven: body.kmDriven || null, fuelLiters: body.fuelLiters || null,
+        fuelCost: body.fuelCost || null, tollCost: body.tollCost || null,
+        driverId: body.driverId || null, notes: body.notes || null, createdById: user.sub,
+      },
+    });
+    // Update truck odometer if km provided
+    if (body.kmDriven) await this.updateOdometer(truckId, body.kmDriven);
+    return mov;
+  }
+
+  async updateMovement(truckId: string, movId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, companyId } });
+    if (!mov) throw new NotFoundException('Movimiento no encontrado');
+    const data: any = {};
+    for (const k of ['type','description','originName','destName','kmDriven','fuelLiters','fuelCost','tollCost','driverId','notes']) {
+      if (body[k] !== undefined) data[k] = body[k] || null;
+    }
+    if (body.departureAt !== undefined) data.departureAt = body.departureAt ? new Date(body.departureAt) : null;
+    if (body.arrivalAt !== undefined) data.arrivalAt = body.arrivalAt ? new Date(body.arrivalAt) : null;
+    return this.prisma.truckMovement.update({ where: { id: movId }, data });
+  }
+
+  async deleteMovement(truckId: string, movId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, companyId } });
+    if (!mov) throw new NotFoundException('Movimiento no encontrado');
+    await this.prisma.truckMovement.delete({ where: { id: movId } });
+    return { ok: true };
+  }
+
+  // ======================== TRIP DATA ====================================
+
+  async updateTripData(freightId: string, assignmentId: string, user: any, body: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    const assignment = await this.prisma.freightAssignment.findFirst({
+      where: { id: assignmentId, freightId, transportCompanyId: companyId },
+    });
+    if (!assignment) throw new NotFoundException('Asignación no encontrada');
+    const data: any = {};
+    for (const k of ['kmLoaded','kmEmpty','kmTotal','loadingMinutes','unloadingMinutes','fuelLiters','fuelCostPerLiter','tollCost','odometerStart','odometerEnd']) {
+      if (body[k] !== undefined) data[k] = body[k];
+    }
+    if (body.departureAt !== undefined) data.departureAt = body.departureAt ? new Date(body.departureAt) : null;
+    if (body.arrivalAt !== undefined) data.arrivalAt = body.arrivalAt ? new Date(body.arrivalAt) : null;
+    const updated = await this.prisma.freightAssignment.update({ where: { id: assignmentId }, data });
+    // Update truck odometer
+    if (body.odometerEnd && assignment.truckId) {
+      await this.prisma.truck.updateMany({
+        where: { id: assignment.truckId, OR: [{ currentOdometer: null }, { currentOdometer: { lt: body.odometerEnd } }] },
+        data: { currentOdometer: body.odometerEnd, lastOdometerDate: new Date() },
+      });
+    }
+    return updated;
+  }
+
+  // ======================== ECONOMIC SUMMARY ==============================
+
+  async getEconomicSummary(truckId: string, user: any, from?: string, to?: string) {
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckAccess(truckId, companyId);
+    const dateFilter = (from || to) ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
+
+    const [incPaid, incPending, incOverdue, expTotal, expByType, freightTrips, movements] = await Promise.all([
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PAID', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PENDING', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'OVERDUE', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+      this.prisma.truckExpense.aggregate({ where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+      this.prisma.truckExpense.groupBy({ by: ['type'], where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+      this.prisma.freightAssignment.findMany({
+        where: { truckId, tripStatus: 'finished', ...(dateFilter ? { finishedAt: dateFilter } : {}) },
+        select: { kmTotal: true, kmLoaded: true, fuelLiters: true, startedAt: true, finishedAt: true, departureAt: true, arrivalAt: true },
+      }),
+      this.prisma.truckMovement.findMany({
+        where: { truckId, companyId, ...(dateFilter ? { departureAt: dateFilter } : {}) },
+        select: { kmDriven: true, fuelLiters: true, departureAt: true, arrivalAt: true, type: true },
+      }),
+    ]);
+
+    const totalIncome = Number(incPaid._sum.amount || 0);
+    const totalExpense = Number(expTotal._sum.amount || 0);
+
+    // Km calculations
+    const freightKm = freightTrips.reduce((s: number, t: any) => s + Number(t.kmTotal || 0), 0);
+    const freightKmLoaded = freightTrips.reduce((s: number, t: any) => s + Number(t.kmLoaded || 0), 0);
+    const movementKm = movements.reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
+    const totalKm = freightKm + movementKm;
+
+    // Fuel
+    const freightFuel = freightTrips.reduce((s: number, t: any) => s + Number(t.fuelLiters || 0), 0);
+    const movementFuel = movements.reduce((s: number, m: any) => s + Number(m.fuelLiters || 0), 0);
+    const totalFuel = freightFuel + movementFuel;
+
+    // Hours
+    const calcHours = (items: any[], depKey: string, arrKey: string) => items.reduce((s: number, i: any) => {
+      const dep = i[depKey] || i.startedAt;
+      const arr = i[arrKey] || i.finishedAt;
+      if (dep && arr) return s + (new Date(arr).getTime() - new Date(dep).getTime()) / 3600000;
+      return s;
+    }, 0);
+    const totalHours = calcHours(freightTrips, 'departureAt', 'arrivalAt') + calcHours(movements, 'departureAt', 'arrivalAt');
+
+    const repoKm = movements.filter((m: any) => m.type === 'REPOSITIONING').reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
+
+    return {
+      income: { paid: totalIncome, pending: Number(incPending._sum.amount || 0), overdue: Number(incOverdue._sum.amount || 0), total: totalIncome + Number(incPending._sum.amount || 0) + Number(incOverdue._sum.amount || 0) },
+      expenses: { total: totalExpense, byType: expByType.map((t: any) => ({ type: t.type, total: Number(t._sum.amount || 0) })) },
+      net: totalIncome - totalExpense,
+      km: { total: totalKm, freight: freightKm, freightLoaded: freightKmLoaded, movements: movementKm, productivePercent: totalKm > 0 ? Math.round((freightKmLoaded / totalKm) * 100) : 0 },
+      fuel: { totalLiters: totalFuel, kmPerLiter: totalFuel > 0 ? Math.round((totalKm / totalFuel) * 10) / 10 : 0 },
+      hours: Math.round(totalHours * 10) / 10,
+      trips: { freights: freightTrips.length, movements: movements.length, total: freightTrips.length + movements.length },
+      costPerKm: totalKm > 0 ? Math.round((totalExpense / totalKm) * 10) / 10 : 0,
+      incomePerKm: totalKm > 0 ? Math.round((totalIncome / totalKm) * 10) / 10 : 0,
+    };
+  }
+
   // ======================== HELPERS ======================================
+
+  private async updateOdometer(truckId: string, additionalKm: number) {
+    const truck = await this.prisma.truck.findUnique({ where: { id: truckId }, select: { currentOdometer: true } });
+    if (truck?.currentOdometer) {
+      await this.prisma.truck.update({
+        where: { id: truckId },
+        data: { currentOdometer: truck.currentOdometer + Math.round(additionalKm), lastOdometerDate: new Date() },
+      });
+    }
+  }
 
   private async assertTruckAccess(truckId: string, companyId: string) {
     const truck = await this.prisma.truck.findFirst({
@@ -770,5 +985,98 @@ export class TrucksController {
   @ApiQuery({ name: 'skip', required: false })
   getFreightHistory(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
     return this.service.getFreightHistory(id, user, take ? parseInt(take, 10) : 20, skip ? parseInt(skip, 10) : 0);
+  }
+
+  // ======================== TRUCK INCOMES ==================================
+
+  @Get(':id/incomes')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Listar ingresos del camión' })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  listIncomes(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string, @Query('status') status?: string) {
+    return this.service.listIncomes(id, user, from, to, status);
+  }
+
+  @Post(':id/incomes')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Registrar ingreso del camión' })
+  addIncome(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.addIncome(id, user, body);
+  }
+
+  @Patch(':id/incomes/:incomeId')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Editar ingreso' })
+  updateIncome(@Param('id', ParseUUIDPipe) id: string, @Param('incomeId', ParseUUIDPipe) incomeId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateIncome(id, incomeId, user, body);
+  }
+
+  @Patch(':id/incomes/:incomeId/delete')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Eliminar ingreso' })
+  deleteIncome(@Param('id', ParseUUIDPipe) id: string, @Param('incomeId', ParseUUIDPipe) incomeId: string, @CurrentUser() user: any) {
+    return this.service.deleteIncome(id, incomeId, user);
+  }
+
+  @Get(':id/incomes/summary')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Resumen de ingresos' })
+  getIncomeSummary(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.getIncomeSummary(id, user);
+  }
+
+  // ======================== TRUCK MOVEMENTS ================================
+
+  @Get(':id/movements')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Listar movimientos extra-flete' })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  @ApiQuery({ name: 'type', required: false })
+  listMovements(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string, @Query('type') type?: string) {
+    return this.service.listMovements(id, user, from, to, type);
+  }
+
+  @Post(':id/movements')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Registrar movimiento extra-flete' })
+  addMovement(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.addMovement(id, user, body);
+  }
+
+  @Patch(':id/movements/:movId')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Editar movimiento' })
+  updateMovement(@Param('id', ParseUUIDPipe) id: string, @Param('movId', ParseUUIDPipe) movId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateMovement(id, movId, user, body);
+  }
+
+  @Patch(':id/movements/:movId/delete')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Eliminar movimiento' })
+  deleteMovement(@Param('id', ParseUUIDPipe) id: string, @Param('movId', ParseUUIDPipe) movId: string, @CurrentUser() user: any) {
+    return this.service.deleteMovement(id, movId, user);
+  }
+
+  // ======================== TRIP DATA ======================================
+
+  @Patch(':freightId/assignments/:assignmentId/trip-data')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Registrar datos de viaje (km, combustible, odómetro)' })
+  updateTripData(@Param('freightId', ParseUUIDPipe) freightId: string, @Param('assignmentId', ParseUUIDPipe) assignmentId: string, @CurrentUser() user: any, @Body() body: any) {
+    return this.service.updateTripData(freightId, assignmentId, user, body);
+  }
+
+  // ======================== ECONOMIC SUMMARY ===============================
+
+  @Get(':id/economic-summary')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Resumen económico del camión' })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  getEconomicSummary(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.getEconomicSummary(id, user, from, to);
   }
 }
