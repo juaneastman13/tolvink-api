@@ -252,6 +252,8 @@ model Field {
   lots         Lot[]
   freights     Freight[]
   shares       SharedField[]
+  movementsAsOrigin TruckMovement[] @relation("movementOriginField")
+  movementsAsDest   TruckMovement[] @relation("movementDestField")
 
   @@index([companyId])
   @@index([companyId, ownerCompanyId])
@@ -295,6 +297,8 @@ model Lot {
   field    Field?      @relation(fields: [fieldId], references: [id], onDelete: SetNull)
   freights Freight[]   @relation("FreightOriginLot")
   shares   SharedLot[]
+  movementsAsOrigin TruckMovement[] @relation("movementOriginLot")
+  movementsAsDest   TruckMovement[] @relation("movementDestLot")
 
   @@index([companyId])
   @@index([fieldId])
@@ -427,15 +431,28 @@ model TruckDocument {
   expiresAt    DateTime?         @map("expires_at")
   notes        String?           @db.Text
   uploadedById String            @map("uploaded_by_id")
+  // Cross-linking: document can be associated with ONE of these (or none = general doc)
+  expenseId    String?           @map("expense_id")
+  incomeId     String?           @map("income_id")
+  freightId    String?           @map("freight_id")
+  movementId   String?           @map("movement_id")
   createdAt    DateTime          @default(now()) @map("created_at")
   updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  truck      Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  company    Company @relation("TruckDocCompany", fields: [companyId], references: [id], onDelete: Cascade)
-  uploadedBy User    @relation("TruckDocUploader", fields: [uploadedById], references: [id])
+  truck      Truck          @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company    Company        @relation("TruckDocCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  uploadedBy User           @relation("TruckDocUploader", fields: [uploadedById], references: [id])
+  expense    TruckExpense?  @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  income     TruckIncome?   @relation(fields: [incomeId], references: [id], onDelete: SetNull)
+  freight    Freight?       @relation("TruckDocFreight", fields: [freightId], references: [id], onDelete: SetNull)
+  movement   TruckMovement? @relation(fields: [movementId], references: [id], onDelete: SetNull)
 
   @@index([truckId, companyId])
   @@index([expiresAt])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([freightId])
+  @@index([movementId])
   @@map("truck_documents")
 }
 
@@ -473,6 +490,7 @@ model TruckExpense {
   company   Company  @relation("TruckExpCompany", fields: [companyId], references: [id], onDelete: Cascade)
   freight   Freight? @relation(fields: [freightId], references: [id], onDelete: SetNull)
   createdBy User     @relation("TruckExpCreator", fields: [createdById], references: [id])
+  documents TruckDocument[]
 
   @@index([truckId, companyId])
   @@index([date])
@@ -502,6 +520,7 @@ model TruckIncome {
   company   Company  @relation("TruckIncCompany", fields: [companyId], references: [id], onDelete: Cascade)
   freight   Freight? @relation("TruckIncFreight", fields: [freightId], references: [id], onDelete: SetNull)
   createdBy User     @relation("TruckIncCreator", fields: [createdById], references: [id])
+  documents TruckDocument[]
 
   @@index([truckId, companyId])
   @@index([truckId, date])
@@ -523,10 +542,18 @@ model TruckMovement {
   companyId   String       @map("company_id")
   driverId    String?      @map("driver_id")
   type        MovementType
-  description String?      @db.VarChar(500)
-  originName  String?      @map("origin_name") @db.VarChar(255)
-  destName    String?      @map("dest_name") @db.VarChar(255)
-  departureAt DateTime?    @map("departure_at")
+  description   String?      @db.VarChar(500)
+  originName    String?      @map("origin_name") @db.VarChar(255)
+  originLat     Decimal?     @map("origin_lat") @db.Decimal(10, 6)
+  originLng     Decimal?     @map("origin_lng") @db.Decimal(10, 6)
+  originFieldId String?      @map("origin_field_id")
+  originLotId   String?      @map("origin_lot_id")
+  destName      String?      @map("dest_name") @db.VarChar(255)
+  destLat       Decimal?     @map("dest_lat") @db.Decimal(10, 6)
+  destLng       Decimal?     @map("dest_lng") @db.Decimal(10, 6)
+  destFieldId   String?      @map("dest_field_id")
+  destLotId     String?      @map("dest_lot_id")
+  departureAt   DateTime?    @map("departure_at")
   arrivalAt   DateTime?    @map("arrival_at")
   kmDriven    Decimal?     @map("km_driven") @db.Decimal(10, 1)
   fuelLiters  Decimal?     @map("fuel_liters") @db.Decimal(10, 1)
@@ -537,10 +564,15 @@ model TruckMovement {
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
-  truck     Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  company   Company @relation("TruckMovCompany", fields: [companyId], references: [id], onDelete: Cascade)
-  driver    User?   @relation("TruckMovDriver", fields: [driverId], references: [id])
-  createdBy User    @relation("TruckMovCreator", fields: [createdById], references: [id])
+  truck       Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  company     Company @relation("TruckMovCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  driver      User?   @relation("TruckMovDriver", fields: [driverId], references: [id])
+  createdBy   User    @relation("TruckMovCreator", fields: [createdById], references: [id])
+  originField Field?  @relation("movementOriginField", fields: [originFieldId], references: [id])
+  originLot   Lot?    @relation("movementOriginLot", fields: [originLotId], references: [id])
+  destField   Field?  @relation("movementDestField", fields: [destFieldId], references: [id])
+  destLot     Lot?    @relation("movementDestLot", fields: [destLotId], references: [id])
+  documents   TruckDocument[]
 
   @@index([truckId, companyId])
   @@index([truckId, departureAt])
@@ -708,6 +740,7 @@ model Freight {
   sharedLinks    SharedLink[]
   truckExpenses  TruckExpense[]
   truckIncomes   TruckIncome[]    @relation("TruckIncFreight")
+  truckDocs      TruckDocument[]  @relation("TruckDocFreight")
 
   @@index([loadDate])
   @@index([fieldId])

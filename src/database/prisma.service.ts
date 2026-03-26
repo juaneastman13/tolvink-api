@@ -130,7 +130,27 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         `ALTER TABLE "truck_movements" ADD CONSTRAINT "truck_movements_driver_id_fkey" FOREIGN KEY ("driver_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
         `ALTER TABLE "truck_movements" ADD CONSTRAINT "truck_movements_created_by_id_fkey" FOREIGN KEY ("created_by_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE`,
       ]) { await this.$executeRawUnsafe(`DO $$ BEGIN ${fk}; EXCEPTION WHEN duplicate_object THEN null; END $$`).catch(() => {}); }
-      this.logger.log('ensureTruckEconomicTables: truck_incomes + truck_movements + trip data ready');
+      // TruckDocument cross-linking columns
+      for (const col of [`"expense_id" TEXT`, `"income_id" TEXT`, `"freight_id" TEXT`, `"movement_id" TEXT`]) {
+        await this.$executeRawUnsafe(`ALTER TABLE "truck_documents" ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+      }
+      for (const idx of [
+        `CREATE INDEX IF NOT EXISTS "truck_documents_expense_id_idx" ON "truck_documents"("expense_id")`,
+        `CREATE INDEX IF NOT EXISTS "truck_documents_income_id_idx" ON "truck_documents"("income_id")`,
+        `CREATE INDEX IF NOT EXISTS "truck_documents_freight_id_idx" ON "truck_documents"("freight_id")`,
+        `CREATE INDEX IF NOT EXISTS "truck_documents_movement_id_idx" ON "truck_documents"("movement_id")`,
+      ]) { await this.$executeRawUnsafe(idx).catch(() => {}); }
+      for (const fk of [
+        `ALTER TABLE "truck_documents" ADD CONSTRAINT "truck_documents_expense_id_fkey" FOREIGN KEY ("expense_id") REFERENCES "truck_expenses"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
+        `ALTER TABLE "truck_documents" ADD CONSTRAINT "truck_documents_income_id_fkey" FOREIGN KEY ("income_id") REFERENCES "truck_incomes"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
+        `ALTER TABLE "truck_documents" ADD CONSTRAINT "truck_documents_freight_id_fkey" FOREIGN KEY ("freight_id") REFERENCES "freights"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
+        `ALTER TABLE "truck_documents" ADD CONSTRAINT "truck_documents_movement_id_fkey" FOREIGN KEY ("movement_id") REFERENCES "truck_movements"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
+      ]) { await this.$executeRawUnsafe(`DO $$ BEGIN ${fk}; EXCEPTION WHEN duplicate_object THEN null; END $$`).catch(() => {}); }
+      // TruckMovement location columns
+      for (const col of [`"origin_lat" DECIMAL(10,6)`, `"origin_lng" DECIMAL(10,6)`, `"origin_field_id" TEXT`, `"origin_lot_id" TEXT`, `"dest_lat" DECIMAL(10,6)`, `"dest_lng" DECIMAL(10,6)`, `"dest_field_id" TEXT`, `"dest_lot_id" TEXT`]) {
+        await this.$executeRawUnsafe(`ALTER TABLE "truck_movements" ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+      }
+      this.logger.log('ensureTruckEconomicTables: truck_incomes + truck_movements + trip data + cross-links ready');
     } catch (err) {
       this.logger.warn('ensureTruckEconomicTables failed: ' + err.message);
     }

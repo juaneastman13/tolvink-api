@@ -386,23 +386,41 @@ export class TrucksService {
 
   // ======================== TRUCK DOCUMENTS ==============================
 
-  async listDocuments(truckId: string, user: any) {
+  async listDocuments(truckId: string, user: any, linkedTo?: string, docType?: string) {
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckAccess(truckId, companyId);
+    const where: any = { truckId, companyId };
+    if (docType) where.type = docType;
+    if (linkedTo === 'expense') where.expenseId = { not: null };
+    else if (linkedTo === 'income') where.incomeId = { not: null };
+    else if (linkedTo === 'freight') where.freightId = { not: null };
+    else if (linkedTo === 'movement') where.movementId = { not: null };
+    else if (linkedTo === 'none') where.AND = [{ expenseId: null }, { incomeId: null }, { freightId: null }, { movementId: null }];
     const docs = await this.prisma.truckDocument.findMany({
-      where: { truckId, companyId },
+      where,
+      include: {
+        expense: { select: { id: true, type: true, date: true } },
+        income: { select: { id: true, concept: true, date: true } },
+        freight: { select: { id: true, code: true } },
+        movement: { select: { id: true, type: true, departureAt: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
     const now = new Date();
     const in30days = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    return docs.map(d => {
+    return docs.map((d: any) => {
       let expiryStatus = 'no_expiry';
       if (d.expiresAt) {
         if (d.expiresAt < now) expiryStatus = 'expired';
         else if (d.expiresAt < in30days) expiryStatus = 'expiring_soon';
         else expiryStatus = 'valid';
       }
-      return { ...d, expiryStatus };
+      let linkedType = 'general';
+      if (d.expenseId) linkedType = 'expense';
+      else if (d.incomeId) linkedType = 'income';
+      else if (d.freightId) linkedType = 'freight';
+      else if (d.movementId) linkedType = 'movement';
+      return { ...d, expiryStatus, linkedType };
     });
   }
 
@@ -410,7 +428,7 @@ export class TrucksService {
     await this.assertNotConsulta(user);
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckAccess(truckId, companyId);
-    const { type, name, fileUrl, fileName, mimeType, issuedAt, expiresAt, notes } = body;
+    const { type, name, fileUrl, fileName, mimeType, issuedAt, expiresAt, notes, expenseId, incomeId, freightId, movementId } = body;
     if (!fileUrl || !fileName || !type) throw new BadRequestException('fileUrl, fileName y type son obligatorios');
     return this.prisma.truckDocument.create({
       data: {
@@ -419,6 +437,8 @@ export class TrucksService {
         issuedAt: issuedAt ? new Date(issuedAt) : null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
         notes: notes || null, uploadedById: user.sub,
+        expenseId: expenseId || null, incomeId: incomeId || null,
+        freightId: freightId || null, movementId: movementId || null,
       },
     });
   }
@@ -434,6 +454,11 @@ export class TrucksService {
     if (body.issuedAt !== undefined) data.issuedAt = body.issuedAt ? new Date(body.issuedAt) : null;
     if (body.notes !== undefined) data.notes = body.notes;
     if (body.fileUrl) { data.fileUrl = body.fileUrl; data.fileName = body.fileName || doc.fileName; }
+    // Cross-linking
+    if (body.expenseId !== undefined) data.expenseId = body.expenseId || null;
+    if (body.incomeId !== undefined) data.incomeId = body.incomeId || null;
+    if (body.freightId !== undefined) data.freightId = body.freightId || null;
+    if (body.movementId !== undefined) data.movementId = body.movementId || null;
     return this.prisma.truckDocument.update({ where: { id: docId }, data });
   }
 
@@ -676,7 +701,10 @@ export class TrucksService {
     const mov = await this.prisma.truckMovement.create({
       data: {
         truckId, companyId, type: body.type, description: body.description || null,
-        originName: body.originName || null, destName: body.destName || null,
+        originName: body.originName || null, originLat: body.originLat || null, originLng: body.originLng || null,
+        originFieldId: body.originFieldId || null, originLotId: body.originLotId || null,
+        destName: body.destName || null, destLat: body.destLat || null, destLng: body.destLng || null,
+        destFieldId: body.destFieldId || null, destLotId: body.destLotId || null,
         departureAt: body.departureAt ? new Date(body.departureAt) : null,
         arrivalAt: body.arrivalAt ? new Date(body.arrivalAt) : null,
         kmDriven: body.kmDriven || null, fuelLiters: body.fuelLiters || null,
@@ -695,7 +723,7 @@ export class TrucksService {
     const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, companyId } });
     if (!mov) throw new NotFoundException('Movimiento no encontrado');
     const data: any = {};
-    for (const k of ['type','description','originName','destName','kmDriven','fuelLiters','fuelCost','tollCost','driverId','notes']) {
+    for (const k of ['type','description','originName','destName','kmDriven','fuelLiters','fuelCost','tollCost','driverId','notes','originLat','originLng','originFieldId','originLotId','destLat','destLng','destFieldId','destLotId']) {
       if (body[k] !== undefined) data[k] = body[k] || null;
     }
     if (body.departureAt !== undefined) data.departureAt = body.departureAt ? new Date(body.departureAt) : null;
@@ -965,8 +993,10 @@ export class TrucksController {
   @Get(':id/documents')
   @Roles('transporter', 'producer', 'plant')
   @ApiOperation({ summary: 'Listar documentos del camión' })
-  listDocuments(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.listDocuments(id, user);
+  @ApiQuery({ name: 'linkedTo', required: false, description: 'expense|income|freight|movement|none' })
+  @ApiQuery({ name: 'type', required: false })
+  listDocuments(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Query('linkedTo') linkedTo?: string, @Query('type') docType?: string) {
+    return this.service.listDocuments(id, user, linkedTo, docType);
   }
 
   @Post(':id/documents')
