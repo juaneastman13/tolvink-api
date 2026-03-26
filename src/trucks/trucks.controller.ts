@@ -1011,6 +1011,15 @@ export class TrucksService {
     return this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrData, ocrStatus: 'completed' } });
   }
 
+  async clearDocOcr(truckId: string, docId: string, user: any) {
+    await this.assertNotConsulta(user);
+    const companyId = user.activeCompanyId || user.companyId;
+    await this.assertTruckOwnership(truckId, companyId);
+    const doc = await this.prisma.truckDocument.findFirst({ where: { id: docId, truckId, companyId } });
+    if (!doc) throw new NotFoundException('Documento no encontrado');
+    return this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrData: null as any, ocrStatus: null, ocrProcessedAt: null } });
+  }
+
   private async assertTruckOwnership(truckId: string, companyId: string) {
     const truck = await this.prisma.truck.findFirst({
       where: { id: truckId, companyId },
@@ -1310,5 +1319,12 @@ export class TrucksController {
   @ApiOperation({ summary: 'Editar datos OCR del documento' })
   updateDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any, @Body() body: any) {
     return this.service.updateDocOcr(id, docId, user, body.ocrData);
+  }
+
+  @Patch(':id/documents/:docId/ocr-clear')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Borrar datos OCR del documento' })
+  clearDocOcr(@Param('id', ParseUUIDPipe) id: string, @Param('docId', ParseUUIDPipe) docId: string, @CurrentUser() user: any) {
+    return this.service.clearDocOcr(id, docId, user);
   }
 }
