@@ -261,10 +261,10 @@ export class WebChatService {
     if (isImage) {
       try {
         const ocrResult = await this.ocr.analyzeFromUrl(doc.url);
-        const ocrSummary = ocrResult?.rawText
-          ? `Contenido detectado: ${ocrResult.rawText.slice(0, 500)}`
+        const ocrSummary = ocrResult?.textoOriginal
+          ? `Contenido detectado: ${ocrResult.textoOriginal.slice(0, 500)}`
           : 'No se detectó texto en la imagen.';
-        const docTypeLabel = ocrResult?.docType ? ` (tipo: ${ocrResult.docType})` : '';
+        const docTypeLabel = ocrResult?.tipoDocumento ? ` (tipo: ${ocrResult.tipoDocumento})` : '';
         messageText = `Subí una imagen: ${doc.name}${docTypeLabel}. ${ocrSummary}`;
       } catch (e) {
         this.logger.warn(`OCR failed for ${doc.name}: ${e.message}`);
