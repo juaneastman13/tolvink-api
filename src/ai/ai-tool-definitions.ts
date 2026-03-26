@@ -1042,4 +1042,71 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ['freightId'],
     },
   },
+
+  // ======================== FLEET ECONOMICS ========================
+  {
+    name: 'get_truck_detail',
+    description: 'Muestra el detalle completo de un camión: datos, chofer, fletes activos, documentos vencidos, resumen económico rápido. Buscar por patente o ID.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión (parcial o completa, fuzzy match)' }, truckId: { type: 'string', description: 'UUID del camión (si se conoce)' } }, required: [] },
+  },
+  {
+    name: 'get_truck_documents',
+    description: 'Lista documentos de un camión con estado de vencimiento (vigente/por vencer/vencido). Usar cuando preguntan por documentos, papeles, habilitaciones del camión.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, filter: { type: 'string', enum: ['all', 'expired', 'expiring', 'valid'], description: 'Filtro por estado de vencimiento' } }, required: ['plate'] },
+  },
+  {
+    name: 'get_expiring_documents',
+    description: 'Lista documentos próximos a vencer o vencidos de TODA la flota. Usar cuando preguntan por alertas, vencimientos, o documentos pendientes.',
+    input_schema: { type: 'object' as const, properties: { days: { type: 'number', description: 'Días hacia adelante para buscar (default 30)' } }, required: [] },
+  },
+  {
+    name: 'register_truck_expense',
+    description: 'Registra un gasto del camión (combustible, peaje, mantenimiento, neumáticos, seguro, multa, estacionamiento, viáticos). Requiere confirmación.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, type: { type: 'string', enum: ['FUEL', 'TOLL', 'MAINTENANCE', 'TIRE', 'INSURANCE', 'FINE', 'PARKING', 'MEAL', 'OTHER'], description: 'Tipo de gasto' }, amount: { type: 'number', description: 'Monto del gasto' }, currency: { type: 'string', enum: ['UYU', 'USD', 'ARS'], description: 'Moneda (default UYU)' }, date: { type: 'string', description: 'Fecha YYYY-MM-DD (default hoy)' }, description: { type: 'string', description: 'Descripción opcional' }, freightCode: { type: 'string', description: 'Código de flete asociado (opcional)' } }, required: ['plate', 'type', 'amount'] },
+  },
+  {
+    name: 'list_truck_expenses',
+    description: 'Lista gastos de un camión, opcionalmente filtrados por fecha o tipo. Muestra totales.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, from: { type: 'string', description: 'Fecha desde YYYY-MM-DD' }, to: { type: 'string', description: 'Fecha hasta YYYY-MM-DD' }, type: { type: 'string', description: 'Filtrar por tipo de gasto' } }, required: ['plate'] },
+  },
+  {
+    name: 'register_truck_income',
+    description: 'Registra un ingreso/cobro del camión. Puede vincularse opcionalmente a un flete. Requiere confirmación.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, concept: { type: 'string', description: 'Concepto del ingreso (ej: "Flete Colonia → Montevideo")' }, amount: { type: 'number', description: 'Monto' }, currency: { type: 'string', enum: ['UYU', 'USD', 'ARS'], description: 'Moneda' }, date: { type: 'string', description: 'Fecha YYYY-MM-DD' }, status: { type: 'string', enum: ['PENDING', 'PAID', 'OVERDUE'], description: 'Estado (default PENDING)' }, freightCode: { type: 'string', description: 'Código de flete asociado (opcional)' } }, required: ['plate', 'concept', 'amount'] },
+  },
+  {
+    name: 'list_truck_incomes',
+    description: 'Lista ingresos de un camión. Filtrar por estado para ver pendientes de cobro.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, from: { type: 'string', description: 'Fecha desde' }, to: { type: 'string', description: 'Fecha hasta' }, status: { type: 'string', enum: ['PENDING', 'PAID', 'OVERDUE'], description: 'Filtrar por estado' } }, required: ['plate'] },
+  },
+  {
+    name: 'register_truck_movement',
+    description: 'Registra un movimiento extra-flete del camión (reposicionamiento, viaje a taller, traslado interno, uso particular). Requiere confirmación.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, type: { type: 'string', enum: ['REPOSITIONING', 'MAINTENANCE_TRIP', 'INTERNAL_TRANSFER', 'PERSONAL', 'OTHER'], description: 'Tipo de movimiento' }, description: { type: 'string', description: 'Descripción' }, originName: { type: 'string', description: 'Nombre del origen' }, destName: { type: 'string', description: 'Nombre del destino' }, kmDriven: { type: 'number', description: 'Km recorridos' }, fuelLiters: { type: 'number', description: 'Litros de combustible' }, fuelCost: { type: 'number', description: 'Costo del combustible' }, tollCost: { type: 'number', description: 'Costo de peajes' } }, required: ['plate', 'type'] },
+  },
+  {
+    name: 'list_truck_movements',
+    description: 'Lista movimientos extra-flete de un camión.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, from: { type: 'string', description: 'Fecha desde' }, to: { type: 'string', description: 'Fecha hasta' }, type: { type: 'string', description: 'Filtrar por tipo' } }, required: ['plate'] },
+  },
+  {
+    name: 'register_trip_data',
+    description: 'Registra datos operativos de un viaje/flete (km, combustible, odómetro, tiempos). Se puede cargar parcialmente. Requiere confirmación.',
+    input_schema: { type: 'object' as const, properties: { freightCode: { type: 'string', description: 'Código del flete' }, kmLoaded: { type: 'number', description: 'Km recorridos con carga' }, kmEmpty: { type: 'number', description: 'Km recorridos vacío' }, fuelLiters: { type: 'number', description: 'Litros consumidos' }, fuelCostPerLiter: { type: 'number', description: 'Precio por litro' }, tollCost: { type: 'number', description: 'Peajes totales' }, odometerStart: { type: 'number', description: 'Odómetro al salir' }, odometerEnd: { type: 'number', description: 'Odómetro al llegar' }, loadingMinutes: { type: 'number', description: 'Minutos espera en carga' }, unloadingMinutes: { type: 'number', description: 'Minutos espera en descarga' } }, required: ['freightCode'] },
+  },
+  {
+    name: 'get_truck_economic_summary',
+    description: 'Muestra resumen económico de un camión: ingresos, gastos, resultado neto, km totales, costo/km, km/litro. Para un período.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, from: { type: 'string', description: 'Fecha desde YYYY-MM-DD' }, to: { type: 'string', description: 'Fecha hasta YYYY-MM-DD' } }, required: ['plate'] },
+  },
+  {
+    name: 'get_fleet_summary',
+    description: 'Resumen económico de TODA la flota del mes actual: ingresos, gastos, resultado neto, km, camión más rentable, alertas de documentos.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_fleet_alerts',
+    description: 'Muestra alertas de documentos vencidos y por vencer de toda la flota.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
 ];

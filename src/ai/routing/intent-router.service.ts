@@ -69,6 +69,15 @@ export class IntentRouterService {
     'update_company', 'update_user_admin',
   ]);
 
+  private static readonly FLEET_ECONOMICS_TOOLS = new Set([
+    'get_truck_detail', 'get_truck_documents', 'get_expiring_documents',
+    'register_truck_expense', 'list_truck_expenses',
+    'register_truck_income', 'list_truck_incomes',
+    'register_truck_movement', 'list_truck_movements',
+    'register_trip_data', 'get_truck_economic_summary',
+    'get_fleet_summary', 'get_fleet_alerts',
+  ]);
+
   private static readonly MULTI_COMPANY_TOOLS = new Set(['switch_company']);
   private static readonly PENDING_CHANGE_TOOLS = new Set(['approve_pending_change', 'reject_pending_change']);
 
@@ -127,6 +136,8 @@ export class IntentRouterService {
     if (isAdmin) {
       for (const t of IntentRouterService.ADMIN_TOOLS) allowed.add(t);
     }
+    // Fleet economics — available to all non-chofer users (transporters manage fleet, producers/plants may have own fleet)
+    for (const t of IntentRouterService.FLEET_ECONOMICS_TOOLS) allowed.add(t);
     if (hasMultiCompany) {
       for (const t of IntentRouterService.MULTI_COMPANY_TOOLS) allowed.add(t);
     }

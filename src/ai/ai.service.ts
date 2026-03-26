@@ -344,6 +344,8 @@ export class AiService implements OnModuleDestroy {
             'list_transporters', 'list_trucks', 'list_company_users', 'list_drivers', 'summarize_freights',
             'list_documents', 'freight_history', 'get_dashboard',
             'generate_tracking_link', 'generate_map_link', 'generate_report_link', 'generate_daily_map_link',
+            'get_truck_detail', 'get_truck_documents', 'get_expiring_documents', 'list_truck_expenses',
+            'list_truck_incomes', 'list_truck_movements', 'get_truck_economic_summary', 'get_fleet_summary', 'get_fleet_alerts',
             'navigate_app',
           ]);
 
@@ -739,7 +741,164 @@ export class AiService implements OnModuleDestroy {
         case 'view_live_locations': return await this.locationTools.toolViewLiveLocations(input, user);
         case 'request_location': return await this.locationTools.toolRequestLocation(input, user);
         case 'navigate_app': return this.locationTools.toolNavigateApp(input, session);
+        // Fleet economics tools
+        case 'get_truck_detail': case 'get_truck_documents': case 'get_expiring_documents':
+        case 'register_truck_expense': case 'list_truck_expenses':
+        case 'register_truck_income': case 'list_truck_incomes':
+        case 'register_truck_movement': case 'list_truck_movements':
+        case 'register_trip_data': case 'get_truck_economic_summary':
+        case 'get_fleet_summary': case 'get_fleet_alerts':
+          return await this.executeFleetTool(toolName, input, user, session);
         default: return JSON.stringify({ error: 'Herramienta no reconocida' });
+    }
+  }
+
+  /** Execute fleet economics tools */
+  private async executeFleetTool(toolName: string, input: any, user: any, session: any): Promise<string> {
+    const companyId = user.activeCompanyId || user.companyId;
+    const resolveTruck = async (plate?: string, truckId?: string) => {
+      if (truckId) return truckId;
+      if (!plate) return null;
+      const norm = plate.replace(/[\s\-\.]/g, '').toUpperCase();
+      const trucks = await this.prisma.truck.findMany({ where: { companyId, active: true }, select: { id: true, plate: true } });
+      return (trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase() === norm) || trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase().includes(norm) || norm.includes(t.plate.replace(/[\s\-]/g, '').toUpperCase())))?.id || null;
+    };
+    const resolveFreight = async (code?: string) => {
+      if (!code) return null;
+      return this.prisma.freight.findFirst({ where: { code: { equals: code, mode: 'insensitive' }, participantCompanyIds: { has: companyId } }, select: { id: true, code: true, originName: true, destName: true } });
+    };
+    try {
+      switch (toolName) {
+        case 'get_truck_detail': {
+          const tid = await resolveTruck(input.plate, input.truckId);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate || input.truckId}" no encontrado` });
+          const t = await this.prisma.truck.findFirst({ where: { id: tid, OR: [{ companyId }, { ownerCompanyId: companyId }] }, include: { assignedUser: { select: { name: true, phone: true } }, documents: { where: { companyId }, select: { type: true, expiresAt: true } } } }) as any;
+          if (!t) return JSON.stringify({ error: 'Camión no encontrado' });
+          const now = new Date();
+          return JSON.stringify({ plate: t.plate, model: t.model, driver: t.assignedUser?.name || 'Sin chofer', odometer: t.currentOdometer, totalDocs: t.documents.length, expiredDocs: t.documents.filter((d: any) => d.expiresAt && d.expiresAt < now).length, activeFreights: await this.prisma.freightAssignment.count({ where: { truckId: tid, status: { in: ['active', 'accepted'] } } }), totalFreights: await this.prisma.freightAssignment.count({ where: { truckId: tid } }) });
+        }
+        case 'get_truck_documents': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const docs = await this.prisma.truckDocument.findMany({ where: { truckId: tid, companyId }, orderBy: { expiresAt: 'asc' } });
+          const now = new Date(); const in30 = new Date(Date.now() + 30 * 86400000);
+          const mapped = docs.map((d: any) => ({ type: d.type, name: d.name, expires: d.expiresAt?.toISOString().split('T')[0], status: !d.expiresAt ? 'sin_vencimiento' : d.expiresAt < now ? 'vencido' : d.expiresAt < in30 ? 'por_vencer' : 'vigente' }));
+          if (input.filter && input.filter !== 'all') return JSON.stringify(mapped.filter((d: any) => d.status === (input.filter === 'expired' ? 'vencido' : input.filter === 'expiring' ? 'por_vencer' : 'vigente')));
+          return JSON.stringify(mapped);
+        }
+        case 'get_expiring_documents': {
+          const days = input.days || 30; const now = new Date();
+          const docs = await this.prisma.truckDocument.findMany({ where: { companyId, expiresAt: { lte: new Date(Date.now() + days * 86400000) } }, include: { truck: { select: { plate: true } } }, orderBy: { expiresAt: 'asc' } });
+          return JSON.stringify(docs.map((d: any) => ({ plate: d.truck.plate, type: d.type, expires: d.expiresAt?.toISOString().split('T')[0], status: d.expiresAt < now ? 'vencido' : 'por_vencer' })));
+        }
+        case 'register_truck_expense': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const fId = input.freightCode ? (await resolveFreight(input.freightCode))?.id : null;
+          const L: Record<string,string> = { FUEL:'Combustible',TOLL:'Peaje',MAINTENANCE:'Mantenimiento',TIRE:'Neumáticos',INSURANCE:'Seguro',FINE:'Multa',PARKING:'Estacionamiento',MEAL:'Viáticos',OTHER:'Otro' };
+          const effects = this.sessionManager.getSideEffects(session.id);
+          effects.pendingAction = { tool: 'register_truck_expense', summary: `Registrar gasto: ${L[input.type]||input.type} $${input.amount} en ${input.plate}`, data: { truckId: tid, companyId, type: input.type, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], description: input.description, freightId: fId, createdById: user.sub } };
+          effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
+          this.sessionManager.setSideEffects(session.id, effects);
+          return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
+        }
+        case 'list_truck_expenses': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const w: any = { truckId: tid, companyId };
+          if (input.from || input.to) { w.date = {}; if (input.from) w.date.gte = new Date(input.from); if (input.to) w.date.lte = new Date(input.to); }
+          const exps = await this.prisma.truckExpense.findMany({ where: w, orderBy: { date: 'desc' }, take: 15 });
+          const tot = await this.prisma.truckExpense.aggregate({ where: w, _sum: { amount: true } });
+          return JSON.stringify({ expenses: exps.map((e: any) => ({ type: e.type, amount: Number(e.amount), date: e.date.toISOString().split('T')[0], description: e.description })), total: Number(tot._sum.amount || 0) });
+        }
+        case 'register_truck_income': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const fId = input.freightCode ? (await resolveFreight(input.freightCode))?.id : null;
+          const effects = this.sessionManager.getSideEffects(session.id);
+          effects.pendingAction = { tool: 'register_truck_income', summary: `Registrar ingreso: "${input.concept}" $${input.amount} en ${input.plate}`, data: { truckId: tid, companyId, concept: input.concept, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], status: input.status || 'PENDING', freightId: fId, createdById: user.sub } };
+          effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
+          this.sessionManager.setSideEffects(session.id, effects);
+          return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
+        }
+        case 'list_truck_incomes': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const w: any = { truckId: tid, companyId };
+          if (input.from || input.to) { w.date = {}; if (input.from) w.date.gte = new Date(input.from); if (input.to) w.date.lte = new Date(input.to); }
+          if (input.status) w.status = input.status;
+          const incs = await this.prisma.truckIncome.findMany({ where: w, orderBy: { date: 'desc' }, take: 15 });
+          const byStatus = await this.prisma.truckIncome.groupBy({ by: ['status'], where: { truckId: tid, companyId }, _sum: { amount: true } });
+          return JSON.stringify({ incomes: incs.map((i: any) => ({ concept: i.concept, amount: Number(i.amount), date: i.date.toISOString().split('T')[0], status: i.status })), byStatus: byStatus.map((s: any) => ({ status: s.status, total: Number(s._sum.amount || 0) })) });
+        }
+        case 'register_truck_movement': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const ML: Record<string,string> = { REPOSITIONING:'Reposicionamiento',MAINTENANCE_TRIP:'Viaje a taller',INTERNAL_TRANSFER:'Traslado interno',PERSONAL:'Uso particular',OTHER:'Otro' };
+          const effects = this.sessionManager.getSideEffects(session.id);
+          effects.pendingAction = { tool: 'register_truck_movement', summary: `Registrar: ${ML[input.type]||input.type}${input.kmDriven ? ' ('+input.kmDriven+' km)' : ''} — ${input.plate}`, data: { truckId: tid, companyId, type: input.type, description: input.description, originName: input.originName, destName: input.destName, kmDriven: input.kmDriven, fuelLiters: input.fuelLiters, fuelCost: input.fuelCost, tollCost: input.tollCost, createdById: user.sub } };
+          effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
+          this.sessionManager.setSideEffects(session.id, effects);
+          return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
+        }
+        case 'list_truck_movements': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const w: any = { truckId: tid, companyId };
+          if (input.from || input.to) { w.departureAt = {}; if (input.from) w.departureAt.gte = new Date(input.from); if (input.to) w.departureAt.lte = new Date(input.to); }
+          const movs = await this.prisma.truckMovement.findMany({ where: w, orderBy: { departureAt: 'desc' }, take: 15 });
+          return JSON.stringify(movs.map((m: any) => ({ type: m.type, origin: m.originName, dest: m.destName, date: m.departureAt?.toISOString().split('T')[0], km: m.kmDriven ? Number(m.kmDriven) : null })));
+        }
+        case 'register_trip_data': {
+          const freight = await resolveFreight(input.freightCode);
+          if (!freight) return JSON.stringify({ error: `Flete "${input.freightCode}" no encontrado` });
+          const asgn = await this.prisma.freightAssignment.findFirst({ where: { freightId: freight.id, transportCompanyId: companyId }, select: { id: true } });
+          if (!asgn) return JSON.stringify({ error: 'No tenés asignación en este flete' });
+          const kmT = (input.kmLoaded||0)+(input.kmEmpty||0);
+          const effects = this.sessionManager.getSideEffects(session.id);
+          effects.pendingAction = { tool: 'register_trip_data', summary: `Datos de viaje ${freight.code}: ${kmT?kmT+' km':''}${input.fuelLiters?', '+input.fuelLiters+' litros':''}${input.tollCost?', $'+input.tollCost+' peajes':''}`, data: { freightId: freight.id, assignmentId: asgn.id, kmLoaded: input.kmLoaded, kmEmpty: input.kmEmpty, kmTotal: kmT||null, fuelLiters: input.fuelLiters, fuelCostPerLiter: input.fuelCostPerLiter, tollCost: input.tollCost, odometerStart: input.odometerStart, odometerEnd: input.odometerEnd, loadingMinutes: input.loadingMinutes, unloadingMinutes: input.unloadingMinutes } };
+          effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
+          this.sessionManager.setSideEffects(session.id, effects);
+          return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
+        }
+        case 'get_truck_economic_summary': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const from = input.from ? new Date(input.from) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+          const to = input.to ? new Date(input.to) : new Date();
+          const df = { gte: from, lte: to };
+          const [inc, exp, fTrips, movs] = await Promise.all([
+            this.prisma.truckIncome.aggregate({ where: { truckId: tid, companyId, status: 'PAID', date: df }, _sum: { amount: true } }),
+            this.prisma.truckExpense.aggregate({ where: { truckId: tid, companyId, date: df }, _sum: { amount: true } }),
+            this.prisma.freightAssignment.findMany({ where: { truckId: tid, tripStatus: 'finished', finishedAt: df }, select: { kmTotal: true, fuelLiters: true } }),
+            this.prisma.truckMovement.findMany({ where: { truckId: tid, companyId, departureAt: df }, select: { kmDriven: true, fuelLiters: true } }),
+          ]);
+          const income = Number(inc._sum.amount||0), expense = Number(exp._sum.amount||0);
+          const km = fTrips.reduce((s,t:any) => s+Number(t.kmTotal||0),0) + movs.reduce((s,m:any) => s+Number(m.kmDriven||0),0);
+          const fuel = fTrips.reduce((s,t:any) => s+Number(t.fuelLiters||0),0) + movs.reduce((s,m:any) => s+Number(m.fuelLiters||0),0);
+          return JSON.stringify({ income, expense, net: income-expense, km: Math.round(km), trips: fTrips.length+movs.length, kmPerLiter: fuel>0?Math.round(km/fuel*10)/10:0, costPerKm: km>0?Math.round(expense/km):0 });
+        }
+        case 'get_fleet_summary': {
+          const trucks = await this.prisma.truck.findMany({ where: { companyId, active: true }, select: { id: true, plate: true } });
+          if (!trucks.length) return JSON.stringify({ message: 'No tenés camiones registrados' });
+          const now = new Date(); const som = new Date(now.getFullYear(), now.getMonth(), 1);
+          const [inc, exp, expDocs] = await Promise.all([
+            this.prisma.truckIncome.aggregate({ where: { companyId, status: 'PAID', date: { gte: som } }, _sum: { amount: true } }),
+            this.prisma.truckExpense.aggregate({ where: { companyId, date: { gte: som } }, _sum: { amount: true } }),
+            this.prisma.truckDocument.count({ where: { companyId, expiresAt: { lt: now } } }),
+          ]);
+          return JSON.stringify({ trucks: trucks.length, income: Number(inc._sum.amount||0), expense: Number(exp._sum.amount||0), net: Number(inc._sum.amount||0)-Number(exp._sum.amount||0), expiredDocs: expDocs });
+        }
+        case 'get_fleet_alerts': {
+          const now = new Date(); const in7 = new Date(Date.now()+7*86400000);
+          const docs = await this.prisma.truckDocument.findMany({ where: { companyId, expiresAt: { lte: in7 } }, include: { truck: { select: { plate: true } } }, orderBy: { expiresAt: 'asc' } });
+          return JSON.stringify({ expired: docs.filter((d:any)=>d.expiresAt<now).map((d:any)=>({plate:d.truck.plate,type:d.type,expires:d.expiresAt.toISOString().split('T')[0]})), expiring: docs.filter((d:any)=>d.expiresAt>=now).map((d:any)=>({plate:d.truck.plate,type:d.type,expires:d.expiresAt.toISOString().split('T')[0]})) });
+        }
+      }
+      return JSON.stringify({ error: 'Tool no reconocida' });
+    } catch (err: any) {
+      this.logger.error(`Fleet tool ${toolName} error: ${err.message}`);
+      return JSON.stringify({ error: err.message || 'Error' });
     }
   }
 
