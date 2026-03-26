@@ -268,10 +268,25 @@ export class WebChatService {
         }
         // Skip tool_use / tool_result blocks for display
         if (!text) return null;
+        // Strip injected system context prefixes from user messages (e.g. [Contexto activo: ...], [FLETE ACTIVO: ...], [Sistema: ...])
+        if (m.role === 'user') {
+          text = text.replace(/^\[(?:Contexto activo|FLETE ACTIVO|Sistema|Audio transcripto)[^\]]*\]\s*/g, '').trim();
+        }
+        if (!text) return null;
         return { id: `${session.id}-${i}`, role: m.role, text };
       })
       .filter(Boolean);
 
-    return { messages };
+    // Include pending navigate so polling fallback can trigger navigation
+    const navigate = state._lastNavigate || undefined;
+    // Clear it after reading so it only fires once
+    if (state._lastNavigate) {
+      await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { flowState: { ...state, _lastNavigate: null } },
+      });
+    }
+
+    return { messages, navigate };
   }
 }

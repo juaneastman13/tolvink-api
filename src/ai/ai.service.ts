@@ -453,6 +453,7 @@ export class AiService implements OnModuleDestroy {
           ...(mergedActiveContext ? { activeContext: mergedActiveContext } : {}),
           aiMessages: _clearAiMessages ? [] : trimmedMessages,
           lastMessageAt: new Date().toISOString(),
+          ...(_navigate ? { _lastNavigate: _navigate } : { _lastNavigate: null }),
         },
         expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
       };
