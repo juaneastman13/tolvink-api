@@ -1236,7 +1236,7 @@ export class FreightsService {
         (a) => a.transportCompanyId === freight.originCompanyId,
       );
       // Plant-centric: plant can start freight on behalf of CONSULTA transporter
-      if (ct === 'plant' && freight.destCompanyId) {
+      if (ct.includes('plant') && freight.destCompanyId) {
         const callerIds = await this.resolveAllCompanyIds(user);
         if (callerIds.includes(freight.destCompanyId)) {
           const transporterCo = freight.assignments?.[0]?.transportCompanyId;
@@ -1248,7 +1248,7 @@ export class FreightsService {
           }
         }
       }
-      const effectiveType = ct === 'producer' && isOwnFleet ? 'transporter' : ct;
+      const effectiveType = ct.includes('producer') && isOwnFleet ? 'transporter' : ct;
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
@@ -1322,7 +1322,7 @@ export class FreightsService {
 
     // Plant-centric: plant can confirm loaded on behalf of CONSULTA transporter
     let plantActingAsTransporter = false;
-    if (ct === 'plant') {
+    if (ct.includes('plant')) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: freightId },
         select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
@@ -1341,7 +1341,7 @@ export class FreightsService {
       }
     }
 
-    if (ct === 'transporter' || ct === 'producer') {
+    if (ct.includes('transporter') || ct.includes('producer')) {
       const loadedResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent TOCTOU race
         const freight = await tx.freight.findUnique({
@@ -1355,7 +1355,7 @@ export class FreightsService {
           (a) => a.transportCompanyId === freight.originCompanyId,
         );
         let effectiveCt = ct;
-        if (ct === 'producer' && isOwnFleet && freight.status === FreightStatus.in_progress) {
+        if (ct.includes('producer') && isOwnFleet && freight.status === FreightStatus.in_progress) {
           effectiveCt = 'transporter';
         }
 
@@ -1476,7 +1476,7 @@ export class FreightsService {
 
     // Plant-centric: plant can confirm finished on behalf of CONSULTA transporter
     let plantActingAsTransporter = false;
-    if (ct === 'plant') {
+    if (ct.includes('plant')) {
       const freightCheck = await this.prisma.freight.findUnique({
         where: { id: freightId },
         select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
@@ -1496,7 +1496,7 @@ export class FreightsService {
     }
 
     // Producer own-fleet promotion: if producer and freight uses own fleet, act as transporter
-    if (ct === 'producer') {
+    if (ct.includes('producer')) {
       const freightCheck = await this.prisma.freight.findUnique({
         where: { id: freightId },
         select: { originCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
@@ -1507,7 +1507,7 @@ export class FreightsService {
       }
     }
 
-    if (ct === 'transporter') {
+    if (ct === 'transporter' || ct.includes('transporter')) {
       const tFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
@@ -1574,7 +1574,7 @@ export class FreightsService {
       return tFinishResult.updated;
     }
 
-    if (ct === 'plant') {
+    if (ct === 'plant' || ct.includes('plant')) {
       const pFinishResult = await this.prisma.$transaction(async (tx) => {
         // Read freight INSIDE transaction to prevent race condition
         const freight = await tx.freight.findUnique({
@@ -3641,7 +3641,7 @@ export class FreightsService {
 
       // Own fleet promotion: only promote if caller is the ORIGIN company (not the dest plant)
       const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
-      if (isOwnFleet && (ct === 'producer' || ct === 'plant')) {
+      if (isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
         const callerOwnFleetIds = await this.resolveAllCompanyIds(user);
         // Only promote to transporter if caller owns the origin company (i.e. is the producer/fleet owner)
         // Dest plant should NOT be promoted — they need to confirm as plant
