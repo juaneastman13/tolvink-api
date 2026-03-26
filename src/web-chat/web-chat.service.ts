@@ -114,7 +114,10 @@ export class WebChatService {
       this.sse.emitToUser(dbUser.id, 'ai:chunk', { text: chunk, start: !!start });
     };
 
+    const chatStart = Date.now();
+    this.logger.log(`Web chat start: user=${dbUser.id} text="${text.slice(0, 50)}"`);
     const result = await this.ai.chat(WEB_PHONE, text, synUser, session, onDelta);
+    this.logger.log(`Web chat done: user=${dbUser.id} ${Date.now() - chatStart}ms`);
 
     // Buttons (including pending selections) are already merged by ai.chat()
     this.sse.emitToUser(dbUser.id, 'ai:response', {
