@@ -1023,7 +1023,7 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       properties: {
         screen: {
           type: 'string',
-          enum: ['home', 'list', 'new', 'detail', 'calendar', 'reports', 'fields', 'trucks', 'menu', 'chats'],
+          enum: ['home', 'list', 'new', 'detail', 'calendar', 'reports', 'locations', 'trucks', 'menu', 'chats', 'documents', 'analytics', 'admin', 'mydata', 'notifs', 'linked', 'queue'],
           description: 'Pantalla destino.',
         },
         freightId: { type: 'string', description: 'UUID del flete (solo para screen="detail").' },

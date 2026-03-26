@@ -8,7 +8,6 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { SseService } from '../sse/sse.service';
-import { buildSyntheticUser } from '../common/build-synthetic-user';
 import OpenAI from 'openai';
 
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -107,8 +106,6 @@ export class WebChatService {
 
   /** Core: call AI with pre-fetched session, handle _pendingSelection, emit response via SSE */
   private async processAndEmitWithSession(dbUser: any, text: string, session: any): Promise<void> {
-    const synUser = buildSyntheticUser(dbUser);
-
     // Stream text deltas to the frontend as Claude generates them
     const onDelta = (chunk: string, start?: boolean) => {
       this.sse.emitToUser(dbUser.id, 'ai:chunk', { text: chunk, start: !!start });
@@ -116,7 +113,8 @@ export class WebChatService {
 
     const chatStart = Date.now();
     this.logger.log(`Web chat start: user=${dbUser.id} text="${text.slice(0, 50)}"`);
-    const result = await this.ai.chat(WEB_PHONE, text, synUser, session, onDelta);
+    // Pass full dbUser (not synUser) — ai.service needs name, memberships, company for prompt building
+    const result = await this.ai.chat(WEB_PHONE, text, dbUser, session, onDelta);
     this.logger.log(`Web chat done: user=${dbUser.id} ${Date.now() - chatStart}ms`);
 
     // Buttons (including pending selections) are already merged by ai.chat()
@@ -235,7 +233,9 @@ export class WebChatService {
 
   /** Get conversation history for the current session */
   async getHistory(jwtUser: any): Promise<{ messages: any[] }> {
-    const companyId = jwtUser.activeCompanyId || jwtUser.companyId;
+    // Load fresh user from DB to get current activeCompanyId (JWT may be stale)
+    const freshUser = await this.loadFullUser(jwtUser.sub);
+    const companyId = freshUser?.activeCompanyId || freshUser?.companyId || jwtUser.companyId;
     const where: any = {
       userId: jwtUser.sub,
       phone: WEB_PHONE,

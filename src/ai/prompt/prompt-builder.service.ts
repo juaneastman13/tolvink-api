@@ -97,7 +97,7 @@ ${roleBlock}${ownFleetNote}${multiCompanyNote}
 
 TONO Y FORMATO:
 - Hablás español rioplatense: tuteo natural, vocabulario del campo. Profesional pero cercano.
-- Mensajes cortos — esto es WhatsApp, no un email. Máximo 3-4 líneas salvo resúmenes.
+- ${isWeb ? 'Mensajes concisos pero podés explayarte cuando el contexto lo amerite. Usar **negritas** para datos clave, listas con - para múltiples items.' : 'Mensajes cortos — esto es WhatsApp, no un email. Máximo 3-4 líneas salvo resúmenes.'}
 - Sin disclaimers, sin tecnicismos.${isWeb ? '' : ' Sin *negritas* ni markdown.'}
 - No mencionar nombres de herramientas ni estados internos (in_progress, pending_assignment, etc.) — traducir siempre.
 - No repetir información ya dada. No saludar si ya lo hiciste.
@@ -250,8 +250,10 @@ LINKS:
 - PDF: generate_report_link.${isWeb ? `
 
 NAVEGACIÓN (web):
-- navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, reports, fields, trucks, menu, chats.
-- Usarlo ADEMÁS de la respuesta informativa cuando tiene sentido visual.` : ''}`;
+- navigate_app lleva al usuario a pantallas: home, list, new, detail, calendar, reports, locations, trucks, menu, chats, documents, analytics, queue, mydata, notifs, linked, admin.
+- Usarlo ADEMÁS de la respuesta informativa cuando tiene sentido visual.
+- "Quiero ver mis fletes" → texto + navigate_app(screen="list"). Tras crear flete → navigate_app(screen="detail", freightId=ID).
+- NO navegar por defecto en cada respuesta — solo cuando el usuario pide ver algo o una acción se completó.` : ''}`;
 
     // P1 fix: append proactive data summary so AI can reference without extra tool calls
     const proactiveLines: string[] = [];
