@@ -1248,7 +1248,7 @@ export class FreightsService {
           }
         }
       }
-      const effectiveType = ct.includes('producer') && isOwnFleet ? 'transporter' : ct;
+      const effectiveType = (ct.includes('producer') || ct.includes('plant')) && isOwnFleet ? 'transporter' : ct;
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
@@ -1320,16 +1320,21 @@ export class FreightsService {
 
     let ct = await this.resolveCompanyType(user);
 
-    // Plant-centric: plant can confirm loaded on behalf of CONSULTA transporter
+    // Plant/producer acting as own-fleet transporter OR CONSULTA proxy
     let plantActingAsTransporter = false;
-    if (ct.includes('plant')) {
+    if (ct.includes('plant') || ct.includes('producer')) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: freightId },
-        select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
+        select: { originCompanyId: true, destCompanyId: true, useOwnFleet: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
       });
-      if (freight?.destCompanyId) {
+      if (freight) {
         const callerIds = await this.companyRes.resolveAllCompanyIds(user);
-        if (callerIds.includes(freight.destCompanyId)) {
+        // Own fleet: origin company acts as transporter
+        const isOwnFleetOrigin = freight.useOwnFleet && callerIds.includes(freight.originCompanyId)
+          && freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+        if (isOwnFleetOrigin) { ct = 'transporter'; plantActingAsTransporter = true; }
+        // CONSULTA proxy: plant acts as transporter for READONLY transporter
+        if (!isOwnFleetOrigin && ct.includes('plant') && freight.destCompanyId && callerIds.includes(freight.destCompanyId)) {
           const transporterCo = freight.assignments?.[0]?.transportCompanyId;
           if (transporterCo) {
             const access = await this.prisma.companyAccess.findFirst({
@@ -1476,14 +1481,19 @@ export class FreightsService {
 
     // Plant-centric: plant can confirm finished on behalf of CONSULTA transporter
     let plantActingAsTransporter = false;
-    if (ct.includes('plant')) {
+    // Own fleet: origin company (any type) acts as transporter for their own fleet
+    if (ct.includes('plant') || ct.includes('producer')) {
       const freightCheck = await this.prisma.freight.findUnique({
         where: { id: freightId },
-        select: { destCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
+        select: { originCompanyId: true, destCompanyId: true, useOwnFleet: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
       });
-      if (freightCheck?.destCompanyId) {
+      if (freightCheck) {
         const callerIds = await this.companyRes.resolveAllCompanyIds(user);
-        if (callerIds.includes(freightCheck.destCompanyId)) {
+        const isOwnFleetOrigin = freightCheck.useOwnFleet && callerIds.includes(freightCheck.originCompanyId)
+          && freightCheck.assignments?.some(a => a.transportCompanyId === freightCheck.originCompanyId);
+        if (isOwnFleetOrigin) { ct = 'transporter'; plantActingAsTransporter = true; }
+        // CONSULTA proxy
+        if (!isOwnFleetOrigin && ct.includes('plant') && freightCheck.destCompanyId && callerIds.includes(freightCheck.destCompanyId)) {
           const transporterCo = freightCheck.assignments?.[0]?.transportCompanyId;
           if (transporterCo) {
             const access = await this.prisma.companyAccess.findFirst({
@@ -1492,18 +1502,6 @@ export class FreightsService {
             if (access) { ct = 'transporter'; plantActingAsTransporter = true; }
           }
         }
-      }
-    }
-
-    // Producer own-fleet promotion: if producer and freight uses own fleet, act as transporter
-    if (ct.includes('producer')) {
-      const freightCheck = await this.prisma.freight.findUnique({
-        where: { id: freightId },
-        select: { originCompanyId: true, assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { transportCompanyId: true } } },
-      });
-      if (freightCheck) {
-        const isOwnFleet = freightCheck.assignments?.some(a => a.transportCompanyId === freightCheck.originCompanyId);
-        if (isOwnFleet) ct = 'transporter';
       }
     }
 
