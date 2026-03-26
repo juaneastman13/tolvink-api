@@ -361,7 +361,7 @@ export class TrucksService {
     const [activeAssignments, totalFreights, totalTons] = await Promise.all([
       this.prisma.freightAssignment.findMany({
         where: { truckId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
-        include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledDate: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+        include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
         orderBy: { createdAt: 'desc' },
         take: 10,
       }),
@@ -372,7 +372,7 @@ export class TrucksService {
     return {
       ...truck,
       documents: docs,
-      activeFreights: activeAssignments.map(a => ({ ...a.freight, tripStatus: a.tripStatus })),
+      activeFreights: activeAssignments.map((a: any) => ({ ...a.freight, tripStatus: a.tripStatus })),
       totalFreights,
       totalTons: totalTons._sum.loadedTons || 0,
       docsSummary: {
@@ -579,16 +579,16 @@ export class TrucksService {
     await this.assertTruckAccess(truckId, companyId);
     const assignments = await this.prisma.freightAssignment.findMany({
       where: { truckId, tripStatus: 'finished' },
-      include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledDate: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+      include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
       orderBy: { finishedAt: 'desc' },
       take, skip,
     });
-    return assignments.map(a => ({
+    return assignments.map((a: any) => ({
       freightId: a.freight.id,
       code: a.freight.code,
       origin: a.freight.originName,
       dest: a.freight.destName,
-      date: a.finishedAt || a.freight.scheduledDate,
+      date: a.finishedAt || a.freight.scheduledAt,
       grain: a.freight.items?.[0]?.grain,
       tons: a.loadedTons || a.freight.items?.[0]?.tons,
     }));
