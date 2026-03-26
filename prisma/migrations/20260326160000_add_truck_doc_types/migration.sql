@@ -1,0 +1,4 @@
+-- Add new enum values to TruckDocumentType
+ALTER TYPE "TruckDocumentType" ADD VALUE IF NOT EXISTS 'BPS_DGI';
+ALTER TYPE "TruckDocumentType" ADD VALUE IF NOT EXISTS 'GET_CERTIFICATE';
+ALTER TYPE "TruckDocumentType" ADD VALUE IF NOT EXISTS 'CIRCULATION_PERMIT';

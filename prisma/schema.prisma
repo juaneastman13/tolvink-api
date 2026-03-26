@@ -457,14 +457,17 @@ model TruckDocument {
 }
 
 enum TruckDocumentType {
-  VTV_ITV
+  VTV_ITV             // ITV (kept for backward compat, label "ITV")
   INSURANCE
   TRANSPORT_LICENSE
-  GREEN_CARD
+  GREEN_CARD          // @deprecated — hidden from new doc dropdown
   DRIVER_LICENSE
-  RUAT
-  SENASA
-  FUMIGATION
+  RUAT                // @deprecated — hidden from new doc dropdown
+  SENASA              // @deprecated — hidden from new doc dropdown
+  FUMIGATION          // @deprecated — hidden from new doc dropdown
+  BPS_DGI
+  GET_CERTIFICATE
+  CIRCULATION_PERMIT
   OTHER
 }
 
