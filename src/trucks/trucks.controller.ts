@@ -404,7 +404,7 @@ export class TrucksService {
     });
     const now = new Date();
     const in30days = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    return docs.map((d: any) => {
+    const truckDocs = docs.map((d: any) => {
       let expiryStatus = 'no_expiry';
       if (d.expiresAt) {
         if (d.expiresAt < now) expiryStatus = 'expired';
@@ -418,6 +418,64 @@ export class TrucksService {
       else if (d.movementId) linkedType = 'movement';
       return { ...d, expiryStatus, linkedType };
     });
+
+    // Also fetch FreightDocuments from freights where this truck is assigned
+    if (linkedTo && linkedTo !== 'freight' && linkedTo !== 'all') return truckDocs;
+
+    const truckDocFreightIds = new Set(truckDocs.filter((d: any) => d.freightId).map((d: any) => d.freightId));
+    const assignments: any[] = await (this.prisma as any).freightAssignment.findMany({
+      where: { truckId, status: { in: ['active', 'accepted'] } },
+      select: { freightId: true, freight: { select: { id: true, code: true, originCompanyId: true, destCompanyId: true, destName: true, originName: true } } },
+    });
+    if (assignments.length === 0) return truckDocs;
+
+    const freightIds = assignments.map((a: any) => a.freightId);
+    const freightMap = new Map(assignments.map((a: any) => [a.freightId, a.freight]));
+
+    const freightDocs: any[] = await this.prisma.freightDocument.findMany({
+      where: { freightId: { in: freightIds } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Map FreightDocuments to TruckDocument-compatible shape, skip duplicates already linked as TruckDocument
+    const existingUrls = new Set(truckDocs.map((d: any) => d.fileUrl));
+    const mapped = freightDocs
+      .filter((fd: any) => !existingUrls.has(fd.url))
+      .map((fd: any) => {
+        const f = freightMap.get(fd.freightId);
+        return {
+          id: `fd_${fd.id}`,
+          truckId,
+          companyId,
+          type: 'OTHER',
+          name: fd.name || null,
+          fileUrl: fd.url,
+          fileName: fd.name || 'Archivo',
+          mimeType: /\.(jpg|jpeg|png|webp|gif)$/i.test(fd.url || '') ? 'image/jpeg' : /\.pdf$/i.test(fd.url || '') ? 'application/pdf' : null,
+          issuedAt: null,
+          expiresAt: null,
+          notes: null,
+          uploadedById: fd.uploadedById,
+          expenseId: null,
+          incomeId: null,
+          freightId: fd.freightId,
+          movementId: null,
+          ocrData: fd.ocrData || null,
+          ocrStatus: fd.ocrData ? 'completed' : null,
+          ocrProcessedAt: null,
+          createdAt: fd.createdAt,
+          updatedAt: fd.updatedAt,
+          expiryStatus: 'no_expiry',
+          linkedType: 'freight',
+          _fromFreightDoc: true,
+          freight: f ? { id: f.id, code: f.code } : null,
+          expense: null,
+          income: null,
+          movement: null,
+        };
+      });
+
+    return [...truckDocs, ...mapped].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async addDocument(truckId: string, user: any, body: any) {
