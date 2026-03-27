@@ -15,7 +15,6 @@ import { PlantAccessController, PlantAccessService } from './plant-access/plant-
 import { CompanyAccessController, CompanyAccessService } from './company-access/company-access.controller';
 import { ConversationsController, ConversationsService } from './conversations/conversations.controller';
 import { AdminController, AdminService } from './admin/admin.controller';
-import { FleetManagementController, FleetManagementService } from './trucks/fleet-management.controller';
 import { NotificationModule } from './notifications/notification.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { SseModule } from './sse/sse.module';
@@ -54,7 +53,6 @@ import { SharedLinksModule } from './shared-links/shared-links.module';
     CompanyAccessController,
     ConversationsController,
     AdminController,
-    FleetManagementController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -64,7 +62,6 @@ import { SharedLinksModule } from './shared-links/shared-links.module';
     CompanyAccessService,
     ConversationsService,
     AdminService,
-    FleetManagementService,
   ],
 })
 export class AppModule {}

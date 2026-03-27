@@ -582,6 +582,7 @@ export class TrucksService {
         truckId, companyId, type,
         description: description || null,
         amount, currency: currency || 'UYU',
+        exchangeRate: body.exchangeRate ?? 40,
         date: new Date(date),
         freightId: freightId || null,
         receiptUrl: receiptUrl || null,
@@ -601,6 +602,7 @@ export class TrucksService {
     if (body.description !== undefined) data.description = body.description;
     if (body.amount !== undefined) data.amount = body.amount;
     if (body.currency !== undefined) data.currency = body.currency;
+    if (body.exchangeRate !== undefined) data.exchangeRate = body.exchangeRate;
     if (body.date !== undefined) data.date = new Date(body.date);
     if (body.freightId !== undefined) data.freightId = body.freightId || null;
     if (body.receiptUrl !== undefined) { data.receiptUrl = body.receiptUrl; data.receiptName = body.receiptName || exp.receiptName; }
@@ -717,7 +719,8 @@ export class TrucksService {
     return this.prisma.truckIncome.create({
       data: {
         truckId, companyId, concept: body.concept, amount: body.amount,
-        currency: body.currency || 'UYU', date: new Date(body.date),
+        currency: body.currency || 'UYU', exchangeRate: body.exchangeRate ?? 40,
+        date: new Date(body.date),
         freightId: body.freightId || null, invoiceNumber: body.invoiceNumber || null,
         invoiceUrl: body.invoiceUrl || null, status: body.status || 'PENDING',
         notes: body.notes || null, createdById: user.sub,
@@ -735,6 +738,7 @@ export class TrucksService {
     for (const k of ['concept','amount','currency','date','freightId','invoiceNumber','invoiceUrl','status','notes']) {
       if (body[k] !== undefined) data[k] = k === 'date' ? new Date(body[k]) : (body[k] || null);
     }
+    if (body.exchangeRate !== undefined) data.exchangeRate = body.exchangeRate;
     return this.prisma.truckIncome.update({ where: { id: incomeId }, data });
   }
 
@@ -854,12 +858,21 @@ export class TrucksService {
     await this.assertTruckOwnership(truckId, companyId);
     const dateFilter = (from || to) ? { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } : undefined;
 
-    const [incPaid, incPending, incOverdue, expTotal, expByType, freightTrips, movements] = await Promise.all([
-      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PAID', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
-      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'PENDING', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
-      this.prisma.truckIncome.aggregate({ where: { truckId, companyId, status: 'OVERDUE', ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
-      this.prisma.truckExpense.aggregate({ where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
-      this.prisma.truckExpense.groupBy({ by: ['type'], where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) }, _sum: { amount: true } }),
+    // Currency conversion helpers
+    const safeRate = (rate: any) => { const r = Number(rate); return r > 0 ? r : 40; };
+    const toUYU = (amt: any, cur: string, rate: any) => cur === 'USD' ? Number(amt) * safeRate(rate) : Number(amt);
+    const toUSD = (amt: any, cur: string, rate: any) => cur === 'UYU' ? Number(amt) / safeRate(rate) : Number(amt);
+
+    // Fetch raw records (not aggregates) so we can convert per-record
+    const [incomes, expenses, freightTrips, movements] = await Promise.all([
+      this.prisma.truckIncome.findMany({
+        where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) },
+        select: { amount: true, currency: true, exchangeRate: true, status: true },
+      }),
+      this.prisma.truckExpense.findMany({
+        where: { truckId, companyId, ...(dateFilter ? { date: dateFilter } : {}) },
+        select: { type: true, amount: true, currency: true, exchangeRate: true },
+      }),
       this.prisma.freightAssignment.findMany({
         where: { truckId, tripStatus: 'finished', ...(dateFilter ? { finishedAt: dateFilter } : {}) },
         select: { kmTotal: true, kmLoaded: true, fuelLiters: true, startedAt: true, finishedAt: true, departureAt: true, arrivalAt: true },
@@ -870,41 +883,65 @@ export class TrucksService {
       }),
     ]);
 
-    const totalIncome = Number(incPaid._sum.amount || 0);
-    const totalExpense = Number(expTotal._sum.amount || 0);
+    // Average exchange rate from all records
+    const allRates = [...incomes.map((i: any) => Number(i.exchangeRate)), ...expenses.map((e: any) => Number(e.exchangeRate))].filter(r => r > 0);
+    const avgRate = allRates.length > 0 ? Math.round(allRates.reduce((s, r) => s + r, 0) / allRates.length * 100) / 100 : 40;
+
+    // Income sums by status
+    const sumByCur = (items: any[], statusFilter?: string) => {
+      const filtered = statusFilter ? items.filter((i: any) => i.status === statusFilter) : items;
+      return {
+        uyu: filtered.reduce((s: number, i: any) => s + toUYU(i.amount, i.currency, i.exchangeRate), 0),
+        usd: filtered.reduce((s: number, i: any) => s + toUSD(i.amount, i.currency, i.exchangeRate), 0),
+      };
+    };
+    const incomePaid = sumByCur(incomes, 'PAID');
+    const incomePending = sumByCur(incomes, 'PENDING');
+    const incomeOverdue = sumByCur(incomes, 'OVERDUE');
+
+    // Expense sums by type
+    const byTypeUYU: Record<string, number> = {};
+    const byTypeUSD: Record<string, number> = {};
+    let expTotalUYU = 0, expTotalUSD = 0;
+    for (const e of expenses) {
+      const vUYU = toUYU(e.amount, e.currency, e.exchangeRate);
+      const vUSD = toUSD(e.amount, e.currency, e.exchangeRate);
+      byTypeUYU[e.type] = (byTypeUYU[e.type] || 0) + vUYU;
+      byTypeUSD[e.type] = (byTypeUSD[e.type] || 0) + vUSD;
+      expTotalUYU += vUYU;
+      expTotalUSD += vUSD;
+    }
 
     // Km calculations
     const freightKm = freightTrips.reduce((s: number, t: any) => s + Number(t.kmTotal || 0), 0);
-    const freightKmLoaded = freightTrips.reduce((s: number, t: any) => s + Number(t.kmLoaded || 0), 0);
     const movementKm = movements.reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
     const totalKm = freightKm + movementKm;
 
     // Fuel
-    const freightFuel = freightTrips.reduce((s: number, t: any) => s + Number(t.fuelLiters || 0), 0);
-    const movementFuel = movements.reduce((s: number, m: any) => s + Number(m.fuelLiters || 0), 0);
-    const totalFuel = freightFuel + movementFuel;
+    const totalFuel = freightTrips.reduce((s: number, t: any) => s + Number(t.fuelLiters || 0), 0)
+      + movements.reduce((s: number, m: any) => s + Number(m.fuelLiters || 0), 0);
 
-    // Hours
-    const calcHours = (items: any[], depKey: string, arrKey: string) => items.reduce((s: number, i: any) => {
-      const dep = i[depKey] || i.startedAt;
-      const arr = i[arrKey] || i.finishedAt;
-      if (dep && arr) return s + (new Date(arr).getTime() - new Date(dep).getTime()) / 3600000;
-      return s;
-    }, 0);
-    const totalHours = calcHours(freightTrips, 'departureAt', 'arrivalAt') + calcHours(movements, 'departureAt', 'arrivalAt');
-
-    const repoKm = movements.filter((m: any) => m.type === 'REPOSITIONING').reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
+    // Trips
+    const tripsTotal = freightTrips.length + movements.length;
 
     return {
-      income: { paid: totalIncome, pending: Number(incPending._sum.amount || 0), overdue: Number(incOverdue._sum.amount || 0), total: totalIncome + Number(incPending._sum.amount || 0) + Number(incOverdue._sum.amount || 0) },
-      expenses: { total: totalExpense, byType: expByType.map((t: any) => ({ type: t.type, total: Number(t._sum.amount || 0) })) },
-      net: totalIncome - totalExpense,
-      km: { total: totalKm, freight: freightKm, freightLoaded: freightKmLoaded, movements: movementKm, productivePercent: totalKm > 0 ? Math.round((freightKmLoaded / totalKm) * 100) : 0 },
-      fuel: { totalLiters: totalFuel, kmPerLiter: totalFuel > 0 ? Math.round((totalKm / totalFuel) * 10) / 10 : 0 },
-      hours: Math.round(totalHours * 10) / 10,
-      trips: { freights: freightTrips.length, movements: movements.length, total: freightTrips.length + movements.length },
-      costPerKm: totalKm > 0 ? Math.round((totalExpense / totalKm) * 10) / 10 : 0,
-      incomePerKm: totalKm > 0 ? Math.round((totalIncome / totalKm) * 10) / 10 : 0,
+      exchangeRate: avgRate,
+      income: {
+        paid:    { uyu: incomePaid.uyu,    usd: incomePaid.usd },
+        pending: { uyu: incomePending.uyu, usd: incomePending.usd },
+        overdue: { uyu: incomeOverdue.uyu, usd: incomeOverdue.usd },
+        total:   { uyu: incomePaid.uyu + incomePending.uyu + incomeOverdue.uyu, usd: incomePaid.usd + incomePending.usd + incomeOverdue.usd },
+      },
+      expenses: {
+        total: { uyu: expTotalUYU, usd: expTotalUSD },
+        byType: Object.keys(byTypeUYU).map(type => ({ type, uyu: byTypeUYU[type], usd: byTypeUSD[type] || 0 })),
+      },
+      net: { uyu: incomePaid.uyu - expTotalUYU, usd: incomePaid.usd - expTotalUSD },
+      km: { total: totalKm },
+      fuel: { total: totalFuel, kmPerLiter: totalFuel > 0 ? Math.round((totalKm / totalFuel) * 10) / 10 : 0 },
+      trips: { total: tripsTotal, completed: freightTrips.length },
+      costPerKm:   { uyu: totalKm > 0 ? Math.round(expTotalUYU / totalKm) : null, usd: totalKm > 0 ? Math.round((expTotalUSD / totalKm) * 100) / 100 : null },
+      incomePerKm: { uyu: totalKm > 0 ? Math.round(incomePaid.uyu / totalKm) : null, usd: totalKm > 0 ? Math.round((incomePaid.usd / totalKm) * 100) / 100 : null },
     };
   }
 
