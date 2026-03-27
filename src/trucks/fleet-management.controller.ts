@@ -98,7 +98,7 @@ export class FleetManagementService {
 
   async listIncomes(truckId: string, user: any, from?: string, to?: string, status?: string) {
     await this.assertTruckAccess(truckId, user);
-    const where: any = { truckId, active: true };
+    const where: any = { truckId, active: { not: false } };
     if (from) where.date = { ...(where.date || {}), gte: new Date(from) };
     if (to) where.date = { ...(where.date || {}), lte: new Date(to) };
     if (status) where.status = status;
@@ -135,7 +135,7 @@ export class FleetManagementService {
 
   async updateIncome(truckId: string, incId: string, body: any, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incId, truckId, active: true } });
+    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incId, truckId, active: { not: false } } });
     if (!inc) throw new NotFoundException('Ingreso no encontrado');
     const data: any = {};
     if (body.concept !== undefined) data.concept = body.concept;
@@ -153,7 +153,7 @@ export class FleetManagementService {
 
   async deleteIncome(truckId: string, incId: string, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incId, truckId, active: true } });
+    const inc = await this.prisma.truckIncome.findFirst({ where: { id: incId, truckId, active: { not: false } } });
     if (!inc) throw new NotFoundException('Ingreso no encontrado');
     return this.prisma.truckIncome.update({ where: { id: incId }, data: { active: false } });
   }
@@ -162,7 +162,7 @@ export class FleetManagementService {
 
   async listExpenses(truckId: string, user: any, from?: string, to?: string) {
     await this.assertTruckAccess(truckId, user);
-    const where: any = { truckId, active: true };
+    const where: any = { truckId, active: { not: false } };
     if (from) where.date = { ...(where.date || {}), gte: new Date(from) };
     if (to) where.date = { ...(where.date || {}), lte: new Date(to) };
     return this.prisma.truckExpense.findMany({
@@ -196,7 +196,7 @@ export class FleetManagementService {
 
   async updateExpense(truckId: string, expId: string, body: any, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expId, truckId, active: true } });
+    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expId, truckId, active: { not: false } } });
     if (!exp) throw new NotFoundException('Gasto no encontrado');
     const data: any = {};
     if (body.type !== undefined) data.type = body.type;
@@ -213,7 +213,7 @@ export class FleetManagementService {
 
   async deleteExpense(truckId: string, expId: string, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expId, truckId, active: true } });
+    const exp = await this.prisma.truckExpense.findFirst({ where: { id: expId, truckId, active: { not: false } } });
     if (!exp) throw new NotFoundException('Gasto no encontrado');
     return this.prisma.truckExpense.update({ where: { id: expId }, data: { active: false } });
   }
@@ -221,7 +221,7 @@ export class FleetManagementService {
   async getExpenseSummary(truckId: string, user: any) {
     await this.assertTruckAccess(truckId, user);
     const expenses = await this.prisma.truckExpense.findMany({
-      where: { truckId, active: true },
+      where: { truckId, active: { not: false } },
       select: { type: true, amount: true, currency: true, exchangeRate: true },
     });
     const byType: Record<string, number> = {};
@@ -241,7 +241,7 @@ export class FleetManagementService {
 
   async listMovements(truckId: string, user: any, from?: string, to?: string, type?: string) {
     await this.assertTruckAccess(truckId, user);
-    const where: any = { truckId, active: true };
+    const where: any = { truckId, active: { not: false } };
     if (from) where.departureAt = { ...(where.departureAt || {}), gte: new Date(from) };
     if (to) where.departureAt = { ...(where.departureAt || {}), lte: new Date(to) };
     if (type) where.type = type;
@@ -277,7 +277,7 @@ export class FleetManagementService {
 
   async updateMovement(truckId: string, movId: string, body: any, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, active: true } });
+    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, active: { not: false } } });
     if (!mov) throw new NotFoundException('Movimiento no encontrado');
     const data: any = {};
     for (const k of ['type', 'description', 'originName', 'originFieldId', 'destName', 'destFieldId', 'notes']) {
@@ -293,7 +293,7 @@ export class FleetManagementService {
 
   async deleteMovement(truckId: string, movId: string, user: any) {
     await this.assertTruckAccess(truckId, user);
-    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, active: true } });
+    const mov = await this.prisma.truckMovement.findFirst({ where: { id: movId, truckId, active: { not: false } } });
     if (!mov) throw new NotFoundException('Movimiento no encontrado');
     return this.prisma.truckMovement.update({ where: { id: movId }, data: { active: false } });
   }
@@ -455,7 +455,7 @@ export class FleetManagementService {
 
     // Incomes
     const incomes = await this.prisma.truckIncome.findMany({
-      where: { truckId, active: true, ...dateFilter('date') },
+      where: { truckId, active: { not: false }, ...dateFilter('date') },
       select: { amount: true, currency: true, exchangeRate: true, status: true },
     });
     // Convert to UYU: USD * rate, UYU stays as-is
@@ -480,7 +480,7 @@ export class FleetManagementService {
 
     // Expenses
     const expenses = await this.prisma.truckExpense.findMany({
-      where: { truckId, active: true, ...dateFilter('date') },
+      where: { truckId, active: { not: false }, ...dateFilter('date') },
       select: { type: true, amount: true, currency: true, exchangeRate: true },
     });
     allRates.push(...expenses.map(e => Number(e.exchangeRate)));
@@ -511,7 +511,7 @@ export class FleetManagementService {
 
     // Movements km
     const movements = await this.prisma.truckMovement.findMany({
-      where: { truckId, active: true, ...dateFilter('departureAt') },
+      where: { truckId, active: { not: false }, ...dateFilter('departureAt') },
       select: { kmDriven: true, fuelLiters: true },
     });
     const totalKm = movements.reduce((s, m) => s + (Number(m.kmDriven) || 0), 0);
