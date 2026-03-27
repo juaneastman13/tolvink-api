@@ -484,14 +484,16 @@ model TruckExpense {
   freightId   String?          @map("freight_id")
   type        TruckExpenseType
   description String?          @db.VarChar(500)
-  amount      Decimal          @db.Decimal(12, 2)
-  currency    String           @default("UYU") @db.VarChar(3)
-  date        DateTime
-  receiptUrl  String?          @map("receipt_url") @db.VarChar(500)
-  receiptName String?          @map("receipt_name") @db.VarChar(255)
-  createdById String           @map("created_by_id")
-  createdAt   DateTime         @default(now()) @map("created_at")
-  updatedAt   DateTime         @updatedAt @map("updated_at")
+  amount       Decimal          @db.Decimal(12, 2)
+  currency     String           @default("UYU") @db.VarChar(3)
+  exchangeRate Decimal          @default(40) @map("exchange_rate") @db.Decimal(8, 2)
+  date         DateTime
+  receiptUrl   String?          @map("receipt_url") @db.VarChar(500)
+  receiptName  String?          @map("receipt_name") @db.VarChar(255)
+  active       Boolean          @default(true)
+  createdById  String           @map("created_by_id")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
 
   truck     Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
   company   Company  @relation("TruckExpCompany", fields: [companyId], references: [id], onDelete: Cascade)
@@ -500,6 +502,7 @@ model TruckExpense {
   documents TruckDocument[]
 
   @@index([truckId, companyId])
+  @@index([truckId, active])
   @@index([date])
   @@map("truck_expenses")
 }
@@ -514,11 +517,13 @@ model TruckIncome {
   concept       String       @db.VarChar(500)
   amount        Decimal      @db.Decimal(12, 2)
   currency      String       @default("UYU") @db.VarChar(3)
+  exchangeRate  Decimal      @default(40) @map("exchange_rate") @db.Decimal(8, 2)
   date          DateTime
   invoiceNumber String?      @map("invoice_number") @db.VarChar(100)
   invoiceUrl    String?      @map("invoice_url") @db.VarChar(500)
   status        IncomeStatus @default(PENDING)
   notes         String?      @db.Text
+  active        Boolean      @default(true)
   createdById   String       @map("created_by_id")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
@@ -530,6 +535,7 @@ model TruckIncome {
   documents TruckDocument[]
 
   @@index([truckId, companyId])
+  @@index([truckId, active])
   @@index([truckId, date])
   @@index([freightId])
   @@map("truck_incomes")
@@ -567,6 +573,7 @@ model TruckMovement {
   fuelCost    Decimal?     @map("fuel_cost") @db.Decimal(12, 2)
   tollCost    Decimal?     @map("toll_cost") @db.Decimal(12, 2)
   notes       String?      @db.Text
+  active      Boolean      @default(true)
   createdById String       @map("created_by_id")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
@@ -582,6 +589,7 @@ model TruckMovement {
   documents   TruckDocument[]
 
   @@index([truckId, companyId])
+  @@index([truckId, active])
   @@index([truckId, departureAt])
   @@map("truck_movements")
 }
@@ -1244,3 +1252,4 @@ model SharedLink {
   @@index([freightId])
   @@map("shared_links")
 }
+
