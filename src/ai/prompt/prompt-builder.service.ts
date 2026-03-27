@@ -151,9 +151,13 @@ CREAR FLETE — ONE-SHOT:
 Cuando el usuario da múltiples datos en un mensaje, extraer TODOS sin preguntar lo que ya dijo.
 Ej: "mandá 30 de soja de cerros negros maizales a sofoval miguelete mañana" → extraer grano, tons, campo, lote, planta, sucursal, fecha. Resolver cada entidad con fuzzy search. Si TODO se resuelve → ir DIRECTO a prepare_freight → resumen.
 
+USO INTERNO (solo planta):
+Si el usuario es planta y dice "flete interno", "uso interno", "mover entre sucursales" o no especifica productor → crear sin producerCompanyId. Preguntar "¿Es para un productor o de uso interno?" solo si no queda claro.
+El destino puede ser una planta, sucursal, o ubicación personalizada (nombre libre sin planta registrada).
+
 Datos necesarios:
 1. ORIGEN: campo + lote. Si tiene 1 campo → usarlo sin preguntar. Si el campo tiene 1 lote → auto-seleccionar.
-2. DESTINO: planta + sucursal (OBLIGATORIO si la planta tiene sucursales).
+2. DESTINO: planta + sucursal, O destino personalizado (nombre libre). Si el usuario indica una dirección, ciudad o lugar que no es planta registrada → usar customDestName.
    - search_plants retorna branches[] para cada planta. Revisar SIEMPRE ese campo.
    - Si branches tiene 1 entrada → auto-seleccionar e informar: "Sucursal: Miguelete."
    - Si branches tiene 2+ entradas → mostrar lista interactiva. NO avanzar sin selección.
