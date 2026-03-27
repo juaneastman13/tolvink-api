@@ -727,13 +727,13 @@ model Freight {
   plantApprovedAt                DateTime? @map("plant_approved_at")
 
   // Relations
-  originCompany   Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id])
-  destCompany     Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id])
-  producerCompany Company? @relation("producerFreights", fields: [producerCompanyId], references: [id])
+  originCompany   Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id], onDelete: Restrict)
+  destCompany     Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id], onDelete: SetNull)
+  producerCompany Company? @relation("producerFreights", fields: [producerCompanyId], references: [id], onDelete: SetNull)
   originLot     Lot?     @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
   destPlant     Plant?   @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
   field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)
-  requestedBy   User     @relation("FreightRequestedBy", fields: [requestedById], references: [id])
+  requestedBy   User     @relation("FreightRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
 
   items          FreightItem[]
   assignments    FreightAssignment[]
@@ -996,7 +996,7 @@ model Message {
   createdAt      DateTime @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User         @relation(fields: [senderId], references: [id])
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
 
   @@index([senderId])
   @@index([conversationId, createdAt])
@@ -1018,7 +1018,7 @@ model AuditLog {
   metadata   Json?
   createdAt  DateTime @default(now()) @map("created_at")
 
-  user    User     @relation(fields: [userId], references: [id])
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   freight Freight? @relation(fields: [freightId], references: [id], onDelete: Cascade)
 
   @@index([entityType, entityId])
@@ -1196,7 +1196,7 @@ model FreightPendingChange {
   resolvedById      String?   @map("resolved_by_id")
 
   freight     Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
-  requestedBy User    @relation("PendingChangeRequester", fields: [requestedById], references: [id])
+  requestedBy User    @relation("PendingChangeRequester", fields: [requestedById], references: [id], onDelete: Cascade)
   resolvedBy  User?   @relation("PendingChangeResolver", fields: [resolvedById], references: [id])
 
   @@index([freightId, status])

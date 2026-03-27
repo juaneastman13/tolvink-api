@@ -113,6 +113,7 @@ async function bootstrap() {
 
   // CORS — explicit whitelist only
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()) || ['http://localhost:3000'];
+  if (!process.env.CORS_ORIGIN) console.warn('[Tolvink] CORS_ORIGIN not set — using localhost fallback');
   app.enableCors({
     origin: corsOrigins,
     credentials: true,
