@@ -458,10 +458,12 @@ export class FleetManagementService {
       where: { truckId, active: { not: false }, ...dateFilter('date') },
       select: { amount: true, currency: true, exchangeRate: true, status: true },
     });
+    // Safe rate: fallback to 40 if null/undefined/0/NaN
+    const safeRate = (rate: any) => { const r = Number(rate); return r > 0 ? r : 40; };
     // Convert to UYU: USD * rate, UYU stays as-is
-    const toUYU = (amt: any, cur: string, rate: any) => cur === 'USD' ? Number(amt) * Number(rate) : Number(amt);
+    const toUYU = (amt: any, cur: string, rate: any) => cur === 'USD' ? Number(amt) * safeRate(rate) : Number(amt);
     // Convert to USD: UYU / rate, USD stays as-is
-    const toUSD = (amt: any, cur: string, rate: any) => cur === 'UYU' ? Number(amt) / Number(rate) : Number(amt);
+    const toUSD = (amt: any, cur: string, rate: any) => cur === 'UYU' ? Number(amt) / safeRate(rate) : Number(amt);
 
     // Collect average exchange rate from records that have one
     const allRates = [...incomes.map(i => Number(i.exchangeRate))];
