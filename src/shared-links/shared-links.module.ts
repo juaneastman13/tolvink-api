@@ -343,7 +343,7 @@ export class SharedLinksPublicController {
   constructor(private service: SharedLinksService) {}
 
   @Get(':token')
-  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Resolver link compartible (público)' })
   resolve(@Param('token') token: string) {
     if (!token || token.length < 10) throw new BadRequestException('Token inválido');
@@ -351,7 +351,7 @@ export class SharedLinksPublicController {
   }
 
   @Get(':token/data')
-  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
   @ApiOperation({ summary: 'Datos del link compartible (JSON para SPA)' })
   resolveData(@Param('token') token: string) {
     if (!token || token.length < 10) throw new BadRequestException('Token inválido');

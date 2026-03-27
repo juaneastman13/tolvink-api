@@ -100,6 +100,9 @@ export class AiService implements OnModuleDestroy {
       this.client = new Anthropic({ apiKey });
       this.logger.log(`Claude AI assistant enabled (${MODEL_ID})`);
     } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('ANTHROPIC_API_KEY is required in production');
+      }
       this.logger.warn('ANTHROPIC_API_KEY not set — AI assistant disabled');
     }
   }

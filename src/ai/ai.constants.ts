@@ -6,6 +6,7 @@
 export const MAX_HISTORY = 25;
 export const MAX_TOOL_LOOPS = 5;  // 5 loops needed: crear flete = search_plants + list_fields + list_lots + prepare_freight + confirm
 export const AI_SESSION_TIMEOUT_MIN = 30;
+if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — using tolvink.com fallback');
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 export const OWN_FLEET_SHORTCUT = 'own_fleet';
 

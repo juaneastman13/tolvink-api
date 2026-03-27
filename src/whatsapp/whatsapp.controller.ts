@@ -42,10 +42,6 @@ export class WhatsAppController implements OnModuleDestroy {
     if (!this.appSecret) {
       this.logger.error('WHATSAPP_APP_SECRET is not set — ALL webhook requests will be REJECTED');
     }
-    if (!this.appSecret && process.env.NODE_ENV === 'production') {
-      // Startup validation — server must not start without webhook secret in production
-      throw new Error('WHATSAPP_APP_SECRET is required in production');
-    }
     // Periodic cleanup of dedup map
     this.dedupCleanupTimer = setInterval(() => {
       const now = Date.now();

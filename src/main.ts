@@ -27,6 +27,7 @@ async function bootstrap() {
     });
     logger.log('Sentry initialized');
   }
+  if (!process.env.SENTRY_DSN && process.env.NODE_ENV === 'production') console.warn('[Tolvink] SENTRY_DSN not set — error tracking disabled in production');
 
   // Startup validation — server must not start without critical env vars
   const required = ['DATABASE_URL', 'DIRECT_URL', 'JWT_SECRET', 'WHATSAPP_APP_SECRET'];
