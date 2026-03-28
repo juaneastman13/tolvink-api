@@ -327,6 +327,7 @@ describe('Freight State Machine — Integration Tests', () => {
       });
       mockPrisma.freight.findUnique.mockResolvedValue(freight);
       mockCompanyRes.resolveCompanyType.mockResolvedValue('producer');
+      mockCompanyRes.resolveAllCompanyIds.mockResolvedValue(['comp-prod']);
 
       await expect(service.confirmFinished('f1', producerUser)).rejects.toThrow(ForbiddenException);
     });

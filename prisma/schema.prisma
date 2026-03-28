@@ -457,6 +457,7 @@ model TruckDocument {
   @@index([incomeId])
   @@index([freightId])
   @@index([movementId])
+  @@index([uploadedById])
   @@map("truck_documents")
 }
 
@@ -504,6 +505,7 @@ model TruckExpense {
   @@index([truckId, companyId])
   @@index([truckId, active])
   @@index([date])
+  @@index([createdById])
   @@map("truck_expenses")
 }
 
@@ -538,6 +540,7 @@ model TruckIncome {
   @@index([truckId, active])
   @@index([truckId, date])
   @@index([freightId])
+  @@index([createdById])
   @@map("truck_incomes")
 }
 
@@ -580,7 +583,7 @@ model TruckMovement {
 
   truck       Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
   company     Company @relation("TruckMovCompany", fields: [companyId], references: [id], onDelete: Cascade)
-  driver      User?   @relation("TruckMovDriver", fields: [driverId], references: [id])
+  driver      User?   @relation("TruckMovDriver", fields: [driverId], references: [id], onDelete: SetNull)
   createdBy   User    @relation("TruckMovCreator", fields: [createdById], references: [id])
   originField Field?  @relation("movementOriginField", fields: [originFieldId], references: [id])
   originLot   Lot?    @relation("movementOriginLot", fields: [originLotId], references: [id])
@@ -591,6 +594,8 @@ model TruckMovement {
   @@index([truckId, companyId])
   @@index([truckId, active])
   @@index([truckId, departureAt])
+  @@index([createdById])
+  @@index([driverId])
   @@map("truck_movements")
 }
 
@@ -771,6 +776,7 @@ model Freight {
   @@index([originLotId])
   @@index([originCompanyId, status, loadDate])
   @@index([destCompanyId, status, loadDate])
+  @@index([producerCompanyId])
   @@index([participantCompanyIds], type: Gin)
   @@map("freights")
 }
@@ -841,7 +847,7 @@ model FreightAssignment {
   freight          Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
   transportCompany Company @relation("AssignmentTransporter", fields: [transportCompanyId], references: [id])
   assignedBy       User    @relation("AssignmentAssignedBy", fields: [assignedById], references: [id])
-  driver           User?   @relation("AssignmentDriver", fields: [driverId], references: [id])
+  driver           User?   @relation("AssignmentDriver", fields: [driverId], references: [id], onDelete: SetNull)
   truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
   weighTickets     WeighTicket[]
 
@@ -852,6 +858,7 @@ model FreightAssignment {
   @@index([truckId])
   @@index([driverId])
   @@index([driverId, status])
+  @@index([assignedById])
   @@map("freight_assignments")
 }
 
@@ -910,6 +917,7 @@ model WeighTicket {
   @@index([assignmentId])
   @@index([ticketNumber])
   @@index([freightId, assignmentId, type])
+  @@index([registeredById])
   @@map("weigh_tickets")
 }
 

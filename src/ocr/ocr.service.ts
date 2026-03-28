@@ -149,59 +149,64 @@ export class OcrService {
 
     const base64 = buffer.toString('base64');
 
-    // If a specific docType is provided, use legacy prompts directly
-    if (docType && DOC_PROMPTS[docType]) {
-      this.logger.log(`OCR analyze (legacy): type=${docType}, size=${buffer.length}`);
-      const raw = await this.callClaude(base64, mimeType, DOC_PROMPTS[docType]);
-      const result = this.parseResponse(raw, docType);
-      result.datos._processedAt = new Date().toISOString();
-      result.datos._model = MODEL_ID;
-      return result;
-    }
+    try {
+      // If a specific docType is provided, use legacy prompts directly
+      if (docType && DOC_PROMPTS[docType]) {
+        this.logger.log(`OCR analyze (legacy): type=${docType}, size=${buffer.length}`);
+        const raw = await this.callClaude(base64, mimeType, DOC_PROMPTS[docType]);
+        const result = this.parseResponse(raw, docType);
+        result.datos._processedAt = new Date().toISOString();
+        result.datos._model = MODEL_ID;
+        return result;
+      }
 
-    // Phase 1: Structured extraction
-    this.logger.log(`OCR analyze (structured phase 1): size=${buffer.length}, mime=${mimeType}`);
-    const raw1 = await this.callClaude(base64, mimeType, STRUCTURED_PROMPT);
-    const parsed1 = this.parseStructuredResponse(raw1);
+      // Phase 1: Structured extraction
+      this.logger.log(`OCR analyze (structured phase 1): size=${buffer.length}, mime=${mimeType}`);
+      const raw1 = await this.callClaude(base64, mimeType, STRUCTURED_PROMPT);
+      const parsed1 = this.parseStructuredResponse(raw1);
 
-    // Count non-null structured fields
-    const nonNullCount = STRUCTURED_FIELDS.filter(f => parsed1[f] != null && parsed1[f] !== '').length;
-    const fillRate = nonNullCount / STRUCTURED_FIELDS.length;
-    this.logger.log(`OCR phase 1: ${nonNullCount}/${STRUCTURED_FIELDS.length} fields filled (${Math.round(fillRate * 100)}%)`);
+      // Count non-null structured fields
+      const nonNullCount = STRUCTURED_FIELDS.filter(f => parsed1[f] != null && parsed1[f] !== '').length;
+      const fillRate = nonNullCount / STRUCTURED_FIELDS.length;
+      this.logger.log(`OCR phase 1: ${nonNullCount}/${STRUCTURED_FIELDS.length} fields filled (${Math.round(fillRate * 100)}%)`);
 
-    // If >20% fields filled, use structured result
-    if (fillRate > 0.2) {
-      // Normalize date field
-      if (parsed1.date) parsed1.date = this.normalizeDate(parsed1.date);
+      // If >20% fields filled, use structured result
+      if (fillRate > 0.2) {
+        // Normalize date field
+        if (parsed1.date) parsed1.date = this.normalizeDate(parsed1.date);
 
-      const confidence = Math.round(fillRate * 100);
+        const confidence = Math.round(fillRate * 100);
+        return {
+          tipoDocumento: this.inferDocType(parsed1),
+          datos: parsed1,
+          confianza: confidence / 100,
+          textoOriginal: raw1.slice(0, 2000),
+          structured: true,
+          ...(fillRate < 0.15 ? { lowConfidence: true } : {}),
+          processedAt: new Date().toISOString(),
+          model: MODEL_ID,
+        } as any;
+      }
+
+      // Phase 2: Free extraction (fallback)
+      this.logger.log(`OCR analyze (free phase 2): structured yielded <20% fields, retrying with free extraction`);
+      const raw2 = await this.callClaude(base64, mimeType, FREE_PROMPT);
+      const parsed2 = this.parseFreeResponse(raw2);
+
       return {
-        tipoDocumento: this.inferDocType(parsed1),
-        datos: parsed1,
-        confianza: confidence / 100,
-        textoOriginal: raw1.slice(0, 2000),
-        structured: true,
-        ...(fillRate < 0.15 ? { lowConfidence: true } : {}),
+        tipoDocumento: parsed2.documentType || 'desconocido',
+        datos: parsed2,
+        confianza: 0,
+        textoOriginal: raw2.slice(0, 2000),
+        structured: false,
+        lowConfidence: true, // Phase 2 fallback always flags low confidence
         processedAt: new Date().toISOString(),
         model: MODEL_ID,
       } as any;
+    } catch (err) {
+      this.logger.error(`OCR analyze failed: ${err.message}`);
+      throw new BadRequestException(`OCR falló: ${err.message?.includes('timeout') ? 'timeout — intentá de nuevo' : 'error procesando imagen'}`);
     }
-
-    // Phase 2: Free extraction (fallback)
-    this.logger.log(`OCR analyze (free phase 2): structured yielded <20% fields, retrying with free extraction`);
-    const raw2 = await this.callClaude(base64, mimeType, FREE_PROMPT);
-    const parsed2 = this.parseFreeResponse(raw2);
-
-    return {
-      tipoDocumento: parsed2.documentType || 'desconocido',
-      datos: parsed2,
-      confianza: 0,
-      textoOriginal: raw2.slice(0, 2000),
-      structured: false,
-      lowConfidence: true, // Phase 2 fallback always flags low confidence
-      processedAt: new Date().toISOString(),
-      model: MODEL_ID,
-    } as any;
   }
 
   /** Call Claude Vision API with timeout */

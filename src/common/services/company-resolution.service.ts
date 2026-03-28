@@ -145,17 +145,20 @@ export class CompanyResolutionService {
     return result;
   }
 
-  async resolveCompanyType(user: { sub: string; companyType?: string }): Promise<string> {
+  async resolveCompanyType(user: { sub: string; companyType?: string; activeCompanyId?: string; companyId?: string }): Promise<string> {
+    const activeId = (user as any).activeCompanyId || (user as any).companyId;
     const cache = this.getCache();
-    const key = `companyType:${user.sub}`;
+    const key = `companyType:${user.sub}:${activeId || 'default'}`;
     if (cache?.has(key)) return cache.get(key);
 
     // Always verify against DB — JWT companyType may be stale
     const memberships = await this.getMemberships(user.sub);
-    // Prefer types[] array if available, fallback to type field
     if (memberships.length > 0) {
-      const types = getCompanyTypes(memberships[0].company);
-      const result = types[0] || memberships[0].company?.type || 'unknown';
+      // Prefer the membership matching activeCompanyId for multi-company users
+      const activeMem = activeId ? memberships.find((m: any) => m.companyId === activeId) : null;
+      const mem = activeMem || memberships[0];
+      const types = getCompanyTypes(mem.company);
+      const result = types[0] || mem.company?.type || 'unknown';
       cache?.set(key, result);
       return result;
     }

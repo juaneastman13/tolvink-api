@@ -1218,7 +1218,7 @@ export class AdminService {
     return results;
   }
 
-  async importUsers(rows: any[], callerCompanyId?: string) {
+  async importUsers(rows: any[], callerCompanyId?: string, isPlatformAdmin = false) {
     const roleMap: Record<string, { userRole: string; membershipRole: string }> = {
       operario: { userRole: 'operator', membershipRole: 'operario' },
       gerente: { userRole: 'admin', membershipRole: 'gerente' },
@@ -1251,6 +1251,22 @@ export class AdminService {
 
       const company = await this.prisma.company.findFirst({ where: { name: { equals: companyName, mode: 'insensitive' }, active: true } });
       if (!company) { results.errors.push({ row: i + 1, email, error: `Empresa no encontrada: ${companyName}` }); continue; }
+
+      // Non-platform_admin can only import to their own company or companies they have CompanyAccess with
+      if (!isPlatformAdmin && callerCompanyId && company.id !== callerCompanyId) {
+        const hasAccess = await this.prisma.companyAccess.findFirst({
+          where: {
+            OR: [
+              { grantorCompanyId: callerCompanyId, granteeCompanyId: company.id, isActive: true },
+              { grantorCompanyId: company.id, granteeCompanyId: callerCompanyId, isActive: true },
+            ],
+          },
+        });
+        if (!hasAccess) {
+          results.errors.push({ row: i + 1, email, error: `Sin acceso a la empresa: ${companyName}` });
+          continue;
+        }
+      }
 
       const existing = await this.prisma.user.findUnique({ where: { email } });
       if (existing) { results.errors.push({ row: i + 1, email, error: 'Email ya registrado' }); continue; }
@@ -1651,6 +1667,6 @@ export class AdminController {
     await this.svc.assertCompanyOrPlatformAdmin(u);
     if (!Array.isArray(body.users) || body.users.length === 0) throw new BadRequestException('Lista de usuarios vacía');
     if (body.users.length > 200) throw new BadRequestException('Máximo 200 usuarios por importación');
-    return this.svc.importUsers(body.users, u.companyId || null);
+    return this.svc.importUsers(body.users, u.companyId || null, u.role === 'platform_admin');
   }
 }

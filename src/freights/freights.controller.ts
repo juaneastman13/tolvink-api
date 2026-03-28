@@ -413,7 +413,7 @@ export class FreightsController {
   @Post(':id/tracking')
   @UseGuards(FreightAccessGuard)
   @Throttle({ default: { ttl: 60000, limit: 60 } })
-  @Roles('transporter', 'producer', 'plant')
+  @Roles('transporter', 'producer', 'plant', 'chofer')
   @ApiOperation({ summary: 'Enviar punto de tracking GPS' })
   addTracking(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AddTrackingDto, @CurrentUser() user: any) {
     return this.service.addTrackingPoint(id, dto, user);

@@ -315,8 +315,16 @@ export class SharedLinksController {
   @ApiOperation({ summary: 'Listar links de una empresa' })
   listByCompany(
     @Param('companyId', ParseUUIDPipe) companyId: string,
+    @CurrentUser() user: any,
     @Query('type') type?: string,
   ) {
+    // Non-platform_admin can only list their own company's links
+    if (user.role !== 'platform_admin') {
+      const callerCompanyId = user.activeCompanyId || user.companyId;
+      if (callerCompanyId !== companyId) {
+        throw new ForbiddenException('Solo puede ver links de su propia empresa');
+      }
+    }
     return this.service.listByCompany(companyId, type);
   }
 

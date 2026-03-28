@@ -163,11 +163,11 @@ export class FreightsService {
     });
   }
 
-  // Helper: verify a chofer is the assigned driver for a freight
-  private async assertDriverAccess(freightId: string, userId: string) {
-    const assignment = await this.prisma.freightAssignment.findFirst({
-      where: { freightId, driverId: userId, status: { in: ['active', 'accepted'] } },
-    });
+  // Helper: verify a chofer is the assigned driver for a freight (or specific assignment)
+  private async assertDriverAccess(freightId: string, userId: string, assignmentId?: string) {
+    const where: any = { freightId, driverId: userId, status: { in: ['active', 'accepted'] } };
+    if (assignmentId) where.id = assignmentId;
+    const assignment = await this.prisma.freightAssignment.findFirst({ where });
     if (!assignment) throw new ForbiddenException('No sos el chofer asignado a este flete');
   }
 
@@ -293,10 +293,27 @@ export class FreightsService {
       destName = dto.customDestName || 'Ubicación personalizada';
       destLat = dto.customDestLat ?? null;
       destLng = dto.customDestLng ?? null;
-      // Allow explicit destCompanyId for custom dests linked to a company
+      // Allow explicit destCompanyId only if user has a relationship with that company
       if (dto.destCompanyId) {
-        const co = await this.prisma.company.findFirst({ where: { id: dto.destCompanyId, active: true } });
-        if (co) destCompanyId = co.id;
+        const callerIds = await this.resolveAllCompanyIds(user);
+        if (callerIds.includes(dto.destCompanyId)) {
+          destCompanyId = dto.destCompanyId;
+        } else {
+          // Check if a CompanyAccess link exists between caller and target
+          const hasAccess = await this.prisma.companyAccess.findFirst({
+            where: {
+              OR: [
+                { grantorCompanyId: { in: callerIds }, granteeCompanyId: dto.destCompanyId },
+                { grantorCompanyId: dto.destCompanyId, granteeCompanyId: { in: callerIds } },
+              ],
+              isActive: true,
+            },
+          });
+          if (hasAccess) {
+            destCompanyId = dto.destCompanyId;
+          }
+          // If no relationship, silently ignore — custom dest without company link
+        }
       }
     }
 
@@ -426,11 +443,13 @@ export class FreightsService {
             if (driverUser) { assignDriverId = driverUser.id; assignDriverName = driverUser.name; }
           }
 
-          // Flow C vs D: if freight has a plant destination → needs plant approval (pending)
-          // If no plant destination (custom) → direct accepted (Flow D)
-          const needsPlantApproval = !!f.destCompanyId;
-          const assignmentStatus = needsPlantApproval ? AssignmentStatus.active : AssignmentStatus.accepted;
-          const tripStatusVal = needsPlantApproval ? 'pending' : 'accepted';
+          // Use freight's actual needsPlantApproval field (set at creation based on caller, dest, useOwnFleet)
+          // If plant creates with own fleet → no approval needed → direct accepted
+          // If non-plant creates with dest + own fleet → needs approval → pending
+          // If no dest (custom) → no approval needed → direct accepted
+          const freightNeedsApproval = f.needsPlantApproval;
+          const assignmentStatus = freightNeedsApproval ? AssignmentStatus.active : AssignmentStatus.accepted;
+          const tripStatusVal = freightNeedsApproval ? 'pending' : 'accepted';
 
           await tx.freightAssignment.create({
             data: {
@@ -452,7 +471,7 @@ export class FreightsService {
           let newStatus: FreightStatus;
           if (isMulti) {
             newStatus = FreightStatus.pending_assignment;
-          } else if (needsPlantApproval) {
+          } else if (freightNeedsApproval) {
             newStatus = FreightStatus.pending_assignment; // Flow C
           } else {
             newStatus = FreightStatus.accepted; // Flow D
@@ -503,6 +522,7 @@ export class FreightsService {
     try {
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${oLat},${oLng}&destination=${dLat},${dLng}&key=${key}`;
       const res = await fetch(url);
+      if (!res.ok) { this.logger.warn(`Google Directions API HTTP ${res.status} for freight ${freightId}`); return; }
       const json = await res.json();
       if (json.status !== 'OK' || !json.routes?.[0]) return;
       const route = json.routes[0];
@@ -1781,7 +1801,8 @@ export class FreightsService {
       });
 
       // Determine final freight status based on whether all assignments have trucks
-      const allHaveTrucks = freight.assignments.every((a: any) => a.truckId);
+      // Guard: empty array .every() returns true — must have at least one assignment to advance to accepted
+      const allHaveTrucks = freight.assignments.length > 0 && freight.assignments.every((a: any) => a.truckId);
       const finalStatus = allHaveTrucks ? FreightStatus.accepted : FreightStatus.assigned;
 
       const updated = await tx.freight.update({
@@ -2552,6 +2573,11 @@ export class FreightsService {
     });
     if (!truck) throw new NotFoundException('Camión no encontrado');
 
+    // Cross-tenant validation: truck must belong to user's companies
+    if (!allIds.includes(truck.companyId)) {
+      throw new ForbiddenException('No tiene acceso a este camión');
+    }
+
     const assignments = await this.prisma.freightAssignment.findMany({
       where: {
         truckId,
@@ -2589,6 +2615,14 @@ export class FreightsService {
   }
 
   async reorderTruckQueue(truckId: string, orderedAssignmentIds: string[], user: any) {
+    // Cross-tenant validation: truck must belong to user's companies
+    const allIds = await this.resolveAllCompanyIds(user);
+    const truck = await this.prisma.truck.findUnique({ where: { id: truckId }, select: { companyId: true } });
+    if (!truck) throw new NotFoundException('Camión no encontrado');
+    if (!allIds.includes(truck.companyId)) {
+      throw new ForbiddenException('No tiene acceso a este camión');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       // Validate all assignments belong to this truck and are reorderable (pre-in_progress)
       const assignments: any[] = await tx.freightAssignment.findMany({
@@ -2766,12 +2800,6 @@ export class FreightsService {
       where: { freightId, status: { in: ['active', 'accepted'] } },
       select: { tripStatus: true },
     });
-    // When assignments are lost (canceled/rejected), allow regression to pending_assignment
-    // This handles: all removed, or some canceled reducing below truckCount
-    if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
-    if (assignments.length < truckCount) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
-
-    // All slots filled — derive status from the MINIMUM tripStatus across all assignments
     // Status hierarchy: pending < accepted < in_progress < loaded < finished
     const statusOrder: Record<string, number> = { pending: 0, accepted: 1, in_progress: 2, loaded: 3, finished: 4 };
     const statusFromRank: Record<number, FreightStatus> = {
@@ -2781,6 +2809,25 @@ export class FreightsService {
       3: FreightStatus.loaded,
       4: FreightStatus.finished,
     };
+
+    // When ALL assignments are lost (canceled/rejected), allow regression to pending_assignment
+    if (assignments.length === 0) return applyMonotonicGuard(FreightStatus.pending_assignment, true);
+
+    // Some slots unfilled but active trips exist — derive from active trips, don't regress blindly
+    if (assignments.length < truckCount) {
+      const activeStatuses = assignments.map((a: any) => statusOrder[a.tripStatus] ?? 0);
+      const maxActive = Math.max(...activeStatuses);
+      if (maxActive > 0) {
+        // Active trips beyond pending — derive from minimum of active trips
+        const minRankPartial = Math.min(...activeStatuses);
+        const partialDerived = statusFromRank[minRankPartial] ?? FreightStatus.assigned;
+        return applyMonotonicGuard(partialDerived);
+      }
+      // All remaining are pending — allow regression to pending_assignment
+      return applyMonotonicGuard(FreightStatus.pending_assignment, true);
+    }
+
+    // All slots filled — derive status from the MINIMUM tripStatus across all assignments
     const minRank = Math.min(...assignments.map((a: any) => statusOrder[a.tripStatus] ?? 0));
     const derived = statusFromRank[minRank] ?? FreightStatus.assigned;
 
@@ -2872,11 +2919,14 @@ export class FreightsService {
           tripNumber++;
 
           // Check CONSULTA transporter auto-accept
+          // Use both destCompanyId and caller's company as potential grantors (mirrors single-truck assign)
           let isConsultaAm = false;
-          if (freight.destCompanyId) {
+          const callerCompanyIdAm = user.activeCompanyId || user.companyId;
+          const grantorCandidatesAm = [...new Set([freight.destCompanyId, callerCompanyIdAm].filter(Boolean))];
+          if (grantorCandidatesAm.length > 0) {
             const taAccess = await tx.companyAccess.findFirst({
               where: {
-                grantorCompanyId: freight.destCompanyId,
+                grantorCompanyId: { in: grantorCandidatesAm },
                 granteeCompanyId: truck.transportCompanyId,
                 isActive: true,
                 accessLevel: 'READONLY',
@@ -3053,6 +3103,11 @@ export class FreightsService {
         where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
       });
       if (!assignment) throw new NotFoundException('Asignación no encontrada o ya cancelada');
+
+      // Block canceling trips that are already in progress or loaded (cargo physically on truck)
+      if (assignment.tripStatus === 'in_progress' || assignment.tripStatus === 'loaded') {
+        throw new BadRequestException('No se puede cancelar una asignación con viaje en curso o cargado. Primero finalice el viaje.');
+      }
 
       // Producers can only cancel their own-fleet assignments
       if (isProducer && !isPlant) {
@@ -3232,15 +3287,20 @@ export class FreightsService {
       }
 
       // Status upgrade: when truck+driver assigned to a pending assignment → accepted
+      // Block upgrade if plant approval is required but not yet given
       let statusUpgraded = false;
       const finalTruckId = updateData.truckId !== undefined ? updateData.truckId : assignment.truckId;
       const finalDriverId = updateData.driverId !== undefined ? updateData.driverId : assignment.driverId;
       if (finalTruckId && finalDriverId && assignment.status === AssignmentStatus.active) {
-        updateData.status = AssignmentStatus.accepted;
-        if (assignment.tripStatus === 'pending') {
-          updateData.tripStatus = 'accepted';
+        if (freight.needsPlantApproval && !freight.plantApprovedAt) {
+          // Don't auto-upgrade — plant must authorize first
+        } else {
+          updateData.status = AssignmentStatus.accepted;
+          if (assignment.tripStatus === 'pending') {
+            updateData.tripStatus = 'accepted';
+          }
+          statusUpgraded = true;
         }
-        statusUpgraded = true;
       }
 
       const result = await (tx.freightAssignment as any).update({
@@ -3432,6 +3492,11 @@ export class FreightsService {
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint start');
 
+      // Block start if plant approval is required but not yet given
+      if (freight.needsPlantApproval && !freight.plantApprovedAt) {
+        throw new BadRequestException('Este flete requiere aprobación de la planta destino antes de poder iniciar');
+      }
+
       const assignment: any = await (tx.freightAssignment as any).findFirst({
         where: { id: assignmentId, freightId, status: { in: ['active', 'accepted'] } },
       });
@@ -3510,7 +3575,7 @@ export class FreightsService {
   }
 
   async confirmTripLoaded(freightId: string, assignmentId: string, user: any, loadedTons?: number) {
-    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub, assignmentId);
     await this.assertNotConsultaProducer(freightId, user);
 
     let ct = await this.resolveCompanyType(user);
@@ -3536,7 +3601,7 @@ export class FreightsService {
             ct = 'transporter';
           }
           if (callerOwnFleetIdsL.includes(freight.originCompanyId) && callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
-            const activeCompanyId = user.companyId || user.activeCompanyId;
+            const activeCompanyId = user.activeCompanyId || user.companyId;
             ct = activeCompanyId === freight.destCompanyId ? 'plant' : 'transporter';
           }
         }
@@ -3634,7 +3699,7 @@ export class FreightsService {
   }
 
   async confirmTripFinished(freightId: string, assignmentId: string, user: any) {
-    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
+    if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub, assignmentId);
     await this.assertNotConsultaProducer(freightId, user);
 
     let ct = await this.resolveCompanyType(user);
@@ -3659,14 +3724,21 @@ export class FreightsService {
       const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
       if (isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
         const callerOwnFleetIds = await this.resolveAllCompanyIds(user);
-        // Only promote to transporter if caller owns the origin company (i.e. is the producer/fleet owner)
-        // Dest plant should NOT be promoted — they need to confirm as plant
-        if (callerOwnFleetIds.includes(freight.originCompanyId) && !callerOwnFleetIds.includes(freight.destCompanyId || '__none__')) {
+        const callerIsOrigin = callerOwnFleetIds.includes(freight.originCompanyId);
+        const callerIsDest = callerOwnFleetIds.includes(freight.destCompanyId || '__none__');
+
+        // Own fleet WITHOUT dest: if transporter already confirmed, DON'T promote — let plant path auto-confirm
+        const transporterAlreadyConfirmed = !!assignment.transporterFinishedConfirmedAt;
+        const noDest = !freight.destCompanyId;
+        if (callerIsOrigin && noDest && transporterAlreadyConfirmed) {
+          // Fall through to plant path — plant will auto-confirm
+        } else if (callerIsOrigin && !callerIsDest) {
+          // Only promote to transporter if caller owns the origin company (i.e. is the producer/fleet owner)
+          // Dest plant should NOT be promoted — they need to confirm as plant
           ct = 'transporter';
-        }
-        // If caller has BOTH origin and dest, check which company is active
-        if (callerOwnFleetIds.includes(freight.originCompanyId) && callerOwnFleetIds.includes(freight.destCompanyId || '__none__')) {
-          const activeCompanyId = user.companyId || user.activeCompanyId;
+        } else if (callerIsOrigin && callerIsDest) {
+          // If caller has BOTH origin and dest, check which company is active
+          const activeCompanyId = user.activeCompanyId || user.companyId;
           ct = activeCompanyId === freight.destCompanyId ? 'plant' : 'transporter';
         }
       }
@@ -3680,8 +3752,10 @@ export class FreightsService {
         const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
 
         const updateData: any = { transporterFinishedConfirmedAt: new Date() };
-        // Own fleet: do NOT auto-confirm plant side — plant must confirm separately
-        const bothConfirmed = plantAlsoConfirmed;
+        // Own fleet without dest company: auto-confirm both sides (no external plant to confirm)
+        const isOwnFleetNoDest = isOwnFleet && !freight.destCompanyId;
+        if (isOwnFleetNoDest) updateData.plantFinishedConfirmedAt = new Date();
+        const bothConfirmed = plantAlsoConfirmed || isOwnFleetNoDest;
         if (bothConfirmed) {
           updateData.tripStatus = 'finished';
           updateData.finishedAt = new Date();
@@ -3698,7 +3772,7 @@ export class FreightsService {
             entityType: 'freight', entityId: freightId, freightId: freightId,
             action: bothConfirmed ? 'trip_finished' : 'trip_confirm_finished',
             fromValue: 'loaded', toValue: bothConfirmed ? 'finished' : 'loaded', userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed },
+            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'transporter', bothConfirmed, autoConfirmNoDest: isOwnFleetNoDest },
           },
         });
         return { result: updated, freight, bothConfirmed, confirmedBy: 'transporter' as const };
@@ -4017,11 +4091,13 @@ export class FreightsService {
     if (Object.keys(ocrData).length > 100) {
       throw new BadRequestException('ocrData tiene demasiados campos (máx 100)');
     }
-    // Depth check to prevent stack overflow from deeply nested objects
+    // Depth check + prototype pollution prevention
+    const BANNED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
     const checkDepth = (obj: any, depth: number): boolean => {
       if (depth > 10) return false;
       if (obj && typeof obj === 'object') {
-        for (const v of Object.values(obj)) {
+        for (const [k, v] of Object.entries(obj)) {
+          if (BANNED_KEYS.has(k)) return false;
           if (!checkDepth(v, depth + 1)) return false;
         }
       }
@@ -4076,6 +4152,19 @@ export class FreightsService {
     // Validate ocrData shape
     if (!ocrData || typeof ocrData !== 'object' || Array.isArray(ocrData)) {
       throw new BadRequestException('ocrData debe ser un objeto JSON');
+    }
+    // Prototype pollution prevention
+    const BANNED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+    const hasBannedKey = (obj: any): boolean => {
+      if (obj && typeof obj === 'object') {
+        for (const [k, v] of Object.entries(obj)) {
+          if (BANNED_KEYS.has(k) || hasBannedKey(v)) return true;
+        }
+      }
+      return false;
+    };
+    if (hasBannedKey(ocrData)) {
+      throw new BadRequestException('ocrData contiene claves no permitidas');
     }
     const serialized = JSON.stringify(ocrData);
     if (serialized.length > 50_000) {
