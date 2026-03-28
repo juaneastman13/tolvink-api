@@ -823,18 +823,20 @@ export class FreightsService {
         if (!freight) throw new NotFoundException('Flete no encontrado');
 
         // Access check by company type
+        const callerIsOrigin = allIds.includes(freight.originCompanyId);
+        const callerIsDest = freight.destCompanyId ? allIds.includes(freight.destCompanyId) : false;
+        const isOwnFleetAssign = dto.transportCompanyId === freight.originCompanyId && callerIsOrigin;
         if (isPlant && !isTransporter && !isProducer) {
-          if (!freight.destCompanyId || !allIds.includes(freight.destCompanyId)) {
-            throw new ForbiddenException('Solo la planta destino del flete puede asignar transportista');
+          // Plant can assign as dest company OR as origin company with own fleet
+          if (!callerIsDest && !isOwnFleetAssign) {
+            throw new ForbiddenException('Solo la planta destino o la planta origen con flota propia puede asignar transportista');
           }
         } else if (isProducer && !isPlant && !isTransporter) {
-          if (!allIds.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+          if (!callerIsOrigin || (!freight.useOwnFleet && !isOwnFleetAssign)) {
             throw new ForbiddenException('Solo el productor origen con flota propia puede asignar');
           }
         } else if (isTransporter && !isPlant && !isProducer) {
-          const isParticipant = allIds.includes(freight.originCompanyId) ||
-            (freight.destCompanyId && allIds.includes(freight.destCompanyId));
-          if (!isParticipant) {
+          if (!callerIsOrigin && !callerIsDest) {
             throw new ForbiddenException('Sin acceso a este flete');
           }
         }
@@ -1534,8 +1536,11 @@ export class FreightsService {
             throw new ForbiddenException('No sos el transportista asignado a este flete');
         }
 
-        const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt;
+        // Own fleet without dest company: auto-confirm both sides (no external plant to confirm)
+        const isOwnFleetNoDest = plantActingAsTransporter && !freight.destCompanyId;
+        const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt || isOwnFleetNoDest;
         const data: any = { transporterFinishedConfirmedAt: new Date() };
+        if (isOwnFleetNoDest) data.plantFinishedConfirmedAt = new Date();
         if (plantAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
           data.status = FreightStatus.finished;
@@ -1552,7 +1557,7 @@ export class FreightsService {
             fromValue: 'loaded',
             toValue: plantAlsoConfirmed ? 'finished' : 'loaded',
             userId: user.sub,
-            metadata: { confirmedBy: 'transporter', bothConfirmed: plantAlsoConfirmed },
+            metadata: { confirmedBy: 'transporter', bothConfirmed: plantAlsoConfirmed, autoConfirmNoDest: isOwnFleetNoDest },
           },
         });
 
@@ -1588,9 +1593,12 @@ export class FreightsService {
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
 
-        // Check destCompany inside transaction (was previously outside — TOCTOU fix)
+        // Check caller is dest company OR origin company (own fleet with no external dest)
         const allIdsPlant = await this.resolveAllCompanyIds(user);
-        if (!freight.destCompanyId || !allIdsPlant.includes(freight.destCompanyId)) {
+        const isDestPlant = freight.destCompanyId && allIdsPlant.includes(freight.destCompanyId);
+        const isOriginOwnFleet = !freight.destCompanyId && allIdsPlant.includes(freight.originCompanyId)
+          && freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+        if (!isDestPlant && !isOriginOwnFleet) {
           throw new ForbiddenException('Solo la planta destino puede confirmar la recepción');
         }
 
@@ -2798,19 +2806,19 @@ export class FreightsService {
         });
         if (!freight) throw new NotFoundException('Flete no encontrado');
 
-        // Access check: plant must be dest company, producer must be origin with own fleet, transporter must be assigned
+        // Access check: plant/producer can be dest or origin (own fleet), transporter must be participant
+        const callerIsOriginAm = allIdsAm.includes(freight.originCompanyId);
+        const callerIsDestAm = freight.destCompanyId ? allIdsAm.includes(freight.destCompanyId) : false;
         if (isPlant && !isTransporter && !isProducer) {
-          if (!freight.destCompanyId || !allIdsAm.includes(freight.destCompanyId)) {
-            throw new ForbiddenException('Solo la planta destino del flete puede asignar transportistas');
+          if (!callerIsDestAm && !callerIsOriginAm) {
+            throw new ForbiddenException('Solo la planta destino o la planta origen con flota propia puede asignar transportistas');
           }
         } else if (isProducer && !isPlant && !isTransporter) {
-          if (!allIdsAm.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+          if (!callerIsOriginAm) {
             throw new ForbiddenException('Solo el productor origen con flota propia puede asignar');
           }
         } else if (isTransporter && !isPlant && !isProducer) {
-          const isParticipant = allIdsAm.includes(freight.originCompanyId) ||
-            (freight.destCompanyId && allIdsAm.includes(freight.destCompanyId));
-          if (!isParticipant) {
+          if (!callerIsOriginAm && !callerIsDestAm) {
             throw new ForbiddenException('Sin acceso a este flete');
           }
         }
@@ -3033,8 +3041,8 @@ export class FreightsService {
       // Plants: must be dest company. Producers: must be origin company.
       const isDestCompany = freight.destCompanyId && allIdsCa.includes(freight.destCompanyId);
       const isOriginCompany = allIdsCa.includes(freight.originCompanyId);
-      if (isPlant && !isDestCompany) {
-        throw new ForbiddenException('Solo la planta destino puede cancelar asignaciones');
+      if (isPlant && !isDestCompany && !isOriginCompany) {
+        throw new ForbiddenException('Solo la planta destino o la planta origen puede cancelar asignaciones');
       }
       if (isProducer && !isPlant && !isOriginCompany) {
         throw new ForbiddenException('Solo el productor de origen puede cancelar asignaciones de su flota');
@@ -3117,16 +3125,18 @@ export class FreightsService {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
 
-      // Plant: must be dest company. Transporter: checked below against assignment.
+      // Plant: must be dest company OR origin company (own fleet). Transporter: checked below against assignment.
+      const callerIsDestUa = freight.destCompanyId && allIdsUa.includes(freight.destCompanyId);
+      const callerIsOriginUa = allIdsUa.includes(freight.originCompanyId);
       if (isPlant && !isTransporter && !isProducer) {
-        if (!freight.destCompanyId || !allIdsUa.includes(freight.destCompanyId)) {
-          throw new ForbiddenException('Solo la planta destino puede editar asignaciones');
+        if (!callerIsDestUa && !callerIsOriginUa) {
+          throw new ForbiddenException('Solo la planta destino o planta origen puede editar asignaciones');
         }
       }
 
       // Producer with own fleet: must be origin company
       if (isProducer && !isPlant && !isTransporter) {
-        if (!freight.originCompanyId || !allIdsUa.includes(freight.originCompanyId) || !freight.useOwnFleet) {
+        if (!callerIsOriginUa) {
           throw new ForbiddenException('Solo el productor origen con flota propia puede editar asignaciones');
         }
       }
@@ -3341,8 +3351,9 @@ export class FreightsService {
         if (!freight) throw new NotFoundException('Flete no encontrado');
         if (!(freight as any).isMultiTruck) throw new BadRequestException('Para fletes single-truck, usar endpoint respond');
         // Ownership checks inside transaction (TOCTOU-safe)
-        if (_rtIsPlantOnly && (!freight.destCompanyId || !_rtCallerIds.includes(freight.destCompanyId))) {
-          throw new ForbiddenException('Solo la planta destino puede responder asignaciones');
+        if (_rtIsPlantOnly && (!freight.destCompanyId || !_rtCallerIds.includes(freight.destCompanyId))
+          && !_rtCallerIds.includes(freight.originCompanyId)) {
+          throw new ForbiddenException('Solo la planta destino o planta origen puede responder asignaciones');
         }
 
         const assignment: any = await (tx.freightAssignment as any).findFirst({
@@ -3695,7 +3706,10 @@ export class FreightsService {
 
       if (ct === 'plant') {
         const allIdsCtf = await this.resolveAllCompanyIds(user);
-        if (!freight.destCompanyId || !allIdsCtf.includes(freight.destCompanyId)) {
+        const isDestCtf = freight.destCompanyId && allIdsCtf.includes(freight.destCompanyId);
+        const isOriginOwnFleetCtf = !freight.destCompanyId && allIdsCtf.includes(freight.originCompanyId)
+          && assignment.transportCompanyId === freight.originCompanyId;
+        if (!isDestCtf && !isOriginOwnFleetCtf) {
           throw new ForbiddenException('Solo la planta destino puede confirmar la recepción del viaje');
         }
 
