@@ -672,18 +672,20 @@ export class TrucksService {
     const companyId = user.activeCompanyId || user.companyId;
     await this.assertTruckOwnership(truckId, companyId);
     const assignments = await this.prisma.freightAssignment.findMany({
-      where: { truckId, tripStatus: 'finished' },
+      where: { truckId, OR: [{ tripStatus: { in: ['finished', 'canceled'] } }, { freight: { status: { in: ['finished', 'canceled'] } } }] },
       include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
-      orderBy: { finishedAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
       take, skip,
     });
     return assignments.map((a: any) => ({
       assignmentId: a.id,
       freightId: a.freight.id,
       code: a.freight.code,
+      status: a.freight.status,
+      tripStatus: a.tripStatus,
       origin: a.freight.originName,
       dest: a.freight.destName,
-      date: a.finishedAt || a.freight.scheduledAt,
+      date: a.finishedAt || a.updatedAt || a.freight.scheduledAt,
       grain: a.freight.items?.[0]?.grain,
       tons: a.loadedTons || a.freight.items?.[0]?.tons,
       kmLoaded: a.kmLoaded ? Number(a.kmLoaded) : null,
