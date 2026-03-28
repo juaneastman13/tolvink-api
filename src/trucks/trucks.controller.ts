@@ -1249,41 +1249,37 @@ export class TrucksService {
       });
     }
 
-    // --- Sheet 3: Movimientos (unified income + expense chronological) ---
+    // --- Sheet 3: Movimientos (viajes internos / extra-flete) ---
     const wsMov = wb.addWorksheet('Movimientos');
+    const movTypeLabel: Record<string, string> = {
+      REPOSITIONING: 'Reposicionamiento', MAINTENANCE_TRIP: 'Mantenimiento',
+      INTERNAL_TRANSFER: 'Transferencia interna', PERSONAL: 'Personal', OTHER: 'Otro',
+    };
     wsMov.columns = [
       { header: 'Patente', key: 'plate', width: 14 },
-      { header: 'Fecha', key: 'date', width: 12 },
-      { header: 'Tipo', key: 'type', width: 10 },
-      { header: 'Concepto', key: 'concept', width: 30 },
-      { header: 'Ingreso', key: 'income', width: 14 },
-      { header: 'Egreso', key: 'expense', width: 14 },
-      { header: 'Moneda', key: 'currency', width: 8 },
-      { header: 'Saldo Acum.', key: 'balance', width: 14 },
+      { header: 'Tipo', key: 'type', width: 20 },
+      { header: 'Descripción', key: 'description', width: 28 },
+      { header: 'Origen', key: 'origin', width: 22 },
+      { header: 'Destino', key: 'dest', width: 22 },
+      { header: 'Salida', key: 'departure', width: 14 },
+      { header: 'Llegada', key: 'arrival', width: 14 },
+      { header: 'Km', key: 'km', width: 10 },
+      { header: 'Combustible (L)', key: 'fuel', width: 14 },
+      { header: 'Costo Comb.', key: 'fuelCost', width: 12 },
+      { header: 'Peaje', key: 'toll', width: 10 },
+      { header: 'Chofer', key: 'driver', width: 18 },
+      { header: 'Notas', key: 'notes', width: 25 },
     ];
     wsMov.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
-
-    // Merge and sort chronologically
-    const movements_unified: { date: Date; plate: string; type: string; concept: string; income: number; expense: number; currency: string }[] = [];
-    for (const inc of incomes) {
-      movements_unified.push({
-        date: new Date(inc.date), plate: (inc as any).truck?.plate || '',
-        type: 'Ingreso', concept: inc.concept,
-        income: Number(inc.amount), expense: 0, currency: inc.currency,
+    for (const mov of movements) {
+      wsMov.addRow({
+        plate: (mov as any).truck?.plate, type: movTypeLabel[mov.type] || mov.type,
+        description: mov.description || '', origin: mov.originName || '', dest: mov.destName || '',
+        departure: fmtDate(mov.departureAt), arrival: fmtDate(mov.arrivalAt),
+        km: fmtNum(mov.kmDriven), fuel: fmtNum(mov.fuelLiters),
+        fuelCost: fmtNum(mov.fuelCost), toll: fmtNum(mov.tollCost),
+        driver: (mov as any).driver?.name || '', notes: mov.notes || '',
       });
-    }
-    for (const exp of expenses) {
-      movements_unified.push({
-        date: new Date(exp.date), plate: (exp as any).truck?.plate || '',
-        type: 'Egreso', concept: (expTypeLabel[exp.type] || exp.type) + (exp.description ? ` - ${exp.description}` : ''),
-        income: 0, expense: Number(exp.amount), currency: exp.currency,
-      });
-    }
-    movements_unified.sort((a, b) => a.date.getTime() - b.date.getTime());
-    let balance = 0;
-    for (const m of movements_unified) {
-      balance += m.income - m.expense;
-      wsMov.addRow({ plate: m.plate, date: fmtDate(m.date), type: m.type, concept: m.concept, income: m.income || '', expense: m.expense || '', currency: m.currency, balance: Math.round(balance * 100) / 100 });
     }
 
     // --- Sheet 4: Fletes ---
