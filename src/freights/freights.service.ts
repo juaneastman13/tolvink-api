@@ -992,6 +992,11 @@ export class FreightsService {
           this.logger.log(`assign: CONSULTA transporter auto-complete to loaded freight=${freightId}`);
         }
 
+        // Auto-detect own fleet: if transport company is the origin company, mark as own fleet
+        if (!freight.useOwnFleet && dto.transportCompanyId === freight.originCompanyId) {
+          freightUpdateData.useOwnFleet = true;
+        }
+
         const updated = await tx.freight.update({
           where: { id: freightId },
           data: freightUpdateData,
@@ -1329,9 +1334,10 @@ export class FreightsService {
       });
       if (freight) {
         const callerIds = await this.companyRes.resolveAllCompanyIds(user);
-        // Own fleet: origin company acts as transporter
-        const isOwnFleetOrigin = freight.useOwnFleet && callerIds.includes(freight.originCompanyId)
-          && freight.assignments?.some(a => a.transportCompanyId === freight.originCompanyId);
+        // Own fleet: origin company acts as transporter (check useOwnFleet OR de-facto own-fleet via assignment match)
+        const callerIsOrigin = callerIds.includes(freight.originCompanyId);
+        const hasOwnAssignment = freight.assignments?.some(a => callerIds.includes(a.transportCompanyId) && a.transportCompanyId === freight.originCompanyId);
+        const isOwnFleetOrigin = callerIsOrigin && hasOwnAssignment && (freight.useOwnFleet || hasOwnAssignment);
         if (isOwnFleetOrigin) { ct = 'transporter'; plantActingAsTransporter = true; }
         // CONSULTA proxy: plant acts as transporter for READONLY transporter
         if (!isOwnFleetOrigin && ct.includes('plant') && freight.destCompanyId && callerIds.includes(freight.destCompanyId)) {
@@ -1489,8 +1495,9 @@ export class FreightsService {
       });
       if (freightCheck) {
         const callerIds = await this.companyRes.resolveAllCompanyIds(user);
-        const isOwnFleetOrigin = freightCheck.useOwnFleet && callerIds.includes(freightCheck.originCompanyId)
-          && freightCheck.assignments?.some(a => a.transportCompanyId === freightCheck.originCompanyId);
+        const callerIsOrigin = callerIds.includes(freightCheck.originCompanyId);
+        const hasOwnAssignment = freightCheck.assignments?.some(a => callerIds.includes(a.transportCompanyId) && a.transportCompanyId === freightCheck.originCompanyId);
+        const isOwnFleetOrigin = callerIsOrigin && hasOwnAssignment && (freightCheck.useOwnFleet || hasOwnAssignment);
         if (isOwnFleetOrigin) { ct = 'transporter'; plantActingAsTransporter = true; }
         // CONSULTA proxy
         if (!isOwnFleetOrigin && ct.includes('plant') && freightCheck.destCompanyId && callerIds.includes(freightCheck.destCompanyId)) {
