@@ -4,8 +4,8 @@
 // Transporters and Producers with own fleet can manage trucks
 // =====================================================================
 
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
-import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, ParseUUIDPipe, Res, Header } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException, Logger, StreamableFile } from '@nestjs/common';
 import { UUID_RE } from '../common/constants';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, IsEmail, MaxLength, IsUUID, Matches, ValidateIf } from 'class-validator';
@@ -1119,6 +1119,248 @@ export class TrucksService {
     return this.prisma.truckDocument.update({ where: { id: docId }, data: { ocrData: null as any, ocrStatus: null, ocrProcessedAt: null } });
   }
 
+  // ======================== FLEET EXCEL REPORT ============================
+
+  async generateFleetReport(user: any, truckId?: string, from?: string, to?: string): Promise<Buffer> {
+    const ExcelJS = await import('exceljs');
+    const companyId = user.activeCompanyId || user.companyId;
+    if (!companyId) throw new BadRequestException('No se pudo determinar tu empresa');
+
+    // Resolve trucks
+    let trucks: any[];
+    if (truckId) {
+      const truck = await this.assertTruckOwnership(truckId, companyId);
+      trucks = [truck];
+    } else {
+      trucks = await this.prisma.truck.findMany({
+        where: { companyId, active: true },
+        include: { assignedUser: { select: { name: true } } },
+        orderBy: { plate: 'asc' },
+      });
+    }
+    if (trucks.length === 0) throw new BadRequestException('No hay camiones para exportar');
+
+    const truckIds = trucks.map((t: any) => t.id);
+    const truckMap = new Map(trucks.map((t: any) => [t.id, t]));
+
+    // Date filter
+    const dateGte = from ? new Date(from) : undefined;
+    const dateLte = to ? new Date(to) : undefined;
+    const dateFilter = (dateGte || dateLte) ? { ...(dateGte ? { gte: dateGte } : {}), ...(dateLte ? { lte: dateLte } : {}) } : undefined;
+
+    // Fetch all data in parallel
+    const [incomes, expenses, movements, assignments, documents] = await Promise.all([
+      this.prisma.truckIncome.findMany({
+        where: { truckId: { in: truckIds }, companyId, ...(dateFilter ? { date: dateFilter } : {}) },
+        include: { truck: { select: { plate: true } }, freight: { select: { code: true } } },
+        orderBy: { date: 'desc' },
+      }),
+      this.prisma.truckExpense.findMany({
+        where: { truckId: { in: truckIds }, companyId, ...(dateFilter ? { date: dateFilter } : {}) },
+        include: { truck: { select: { plate: true } }, freight: { select: { code: true } } },
+        orderBy: { date: 'desc' },
+      }),
+      this.prisma.truckMovement.findMany({
+        where: { truckId: { in: truckIds }, companyId, ...(dateFilter ? { departureAt: dateFilter } : {}) },
+        include: { truck: { select: { plate: true } }, driver: { select: { name: true } } },
+        orderBy: { departureAt: 'desc' },
+      }),
+      this.prisma.freightAssignment.findMany({
+        where: { truckId: { in: truckIds }, ...(dateFilter ? { createdAt: dateFilter } : {}) },
+        include: {
+          truck: { select: { plate: true } },
+          freight: {
+            select: {
+              code: true, status: true, originName: true, destName: true, loadDate: true,
+              originCompany: { select: { name: true } }, destCompany: { select: { name: true } },
+              items: { select: { grain: true, tons: true }, take: 1 },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.truckDocument.findMany({
+        where: { truckId: { in: truckIds }, companyId },
+        include: { truck: { select: { plate: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    // Build workbook
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Tolvink';
+    wb.created = new Date();
+
+    const headerStyle: any = {
+      font: { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A6B37' } },
+      alignment: { horizontal: 'center', vertical: 'middle' },
+    };
+
+    const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('es-UY', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+    const fmtNum = (n: any) => n != null ? Number(n) : '';
+
+    // --- Sheet 1: Ingresos ---
+    const wsInc = wb.addWorksheet('Ingresos');
+    wsInc.columns = [
+      { header: 'Patente', key: 'plate', width: 14 },
+      { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Concepto', key: 'concept', width: 30 },
+      { header: 'Monto', key: 'amount', width: 14 },
+      { header: 'Moneda', key: 'currency', width: 8 },
+      { header: 'Estado', key: 'status', width: 12 },
+      { header: 'Flete', key: 'freight', width: 12 },
+      { header: 'N° Factura', key: 'invoice', width: 16 },
+      { header: 'Notas', key: 'notes', width: 25 },
+    ];
+    wsInc.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
+    for (const inc of incomes) {
+      wsInc.addRow({
+        plate: (inc as any).truck?.plate, date: fmtDate(inc.date), concept: inc.concept,
+        amount: fmtNum(inc.amount), currency: inc.currency,
+        status: inc.status === 'PAID' ? 'Pagado' : inc.status === 'PENDING' ? 'Pendiente' : 'Vencido',
+        freight: (inc as any).freight?.code || '', invoice: inc.invoiceNumber || '', notes: inc.notes || '',
+      });
+    }
+
+    // --- Sheet 2: Egresos ---
+    const wsExp = wb.addWorksheet('Egresos');
+    wsExp.columns = [
+      { header: 'Patente', key: 'plate', width: 14 },
+      { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Categoría', key: 'type', width: 16 },
+      { header: 'Descripción', key: 'description', width: 30 },
+      { header: 'Monto', key: 'amount', width: 14 },
+      { header: 'Moneda', key: 'currency', width: 8 },
+      { header: 'Flete', key: 'freight', width: 12 },
+    ];
+    wsExp.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
+    const expTypeLabel: Record<string, string> = {
+      FUEL: 'Combustible', TOLL: 'Peaje', MAINTENANCE: 'Mantenimiento', TIRE: 'Neumáticos',
+      INSURANCE: 'Seguro', FINE: 'Multa', PARKING: 'Estacionamiento', MEAL: 'Viático', OTHER: 'Otro',
+    };
+    for (const exp of expenses) {
+      wsExp.addRow({
+        plate: (exp as any).truck?.plate, date: fmtDate(exp.date),
+        type: expTypeLabel[exp.type] || exp.type, description: exp.description || '',
+        amount: fmtNum(exp.amount), currency: exp.currency,
+        freight: (exp as any).freight?.code || '',
+      });
+    }
+
+    // --- Sheet 3: Movimientos (unified income + expense chronological) ---
+    const wsMov = wb.addWorksheet('Movimientos');
+    wsMov.columns = [
+      { header: 'Patente', key: 'plate', width: 14 },
+      { header: 'Fecha', key: 'date', width: 12 },
+      { header: 'Tipo', key: 'type', width: 10 },
+      { header: 'Concepto', key: 'concept', width: 30 },
+      { header: 'Ingreso', key: 'income', width: 14 },
+      { header: 'Egreso', key: 'expense', width: 14 },
+      { header: 'Moneda', key: 'currency', width: 8 },
+      { header: 'Saldo Acum.', key: 'balance', width: 14 },
+    ];
+    wsMov.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
+
+    // Merge and sort chronologically
+    const movements_unified: { date: Date; plate: string; type: string; concept: string; income: number; expense: number; currency: string }[] = [];
+    for (const inc of incomes) {
+      movements_unified.push({
+        date: new Date(inc.date), plate: (inc as any).truck?.plate || '',
+        type: 'Ingreso', concept: inc.concept,
+        income: Number(inc.amount), expense: 0, currency: inc.currency,
+      });
+    }
+    for (const exp of expenses) {
+      movements_unified.push({
+        date: new Date(exp.date), plate: (exp as any).truck?.plate || '',
+        type: 'Egreso', concept: (expTypeLabel[exp.type] || exp.type) + (exp.description ? ` - ${exp.description}` : ''),
+        income: 0, expense: Number(exp.amount), currency: exp.currency,
+      });
+    }
+    movements_unified.sort((a, b) => a.date.getTime() - b.date.getTime());
+    let balance = 0;
+    for (const m of movements_unified) {
+      balance += m.income - m.expense;
+      wsMov.addRow({ plate: m.plate, date: fmtDate(m.date), type: m.type, concept: m.concept, income: m.income || '', expense: m.expense || '', currency: m.currency, balance: Math.round(balance * 100) / 100 });
+    }
+
+    // --- Sheet 4: Fletes ---
+    const wsFre = wb.addWorksheet('Fletes');
+    wsFre.columns = [
+      { header: 'Patente', key: 'plate', width: 14 },
+      { header: 'Código', key: 'code', width: 12 },
+      { header: 'Estado', key: 'status', width: 16 },
+      { header: 'Estado Viaje', key: 'tripStatus', width: 14 },
+      { header: 'Origen', key: 'origin', width: 22 },
+      { header: 'Destino', key: 'dest', width: 22 },
+      { header: 'Fecha Carga', key: 'loadDate', width: 12 },
+      { header: 'Grano', key: 'grain', width: 12 },
+      { header: 'Toneladas', key: 'tons', width: 12 },
+      { header: 'Chofer', key: 'driver', width: 18 },
+      { header: 'Productor', key: 'producer', width: 20 },
+      { header: 'Planta', key: 'plant', width: 20 },
+    ];
+    wsFre.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
+    const statusLabel: Record<string, string> = {
+      draft: 'Borrador', pending_assignment: 'Pendiente', assigned: 'Asignado',
+      accepted: 'Aceptado', in_progress: 'En progreso', loaded: 'Cargado', finished: 'Finalizado', canceled: 'Cancelado',
+    };
+    const tripLabel: Record<string, string> = {
+      pending: 'Pendiente', accepted: 'Aceptado', in_progress: 'En camino', loaded: 'Cargado', finished: 'Finalizado', canceled: 'Cancelado',
+    };
+    for (const a of assignments) {
+      const f = (a as any).freight;
+      wsFre.addRow({
+        plate: (a as any).truck?.plate, code: f?.code || '',
+        status: statusLabel[f?.status] || f?.status || '',
+        tripStatus: tripLabel[a.tripStatus] || a.tripStatus,
+        origin: f?.originName || '', dest: f?.destName || '',
+        loadDate: fmtDate(f?.loadDate), grain: f?.items?.[0]?.grain || '',
+        tons: fmtNum(a.tons || f?.items?.[0]?.tons),
+        driver: a.driverName || '', producer: f?.originCompany?.name || '', plant: f?.destCompany?.name || '',
+      });
+    }
+
+    // --- Sheet 5: Documentos ---
+    const wsDoc = wb.addWorksheet('Documentos');
+    wsDoc.columns = [
+      { header: 'Patente', key: 'plate', width: 14 },
+      { header: 'Tipo', key: 'type', width: 22 },
+      { header: 'Nombre', key: 'name', width: 25 },
+      { header: 'Emisión', key: 'issued', width: 12 },
+      { header: 'Vencimiento', key: 'expires', width: 12 },
+      { header: 'Estado', key: 'status', width: 14 },
+      { header: 'Notas', key: 'notes', width: 25 },
+    ];
+    wsDoc.getRow(1).eachCell(c => { Object.assign(c, { style: headerStyle }); });
+    const docTypeLabel: Record<string, string> = {
+      VTV_ITV: 'ITV', INSURANCE: 'Seguro', TRANSPORT_LICENSE: 'Habilitación',
+      DRIVER_LICENSE: 'Libreta', BPS_DGI: 'BPS/DGI', GET_CERTIFICATE: 'Certificado GET',
+      CIRCULATION_PERMIT: 'Permiso Circulación', OTHER: 'Otro',
+      GREEN_CARD: 'Green Card', RUAT: 'RUAT', SENASA: 'SENASA', FUMIGATION: 'Fumigación',
+    };
+    const now = new Date();
+    const in30d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    for (const doc of documents) {
+      let expiryStatus = 'Sin vencimiento';
+      if (doc.expiresAt) {
+        if (doc.expiresAt < now) expiryStatus = 'Vencido';
+        else if (doc.expiresAt < in30d) expiryStatus = 'Por vencer';
+        else expiryStatus = 'Vigente';
+      }
+      wsDoc.addRow({
+        plate: (doc as any).truck?.plate, type: docTypeLabel[doc.type] || doc.type,
+        name: doc.name || doc.fileName, issued: fmtDate(doc.issuedAt), expires: fmtDate(doc.expiresAt),
+        status: expiryStatus, notes: doc.notes || '',
+      });
+    }
+
+    // Generate buffer
+    const buffer = await wb.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+
   private async assertTruckOwnership(truckId: string, companyId: string) {
     const truck = await this.prisma.truck.findFirst({
       where: { id: truckId, companyId },
@@ -1211,6 +1453,32 @@ export class TrucksController {
   @ApiQuery({ name: 'days', required: false })
   getExpiringDocuments(@CurrentUser() user: any, @Query('days') days?: string) {
     return this.service.getExpiringDocuments(user, days ? parseInt(days, 10) : 30);
+  }
+
+  // ======================== FLEET EXCEL REPORT ==============================
+
+  @Get('export-report')
+  @Roles('transporter', 'producer', 'plant')
+  @ApiOperation({ summary: 'Exportar informe Excel de la flota (o de un camión)' })
+  @ApiQuery({ name: 'truckId', required: false })
+  @ApiQuery({ name: 'from', required: false })
+  @ApiQuery({ name: 'to', required: false })
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  async exportReport(
+    @CurrentUser() user: any,
+    @Res({ passthrough: true }) res: any,
+    @Query('truckId') truckId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    if (truckId && !UUID_RE.test(truckId)) throw new BadRequestException('truckId inválido');
+    const buffer = await this.service.generateFleetReport(user, truckId, from, to);
+    const datePart = new Date().toISOString().slice(0, 10);
+    const filename = truckId
+      ? `Informe_Camion_${datePart}.xlsx`
+      : `Informe_Flota_${datePart}.xlsx`;
+    res.set({ 'Content-Disposition': `attachment; filename="${filename}"` });
+    return new StreamableFile(buffer);
   }
 
   // ======================== TRUCK DETAIL ==================================
