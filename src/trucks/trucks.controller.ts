@@ -361,20 +361,61 @@ export class TrucksService {
       return { ...d, expiryStatus };
     });
 
+    const freightSelect = {
+      id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true,
+      loadDate: true, loadTime: true, isMultiTruck: true, assignedTruckCount: true,
+      destPlantId: true, destLat: true, destLng: true, producerCompanyId: true,
+      originCompany: { select: { name: true } },
+      destCompany: { select: { name: true } },
+      producerCompany: { select: { name: true } },
+      items: { select: { grain: true, tons: true }, take: 1 },
+    };
     const [activeAssignments, totalFreights, totalTons] = await Promise.all([
       this.prisma.freightAssignment.findMany({
         where: { truckId, status: { in: ['active', 'accepted'] }, freight: { status: { notIn: ['finished', 'canceled'] } } },
-        include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+        include: { freight: { select: freightSelect }, transportCompany: { select: { name: true } }, driver: { select: { name: true } } },
         orderBy: { createdAt: 'desc' }, take: 10,
       }),
       this.prisma.freightAssignment.count({ where: { truckId } }),
       this.prisma.freightAssignment.aggregate({ where: { truckId, tripStatus: 'finished' }, _sum: { loadedTons: true } }),
     ]);
 
+    const mapAssignmentToCard = (a: any) => ({
+      id: a.freight.id,
+      assignmentId: a.id,
+      code: a.freight.code,
+      status: a.freight.status,
+      tripStatus: a.tripStatus,
+      originName: a.freight.originName,
+      originCompanyName: a.freight.originCompany?.name,
+      destName: a.freight.destName,
+      destPlantId: a.freight.destPlantId,
+      destLat: a.freight.destLat ? Number(a.freight.destLat) : null,
+      destLng: a.freight.destLng ? Number(a.freight.destLng) : null,
+      loadDate: a.freight.loadDate,
+      loadTime: a.freight.loadTime,
+      grain: a.freight.items?.[0]?.grain,
+      tons: a.loadedTons ? Number(a.loadedTons) : (a.freight.items?.[0]?.tons ? Number(a.freight.items[0].tons) : null),
+      transporterName: a.transportCompany?.name,
+      truckPlate: a.plate,
+      driverName: a.driverName || a.driver?.name,
+      producerCompanyName: a.freight.producerCompany?.name,
+      isMultiTruck: a.freight.isMultiTruck,
+      assignedTruckCount: a.freight.assignedTruckCount,
+      kmTotal: a.kmTotal ? Number(a.kmTotal) : null,
+      kmLoaded: a.kmLoaded ? Number(a.kmLoaded) : null,
+      kmEmpty: a.kmEmpty ? Number(a.kmEmpty) : null,
+      fuelLiters: a.fuelLiters ? Number(a.fuelLiters) : null,
+      fuelCostPerLiter: a.fuelCostPerLiter ? Number(a.fuelCostPerLiter) : null,
+      tollCost: a.tollCost ? Number(a.tollCost) : null,
+      odometerStart: a.odometerStart,
+      odometerEnd: a.odometerEnd,
+    });
+
     return {
       ...truck, isOwn: true,
       documents: docsWithStatus,
-      activeFreights: activeAssignments.map((a: any) => ({ ...a.freight, tripStatus: a.tripStatus })),
+      activeFreights: activeAssignments.map(mapAssignmentToCard),
       totalFreights, totalTons: totalTons._sum.loadedTons || 0,
       docsSummary: { total: docsWithStatus.length, expired: docsWithStatus.filter((d: any) => d.expiryStatus === 'expired').length, expiringSoon: docsWithStatus.filter((d: any) => d.expiryStatus === 'expiring_soon').length, valid: docsWithStatus.filter((d: any) => d.expiryStatus === 'valid').length },
     };
@@ -673,21 +714,48 @@ export class TrucksService {
     await this.assertTruckOwnership(truckId, companyId);
     const assignments = await this.prisma.freightAssignment.findMany({
       where: { truckId, OR: [{ tripStatus: { in: ['finished', 'canceled'] } }, { freight: { status: { in: ['finished', 'canceled'] } } }] },
-      include: { freight: { select: { id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true, items: { select: { grain: true, tons: true }, take: 1 } } } },
+      include: {
+        freight: {
+          select: {
+            id: true, code: true, status: true, originName: true, destName: true, scheduledAt: true,
+            loadDate: true, loadTime: true, isMultiTruck: true, assignedTruckCount: true,
+            destPlantId: true, destLat: true, destLng: true,
+            originCompany: { select: { name: true } },
+            destCompany: { select: { name: true } },
+            producerCompany: { select: { name: true } },
+            items: { select: { grain: true, tons: true }, take: 1 },
+          },
+        },
+        transportCompany: { select: { name: true } },
+        driver: { select: { name: true } },
+      },
       orderBy: { updatedAt: 'desc' },
       take, skip,
     });
     return assignments.map((a: any) => ({
+      id: a.freight.id,
       assignmentId: a.id,
       freightId: a.freight.id,
       code: a.freight.code,
       status: a.freight.status,
       tripStatus: a.tripStatus,
-      origin: a.freight.originName,
-      dest: a.freight.destName,
-      date: a.finishedAt || a.updatedAt || a.freight.scheduledAt,
+      originName: a.freight.originName,
+      originCompanyName: a.freight.originCompany?.name,
+      destName: a.freight.destName,
+      destPlantId: a.freight.destPlantId,
+      destLat: a.freight.destLat ? Number(a.freight.destLat) : null,
+      destLng: a.freight.destLng ? Number(a.freight.destLng) : null,
+      loadDate: a.freight.loadDate,
+      loadTime: a.freight.loadTime,
       grain: a.freight.items?.[0]?.grain,
-      tons: a.loadedTons || a.freight.items?.[0]?.tons,
+      tons: a.loadedTons ? Number(a.loadedTons) : (a.freight.items?.[0]?.tons ? Number(a.freight.items[0].tons) : null),
+      transporterName: a.transportCompany?.name,
+      truckPlate: a.plate,
+      driverName: a.driverName || a.driver?.name,
+      producerCompanyName: a.freight.producerCompany?.name,
+      isMultiTruck: a.freight.isMultiTruck,
+      assignedTruckCount: a.freight.assignedTruckCount,
+      date: a.finishedAt || a.updatedAt || a.freight.scheduledAt,
       kmLoaded: a.kmLoaded ? Number(a.kmLoaded) : null,
       kmEmpty: a.kmEmpty ? Number(a.kmEmpty) : null,
       kmTotal: a.kmTotal ? Number(a.kmTotal) : null,
