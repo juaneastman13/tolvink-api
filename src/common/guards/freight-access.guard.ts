@@ -33,7 +33,7 @@ export class FreightAccessGuard implements CanActivate {
       select: {
         originCompanyId: true,
         destCompanyId: true,
-        createdById: true,
+        requestedById: true,
         assignments: {
           where: { status: { in: ['active', 'accepted'] } },
           select: { transportCompanyId: true, driverId: true },
@@ -50,7 +50,7 @@ export class FreightAccessGuard implements CanActivate {
     const isDest = freight.destCompanyId ? allIds.includes(freight.destCompanyId) : false;
     const isTransporter = freight.assignments.some(a => allIds.includes(a.transportCompanyId));
     const isDriver = freight.assignments.some(a => a.driverId === user.sub);
-    const isCreator = freight.createdById === user.sub;
+    const isCreator = freight.requestedById === user.sub;
 
     if (!isOrigin && !isDest && !isTransporter && !isDriver && !isCreator) {
       throw new ForbiddenException('Tu empresa no participa en este flete');
