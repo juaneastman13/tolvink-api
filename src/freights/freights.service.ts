@@ -1556,11 +1556,13 @@ export class FreightsService {
             throw new ForbiddenException('No sos el transportista asignado a este flete');
         }
 
-        // Own fleet without dest company: auto-confirm both sides (no external plant to confirm)
+        // Own fleet: auto-confirm plant side when caller is also the dest plant, or when no dest company
         const isOwnFleetNoDest = plantActingAsTransporter && !freight.destCompanyId;
-        const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt || isOwnFleetNoDest;
+        const callerIsAlsoDest = plantActingAsTransporter && freight.destCompanyId && callerCfIds.includes(freight.destCompanyId);
+        const autoConfirmPlant = isOwnFleetNoDest || callerIsAlsoDest;
+        const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt || autoConfirmPlant;
         const data: any = { transporterFinishedConfirmedAt: new Date() };
-        if (isOwnFleetNoDest) data.plantFinishedConfirmedAt = new Date();
+        if (autoConfirmPlant) data.plantFinishedConfirmedAt = new Date();
         if (plantAlsoConfirmed) {
           this.stateMachine.validateTransition(freight.status, FreightStatus.finished, 'transporter');
           data.status = FreightStatus.finished;
@@ -3601,8 +3603,9 @@ export class FreightsService {
             ct = 'transporter';
           }
           if (callerOwnFleetIdsL.includes(freight.originCompanyId) && callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
-            const activeCompanyId = user.activeCompanyId || user.companyId;
-            ct = activeCompanyId === freight.destCompanyId ? 'plant' : 'transporter';
+            // Own fleet where caller is both origin and dest: always use transporter path
+            // (no separate plant confirm-loaded path exists — only transporter and producer)
+            ct = 'transporter';
           }
         }
         // Plant-centric: plant can confirm loaded for CONSULTA transporter
@@ -3788,9 +3791,14 @@ export class FreightsService {
         }
 
         if (assignment.plantFinishedConfirmedAt) throw new BadRequestException('La planta ya confirmó la recepción');
-        const transporterAlsoConfirmed = !!assignment.transporterFinishedConfirmedAt;
+
+        // Own fleet where caller is also the origin: auto-confirm transporter side
+        const callerIsAlsoOrigin = isOwnFleet && allIdsCtf.includes(freight.originCompanyId);
+        const autoConfirmTransporter = callerIsAlsoOrigin && !assignment.transporterFinishedConfirmedAt;
+        const transporterAlsoConfirmed = !!assignment.transporterFinishedConfirmedAt || autoConfirmTransporter;
 
         const updateData: any = { plantFinishedConfirmedAt: new Date() };
+        if (autoConfirmTransporter) updateData.transporterFinishedConfirmedAt = new Date();
         if (transporterAlsoConfirmed) {
           updateData.tripStatus = 'finished';
           updateData.finishedAt = new Date();
@@ -3807,7 +3815,7 @@ export class FreightsService {
             entityType: 'freight', entityId: freightId, freightId: freightId,
             action: transporterAlsoConfirmed ? 'trip_finished' : 'trip_confirm_finished',
             fromValue: 'loaded', toValue: transporterAlsoConfirmed ? 'finished' : 'loaded', userId: user.sub,
-            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed },
+            metadata: { assignmentId, tripNumber: assignment.tripNumber, confirmedBy: 'plant', bothConfirmed: transporterAlsoConfirmed, autoConfirmTransporter },
           },
         });
         return { result: updated, freight, bothConfirmed: transporterAlsoConfirmed, confirmedBy: 'plant' as const };
