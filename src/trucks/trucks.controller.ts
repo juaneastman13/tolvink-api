@@ -1122,7 +1122,8 @@ export class TrucksService {
   // ======================== FLEET EXCEL REPORT ============================
 
   async generateFleetReport(user: any, truckId?: string, from?: string, to?: string): Promise<Buffer> {
-    const ExcelJS = await import('exceljs');
+    const ExcelMod = await import('exceljs');
+    const ExcelJS = (ExcelMod as any).default || ExcelMod;
     const companyId = user.activeCompanyId || user.companyId;
     if (!companyId) throw new BadRequestException('No se pudo determinar tu empresa');
 
@@ -1463,10 +1464,9 @@ export class TrucksController {
   @ApiQuery({ name: 'truckId', required: false })
   @ApiQuery({ name: 'from', required: false })
   @ApiQuery({ name: 'to', required: false })
-  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
   async exportReport(
     @CurrentUser() user: any,
-    @Res({ passthrough: true }) res: any,
+    @Res() res: any,
     @Query('truckId') truckId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
@@ -1477,8 +1477,12 @@ export class TrucksController {
     const filename = truckId
       ? `Informe_Camion_${datePart}.xlsx`
       : `Informe_Flota_${datePart}.xlsx`;
-    res.set({ 'Content-Disposition': `attachment; filename="${filename}"` });
-    return new StreamableFile(buffer);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+    res.end(buffer);
   }
 
   // ======================== TRUCK DETAIL ==================================
