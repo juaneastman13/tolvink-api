@@ -930,6 +930,7 @@ export class FreightsService {
           freightId,
           transportCompanyId: dto.transportCompanyId,
           status: hasTruck ? AssignmentStatus.accepted : AssignmentStatus.active,
+          tripStatus: hasTruck ? 'accepted' : 'pending',
           assignedById: user.sub,
         };
         if (dto.truckId) {
