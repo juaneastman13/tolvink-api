@@ -811,8 +811,6 @@ export class FreightQueryToolsService {
 
     // Create new shared link
     try {
-      const { apiCreateSharedLink } = await import('../../freights/freights.service');
-      // Use the freights service directly
       const link = await (this.freights as any).createSharedLink(freight.id, user);
       const url = `${baseUrl}/shared/${link.token}`;
       return JSON.stringify({
