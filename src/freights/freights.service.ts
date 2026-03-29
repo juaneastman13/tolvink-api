@@ -823,6 +823,14 @@ export class FreightsService {
 
     const allIds = await this.resolveAllCompanyIds(user);
 
+    // ── External truck (third-party, not registered in system) ──
+    if (dto.isExternal) {
+      if (!dto.plate?.trim()) throw new BadRequestException('Matrícula obligatoria para camión de terceros');
+      return this.assignExternal(freightId, dto, user, allIds);
+    }
+
+    if (!dto.transportCompanyId) throw new BadRequestException('transportCompanyId es obligatorio para asignaciones internas');
+
     const transport = await this.prisma.company.findFirst({
       where: { id: dto.transportCompanyId, active: true },
       select: { id: true, type: true, types: true, hasInternalFleet: true },
@@ -1133,6 +1141,90 @@ export class FreightsService {
     return result.updated;
   }
 
+  // ======================== EXTERNAL TRUCK ASSIGNMENT =================
+
+  private async assignExternal(freightId: string, dto: AssignFreightDto, user: any, allIds: string[]) {
+    const callerCompanyId = user.activeCompanyId || user.companyId;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const freight = await tx.freight.findUnique({
+        where: { id: freightId },
+        include: { assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true } } },
+      });
+      if (!freight) throw new NotFoundException('Flete no encontrado');
+      if (freight.status === FreightStatus.finished || freight.status === FreightStatus.canceled) {
+        throw new BadRequestException('No se puede asignar en un flete finalizado o cancelado');
+      }
+
+      // Access: caller must be origin or dest company
+      const callerIsOrigin = allIds.includes(freight.originCompanyId);
+      const callerIsDest = freight.destCompanyId ? allIds.includes(freight.destCompanyId) : false;
+      if (!callerIsOrigin && !callerIsDest) {
+        throw new ForbiddenException('Sin acceso a este flete para asignar camión externo');
+      }
+
+      // For single-truck in early state, cancel existing assignments (reassignment)
+      const isEarlyState = ['pending_assignment', 'assigned'].includes(freight.status);
+      if (!(freight as any).isMultiTruck && isEarlyState) {
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: { status: AssignmentStatus.canceled, reason: 'Reasignado a camión externo' },
+        });
+      }
+
+      // Trip number for multi-truck
+      let tripNumber = 1;
+      if ((freight as any).isMultiTruck) {
+        const maxTn = await tx.freightAssignment.aggregate({ where: { freightId }, _max: { tripNumber: true } });
+        tripNumber = (maxTn._max.tripNumber ?? 0) + 1;
+      }
+
+      // Create external assignment — uses caller's company as transportCompanyId (Option B)
+      const assignment = await tx.freightAssignment.create({
+        data: {
+          freightId,
+          transportCompanyId: callerCompanyId,
+          status: AssignmentStatus.accepted,
+          tripStatus: 'accepted',
+          tripNumber,
+          assignedById: user.sub,
+          plate: dto.plate?.trim().toUpperCase() || null,
+          isExternal: true,
+          externalCompanyName: dto.externalCompanyName?.trim() || null,
+          externalDriverName: dto.externalDriverName?.trim() || null,
+        },
+      });
+
+      // Derive freight status
+      const isMulti = (freight as any).isMultiTruck;
+      let newStatus: FreightStatus;
+      if (isMulti) {
+        const activeCount = await tx.freightAssignment.count({ where: { freightId, status: { in: ['active', 'accepted'] } } });
+        newStatus = await this.deriveFreightStatus(tx, freightId);
+        await tx.freight.update({ where: { id: freightId }, data: { status: newStatus, assignedTruckCount: activeCount, isMultiTruck: true } as any });
+      } else {
+        newStatus = FreightStatus.accepted;
+        await tx.freight.update({ where: { id: freightId }, data: { status: newStatus } });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight', entityId: freightId, freightId,
+          action: 'external_truck_assigned',
+          fromValue: freight.status, toValue: newStatus,
+          userId: user.sub,
+          metadata: { plate: dto.plate, externalCompanyName: dto.externalCompanyName, assignmentId: assignment.id },
+        },
+      });
+
+      return await tx.freight.findUnique({ where: { id: freightId }, include: { assignments: true } });
+    });
+
+    // SSE broadcast (no notifications — external is internal-only)
+    this.broadcastAndInvalidate(freightId, { id: freightId, status: updated.status }, user.sub);
+    return updated;
+  }
+
   // ======================== RESPOND (accept/reject) ===================
 
   async respond(freightId: string, dto: RespondAssignmentDto, user: any) {
@@ -1259,11 +1351,20 @@ export class FreightsService {
         throw new BadRequestException('Este flete requiere aprobación de la planta destino antes de poder iniciar');
       }
 
+      const activeAssignment: any = freight.assignments?.[0];
+      const isExternalAssignment = activeAssignment?.isExternal;
+
+      // External assignment: creator acts as transporter
+      if (isExternalAssignment) {
+        const callerExtIds = await this.resolveAllCompanyIds(user);
+        if (callerExtIds.includes(activeAssignment.transportCompanyId)) ct = 'transporter';
+      }
+
       const isOwnFleet = freight.assignments?.some(
         (a) => a.transportCompanyId === freight.originCompanyId,
       );
       // Plant-centric: plant can start freight on behalf of CONSULTA transporter
-      if (ct.includes('plant') && freight.destCompanyId) {
+      if (!isExternalAssignment && ct.includes('plant') && freight.destCompanyId) {
         const callerIds = await this.resolveAllCompanyIds(user);
         if (callerIds.includes(freight.destCompanyId)) {
           const transporterCo = freight.assignments?.[0]?.transportCompanyId;
@@ -1279,16 +1380,18 @@ export class FreightsService {
 
       this.stateMachine.validateTransition(freight.status, FreightStatus.in_progress, effectiveType);
 
-      // Require truck+driver before starting
-      const activeAssignment = freight.assignments?.[0];
-      if (!activeAssignment?.truckId) {
-        throw new BadRequestException('El flete no tiene camión asignado. Asigná camión y chofer antes de iniciar.');
-      }
-      if (!activeAssignment?.driverId) {
-        throw new BadRequestException('El flete no tiene chofer asignado. Asigná chofer antes de iniciar.');
+      // External trucks: skip truck/driver/availability checks
+      if (!isExternalAssignment) {
+        if (!activeAssignment?.truckId) {
+          throw new BadRequestException('El flete no tiene camión asignado. Asigná camión y chofer antes de iniciar.');
+        }
+        if (!activeAssignment?.driverId) {
+          throw new BadRequestException('El flete no tiene chofer asignado. Asigná chofer antes de iniciar.');
+        }
       }
 
       // Check truck availability — only block if in_progress or loaded (accepted elsewhere is OK)
+      if (activeAssignment?.truckId) {
       const busyAssignment = await tx.freightAssignment.findFirst({
         where: {
           truckId: activeAssignment.truckId,
@@ -1302,6 +1405,7 @@ export class FreightsService {
           `El camión ${activeAssignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
         );
       }
+      } // end if (activeAssignment?.truckId)
 
       const updated = await tx.freight.update({
         where: { id: freightId },
@@ -2907,7 +3011,26 @@ export class FreightsService {
         let tripNumber = maxTripRow[0]?.maxTn ?? existingCount;
 
         // N+1: low volume (typically 1-5 trucks per assignment), within transaction — batch later
+        const callerCompanyIdLoop = user.activeCompanyId || user.companyId;
         for (const truck of dto.trucks) {
+          // ── External truck shortcut ──
+          if (truck.isExternal) {
+            if (!truck.plate?.trim()) throw new BadRequestException('Matrícula obligatoria para camión de terceros');
+            tripNumber++;
+            await tx.freightAssignment.create({
+              data: {
+                freightId, transportCompanyId: callerCompanyIdLoop,
+                status: AssignmentStatus.accepted, tripStatus: 'accepted', tripNumber,
+                assignedById: callerId, plate: truck.plate.trim().toUpperCase(),
+                isExternal: true, externalCompanyName: truck.externalCompanyName?.trim() || null,
+                externalDriverName: truck.externalDriverName?.trim() || null,
+                ...(truck.tons ? { tons: truck.tons } : {}),
+              },
+            });
+            continue;
+          }
+
+          if (!truck.transportCompanyId) throw new BadRequestException('transportCompanyId obligatorio para camiones internos');
           const transport = await tx.company.findFirst({
             where: { id: truck.transportCompanyId, active: true },
             select: { id: true, type: true, types: true, hasInternalFleet: true },
@@ -3217,6 +3340,20 @@ export class FreightsService {
 
       const updateData: any = {};
 
+      // External assignment: only allow editing external fields
+      if (assignment.isExternal) {
+        if ((dto as any).plate !== undefined) updateData.plate = (dto as any).plate?.trim().toUpperCase() || assignment.plate;
+        if ((dto as any).externalCompanyName !== undefined) updateData.externalCompanyName = (dto as any).externalCompanyName?.trim() || null;
+        if ((dto as any).externalDriverName !== undefined) updateData.externalDriverName = (dto as any).externalDriverName?.trim() || null;
+        if (dto.tons !== undefined) updateData.tons = dto.tons;
+        if (Object.keys(updateData).length === 0) throw new BadRequestException('No hay cambios para aplicar');
+        const result = await (tx.freightAssignment as any).update({
+          where: { id: assignmentId }, data: updateData,
+          include: { transportCompany: { select: { id: true, name: true } }, truck: true, driver: { select: { id: true, name: true, phone: true } } },
+        });
+        return { updated: result, freight, statusUpgraded: false };
+      }
+
       // Only plant can change transportCompanyId
       if (dto.transportCompanyId && dto.transportCompanyId !== assignment.transportCompanyId) {
         if (!isPlant) throw new ForbiddenException('Solo la planta puede cambiar la empresa transportista');
@@ -3516,15 +3653,19 @@ export class FreightsService {
 
       this.stateMachine.validateTripTransition(assignment.tripStatus as any, 'in_progress' as any);
 
-      // Require truck+driver before starting
-      if (!assignment.truckId) {
-        throw new BadRequestException('El viaje no tiene camión asignado. Asigná camión y chofer antes de iniciar.');
-      }
-      if (!assignment.driverId) {
-        throw new BadRequestException('El viaje no tiene chofer asignado. Asigná chofer antes de iniciar.');
+      // External trucks: skip truck/driver/availability checks (not registered in system)
+      if (!assignment.isExternal) {
+        // Require truck+driver before starting
+        if (!assignment.truckId) {
+          throw new BadRequestException('El viaje no tiene camión asignado. Asigná camión y chofer antes de iniciar.');
+        }
+        if (!assignment.driverId) {
+          throw new BadRequestException('El viaje no tiene chofer asignado. Asigná chofer antes de iniciar.');
+        }
       }
 
       // Check truck availability — only block if in_progress or loaded (accepted elsewhere is OK)
+      if (assignment.truckId) {
       const busyAssignment = await (tx.freightAssignment as any).findFirst({
         where: {
           truckId: assignment.truckId,
@@ -3538,6 +3679,7 @@ export class FreightsService {
           `El camión ${assignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
         );
       }
+      } // end if (assignment.truckId)
 
       await (tx.freightAssignment as any).update({
         where: { id: assignmentId },
@@ -3596,9 +3738,15 @@ export class FreightsService {
         const assignment: any = freight.assignments.find((a: any) => a.id === assignmentId);
         if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
+        // External assignment: creator acts as transporter (no real transport company)
+        if (assignment.isExternal) {
+          const callerExtIds = await this.resolveAllCompanyIds(user);
+          if (callerExtIds.includes(assignment.transportCompanyId)) ct = 'transporter';
+        }
+
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
         // Own fleet promotion: only promote if caller is the origin company
-        if (isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
+        if (!assignment.isExternal && isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
           const callerOwnFleetIdsL = await this.resolveAllCompanyIds(user);
           if (callerOwnFleetIdsL.includes(freight.originCompanyId) && !callerOwnFleetIdsL.includes(freight.destCompanyId || '__none__')) {
             ct = 'transporter';
@@ -3636,7 +3784,7 @@ export class FreightsService {
           if (assignment.transporterLoadedConfirmedAt) throw new BadRequestException('El transportista ya confirmó la carga de este camión');
 
           const updateData: any = { transporterLoadedConfirmedAt: new Date() };
-          if (isOwnFleet) updateData.producerLoadedConfirmedAt = new Date();
+          if (isOwnFleet || assignment.isExternal) updateData.producerLoadedConfirmedAt = new Date();
           if (assignment.tripStatus === 'in_progress') {
             updateData.tripStatus = 'loaded';
             updateData.loadedAt = new Date();
@@ -3724,9 +3872,15 @@ export class FreightsService {
         throw new BadRequestException(`Solo se puede finalizar un camión a planta. Estado actual: ${assignment.tripStatus}`);
       }
 
+      // External assignment: creator acts as transporter, auto-confirm both sides
+      if (assignment.isExternal) {
+        const callerExtIds = await this.resolveAllCompanyIds(user);
+        if (callerExtIds.includes(assignment.transportCompanyId)) ct = 'transporter';
+      }
+
       // Own fleet promotion: only promote if caller is the ORIGIN company (not the dest plant)
       const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
-      if (isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
+      if (!assignment.isExternal && isOwnFleet && (ct.includes('producer') || ct.includes('plant'))) {
         const callerOwnFleetIds = await this.resolveAllCompanyIds(user);
         const callerIsOrigin = callerOwnFleetIds.includes(freight.originCompanyId);
         const callerIsDest = callerOwnFleetIds.includes(freight.destCompanyId || '__none__');
@@ -3756,10 +3910,11 @@ export class FreightsService {
         const plantAlsoConfirmed = !!assignment.plantFinishedConfirmedAt;
 
         const updateData: any = { transporterFinishedConfirmedAt: new Date() };
-        // Own fleet without dest company: auto-confirm both sides (no external plant to confirm)
+        // Auto-confirm both sides: own fleet without dest company OR external assignment (100% internal)
         const isOwnFleetNoDest = isOwnFleet && !freight.destCompanyId;
-        if (isOwnFleetNoDest) updateData.plantFinishedConfirmedAt = new Date();
-        const bothConfirmed = plantAlsoConfirmed || isOwnFleetNoDest;
+        const autoConfirmPlant = isOwnFleetNoDest || assignment.isExternal;
+        if (autoConfirmPlant) updateData.plantFinishedConfirmedAt = new Date();
+        const bothConfirmed = plantAlsoConfirmed || autoConfirmPlant;
         if (bothConfirmed) {
           updateData.tripStatus = 'finished';
           updateData.finishedAt = new Date();

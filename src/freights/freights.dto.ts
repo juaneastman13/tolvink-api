@@ -167,9 +167,10 @@ export class CreateFreightDto {
 }
 
 export class AssignFreightDto {
-  @ApiProperty({ description: 'ID de empresa transportista' })
+  @ApiProperty({ description: 'ID de empresa transportista (requerido si no es externo)' })
+  @IsOptional()
   @IsUUID()
-  transportCompanyId: string;
+  transportCompanyId?: string;
 
   @ApiProperty({ required: false, description: 'ID del camión (flota propia)' })
   @IsOptional()
@@ -180,6 +181,29 @@ export class AssignFreightDto {
   @IsOptional()
   @IsUUID()
   driverId?: string;
+
+  @ApiProperty({ required: false, description: 'Camión de terceros (no registrado en sistema)', default: false })
+  @IsOptional()
+  @IsBoolean()
+  isExternal?: boolean;
+
+  @ApiProperty({ required: false, description: 'Matrícula del camión externo', maxLength: 20 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  plate?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre empresa transportista externa', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalCompanyName?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre del chofer externo', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalDriverName?: string;
 }
 
 export class RespondAssignmentDto {
@@ -213,9 +237,10 @@ export class CancelFreightDto {
 // ======================== MULTI-TRUCK DTOs ==============================
 
 export class TruckAssignmentDto {
-  @ApiProperty({ description: 'ID de empresa transportista' })
+  @ApiProperty({ description: 'ID de empresa transportista (requerido si no es externo)' })
+  @IsOptional()
   @IsUUID()
-  transportCompanyId: string;
+  transportCompanyId?: string;
 
   @ApiProperty({ required: false, description: 'ID del camión' })
   @IsOptional()
@@ -234,6 +259,29 @@ export class TruckAssignmentDto {
   @Max(100000)
   @Type(() => Number)
   tons?: number;
+
+  @ApiProperty({ required: false, description: 'Camión de terceros', default: false })
+  @IsOptional()
+  @IsBoolean()
+  isExternal?: boolean;
+
+  @ApiProperty({ required: false, description: 'Matrícula del camión externo', maxLength: 20 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  plate?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre empresa transportista externa', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalCompanyName?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre del chofer externo', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalDriverName?: string;
 }
 
 export class AssignMultiTruckDto {
@@ -269,6 +317,24 @@ export class UpdateAssignmentDto {
   @Max(100000)
   @Type(() => Number)
   tons?: number;
+
+  @ApiProperty({ required: false, description: 'Matrícula (para camión externo)', maxLength: 20 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  plate?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre empresa externa', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalCompanyName?: string;
+
+  @ApiProperty({ required: false, description: 'Nombre chofer externo', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  externalDriverName?: string;
 }
 
 export class AddDocumentDto {

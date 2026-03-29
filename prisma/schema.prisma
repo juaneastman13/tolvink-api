@@ -814,6 +814,11 @@ model FreightAssignment {
   reason        String? @db.VarChar(255)
   queuePosition Int     @default(0) @map("queue_position")
 
+  // External truck (third-party, not registered in system)
+  isExternal          Boolean  @default(false) @map("is_external")
+  externalCompanyName String?  @map("external_company_name") @db.VarChar(255)
+  externalDriverName  String?  @map("external_driver_name") @db.VarChar(255)
+
   // Multi-truck trip lifecycle (v6.0)
   tripStatus                     TripStatus @default(pending) @map("trip_status")
   tripNumber                     Int        @default(1) @map("trip_number")
