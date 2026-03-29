@@ -996,7 +996,7 @@ export class TrucksService {
       }
     }
     const freightKm = freightTrips.reduce((s: number, t: any) => {
-      const km = Number(t.kmTotal || 0) || (routeKmMap[t.freightId] ? routeKmMap[t.freightId] * 2 : 0);
+      const km = Number(t.kmTotal || 0) || (routeKmMap[t.freightId] || 0);
       return s + km;
     }, 0);
     const movementKm = movements.reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
@@ -1074,8 +1074,8 @@ export class TrucksService {
     for (const r of expAgg) { if (byTruck[r.truckId]) byTruck[r.truckId].expense = Number(r._sum.amount || 0); }
     for (const a of freightAgg as any[]) {
       if (!byTruck[a.truckId]) continue;
-      // Use kmTotal if available, otherwise fall back to route distance (round trip)
-      const km = Number(a.kmTotal || 0) || (routeDistanceMap[a.freightId] ? routeDistanceMap[a.freightId] * 2 : 0);
+      // Use kmTotal if available, otherwise fall back to route distance
+      const km = Number(a.kmTotal || 0) || (routeDistanceMap[a.freightId] || 0);
       byTruck[a.truckId].km += km;
       byTruck[a.truckId].trips += 1;
     }
