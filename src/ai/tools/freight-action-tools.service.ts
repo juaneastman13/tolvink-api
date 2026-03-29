@@ -1383,6 +1383,30 @@ export class FreightActionToolsService {
           break;
         }
 
+        // ---- External truck confirm handlers ----
+        case 'assign_external_truck': {
+          const dto: any = { isExternal: true, plate: params.plate };
+          if (params.externalCompanyName) dto.externalCompanyName = params.externalCompanyName;
+          if (params.externalDriverName) dto.externalDriverName = params.externalDriverName;
+          await this.freights.assign(params.freightId, dto, synUser);
+          result = JSON.stringify({ status: 'assigned', code: params.code, plate: params.plate, message: `Camión externo ${params.plate} asignado a ${params.code}` });
+          break;
+        }
+        case 'assign_mixed_trucks': {
+          await this.freights.assignMulti(params.freightId, { trucks: params.trucks }, synUser);
+          result = JSON.stringify({ status: 'assigned', code: params.code, count: params.trucks.length, message: `${params.trucks.length} camiones asignados a ${params.code}` });
+          break;
+        }
+        case 'edit_external_assignment': {
+          const updateDto: any = {};
+          if (params.plate) updateDto.plate = params.plate;
+          if (params.externalCompanyName !== undefined) updateDto.externalCompanyName = params.externalCompanyName;
+          if (params.externalDriverName !== undefined) updateDto.externalDriverName = params.externalDriverName;
+          await this.freights.updateAssignment(params.freightId, params.assignmentId, updateDto, synUser);
+          result = JSON.stringify({ status: 'updated', code: params.code, message: `Camión externo actualizado en ${params.code}` });
+          break;
+        }
+
         default:
           result = JSON.stringify({ error: `Acción no reconocida: ${tool}` });
       }

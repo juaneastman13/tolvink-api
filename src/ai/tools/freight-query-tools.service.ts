@@ -758,4 +758,73 @@ export class FreightQueryToolsService {
     }
     return JSON.stringify({ results: results.map(r => ({ ...r.item, score: r.score })) });
   }
+
+  // ======================== G8: RENAME DOCUMENT ============================
+
+  async toolRenameDocument(input: any, user: any): Promise<string> {
+    if (!input.code) return JSON.stringify({ error: 'Código de flete requerido.' });
+    if (!input.documentId) return JSON.stringify({ error: 'ID de documento requerido.' });
+    if (!input.newName?.trim()) return JSON.stringify({ error: 'Nuevo nombre requerido.' });
+
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+
+    try {
+      await this.prisma.freightDocument.update({
+        where: { id: input.documentId },
+        data: { name: input.newName.trim() },
+      });
+      return JSON.stringify({ status: 'renamed', documentId: input.documentId, newName: input.newName.trim() });
+    } catch {
+      return JSON.stringify({ error: 'Documento no encontrado.' });
+    }
+  }
+
+  // ======================== G9: SHARE LINK WITH DETAILS ====================
+
+  async toolGenerateShareLinkWithDetails(input: any, user: any): Promise<string> {
+    if (!input.code) return JSON.stringify({ error: 'Código de flete requerido.' });
+
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+
+    // Check if shared link already exists
+    const existing = await this.prisma.sharedLink.findFirst({
+      where: { freightId: freight.id, expiresAt: { gt: new Date() } },
+      select: { token: true, expiresAt: true },
+    });
+
+    const baseUrl = process.env.FRONTEND_URL || 'https://tolvink.com';
+
+    if (existing) {
+      const url = `${baseUrl}/shared/${existing.token}`;
+      return JSON.stringify({
+        status: 'existing',
+        url,
+        expiresAt: existing.expiresAt,
+        code: freight.code,
+        message: `Link ya existente para ${freight.code}. Válido hasta ${new Date(existing.expiresAt).toLocaleDateString('es-UY')}.`,
+        copyText: `Seguimiento flete ${freight.code}: ${url}`,
+      });
+    }
+
+    // Create new shared link
+    try {
+      const { apiCreateSharedLink } = await import('../../freights/freights.service');
+      // Use the freights service directly
+      const link = await (this.freights as any).createSharedLink(freight.id, user);
+      const url = `${baseUrl}/shared/${link.token}`;
+      return JSON.stringify({
+        status: 'created',
+        url,
+        expiresAt: link.expiresAt,
+        code: freight.code,
+        message: `Link de seguimiento creado para ${freight.code}. Válido por 72 horas.`,
+        copyText: `Seguimiento flete ${freight.code}: ${url}`,
+      });
+    } catch (e: any) {
+      return JSON.stringify({ error: e.message || 'Error al generar link.' });
+    }
+  }
 }

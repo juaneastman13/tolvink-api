@@ -1109,4 +1109,90 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
     description: 'Muestra alertas de documentos vencidos y por vencer de toda la flota.',
     input_schema: { type: 'object' as const, properties: {}, required: [] },
   },
+
+  // ====================== EXTERNAL TRUCKS (G1, G2, G3) ======================
+  {
+    name: 'assign_external_truck',
+    description: 'Asigna un camión de terceros (no registrado en el sistema) a un flete. El camión se identifica solo por matrícula, opcionalmente empresa y chofer. Usar cuando el usuario menciona un camión que no está en la flota ni en transportistas vinculados.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete.' },
+        plate: { type: 'string', description: 'Matrícula del camión (ej: ABC 1234). Obligatorio.' },
+        externalCompanyName: { type: 'string', description: 'Nombre de la empresa transportista (opcional).' },
+        externalDriverName: { type: 'string', description: 'Nombre del chofer (opcional).' },
+      },
+      required: ['code', 'plate'],
+    },
+  },
+  {
+    name: 'assign_mixed_trucks',
+    description: 'Asigna múltiples camiones de distintos tipos a un flete multi-camión en una sola operación. Cada camión puede ser de flota propia (transportCompanyId + truckId), externo (isExternal + plate) o delegado a transportista (solo transportCompanyId). Usar cuando el usuario quiere combinar tipos de camión.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete.' },
+        trucks: {
+          type: 'array',
+          description: 'Lista de camiones a asignar.',
+          items: {
+            type: 'object',
+            properties: {
+              isExternal: { type: 'boolean', description: 'true si es camión de terceros.' },
+              plate: { type: 'string', description: 'Matrícula (requerido si isExternal).' },
+              externalCompanyName: { type: 'string', description: 'Empresa externa (opcional, solo si isExternal).' },
+              externalDriverName: { type: 'string', description: 'Chofer externo (opcional, solo si isExternal).' },
+              transportCompanyId: { type: 'string', description: 'ID empresa transportista (requerido si NO isExternal).' },
+              truckId: { type: 'string', description: 'ID camión registrado (opcional).' },
+              driverId: { type: 'string', description: 'ID chofer (opcional).' },
+            },
+          },
+        },
+      },
+      required: ['code', 'trucks'],
+    },
+  },
+  {
+    name: 'edit_external_assignment',
+    description: 'Edita los datos de un camión externo (terceros) ya asignado a un flete. Permite cambiar matrícula, empresa y chofer.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete.' },
+        assignmentId: { type: 'string', description: 'ID de la asignación (opcional si hay una sola).' },
+        plate: { type: 'string', description: 'Nueva matrícula (opcional).' },
+        externalCompanyName: { type: 'string', description: 'Nuevo nombre de empresa (opcional).' },
+        externalDriverName: { type: 'string', description: 'Nuevo nombre de chofer (opcional).' },
+      },
+      required: ['code'],
+    },
+  },
+
+  // ====================== DOCUMENT RENAME (G8) ======================
+  {
+    name: 'rename_document',
+    description: 'Renombra un documento adjunto a un flete.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete.' },
+        documentId: { type: 'string', description: 'ID del documento.' },
+        newName: { type: 'string', description: 'Nuevo nombre del documento.' },
+      },
+      required: ['code', 'documentId', 'newName'],
+    },
+  },
+
+  // ====================== SHARE LINK (G9) ======================
+  {
+    name: 'generate_share_link_with_details',
+    description: 'Genera un link público para compartir el seguimiento de un flete. Incluye URL lista para copiar y compartir por cualquier medio. Si ya existe un link activo, lo reutiliza.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        code: { type: 'string', description: 'Código del flete.' },
+      },
+      required: ['code'],
+    },
+  },
 ];

@@ -608,4 +608,90 @@ export class TransportToolsService {
       driverId: input.driverId, driverName: driver.name, orderedFreightIds: input.orderedFreightIds,
     }, `Reordenar cola de ${driver.name} (${input.orderedFreightIds.length} fletes)`, user);
   }
+
+  // ======================== G1: ASSIGN EXTERNAL TRUCK =======================
+
+  async toolAssignExternalTruck(input: any, user: any, synUser: any, session: any): Promise<string> {
+    if (!input.plate?.trim()) return JSON.stringify({ error: 'Matrícula (plate) es obligatoria.' });
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+
+    return this.stageAction(session, 'assign_external_truck', {
+      freightId: freight.id,
+      code: freight.code,
+      plate: input.plate.trim().toUpperCase(),
+      externalCompanyName: input.externalCompanyName?.trim() || null,
+      externalDriverName: input.externalDriverName?.trim() || null,
+    }, `Asignar camión externo ${input.plate.trim().toUpperCase()} a flete ${freight.code}`, user);
+  }
+
+  // ======================== G2: ASSIGN MIXED TRUCKS =========================
+
+  async toolAssignMixedTrucks(input: any, user: any, synUser: any, session: any): Promise<string> {
+    if (!Array.isArray(input.trucks) || input.trucks.length === 0) {
+      return JSON.stringify({ error: 'Debe indicar al menos un camión en la lista trucks[].' });
+    }
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+
+    // Validate each truck entry
+    for (let i = 0; i < input.trucks.length; i++) {
+      const t = input.trucks[i];
+      if (t.isExternal && !t.plate?.trim()) {
+        return JSON.stringify({ error: `Camión #${i + 1}: matrícula obligatoria para camión externo.` });
+      }
+      if (!t.isExternal && !t.transportCompanyId) {
+        return JSON.stringify({ error: `Camión #${i + 1}: transportCompanyId obligatorio para camión interno.` });
+      }
+    }
+
+    const summary = input.trucks.map((t: any, i: number) =>
+      t.isExternal ? `#${i + 1} Externo: ${t.plate}` : `#${i + 1} Empresa: ${t.transportCompanyId?.substring(0, 8)}...`
+    ).join('\n');
+
+    return this.stageAction(session, 'assign_mixed_trucks', {
+      freightId: freight.id,
+      code: freight.code,
+      trucks: input.trucks,
+    }, `Asignar ${input.trucks.length} camiones a flete ${freight.code}:\n${summary}`, user);
+  }
+
+  // ======================== G3: EDIT EXTERNAL ASSIGNMENT ====================
+
+  async toolEditExternalAssignment(input: any, user: any, synUser: any, session: any): Promise<string> {
+    const result = await this.resolveFreightWithAccess(input.code, user);
+    if (result.error) return JSON.stringify({ error: result.error });
+    const freight = result.freight;
+
+    // Find external assignment
+    const assignments = (freight as any).assignments?.filter((a: any) => a.isExternal && ['active', 'accepted'].includes(a.status)) || [];
+    if (assignments.length === 0) {
+      return JSON.stringify({ error: 'Este flete no tiene asignaciones de camiones externos activas.' });
+    }
+
+    let assignment = assignments[0];
+    if (input.assignmentId) {
+      assignment = assignments.find((a: any) => a.id === input.assignmentId);
+      if (!assignment) return JSON.stringify({ error: 'Asignación no encontrada.' });
+    } else if (assignments.length > 1) {
+      return JSON.stringify({ error: `Hay ${assignments.length} asignaciones externas. Indique assignmentId.`, assignments: assignments.map((a: any) => ({ id: a.id, plate: a.plate, tripNumber: a.tripNumber })) });
+    }
+
+    const changes: string[] = [];
+    if (input.plate) changes.push(`Matrícula: ${assignment.plate || '—'} → ${input.plate.toUpperCase()}`);
+    if (input.externalCompanyName !== undefined) changes.push(`Empresa: ${assignment.externalCompanyName || '—'} → ${input.externalCompanyName || '—'}`);
+    if (input.externalDriverName !== undefined) changes.push(`Chofer: ${assignment.externalDriverName || '—'} → ${input.externalDriverName || '—'}`);
+    if (changes.length === 0) return JSON.stringify({ error: 'No se indicaron cambios.' });
+
+    return this.stageAction(session, 'edit_external_assignment', {
+      freightId: freight.id,
+      code: freight.code,
+      assignmentId: assignment.id,
+      plate: input.plate?.trim().toUpperCase() || undefined,
+      externalCompanyName: input.externalCompanyName?.trim() || undefined,
+      externalDriverName: input.externalDriverName?.trim() || undefined,
+    }, `Editar camión externo en flete ${freight.code}:\n${changes.join('\n')}`, user);
+  }
 }

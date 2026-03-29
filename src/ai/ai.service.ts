@@ -513,6 +513,7 @@ export class AiService implements OnModuleDestroy {
     'start_freight', 'confirm_loaded', 'confirm_finished', 'cancel_freight',
     'assign_transporter', 'authorize_freight', 'create_field', 'create_lot',
     'create_truck', 'create_user', 'update_freight', 'duplicate_freight',
+    'assign_external_truck', 'assign_mixed_trucks', 'edit_external_assignment',
   ]);
 
   // Tools blocked for CONSULTA (READONLY) users — Strategy A pre-check
@@ -713,6 +714,13 @@ export class AiService implements OnModuleDestroy {
         case 'assign_multi_trucks': return await this.transportTools.toolAssignMultiTrucks(input, user, session);
         case 'view_driver_queue': return await this.transportTools.toolViewDriverQueue(input, user);
         case 'reorder_driver_queue': return await this.transportTools.toolReorderDriverQueue(input, user, session);
+        // ---- External Trucks & Mixed Assignment ----
+        case 'assign_external_truck': return await this.transportTools.toolAssignExternalTruck(input, user, synUser, session);
+        case 'assign_mixed_trucks': return await this.transportTools.toolAssignMixedTrucks(input, user, synUser, session);
+        case 'edit_external_assignment': return await this.transportTools.toolEditExternalAssignment(input, user, synUser, session);
+        // ---- Document Rename & Share Link ----
+        case 'rename_document': return await this.freightQueryTools.toolRenameDocument(input, user);
+        case 'generate_share_link_with_details': return await this.freightQueryTools.toolGenerateShareLinkWithDetails(input, user);
         // ---- Admin & User Management ----
         case 'get_user_profile': return this.adminTools.toolGetUserProfile(user);
         case 'create_user': return await this.adminTools.toolCreateUser(input, user, session);
