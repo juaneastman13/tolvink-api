@@ -1354,10 +1354,11 @@ export class FreightsService {
       const activeAssignment: any = freight.assignments?.[0];
       const isExternalAssignment = activeAssignment?.isExternal;
 
-      // External assignment: creator acts as transporter
+      // External assignment: only creator can act as transporter
       if (isExternalAssignment) {
         const callerExtIds = await this.resolveAllCompanyIds(user);
         if (callerExtIds.includes(activeAssignment.transportCompanyId)) ct = 'transporter';
+        else throw new ForbiddenException('Solo el creador puede operar camiones externos');
       }
 
       const isOwnFleet = freight.assignments?.some(
@@ -3340,8 +3341,11 @@ export class FreightsService {
 
       const updateData: any = {};
 
-      // External assignment: only allow editing external fields
+      // External assignment: only creator can edit, only allow external fields
       if (assignment.isExternal) {
+        if (!allIdsUa.includes(assignment.transportCompanyId)) {
+          throw new ForbiddenException('Solo el creador puede editar asignaciones de camiones externos');
+        }
         if ((dto as any).plate !== undefined) updateData.plate = (dto as any).plate?.trim().toUpperCase() || assignment.plate;
         if ((dto as any).externalCompanyName !== undefined) updateData.externalCompanyName = (dto as any).externalCompanyName?.trim() || null;
         if ((dto as any).externalDriverName !== undefined) updateData.externalDriverName = (dto as any).externalDriverName?.trim() || null;
@@ -3738,10 +3742,11 @@ export class FreightsService {
         const assignment: any = freight.assignments.find((a: any) => a.id === assignmentId);
         if (!assignment) throw new NotFoundException('Asignación no encontrada');
 
-        // External assignment: creator acts as transporter (no real transport company)
+        // External assignment: only creator can act as transporter
         if (assignment.isExternal) {
           const callerExtIds = await this.resolveAllCompanyIds(user);
           if (callerExtIds.includes(assignment.transportCompanyId)) ct = 'transporter';
+          else throw new ForbiddenException('Solo el creador puede operar camiones externos');
         }
 
         const isOwnFleet = assignment.transportCompanyId === freight.originCompanyId;
@@ -3872,10 +3877,11 @@ export class FreightsService {
         throw new BadRequestException(`Solo se puede finalizar un camión a planta. Estado actual: ${assignment.tripStatus}`);
       }
 
-      // External assignment: creator acts as transporter, auto-confirm both sides
+      // External assignment: only creator can act as transporter, auto-confirm both sides
       if (assignment.isExternal) {
         const callerExtIds = await this.resolveAllCompanyIds(user);
         if (callerExtIds.includes(assignment.transportCompanyId)) ct = 'transporter';
+        else throw new ForbiddenException('Solo el creador puede operar camiones externos');
       }
 
       // Own fleet promotion: only promote if caller is the ORIGIN company (not the dest plant)
