@@ -2571,7 +2571,7 @@ export class FreightsService {
           select: {
             id: true, tripNumber: true, tripStatus: true, queuePosition: true,
             plate: true, driverName: true, tons: true,
-            transportCompanyId: true,
+            transportCompanyId: true, isExternal: true, externalCompanyName: true, externalDriverName: true,
             transportCompany: { select: { id: true, name: true } },
             truck: { select: { id: true, plate: true, model: true } },
           },
