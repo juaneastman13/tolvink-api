@@ -3472,12 +3472,12 @@ export class FreightsService {
         throw new BadRequestException('No hay cambios para aplicar');
       }
 
-      // Status upgrade: when truck+driver assigned to a pending assignment → accepted
-      // Block upgrade if plant approval is required but not yet given
+      // Status upgrade/downgrade based on truck+driver presence
       let statusUpgraded = false;
       const finalTruckId = updateData.truckId !== undefined ? updateData.truckId : assignment.truckId;
       const finalDriverId = updateData.driverId !== undefined ? updateData.driverId : assignment.driverId;
       if (finalTruckId && finalDriverId && assignment.status === AssignmentStatus.active) {
+        // Upgrade: truck+driver assigned to pending assignment → accepted
         if (freight.needsPlantApproval && !freight.plantApprovedAt) {
           // Don't auto-upgrade — plant must authorize first
         } else {
@@ -3487,6 +3487,11 @@ export class FreightsService {
           }
           statusUpgraded = true;
         }
+      } else if ((!finalTruckId || !finalDriverId) && assignment.status === AssignmentStatus.accepted && assignment.tripStatus === 'accepted') {
+        // Downgrade: truck or driver removed from accepted assignment → back to active/pending
+        updateData.status = AssignmentStatus.active;
+        updateData.tripStatus = 'pending';
+        statusUpgraded = true; // triggers freight status re-derive
       }
 
       const result = await (tx.freightAssignment as any).update({
