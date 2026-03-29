@@ -1408,6 +1408,14 @@ export class FreightsService {
       }
       } // end if (activeAssignment?.truckId)
 
+      // Sync assignment tripStatus for single-truck freights
+      if (activeAssignment) {
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: { tripStatus: 'in_progress', startedAt: new Date() },
+        });
+      }
+
       const updated = await tx.freight.update({
         where: { id: freightId },
         data: { status: FreightStatus.in_progress, startedAt: new Date() },
@@ -1515,6 +1523,16 @@ export class FreightsService {
 
           this.stateMachine.validateTransition(freight.status, FreightStatus.loaded, 'transporter');
 
+          // Sync assignment tripStatus for single-truck freights
+          await tx.freightAssignment.updateMany({
+            where: { freightId, status: { in: ['active', 'accepted'] } },
+            data: {
+              tripStatus: 'loaded', loadedAt: new Date(),
+              transporterLoadedConfirmedAt: new Date(),
+              ...(isOwnFleet ? { producerLoadedConfirmedAt: new Date() } : {}),
+            },
+          });
+
           const updated = await tx.freight.update({
             where: { id: freightId },
             data: {
@@ -1560,6 +1578,12 @@ export class FreightsService {
         if (freight.producerLoadedConfirmedAt) {
           throw new BadRequestException('El productor ya confirmó la carga');
         }
+
+        // Sync assignment for single-truck
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: { producerLoadedConfirmedAt: new Date() },
+        });
 
         const updated = await tx.freight.update({
           where: { id: freightId },
@@ -1674,6 +1698,15 @@ export class FreightsService {
           data.finishedAt = new Date();
         }
 
+        // Sync assignment tripStatus for single-truck freights
+        const assignTripData: any = { transporterFinishedConfirmedAt: new Date() };
+        if (autoConfirmPlant) assignTripData.plantFinishedConfirmedAt = new Date();
+        if (plantAlsoConfirmed) { assignTripData.tripStatus = 'finished'; assignTripData.finishedAt = new Date(); }
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: assignTripData,
+        });
+
         const updated = await tx.freight.update({ where: { id: freightId }, data });
 
         await tx.auditLog.create({
@@ -1744,6 +1777,14 @@ export class FreightsService {
           data.status = FreightStatus.finished;
           data.finishedAt = new Date();
         }
+
+        // Sync assignment tripStatus for single-truck freights
+        const assignPlantData: any = { plantFinishedConfirmedAt: new Date() };
+        if (transporterAlsoConfirmed) { assignPlantData.tripStatus = 'finished'; assignPlantData.finishedAt = new Date(); }
+        await tx.freightAssignment.updateMany({
+          where: { freightId, status: { in: ['active', 'accepted'] } },
+          data: assignPlantData,
+        });
 
         const updated = await tx.freight.update({ where: { id: freightId }, data });
 
