@@ -2848,7 +2848,8 @@ export class FreightsService {
     let result: { updated: any; freight: any };
     try {
       result = await this.prisma.$transaction(async (tx) => {
-        // Read freight INSIDE transaction to prevent TOCTOU race
+        // Lock freight row to serialize concurrent assignMulti calls on the same freight
+        await tx.$queryRaw`SELECT id FROM "freights" WHERE id::text = ${freightId} FOR UPDATE`;
         const freight = await tx.freight.findUnique({
           where: { id: freightId },
           include: { conversation: { select: { id: true } }, items: { select: { tons: true } } },
