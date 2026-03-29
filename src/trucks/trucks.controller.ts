@@ -945,7 +945,7 @@ export class TrucksService {
       }),
       this.prisma.freightAssignment.findMany({
         where: { truckId, tripStatus: 'finished', ...(dateFilter ? { finishedAt: dateFilter } : {}) },
-        select: { kmTotal: true, kmLoaded: true, fuelLiters: true, startedAt: true, finishedAt: true, departureAt: true, arrivalAt: true },
+        select: { freightId: true, kmTotal: true, kmLoaded: true, fuelLiters: true, startedAt: true, finishedAt: true, departureAt: true, arrivalAt: true },
       }),
       this.prisma.truckMovement.findMany({
         where: { truckId, companyId, ...(dateFilter ? { departureAt: dateFilter } : {}) },
@@ -982,8 +982,23 @@ export class TrucksService {
       expTotalUSD += vUSD;
     }
 
-    // Km calculations
-    const freightKm = freightTrips.reduce((s: number, t: any) => s + Number(t.kmTotal || 0), 0);
+    // Km calculations — use kmTotal if available, otherwise fall back to freight's routeDistanceKm (round trip)
+    const tripsWithoutKm = freightTrips.filter((t: any) => !t.kmTotal);
+    let routeKmMap: Record<string, number> = {};
+    if (tripsWithoutKm.length > 0) {
+      const fIds = [...new Set(freightTrips.filter((t: any) => !t.kmTotal).map((t: any) => t.freightId))];
+      if (fIds.length > 0) {
+        const routes = await this.prisma.freight.findMany({
+          where: { id: { in: fIds }, routeDistanceKm: { not: null } },
+          select: { id: true, routeDistanceKm: true },
+        });
+        routeKmMap = Object.fromEntries(routes.map((f: any) => [f.id, Number(f.routeDistanceKm)]));
+      }
+    }
+    const freightKm = freightTrips.reduce((s: number, t: any) => {
+      const km = Number(t.kmTotal || 0) || (routeKmMap[t.freightId] ? routeKmMap[t.freightId] * 2 : 0);
+      return s + km;
+    }, 0);
     const movementKm = movements.reduce((s: number, m: any) => s + Number(m.kmDriven || 0), 0);
     const totalKm = freightKm + movementKm;
 
@@ -1032,17 +1047,38 @@ export class TrucksService {
     const [incAgg, expAgg, freightAgg, movAgg, expiredDocs] = await Promise.all([
       this.prisma.truckIncome.groupBy({ by: ['truckId'], where: { companyId, status: 'PAID', date: { gte: startOfMonth } }, _sum: { amount: true } }),
       this.prisma.truckExpense.groupBy({ by: ['truckId'], where: { companyId, date: { gte: startOfMonth } }, _sum: { amount: true } }),
-      this.prisma.freightAssignment.groupBy({ by: ['truckId'], where: { truckId: { in: truckIds }, tripStatus: 'finished', finishedAt: { gte: startOfMonth } }, _sum: { kmTotal: true }, _count: true }),
+      this.prisma.freightAssignment.findMany({
+        where: { truckId: { in: truckIds }, tripStatus: 'finished', finishedAt: { gte: startOfMonth } },
+        select: { truckId: true, kmTotal: true, freightId: true },
+      }),
       this.prisma.truckMovement.groupBy({ by: ['truckId'], where: { companyId, departureAt: { gte: startOfMonth } }, _sum: { kmDriven: true }, _count: true }),
       this.prisma.truckDocument.count({ where: { companyId, expiresAt: { lt: now } } }),
     ]);
+
+    // Fallback: for assignments without trip data (kmTotal), use freight's routeDistanceKm
+    const assignmentsWithoutKm = freightAgg.filter((a: any) => !a.kmTotal);
+    let routeDistanceMap: Record<string, number> = {};
+    if (assignmentsWithoutKm.length > 0) {
+      const freightIds = [...new Set(assignmentsWithoutKm.map((a: any) => a.freightId))];
+      const freightsWithRoute = await this.prisma.freight.findMany({
+        where: { id: { in: freightIds }, routeDistanceKm: { not: null } },
+        select: { id: true, routeDistanceKm: true },
+      });
+      routeDistanceMap = Object.fromEntries(freightsWithRoute.map((f: any) => [f.id, Number(f.routeDistanceKm)]));
+    }
 
     // Build per-truck map
     const byTruck: Record<string, any> = {};
     for (const t of trucks) byTruck[t.id] = { id: t.id, plate: t.plate, income: 0, expense: 0, km: 0, trips: 0 };
     for (const r of incAgg) { if (byTruck[r.truckId]) byTruck[r.truckId].income = Number(r._sum.amount || 0); }
     for (const r of expAgg) { if (byTruck[r.truckId]) byTruck[r.truckId].expense = Number(r._sum.amount || 0); }
-    for (const r of freightAgg) { if (byTruck[r.truckId]) { byTruck[r.truckId].km += Number(r._sum.kmTotal || 0); byTruck[r.truckId].trips += r._count; } }
+    for (const a of freightAgg as any[]) {
+      if (!byTruck[a.truckId]) continue;
+      // Use kmTotal if available, otherwise fall back to route distance (round trip)
+      const km = Number(a.kmTotal || 0) || (routeDistanceMap[a.freightId] ? routeDistanceMap[a.freightId] * 2 : 0);
+      byTruck[a.truckId].km += km;
+      byTruck[a.truckId].trips += 1;
+    }
     for (const r of movAgg) { if (byTruck[r.truckId]) { byTruck[r.truckId].km += Number(r._sum.kmDriven || 0); byTruck[r.truckId].trips += r._count; } }
 
     const arr = Object.values(byTruck) as any[];
