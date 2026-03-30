@@ -1316,7 +1316,7 @@ export class FreightsService {
 
   // ======================== START =====================================
 
-  async start(freightId: string, user: any) {
+  async start(freightId: string, user: any, force = false) {
     if (user.role === 'chofer') await this.assertDriverAccess(freightId, user.sub);
     await this.assertNotConsultaProducer(freightId, user);
 
@@ -1392,22 +1392,25 @@ export class FreightsService {
         }
       }
 
-      // Check truck availability — only block if in_progress or loaded (accepted elsewhere is OK)
-      if (activeAssignment?.truckId) {
-      const busyAssignment = await tx.freightAssignment.findFirst({
-        where: {
-          truckId: activeAssignment.truckId,
-          tripStatus: { in: ['in_progress', 'loaded'] },
-          freightId: { not: freightId },
-        },
-        include: { freight: { select: { code: true } } },
-      });
-      if (busyAssignment) {
-        throw new BadRequestException(
-          `El camión ${activeAssignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
-        );
+      // Check truck availability — warn if in_progress or loaded (accepted elsewhere is OK)
+      if (activeAssignment?.truckId && !force) {
+        const busyAssignment = await tx.freightAssignment.findFirst({
+          where: {
+            truckId: activeAssignment.truckId,
+            tripStatus: { in: ['in_progress', 'loaded'] },
+            freightId: { not: freightId },
+          },
+          include: { freight: { select: { code: true } } },
+        });
+        if (busyAssignment) {
+          const err: any = new BadRequestException(
+            `El camión ${activeAssignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). ¿Desea iniciar de todos modos?`,
+          );
+          err.response.truckBusy = true;
+          err.response.busyFreightCode = busyAssignment.freight.code;
+          throw err;
+        }
       }
-      } // end if (activeAssignment?.truckId)
 
       // Sync assignment tripStatus for single-truck freights
       if (activeAssignment) {
@@ -3661,7 +3664,7 @@ export class FreightsService {
     throw new BadRequestException('Acción no válida');
   }
 
-  async startTrip(freightId: string, assignmentId: string, user: any) {
+  async startTrip(freightId: string, assignmentId: string, user: any, force = false) {
     await this.assertNotConsultaProducer(freightId, user);
     if (user.role === 'chofer') {
       const a = await this.prisma.freightAssignment.findFirst({
@@ -3715,21 +3718,24 @@ export class FreightsService {
         }
       }
 
-      // Check truck availability — only block if in_progress or loaded (accepted elsewhere is OK)
-      if (assignment.truckId) {
-      const busyAssignment = await (tx.freightAssignment as any).findFirst({
-        where: {
-          truckId: assignment.truckId,
-          tripStatus: { in: ['in_progress', 'loaded'] },
-          id: { not: assignmentId },
-        },
-        include: { freight: { select: { code: true } } },
-      });
-      if (busyAssignment) {
-        throw new BadRequestException(
-          `El camión ${assignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). Debe finalizar ese viaje antes de iniciar este.`,
-        );
-      }
+      // Check truck availability — warn if in_progress or loaded (accepted elsewhere is OK)
+      if (assignment.truckId && !force) {
+        const busyAssignment = await (tx.freightAssignment as any).findFirst({
+          where: {
+            truckId: assignment.truckId,
+            tripStatus: { in: ['in_progress', 'loaded'] },
+            id: { not: assignmentId },
+          },
+          include: { freight: { select: { code: true } } },
+        });
+        if (busyAssignment) {
+          const err: any = new BadRequestException(
+            `El camión ${assignment.plate || ''} está en otro viaje en curso (flete ${busyAssignment.freight.code}). ¿Desea iniciar de todos modos?`,
+          );
+          err.response.truckBusy = true;
+          err.response.busyFreightCode = busyAssignment.freight.code;
+          throw err;
+        }
       } // end if (assignment.truckId)
 
       await (tx.freightAssignment as any).update({

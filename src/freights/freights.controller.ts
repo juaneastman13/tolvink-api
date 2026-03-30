@@ -218,8 +218,8 @@ export class FreightsController {
   @UseGuards(FreightAccessGuard)
   @Roles('transporter', 'producer', 'plant', 'chofer')
   @ApiOperation({ summary: 'Iniciar viaje' })
-  start(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
-    return this.service.start(id, user);
+  start(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any, @Body() body?: any) {
+    return this.service.start(id, user, body?.force === true);
   }
 
   @Post(':id/confirm-loaded')
@@ -347,8 +347,9 @@ export class FreightsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('aId', ParseUUIDPipe) aId: string,
     @CurrentUser() user: any,
+    @Body() body?: any,
   ) {
-    return this.service.startTrip(id, aId, user);
+    return this.service.startTrip(id, aId, user, body?.force === true);
   }
 
   @Post(':id/assignments/:aId/confirm-loaded')
