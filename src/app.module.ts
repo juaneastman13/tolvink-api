@@ -23,6 +23,7 @@ import { OcrModule } from './ocr/ocr.module';
 import { WeighTicketsModule } from './weigh-tickets/weigh-tickets.module';
 import { WebChatModule } from './web-chat/web-chat.module';
 import { SharedLinksModule } from './shared-links/shared-links.module';
+import { ModulesController, ModulesService } from './modules/modules.controller';
 
 @Module({
   imports: [
@@ -53,10 +54,12 @@ import { SharedLinksModule } from './shared-links/shared-links.module';
     CompanyAccessController,
     ConversationsController,
     AdminController,
+    ModulesController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     FieldsService,
+    ModulesService,
     TrucksService,
     PlantAccessService,
     CompanyAccessService,
