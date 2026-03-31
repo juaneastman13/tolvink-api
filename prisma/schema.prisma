@@ -1456,3 +1456,28 @@ model DiagnosticSession {
   @@map("diagnostic_sessions")
 }
 
+model VerifiedPart {
+  id              String    @id @default(uuid())
+  partNumber      String    @map("part_number") @db.VarChar(50)
+  brand           String    @db.VarChar(100)
+  description     String
+  category        String?   @db.VarChar(50)
+  machineModels   Json?     @map("machine_models")
+  source          String    @db.VarChar(100)
+  sourceUrl       String?   @map("source_url")
+  diagramUrl      String?   @map("diagram_url")
+  crossReferences Json?     @map("cross_references")
+  lastKnownPrice  String?   @map("last_known_price")
+  priceCurrency   String?   @default("USD") @map("price_currency") @db.VarChar(10)
+  priceDate       DateTime? @map("price_date")
+  verifiedByUser  Boolean   @default(false) @map("verified_by_user")
+  verifiedAt      DateTime? @map("verified_at")
+  timesUsed       Int       @default(0) @map("times_used")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@unique([partNumber, brand])
+  @@index([brand, category])
+  @@map("verified_parts")
+}
+

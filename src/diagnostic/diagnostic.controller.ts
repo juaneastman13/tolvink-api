@@ -8,11 +8,39 @@ import { IsString, IsNotEmpty, IsOptional, IsIn, IsArray } from 'class-validator
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../database/prisma.service';
+import { PartsLookupService } from './parts-lookup.service';
 import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 
 const MODEL_ID = 'claude-sonnet-4-6';
 const MAX_TOKENS = 4096;
+const MAX_TOOL_LOOPS = 3;
+
+const TOOLS: any[] = [
+  {
+    name: 'search_parts',
+    description: 'Busca números de pieza verificados en catálogos oficiales de fabricantes (John Deere, Case IH, New Holland, etc). Usa SIEMPRE esta herramienta antes de mencionar cualquier repuesto. NUNCA inventes un número de pieza.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        machine_brand: { type: 'string', description: 'Marca de la máquina' },
+        machine_model: { type: 'string', description: 'Modelo de la máquina' },
+        part_description: { type: 'string', description: 'Descripción de la pieza en inglés. Ej: engine oil filter' },
+        part_category: { type: 'string', enum: ['engine','transmission','hydraulics','electrical','filters','cooling','fuel','brakes','steering','cab','pto','other'] },
+      },
+      required: ['machine_brand', 'machine_model', 'part_description'],
+    },
+  },
+  {
+    name: 'verify_part_number',
+    description: 'Verifica si un número de pieza existe buscando en catálogos oficiales.',
+    input_schema: {
+      type: 'object',
+      properties: { part_number: { type: 'string', description: 'Número de pieza a verificar' } },
+      required: ['part_number'],
+    },
+  },
+];
 
 // ── DTOs ──────────────────────────────────────────────────────────────
 
@@ -37,6 +65,7 @@ export class DiagnosticService {
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
+    private partsLookup: PartsLookupService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -112,20 +141,21 @@ export class DiagnosticService {
     messages.push(userMsg);
 
     // Build assistant response
-    let assistantContent = 'El agente de diagnóstico no está disponible en este momento. Intentá de nuevo más tarde.';
+    let assistantContent: { text: string; parts: any[] } = { text: 'El agente de diagnóstico no está disponible en este momento. Intentá de nuevo más tarde.', parts: [] };
 
     if (this.client) {
       try {
         assistantContent = await this.callClaude(session.machine, messages, dto.mediaUrls);
       } catch (err) {
         this.logger.error(`Claude error: ${err.message}`);
-        assistantContent = 'Hubo un error al procesar tu consulta. Por favor intentá de nuevo.';
+        assistantContent = { text: 'Hubo un error al procesar tu consulta. Por favor intentá de nuevo.', parts: [] };
       }
     }
 
     const assistantMsg: any = {
-      id: randomUUID(), role: 'assistant', content: assistantContent,
+      id: randomUUID(), role: 'assistant', content: assistantContent.text,
       mediaUrls: [], mediaTypes: [], timestamp: new Date().toISOString(),
+      suggestedParts: assistantContent.parts?.length > 0 ? assistantContent.parts : undefined,
     };
     messages.push(assistantMsg);
 
@@ -140,19 +170,69 @@ export class DiagnosticService {
     return assistantMsg;
   }
 
-  private async callClaude(machine: any, messages: any[], mediaUrls?: string[]): Promise<string> {
+  private async callClaude(machine: any, messages: any[], mediaUrls?: string[]): Promise<{ text: string; parts: any[] }> {
     const systemPrompt = this.buildSystemPrompt(machine);
     const claudeMessages = this.buildClaudeMessages(messages, mediaUrls);
+    const collectedParts: any[] = [];
 
-    const response = await this.client.messages.create({
-      model: MODEL_ID,
-      max_tokens: MAX_TOKENS,
-      system: systemPrompt,
-      messages: claudeMessages,
-    });
+    let currentMessages = [...claudeMessages];
 
-    const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined;
-    return textBlock?.text || 'No pude generar una respuesta.';
+    for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
+      const response = await this.client.messages.create({
+        model: MODEL_ID,
+        max_tokens: MAX_TOKENS,
+        system: systemPrompt,
+        messages: currentMessages,
+        tools: TOOLS,
+      });
+
+      // If no tool use, extract text and return
+      if (response.stop_reason !== 'tool_use') {
+        const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined;
+        return { text: textBlock?.text || 'No pude generar una respuesta.', parts: collectedParts };
+      }
+
+      // Process tool calls
+      const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
+      const toolResults: any[] = [];
+
+      for (const block of toolUseBlocks) {
+        const tu = block as any;
+        let result: any;
+        try {
+          if (tu.name === 'search_parts') {
+            const parts = await this.partsLookup.searchParts({
+              machineBrand: tu.input.machine_brand,
+              machineModel: tu.input.machine_model,
+              partDescription: tu.input.part_description,
+              partCategory: tu.input.part_category,
+            });
+            collectedParts.push(...parts);
+            result = parts.length > 0 ? parts : { found: false, message: 'No se encontraron resultados verificados para esta pieza.' };
+          } else if (tu.name === 'verify_part_number') {
+            const part = await this.partsLookup.verifyPartNumber(tu.input.part_number);
+            if (part) collectedParts.push(part);
+            result = part || { found: false, message: `No se pudo verificar el número de pieza ${tu.input.part_number}.` };
+          } else {
+            result = { error: `Tool ${tu.name} not found` };
+          }
+        } catch (err) {
+          this.logger.error(`Tool ${tu.name} error: ${err.message}`);
+          result = { error: 'Error al buscar repuestos. Intentá de nuevo.' };
+        }
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(result) });
+      }
+
+      // Add assistant response + tool results for next loop
+      currentMessages = [
+        ...currentMessages,
+        { role: 'assistant', content: response.content },
+        { role: 'user', content: toolResults },
+      ];
+    }
+
+    // If we exhausted loops, return last text
+    return { text: 'No pude completar la búsqueda de repuestos. Intentá de nuevo.', parts: collectedParts };
   }
 
   private buildSystemPrompt(machine: any): string {
@@ -194,11 +274,12 @@ ${maintenance}
    - Reparaciones necesarias con nivel de dificultad.
    - Si requiere taller, indicarlo.
 
-3. Cuando la solución requiere repuesto, SIEMPRE incluí:
-   - Nombre exacto de la pieza.
-   - Número de pieza OEM del fabricante.
-   - Piezas/números compatibles de marcas alternativas (Fleetguard, Donaldson, Baldwin, Mann, Wix, etc.).
-   - Orientá la disponibilidad a Uruguay y Argentina.
+3. Cuando la solución requiere un repuesto:
+   - Llamá SIEMPRE a la herramienta search_parts con marca, modelo y descripción de la pieza.
+   - Presentá SOLO los resultados que la herramienta devuelva con la fuente.
+   - Si la herramienta no encuentra resultados, decí: "No pude verificar el número de pieza. Te recomiendo consultar con tu concesionario o en el catálogo del fabricante."
+   - NUNCA inventes un número de pieza de tu memoria. Los números que "recordás" pueden no existir.
+   - Si hay cross-references (alternativas compatibles), mencioná la marca.
 
 4. Si recibís una imagen:
    - Analizá lo que se ve: componentes, estado, daños visibles, códigos de error en pantalla.

@@ -27,6 +27,7 @@ import { ModulesController, ModulesService } from './modules/modules.controller'
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 import { DiagnosticController, DiagnosticPublicController, DiagnosticService } from './diagnostic/diagnostic.controller';
+import { PartsLookupService } from './diagnostic/parts-lookup.service';
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 
 @Module({
@@ -73,6 +74,7 @@ import { MechanicDashboardController, MechanicDashboardService } from './mechani
     MachinesService,
     MaintenanceService,
     DiagnosticService,
+    PartsLookupService,
     MechanicDashboardService,
     TrucksService,
     PlantAccessService,
