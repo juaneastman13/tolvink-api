@@ -1325,6 +1325,9 @@ model Machine {
 
   modifications        MachineModification[]
   repairHistory        MachineRepairHistory[]
+  maintenanceRecords   MaintenanceRecord[]
+  maintenancePlan      MaintenancePlan?
+  maintenanceAlerts    MaintenanceAlert[]
 
   status               String   @default("active") @db.VarChar(20) // active, inactive, sold
   notes                String?
@@ -1362,5 +1365,70 @@ model MachineRepairHistory {
 
   @@index([machineId])
   @@map("machine_repair_history")
+}
+
+model MaintenanceRecord {
+  id               String   @id @default(uuid())
+  machineId        String   @map("machine_id")
+  machine          Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  companyId        String   @map("company_id")
+
+  type             String   @db.VarChar(50) // scheduled_service, repair, part_change, inspection
+  date             DateTime
+  horometerReading Float?   @map("horometer_reading")
+  odometerReading  Float?   @map("odometer_reading")
+  description      String
+  partsUsed        Json?    @map("parts_used")
+  laborCost        Float?   @map("labor_cost")
+  totalCost        Float?   @map("total_cost")
+  workshop         String?
+  mechanic         String?
+  documents        Json?
+  notes            String?
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([machineId])
+  @@index([companyId])
+  @@map("maintenance_records")
+}
+
+model MaintenancePlan {
+  id               String   @id @default(uuid())
+  machineId        String   @unique @map("machine_id")
+  machine          Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  companyId        String   @map("company_id")
+
+  intervals        Json     // [{ type, label, hours, months }]
+  customIntervals  Json?    @map("custom_intervals")
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("maintenance_plans")
+}
+
+model MaintenanceAlert {
+  id               String   @id @default(uuid())
+  machineId        String   @map("machine_id")
+  machine          Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  companyId        String   @map("company_id")
+
+  type             String   @db.VarChar(30) // hours_based, time_based
+  maintenanceType  String   @map("maintenance_type") @db.VarChar(50) // oil_change, filters, major_service, etc.
+  label            String   @db.VarChar(100)
+  message          String
+  severity         String   @default("warning") @db.VarChar(20) // warning, overdue
+  dueDate          DateTime? @map("due_date")
+  dueHorometer     Float?   @map("due_horometer")
+  status           String   @default("pending") @db.VarChar(20) // pending, acknowledged, completed, dismissed
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([machineId])
+  @@index([companyId, status])
+  @@map("maintenance_alerts")
 }
 

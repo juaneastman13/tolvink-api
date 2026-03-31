@@ -25,6 +25,7 @@ import { WebChatModule } from './web-chat/web-chat.module';
 import { SharedLinksModule } from './shared-links/shared-links.module';
 import { ModulesController, ModulesService } from './modules/modules.controller';
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
+import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 
 @Module({
   imports: [
@@ -58,12 +59,14 @@ import { MachinesController, MachineTemplatesController, MachinesService } from 
     ModulesController,
     MachineTemplatesController,
     MachinesController,
+    MaintenanceController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     FieldsService,
     ModulesService,
     MachinesService,
+    MaintenanceService,
     TrucksService,
     PlantAccessService,
     CompanyAccessService,
