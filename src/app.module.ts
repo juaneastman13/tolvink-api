@@ -24,6 +24,7 @@ import { WeighTicketsModule } from './weigh-tickets/weigh-tickets.module';
 import { WebChatModule } from './web-chat/web-chat.module';
 import { SharedLinksModule } from './shared-links/shared-links.module';
 import { ModulesController, ModulesService } from './modules/modules.controller';
+import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 
 @Module({
   imports: [
@@ -55,11 +56,14 @@ import { ModulesController, ModulesService } from './modules/modules.controller'
     ConversationsController,
     AdminController,
     ModulesController,
+    MachineTemplatesController,
+    MachinesController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     FieldsService,
     ModulesService,
+    MachinesService,
     TrucksService,
     PlantAccessService,
     CompanyAccessService,

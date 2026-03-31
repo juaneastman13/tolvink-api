@@ -144,6 +144,7 @@ model Company {
   truckExpenses          TruckExpense[]        @relation("TruckExpCompany")
   truckIncomes           TruckIncome[]         @relation("TruckIncCompany")
   truckMovements         TruckMovement[]       @relation("TruckMovCompany")
+  machines               Machine[]
 
   @@map("companies")
 }
@@ -1266,5 +1267,100 @@ model SharedLink {
   @@index([targetCompanyId, linkType])
   @@index([freightId])
   @@map("shared_links")
+}
+
+// ======================== MECHANIC MODULE ==============================
+
+model MachineTemplate {
+  id                   String   @id @default(uuid())
+  brand                String   @db.VarChar(100)
+  series               String?  @db.VarChar(100)
+  model                String   @db.VarChar(100)
+  machineType          String   @map("machine_type") @db.VarChar(50) // tractor, harvester, seeder, baler, implement, truck, car, motorcycle, other
+  engineBrand          String?  @map("engine_brand") @db.VarChar(100)
+  engineModel          String?  @map("engine_model") @db.VarChar(100)
+  enginePower          String?  @map("engine_power") @db.VarChar(50)
+  engineDisplacement   String?  @map("engine_displacement") @db.VarChar(50)
+  transmissionType     String?  @map("transmission_type") @db.VarChar(100)
+  fuelType             String?  @map("fuel_type") @db.VarChar(50)
+  hydraulicSystem      String?  @map("hydraulic_system") @db.VarChar(100)
+  maintenanceIntervals Json?    @map("maintenance_intervals")
+  specs                Json?
+  machines             Machine[]
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@unique([brand, model, machineType])
+  @@map("machine_templates")
+}
+
+model Machine {
+  id                   String   @id @default(uuid())
+  companyId            String   @map("company_id")
+  company              Company  @relation(fields: [companyId], references: [id])
+  templateId           String?  @map("template_id")
+  template             MachineTemplate? @relation(fields: [templateId], references: [id])
+
+  machineType          String   @map("machine_type") @db.VarChar(50)
+  brand                String   @db.VarChar(100)
+  model                String   @db.VarChar(100)
+  year                 Int?
+  serialNumber         String   @map("serial_number") @db.VarChar(100)
+
+  engineBrand          String?  @map("engine_brand") @db.VarChar(100)
+  engineModel          String?  @map("engine_model") @db.VarChar(100)
+  enginePower          String?  @map("engine_power") @db.VarChar(50)
+  engineDisplacement   String?  @map("engine_displacement") @db.VarChar(50)
+  transmissionType     String?  @map("transmission_type") @db.VarChar(100)
+  fuelType             String?  @map("fuel_type") @db.VarChar(50)
+  hydraulicSystem      String?  @map("hydraulic_system") @db.VarChar(100)
+  hydraulicCapacity    String?  @map("hydraulic_capacity") @db.VarChar(50)
+  tireSize             String?  @map("tire_size") @db.VarChar(50)
+  tireBrand            String?  @map("tire_brand") @db.VarChar(50)
+  currentHorometer     Float?   @map("current_horometer")
+  currentOdometer      Float?   @map("current_odometer")
+
+  qrCode               String?  @unique @map("qr_code")
+  photos               Json?
+
+  modifications        MachineModification[]
+  repairHistory        MachineRepairHistory[]
+
+  status               String   @default("active") @db.VarChar(20) // active, inactive, sold
+  notes                String?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@unique([companyId, serialNumber])
+  @@index([companyId])
+  @@map("machines")
+}
+
+model MachineModification {
+  id          String    @id @default(uuid())
+  machineId   String    @map("machine_id")
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  description String
+  date        DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([machineId])
+  @@map("machine_modifications")
+}
+
+model MachineRepairHistory {
+  id          String    @id @default(uuid())
+  machineId   String    @map("machine_id")
+  machine     Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  description String
+  date        DateTime?
+  workshop    String?
+  cost        Float?
+  notes       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([machineId])
+  @@map("machine_repair_history")
 }
 
