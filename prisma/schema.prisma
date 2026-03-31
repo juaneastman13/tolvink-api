@@ -1328,6 +1328,7 @@ model Machine {
   maintenanceRecords   MaintenanceRecord[]
   maintenancePlan      MaintenancePlan?
   maintenanceAlerts    MaintenanceAlert[]
+  diagnosticSessions   DiagnosticSession[]
 
   status               String   @default("active") @db.VarChar(20) // active, inactive, sold
   notes                String?
@@ -1430,5 +1431,28 @@ model MaintenanceAlert {
   @@index([machineId])
   @@index([companyId, status])
   @@map("maintenance_alerts")
+}
+
+model DiagnosticSession {
+  id              String    @id @default(uuid())
+  machineId       String    @map("machine_id")
+  machine         Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  companyId       String    @map("company_id")
+  userId          String    @map("user_id")
+
+  title           String?
+  status          String    @default("open") @db.VarChar(20) // open, resolved, unresolved
+  resolutionNotes String?   @map("resolution_notes")
+  messages        Json      @default("[]")
+
+  shareToken      String?   @unique @map("share_token")
+  shareExpiresAt  DateTime? @map("share_expires_at")
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([machineId])
+  @@index([companyId])
+  @@map("diagnostic_sessions")
 }
 

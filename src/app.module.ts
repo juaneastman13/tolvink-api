@@ -26,6 +26,7 @@ import { SharedLinksModule } from './shared-links/shared-links.module';
 import { ModulesController, ModulesService } from './modules/modules.controller';
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
+import { DiagnosticController, DiagnosticPublicController, DiagnosticService } from './diagnostic/diagnostic.controller';
 
 @Module({
   imports: [
@@ -60,6 +61,8 @@ import { MaintenanceController, MaintenanceService } from './maintenance/mainten
     MachineTemplatesController,
     MachinesController,
     MaintenanceController,
+    DiagnosticController,
+    DiagnosticPublicController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -67,6 +70,7 @@ import { MaintenanceController, MaintenanceService } from './maintenance/mainten
     ModulesService,
     MachinesService,
     MaintenanceService,
+    DiagnosticService,
     TrucksService,
     PlantAccessService,
     CompanyAccessService,
