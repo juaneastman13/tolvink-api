@@ -27,6 +27,7 @@ import { ModulesController, ModulesService } from './modules/modules.controller'
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 import { DiagnosticController, DiagnosticPublicController, DiagnosticService } from './diagnostic/diagnostic.controller';
+import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { DiagnosticController, DiagnosticPublicController, DiagnosticService } f
     MaintenanceController,
     DiagnosticController,
     DiagnosticPublicController,
+    MechanicDashboardController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -71,6 +73,7 @@ import { DiagnosticController, DiagnosticPublicController, DiagnosticService } f
     MachinesService,
     MaintenanceService,
     DiagnosticService,
+    MechanicDashboardService,
     TrucksService,
     PlantAccessService,
     CompanyAccessService,
