@@ -936,11 +936,17 @@ export class FreightActionToolsService {
         }
 
         case 'assign_truck_to_freight': {
-          if (!this.aiContext.canAccessCompany(user, synUser, params.plantCompanyId)) {
+          // Allow if user is plant OR if user is the transporter (own fleet assigning own truck)
+          const userCoId = user.activeCompanyId || user.companyId || synUser.companyId;
+          const isOwnFleetAssignment = params.transporterCompanyId === userCoId;
+          if (!isOwnFleetAssignment && !this.aiContext.canAccessCompany(user, synUser, params.plantCompanyId)) {
             result = JSON.stringify({ error: 'No tiene acceso a la empresa para esta acción.' });
             break;
           }
-          const plantSyn = { ...synUser, companyId: params.plantCompanyId, companyType: 'plant', userType: 'plant' };
+          // Use plant context for the API call; for own fleet, use destCompany as plant
+          const effectivePlantId = this.aiContext.canAccessCompany(user, synUser, params.plantCompanyId)
+            ? params.plantCompanyId : params.plantCompanyId; // still use plantCompanyId from staging
+          const plantSyn = { ...synUser, companyId: effectivePlantId, companyType: 'plant', userType: 'plant' };
           const truckDto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) truckDto.truckId = params.truckId;
           if (params.driverId) truckDto.driverId = params.driverId;

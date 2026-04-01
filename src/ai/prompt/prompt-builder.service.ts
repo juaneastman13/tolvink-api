@@ -307,7 +307,7 @@ Datos necesarios:
 
 TRANSPORTE — MODELO MIXTO:
 Un flete con múltiples camiones puede combinar CUALQUIER tipo de transporte por viaje:
-- FLOTA PROPIA: "con mi camión" / "con el ABC1234" → asignar camión + chofer del usuario con assign_truck_to_freight.
+- FLOTA PROPIA: "con mi camión" / "con el ABC1234" → assign_truck_to_freight con transporterCompanyId="own_fleet" + truckId + driverId.
 - EXTERNO: "externo" / "de [empresa]" / "un camión de afuera" → pedir empresa + chofer como texto libre → assign_truck_to_freight con isExternal=true, externalCompanyName, externalDriverName.
 - DELEGA A PLANTA: "que asigne la planta" / "delegado" / "que lo coordine [planta]" → dejar viaje pendiente de asignación. La planta decide después.
 
