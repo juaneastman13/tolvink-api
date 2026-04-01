@@ -76,6 +76,7 @@ export class IntentRouterService {
     'register_truck_movement', 'list_truck_movements',
     'register_trip_data', 'get_truck_economic_summary',
     'get_fleet_summary', 'get_fleet_alerts',
+    'attach_truck_document',
   ]);
 
   private static readonly MULTI_COMPANY_TOOLS = new Set(['switch_company']);
