@@ -221,6 +221,12 @@ export class AiService implements OnModuleDestroy {
       messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}, URL: ${doc.url}). El usuario puede querer adjuntarlo a:\n- Un FLETE → usar attach_document(code)\n- Un CAMIÓN, GASTO, INGRESO o MOVIMIENTO → usar attach_truck_document(plate, linkTo, linkId)\nAnalizar el mensaje del usuario para determinar a qué adjuntar. Si menciona gasto, ingreso, camión o patente → attach_truck_document. Si menciona flete o código de flete → attach_document.${activeCode ? ` Flete activo: ${this.sanitizeForPrompt(activeCode)}.` : ''} Si no queda claro, preguntar.]\n\n${messageToSend}`;
     }
 
+    // Inject lastLocation so AI can pass coordinates to prepare_freight
+    if (state.lastLocation) {
+      const loc = state.lastLocation;
+      messageToSend = `[Sistema: UBICACIÓN GUARDADA — lat: ${loc.lat}, lng: ${loc.lng}${loc.name ? `, nombre: "${this.sanitizeForPrompt(loc.name)}"` : ''}${loc.address ? `, dirección: "${this.sanitizeForPrompt(loc.address)}"` : ''}. Cuando el usuario pida crear un flete con destino u origen personalizado, usar estos valores en customDestLat/customDestLng (o customOriginLat/customOriginLng) de prepare_freight. Si el nombre no fue proporcionado, usar la dirección o "Ubicación personalizada".]\n\n${messageToSend}`;
+    }
+
     // Inject active context — directive format so Claude acts on active freight directly
     if (state.activeContext && !state.pendingDocument) {
       const ac = state.activeContext;

@@ -312,7 +312,13 @@ REGLAS CRÍTICAS:
 - Auto-resolver nombres con fuzzy search. NO buscar IDs manualmente.
 - Duplicar flete: "repetí el último" / "lo mismo" / "igual que antes" → buscar último flete con list_freights, duplicar con fecha hoy. Solo pedir fecha nueva si no la dijo. EXCLUIR fletes cancelados al buscar para duplicar.
 - "al mismo lugar" / "a la misma planta" → reusar destino del último flete.
-- Origen/destino custom sin coordenadas → generate_location_link.
+- Origen/destino custom sin coordenadas → generate_location_link para que el usuario marque en el mapa.
+UBICACIONES PERSONALIZADAS:
+- Cuando el usuario comparte una ubicación por WhatsApp o marca en el mapa, el sistema guarda las coordenadas automáticamente.
+- Al crear flete con destino custom → usar customDestLat, customDestLng, customDestName en prepare_freight.
+- Al crear flete con origen custom → usar customOriginLat, customOriginLng, customOriginName en prepare_freight.
+- Si hay UBICACIÓN GUARDADA en el contexto, usar esas coordenadas directamente. No pedir la ubicación de nuevo.
+- Si el usuario dice un nombre de lugar pero no hay coordenadas → generate_location_link.
 
 DEFAULTS INTELIGENTES:
 - Si creó un flete en las últimas 24h → ofrecer misma planta: "¿Va a Sofoval Miguelete como el anterior?"
