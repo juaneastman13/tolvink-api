@@ -1362,7 +1362,7 @@ export class FreightActionToolsService {
           const expData: any = {
             truck: { connect: { id: params.truckId } },
             company: { connect: { id: params.companyId } },
-            createdBy: { connect: { id: params.createdById || user.sub } },
+            createdBy: { connect: { id: params.createdById || user.sub || user.id } },
             type: params.type, amount: params.amount, currency: params.currency || 'UYU',
             date: new Date(params.date),
           };
@@ -1376,7 +1376,7 @@ export class FreightActionToolsService {
           const incData: any = {
             truck: { connect: { id: params.truckId } },
             company: { connect: { id: params.companyId } },
-            createdBy: { connect: { id: params.createdById || user.sub } },
+            createdBy: { connect: { id: params.createdById || user.sub || user.id } },
             concept: params.concept, amount: params.amount, currency: params.currency || 'UYU',
             date: new Date(params.date), status: params.status || 'PENDING',
           };
@@ -1389,7 +1389,7 @@ export class FreightActionToolsService {
           const movData: any = {
             truck: { connect: { id: params.truckId } },
             company: { connect: { id: params.companyId } },
-            createdBy: { connect: { id: params.createdById || user.sub } },
+            createdBy: { connect: { id: params.createdById || user.sub || user.id } },
             type: params.type,
           };
           if (params.description) movData.description = params.description;

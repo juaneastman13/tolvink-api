@@ -813,7 +813,7 @@ export class AiService implements OnModuleDestroy {
           const fId = input.freightCode ? (await resolveFreight(input.freightCode))?.id : null;
           const L: Record<string,string> = { FUEL:'Combustible',TOLL:'Peaje',MAINTENANCE:'Mantenimiento',TIRE:'Neumáticos',INSURANCE:'Seguro',FINE:'Multa',PARKING:'Estacionamiento',MEAL:'Viáticos',OTHER:'Otro' };
           const effects = this.sessionManager.getSideEffects(session.id);
-          effects.pendingAction = { tool: 'register_truck_expense', summary: `Registrar gasto: ${L[input.type]||input.type} $${input.amount} en ${input.plate}`, params: { truckId: tid, companyId, type: input.type, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], description: input.description, freightId: fId, createdById: user.sub } };
+          effects.pendingAction = { tool: 'register_truck_expense', summary: `Registrar gasto: ${L[input.type]||input.type} $${input.amount} en ${input.plate}`, params: { truckId: tid, companyId, type: input.type, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], description: input.description, freightId: fId, createdById: user.sub || user.id } };
           effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
           this.sessionManager.setSideEffects(session.id, effects);
           return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
@@ -832,7 +832,7 @@ export class AiService implements OnModuleDestroy {
           if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
           const fId = input.freightCode ? (await resolveFreight(input.freightCode))?.id : null;
           const effects = this.sessionManager.getSideEffects(session.id);
-          effects.pendingAction = { tool: 'register_truck_income', summary: `Registrar ingreso: "${input.concept}" $${input.amount} en ${input.plate}`, params: { truckId: tid, companyId, concept: input.concept, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], status: input.status || 'PENDING', freightId: fId, createdById: user.sub } };
+          effects.pendingAction = { tool: 'register_truck_income', summary: `Registrar ingreso: "${input.concept}" $${input.amount} en ${input.plate}`, params: { truckId: tid, companyId, concept: input.concept, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], status: input.status || 'PENDING', freightId: fId, createdById: user.sub || user.id } };
           effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
           this.sessionManager.setSideEffects(session.id, effects);
           return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });
@@ -852,7 +852,7 @@ export class AiService implements OnModuleDestroy {
           if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
           const ML: Record<string,string> = { REPOSITIONING:'Reposicionamiento',MAINTENANCE_TRIP:'Viaje a taller',INTERNAL_TRANSFER:'Traslado interno',PERSONAL:'Uso particular',OTHER:'Otro' };
           const effects = this.sessionManager.getSideEffects(session.id);
-          effects.pendingAction = { tool: 'register_truck_movement', summary: `Registrar: ${ML[input.type]||input.type}${input.kmDriven ? ' ('+input.kmDriven+' km)' : ''} — ${input.plate}`, params: { truckId: tid, companyId, type: input.type, description: input.description, originName: input.originName, destName: input.destName, kmDriven: input.kmDriven, fuelLiters: input.fuelLiters, fuelCost: input.fuelCost, tollCost: input.tollCost, createdById: user.sub } };
+          effects.pendingAction = { tool: 'register_truck_movement', summary: `Registrar: ${ML[input.type]||input.type}${input.kmDriven ? ' ('+input.kmDriven+' km)' : ''} — ${input.plate}`, params: { truckId: tid, companyId, type: input.type, description: input.description, originName: input.originName, destName: input.destName, kmDriven: input.kmDriven, fuelLiters: input.fuelLiters, fuelCost: input.fuelCost, tollCost: input.tollCost, createdById: user.sub || user.id } };
           effects._pendingButtons = [{ id: 'confirm', title: 'Confirmar' }, { id: 'cancel', title: 'Cancelar' }];
           this.sessionManager.setSideEffects(session.id, effects);
           return JSON.stringify({ status: 'pending_confirmation', summary: effects.pendingAction.summary });

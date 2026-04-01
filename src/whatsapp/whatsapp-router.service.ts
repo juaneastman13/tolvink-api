@@ -1956,7 +1956,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       include: userInclude,
     });
 
-    if (user) return user;
+    if (user) { (user as any).sub = user.id; return user; }
 
     // 2) Fallback: lookup by company phone → find first active user of that company
     const company = await this.prisma.company.findFirst({
@@ -1970,7 +1970,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         include: userInclude,
         orderBy: { createdAt: 'asc' },
       });
-      if (companyUser) return companyUser;
+      if (companyUser) { (companyUser as any).sub = companyUser.id; return companyUser; }
     }
 
     return null;
