@@ -28,25 +28,14 @@ export class PartsLookupService {
   }): Promise<PartLookupResult[]> {
     const { machineBrand, machineModel, partDescription } = query;
 
-    // 1. Check cache first
+    // 1. Check cache
     const cached = await this.findCached(machineBrand, machineModel, partDescription);
     if (cached.length > 0) return cached;
 
-    // 2. Search external sources
+    // 2. Search via DuckDuckGo
     let results: PartLookupResult[] = [];
-    const brandLower = machineBrand.toLowerCase();
-
     try {
-      if (brandLower.includes('deere') || brandLower.includes('john deere')) {
-        results = await this.searchGreenFarmParts(machineModel, partDescription);
-      }
-      if (results.length === 0 && (brandLower.includes('case') || brandLower.includes('new holland'))) {
-        results = await this.searchMessicks(machineBrand, machineModel, partDescription);
-      }
-      // Generic fallback for any brand
-      if (results.length === 0) {
-        results = await this.searchGenericWeb(machineBrand, machineModel, partDescription);
-      }
+      results = await this.searchViaDuckDuckGo(machineBrand, machineModel, partDescription);
     } catch (err) {
       this.logger.error(`Parts search error: ${err.message}`);
     }
@@ -74,121 +63,137 @@ export class PartsLookupService {
       };
     }
 
-    // Search web for the specific part number
+    // Search DuckDuckGo for this specific part number
     try {
-      const results = await this.fetchAndParse(
-        `https://www.messicks.com/search?q=${encodeURIComponent(partNumber)}`,
-        partNumber
-      );
-      if (results.length > 0) return results[0];
-
-      const gfp = await this.fetchAndParse(
-        `https://www.greenfarmparts.com/search?q=${encodeURIComponent(partNumber)}`,
-        partNumber
-      );
-      if (gfp.length > 0) return gfp[0];
+      const results = await this.searchDDG(`"${partNumber}" part number OEM`);
+      if (results.length > 0) {
+        const r = results[0];
+        await this.cacheResult({ ...r, partNumber, found: true }, '').catch(() => {});
+        return { ...r, partNumber, found: true };
+      }
     } catch (err) {
       this.logger.error(`Part verify error: ${err.message}`);
     }
-
     return null;
   }
 
-  // ── Green Farm Parts (John Deere) ──
+  // ── DuckDuckGo Search ──
 
-  private async searchGreenFarmParts(model: string, partDesc: string): Promise<PartLookupResult[]> {
-    const searchQuery = `${model} ${partDesc}`;
-    const url = `https://www.greenfarmparts.com/search?q=${encodeURIComponent(searchQuery)}`;
-    return this.fetchAndParse(url, partDesc, 'John Deere', 'greenfarmparts.com');
+  private async searchViaDuckDuckGo(brand: string, model: string, partDesc: string): Promise<PartLookupResult[]> {
+    const brandLower = brand.toLowerCase();
+    let searchSites = '';
+    if (brandLower.includes('deere') || brandLower.includes('john deere')) {
+      searchSites = 'site:shop.deere.com OR site:greenfarmparts.com OR site:avs.parts';
+    } else if (brandLower.includes('case')) {
+      searchSites = 'site:messicks.com OR site:caseih.com OR site:cnhindustrial.com';
+    } else if (brandLower.includes('new holland')) {
+      searchSites = 'site:messicks.com OR site:newholland.com OR site:cnhindustrial.com';
+    } else {
+      searchSites = 'site:messicks.com OR site:tractorjoe.com OR site:agriexpo.com';
+    }
+
+    const query = `${brand} ${model} ${partDesc} OEM part number ${searchSites}`;
+    const results = await this.searchDDG(query);
+
+    // If few results from specific sites, try broader search
+    if (results.length < 2) {
+      const broader = await this.searchDDG(`${brand} ${model} ${partDesc} OEM part number`);
+      // Merge, dedup by partNumber
+      const seen = new Set(results.map(r => r.partNumber));
+      for (const r of broader) {
+        if (!seen.has(r.partNumber)) { results.push(r); seen.add(r.partNumber); }
+      }
+    }
+
+    return results.slice(0, 5);
   }
 
-  // ── Messicks (Case IH / New Holland) ──
+  private async searchDDG(query: string): Promise<PartLookupResult[]> {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
 
-  private async searchMessicks(brand: string, model: string, partDesc: string): Promise<PartLookupResult[]> {
-    const searchQuery = `${model} ${partDesc}`;
-    const url = `https://www.messicks.com/search?q=${encodeURIComponent(searchQuery)}`;
-    return this.fetchAndParse(url, partDesc, brand, 'messicks.com');
-  }
+    const results: PartLookupResult[] = [];
+    const seenParts = new Set<string>();
 
-  // ── Generic web search ──
+    // Extract result titles, URLs, and snippets
+    const titleRegex = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRegex = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
 
-  private async searchGenericWeb(brand: string, model: string, partDesc: string): Promise<PartLookupResult[]> {
-    // Try messicks as it covers many brands
-    const url = `https://www.messicks.com/search?q=${encodeURIComponent(`${brand} ${model} ${partDesc}`)}`;
-    return this.fetchAndParse(url, partDesc, brand, 'messicks.com');
-  }
+    const titles: { url: string; title: string }[] = [];
+    let match;
+    while ((match = titleRegex.exec(html)) !== null) {
+      const rawUrl = match[1];
+      // DuckDuckGo wraps URLs: //duckduckgo.com/l/?uddg=https%3A%2F%2F...
+      const urlMatch = rawUrl.match(/uddg=([^&]+)/);
+      const finalUrl = urlMatch ? decodeURIComponent(urlMatch[1]) : rawUrl;
+      const title = match[2].replace(/<[^>]*>/g, '').trim();
+      titles.push({ url: finalUrl, title });
+    }
 
-  // ── Fetch + Parse HTML ──
+    const snippets: string[] = [];
+    while ((match = snippetRegex.exec(html)) !== null) {
+      snippets.push(match[1].replace(/<[^>]*>/g, '').trim());
+    }
 
-  private async fetchAndParse(url: string, searchTerm: string, defaultBrand?: string, sourceName?: string): Promise<PartLookupResult[]> {
-    try {
-      const res = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TolvinkBot/1.0)' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) return [];
-      const html = await res.text();
+    // Extract part numbers from titles and snippets
+    for (let i = 0; i < Math.min(titles.length, 10); i++) {
+      const text = `${titles[i].title} ${snippets[i] || ''}`;
+      const source = titles[i].url;
 
-      // Extract part numbers with regex patterns common across these sites
-      const results: PartLookupResult[] = [];
-
-      // Pattern: OEM part numbers (alphanumeric, 5-15 chars, often with hyphens)
-      // John Deere: RE504836, AT365870, AH212543
-      // Case/NH: 84412164, 87679598, 47124379
-      const partPatterns = [
-        /(?:part\s*#?\s*:?\s*|P\/N:?\s*|OEM:?\s*|item:?\s*)([A-Z]{1,3}\d{5,10})/gi,
-        /(?:part\s*#?\s*:?\s*|P\/N:?\s*|OEM:?\s*)(\d{8,11})/gi,
-        /\b([A-Z]{2}\d{6,8})\b/g, // JD pattern: RE504836
-        /\b(\d{8,11})\b/g, // CNH pattern: 84412164
+      // Part number patterns
+      const patterns = [
+        /\b([A-Z]{2}\d{5,8})\b/g,   // JD: RE504836, DZ114256, AL156625
+        /\b([A-Z]\d{7,9})\b/g,       // Some: A123456789
+        /\b(\d{8,10})\b/g,           // CNH: 84412164
       ];
 
-      const foundParts = new Set<string>();
-      for (const pattern of partPatterns) {
-        let match;
-        while ((match = pattern.exec(html)) !== null) {
-          const pn = match[1].trim();
-          if (pn.length >= 5 && pn.length <= 15 && !foundParts.has(pn)) {
-            foundParts.add(pn);
-          }
+      for (const pat of patterns) {
+        let pmatch;
+        while ((pmatch = pat.exec(text)) !== null) {
+          const pn = pmatch[1];
+          if (seenParts.has(pn)) continue;
+          if (pn.length < 5 || pn.length > 12) continue;
+          // Filter out obviously non-part numbers (years, phone numbers, etc)
+          if (/^(19|20)\d{2}$/.test(pn)) continue;
+          if (/^0+/.test(pn)) continue;
+
+          seenParts.add(pn);
+          // Determine brand from context
+          let partBrand = 'Unknown';
+          if (/deere|john/i.test(text) || /^[A-Z]{2}\d/.test(pn)) partBrand = 'John Deere';
+          else if (/case/i.test(text)) partBrand = 'Case IH';
+          else if (/new holland|nh/i.test(text)) partBrand = 'New Holland';
+          else if (/massey|mf/i.test(text)) partBrand = 'Massey Ferguson';
+          else if (/baldwin/i.test(text)) partBrand = 'Baldwin';
+          else if (/donaldson/i.test(text)) partBrand = 'Donaldson';
+          else if (/fleetguard/i.test(text)) partBrand = 'Fleetguard';
+          else if (/wix/i.test(text)) partBrand = 'WIX';
+
+          const description = titles[i].title.slice(0, 100);
+
+          results.push({
+            found: true,
+            source: new URL(source).hostname.replace('www.', ''),
+            sourceUrl: source,
+            partNumber: pn,
+            description,
+            brand: partBrand,
+          });
         }
-        if (foundParts.size >= 5) break; // Enough results
       }
-
-      // Extract descriptions near part numbers
-      for (const pn of Array.from(foundParts).slice(0, 5)) {
-        // Find context around the part number in HTML
-        const idx = html.indexOf(pn);
-        if (idx === -1) continue;
-        const context = html.substring(Math.max(0, idx - 200), Math.min(html.length, idx + 200));
-        // Extract description from title tags or nearby text
-        const descMatch = context.match(/title="([^"]{5,80})"/i)
-          || context.match(/>([^<]{5,80})</);
-        const description = descMatch?.[1]?.replace(/<[^>]*>/g, '').trim() || searchTerm;
-
-        // Extract price
-        const priceMatch = context.match(/\$\s*([\d,]+\.?\d{0,2})/);
-
-        results.push({
-          found: true,
-          source: sourceName || new URL(url).hostname,
-          sourceUrl: url,
-          partNumber: pn,
-          description,
-          brand: defaultBrand || 'Unknown',
-          price: priceMatch ? priceMatch[1] : undefined,
-        });
-      }
-
-      return results;
-    } catch (err) {
-      this.logger.warn(`Fetch failed for ${url}: ${err.message}`);
-      return [];
     }
+
+    return results;
   }
 
   // ── Cache ──
 
-  private async findCached(brand: string, model: string, description: string): Promise<PartLookupResult[]> {
+  private async findCached(brand: string, _model: string, description: string): Promise<PartLookupResult[]> {
     const cached = await this.prisma.verifiedPart.findMany({
       where: {
         brand: { contains: brand, mode: 'insensitive' },
@@ -198,21 +203,15 @@ export class PartsLookupService {
     });
     if (cached.length === 0) return [];
 
-    // Increment usage
     await this.prisma.verifiedPart.updateMany({
       where: { id: { in: cached.map(c => c.id) } },
       data: { timesUsed: { increment: 1 } },
     });
 
     return cached.map(c => ({
-      found: true,
-      source: c.source,
-      sourceUrl: c.sourceUrl || '',
-      partNumber: c.partNumber,
-      description: c.description,
-      brand: c.brand,
-      diagramUrl: c.diagramUrl || undefined,
-      price: c.lastKnownPrice || undefined,
+      found: true, source: c.source, sourceUrl: c.sourceUrl || '',
+      partNumber: c.partNumber, description: c.description, brand: c.brand,
+      diagramUrl: c.diagramUrl || undefined, price: c.lastKnownPrice || undefined,
       crossReferences: (c.crossReferences as any[]) || undefined,
     }));
   }
@@ -225,10 +224,9 @@ export class PartsLookupService {
         partNumber: result.partNumber,
         brand: result.brand,
         description: result.description,
-        machineModels: [model],
+        machineModels: model ? [model] : [],
         source: result.source,
         sourceUrl: result.sourceUrl,
-        diagramUrl: result.diagramUrl,
         lastKnownPrice: result.price,
         priceDate: result.price ? new Date() : undefined,
       },
