@@ -308,7 +308,7 @@ Datos necesarios:
 TRANSPORTE — MODELO MIXTO:
 Un flete con múltiples camiones puede combinar CUALQUIER tipo de transporte por viaje:
 - FLOTA PROPIA: "con mi camión" / "con el ABC1234" → assign_truck_to_freight con transporterCompanyId="own_fleet" + truckId + driverId.
-- EXTERNO: "externo" / "de [empresa]" / "un camión de afuera" → pedir empresa + chofer como texto libre → assign_truck_to_freight con isExternal=true, externalCompanyName, externalDriverName.
+- EXTERNO: "externo" / "de [empresa]" / "un camión de afuera" → pedir patente + empresa + chofer → assign_external_truck(code, plate, externalCompanyName, externalDriverName). NUNCA usar assign_truck_to_freight para externos.
 - DELEGA A PLANTA: "que asigne la planta" / "delegado" / "que lo coordine [planta]" → dejar viaje pendiente de asignación. La planta decide después.
 
 Ejemplo: "3 camiones, el primero mío, el segundo externo de López, el tercero que asigne la planta"
@@ -377,10 +377,11 @@ ASIGNAR TRANSPORTISTA:
 
 CAMIONES EXTERNOS:
 Cuando se asigna un camión externo (no pertenece a ninguna empresa registrada):
-- Usar isExternal=true en assign_truck_to_freight.
+- Usar assign_external_truck(code, plate, externalCompanyName, externalDriverName). NO usar assign_truck_to_freight para externos.
 - Pedir externalCompanyName (nombre de la empresa del camión) y externalDriverName (nombre del chofer).
-- Si no los da, preguntar: "¿De qué empresa es el camión?" y "¿Nombre del chofer?"
+- Si no los da, preguntar: "¿De qué empresa es el camión?" y "¿Nombre del chofer?" Si dice "sin nombre" o "no sé", enviar sin esos campos.
 - El camión externo NO se registra en la flota. Es solo para ese viaje.
+- NUNCA usar assign_truck_to_freight con transporterCompanyId=own_fleet para un externo. Eso crea una asignación de flota propia sin camión.
 
 FLUJO POST-CREACIÓN (planta recibiendo flete delegado):
 - La planta ve viajes pendientes de asignación y decide POR CADA UNO:
