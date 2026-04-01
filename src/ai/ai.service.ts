@@ -841,7 +841,7 @@ export class AiService implements OnModuleDestroy {
           if (input.from || input.to) { w.date = {}; if (input.from) w.date.gte = new Date(input.from); if (input.to) w.date.lte = new Date(input.to); }
           const exps = await this.prisma.truckExpense.findMany({ where: w, orderBy: { date: 'desc' }, take: 15 });
           const tot = await this.prisma.truckExpense.aggregate({ where: w, _sum: { amount: true } });
-          return JSON.stringify({ expenses: exps.map((e: any) => ({ type: e.type, amount: Number(e.amount), date: e.date.toISOString().split('T')[0], description: e.description })), total: Number(tot._sum.amount || 0) });
+          return JSON.stringify({ expenses: exps.map((e: any) => ({ id: e.id, type: e.type, amount: Number(e.amount), date: e.date.toISOString().split('T')[0], description: e.description })), total: Number(tot._sum.amount || 0) });
         }
         case 'register_truck_income': {
           const tid = await resolveTruck(input.plate);
@@ -861,7 +861,7 @@ export class AiService implements OnModuleDestroy {
           if (input.status) w.status = input.status;
           const incs = await this.prisma.truckIncome.findMany({ where: w, orderBy: { date: 'desc' }, take: 15 });
           const byStatus = await this.prisma.truckIncome.groupBy({ by: ['status'], where: { truckId: tid, companyId }, _sum: { amount: true } });
-          return JSON.stringify({ incomes: incs.map((i: any) => ({ concept: i.concept, amount: Number(i.amount), date: i.date.toISOString().split('T')[0], status: i.status })), byStatus: byStatus.map((s: any) => ({ status: s.status, total: Number(s._sum.amount || 0) })) });
+          return JSON.stringify({ incomes: incs.map((i: any) => ({ id: i.id, concept: i.concept, amount: Number(i.amount), date: i.date.toISOString().split('T')[0], status: i.status })), byStatus: byStatus.map((s: any) => ({ status: s.status, total: Number(s._sum.amount || 0) })) });
         }
         case 'register_truck_movement': {
           const tid = await resolveTruck(input.plate);
@@ -879,7 +879,7 @@ export class AiService implements OnModuleDestroy {
           const w: any = { truckId: tid, companyId };
           if (input.from || input.to) { w.departureAt = {}; if (input.from) w.departureAt.gte = new Date(input.from); if (input.to) w.departureAt.lte = new Date(input.to); }
           const movs = await this.prisma.truckMovement.findMany({ where: w, orderBy: { departureAt: 'desc' }, take: 15 });
-          return JSON.stringify(movs.map((m: any) => ({ type: m.type, origin: m.originName, dest: m.destName, date: m.departureAt?.toISOString().split('T')[0], km: m.kmDriven ? Number(m.kmDriven) : null })));
+          return JSON.stringify(movs.map((m: any) => ({ id: m.id, type: m.type, origin: m.originName, dest: m.destName, date: m.departureAt?.toISOString().split('T')[0], km: m.kmDriven ? Number(m.kmDriven) : null })));
         }
         case 'register_trip_data': {
           const freight = await resolveFreight(input.freightCode);
