@@ -759,6 +759,7 @@ export class AiService implements OnModuleDestroy {
         case 'navigate_app': return this.locationTools.toolNavigateApp(input, session);
         // Fleet economics tools
         case 'get_truck_detail': case 'get_truck_documents': case 'get_expiring_documents':
+        case 'attach_truck_document':
         case 'register_truck_expense': case 'list_truck_expenses':
         case 'register_truck_income': case 'list_truck_incomes':
         case 'register_truck_movement': case 'list_truck_movements':
@@ -806,6 +807,25 @@ export class AiService implements OnModuleDestroy {
           const days = input.days || 30; const now = new Date();
           const docs = await this.prisma.truckDocument.findMany({ where: { companyId, expiresAt: { lte: new Date(Date.now() + days * 86400000) } }, include: { truck: { select: { plate: true } } }, orderBy: { expiresAt: 'asc' } });
           return JSON.stringify(docs.map((d: any) => ({ plate: d.truck.plate, type: d.type, expires: d.expiresAt?.toISOString().split('T')[0], status: d.expiresAt < now ? 'vencido' : 'por_vencer' })));
+        }
+        case 'attach_truck_document': {
+          const tid = await resolveTruck(input.plate);
+          if (!tid) return JSON.stringify({ error: `Camión "${input.plate}" no encontrado` });
+          const pendingDoc = this.sessionManager.getSideEffects(session.id)?.pendingDocument
+            || (session.flowState as any)?.pendingDocument;
+          if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay archivo pendiente. Enviá primero la foto o documento por WhatsApp.' });
+          const docData: any = { truckId: tid, companyId, type: input.docType || 'OTHER', fileUrl: pendingDoc.url, fileName: pendingDoc.name || 'Archivo', createdById: user.sub };
+          if (input.linkTo === 'expense' && input.linkId) docData.expenseId = input.linkId;
+          else if (input.linkTo === 'income' && input.linkId) docData.incomeId = input.linkId;
+          else if (input.linkTo === 'movement' && input.linkId) docData.movementId = input.linkId;
+          await this.prisma.truckDocument.create({ data: docData });
+          // Clear pending document
+          const eff = this.sessionManager.getSideEffects(session.id);
+          if (eff?.pendingDocument) { delete eff.pendingDocument; this.sessionManager.setSideEffects(session.id, eff); }
+          const st = (session.flowState as any) || {};
+          if (st.pendingDocument) { delete st.pendingDocument; await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { flowState: st } }); }
+          const linkLabel = input.linkTo === 'expense' ? 'gasto' : input.linkTo === 'income' ? 'ingreso' : input.linkTo === 'movement' ? 'movimiento' : 'camión';
+          return JSON.stringify({ status: 'ok', message: `Documento "${pendingDoc.name}" adjuntado al ${linkLabel} del camión ${input.plate}` });
         }
         case 'register_truck_expense': {
           const tid = await resolveTruck(input.plate);

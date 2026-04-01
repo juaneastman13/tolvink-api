@@ -658,6 +658,7 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${supabaseKey}`,
+        apikey: supabaseKey,
         'Content-Type': mimeType,
       },
       body: new Uint8Array(buffer),

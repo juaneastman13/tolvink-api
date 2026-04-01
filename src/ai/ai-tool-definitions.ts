@@ -1060,6 +1060,11 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
     input_schema: { type: 'object' as const, properties: { days: { type: 'number', description: 'Días hacia adelante para buscar (default 30)' } }, required: [] },
   },
   {
+    name: 'attach_truck_document',
+    description: 'Adjunta archivo pendiente (enviado por WhatsApp) a un gasto, ingreso o documento de un camión. Usa el pendingDocument de la sesión.',
+    input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, linkTo: { type: 'string', enum: ['expense', 'income', 'movement', 'general'], description: 'A qué vincular el documento (gasto, ingreso, movimiento, o general)' }, linkId: { type: 'string', description: 'ID del gasto/ingreso/movimiento (opcional, si no se indica se adjunta como documento general del camión)' }, docType: { type: 'string', enum: ['VTV_ITV', 'INSURANCE', 'TRANSPORT_LICENSE', 'DRIVER_LICENSE', 'BPS_DGI', 'GET_CERTIFICATE', 'CIRCULATION_PERMIT', 'OTHER'], description: 'Tipo de documento (default OTHER)' } }, required: ['plate'] },
+  },
+  {
     name: 'register_truck_expense',
     description: 'Registra un gasto del camión (combustible, peaje, mantenimiento, neumáticos, seguro, multa, estacionamiento, viáticos). Requiere confirmación.',
     input_schema: { type: 'object' as const, properties: { plate: { type: 'string', description: 'Patente del camión' }, type: { type: 'string', enum: ['FUEL', 'TOLL', 'MAINTENANCE', 'TIRE', 'INSURANCE', 'FINE', 'PARKING', 'MEAL', 'OTHER'], description: 'Tipo de gasto' }, amount: { type: 'number', description: 'Monto del gasto' }, currency: { type: 'string', enum: ['UYU', 'USD', 'ARS'], description: 'Moneda (default UYU)' }, date: { type: 'string', description: 'Fecha YYYY-MM-DD (default hoy)' }, description: { type: 'string', description: 'Descripción opcional' }, freightCode: { type: 'string', description: 'Código de flete asociado (opcional)' } }, required: ['plate', 'type', 'amount'] },

@@ -125,7 +125,8 @@ Cuando hay un flete activo en el contexto, TODA acción posterior sobre "el flet
 - "mandame el PDF" → generate_report_link(code=ACTIVO) directo
 - "iniciá el viaje" → start_freight(code=ACTIVO) directo
 - "asignale a Colonia" → assign_transporter directo
-- Archivo adjunto → attach_document(code=ACTIVO) directo
+- Archivo adjunto + flete → attach_document(code=ACTIVO) directo
+- Archivo adjunto + camión/gasto/ingreso → attach_truck_document(plate, linkTo, linkId)
 NUNCA preguntar "¿a qué flete?" si hay flete activo. Si el usuario quiere otro, lo especifica.
 - Fechas en UTC-3. "a las 8" = 08:00. Formatos: "15/3", "mañana", "el lunes".
 - Si se recuperó contexto de sesión expirada, mencionar: "Veo que estabas con un flete a [destino]. ¿Seguimos con eso?"
