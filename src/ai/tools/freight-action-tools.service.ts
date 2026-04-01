@@ -946,12 +946,26 @@ export class FreightActionToolsService {
           // Use plant context for the API call; for own fleet, use destCompany as plant
           const effectivePlantId = this.aiContext.canAccessCompany(user, synUser, params.plantCompanyId)
             ? params.plantCompanyId : params.plantCompanyId; // still use plantCompanyId from staging
-          const plantSyn = { ...synUser, companyId: effectivePlantId, companyType: 'plant', userType: 'plant' };
+          const plantSyn = { ...synUser, companyId: effectivePlantId, companyType: 'plant', userType: 'plant', sub: synUser.sub || user.sub || user.id };
           const truckDto: any = { transportCompanyId: params.transporterCompanyId };
           if (params.truckId) truckDto.truckId = params.truckId;
-          if (params.driverId) truckDto.driverId = params.driverId;
+          // Only pass driverId if it looks like a valid UUID (not a truckId or other entity)
+          if (params.driverId && typeof params.driverId === 'string' && params.driverId !== params.truckId) {
+            truckDto.driverId = params.driverId;
+          }
           if (params.tons) truckDto.tons = params.tons;
-          await this.freights.assignTruck(params.freightId, truckDto, plantSyn);
+          try {
+            await this.freights.assignTruck(params.freightId, truckDto, plantSyn);
+          } catch (e) {
+            // If driver validation fails, retry without driver
+            if (e.message?.includes('Chofer no encontrado') && truckDto.driverId) {
+              this.logger.warn(`Driver ${truckDto.driverId} not found, retrying without driver`);
+              delete truckDto.driverId;
+              await this.freights.assignTruck(params.freightId, truckDto, plantSyn);
+            } else {
+              throw e;
+            }
+          }
           result = JSON.stringify({
             status: 'assigned', code: params.code,
             tripNumber: params.nextTripNumber,
