@@ -1359,17 +1359,30 @@ export class FreightActionToolsService {
 
         // ---- Fleet economics confirm handlers ----
         case 'register_truck_expense': {
-          await this.prisma.truckExpense.create({ data: { truckId: params.truckId, companyId: params.companyId, type: params.type, amount: params.amount, currency: params.currency || 'UYU', date: new Date(params.date), description: params.description || null, freightId: params.freightId || null, createdById: params.createdById } });
+          const expData: any = { truckId: params.truckId, companyId: params.companyId, type: params.type, amount: params.amount, currency: params.currency || 'UYU', date: new Date(params.date), createdById: params.createdById || user.sub };
+          if (params.description) expData.description = params.description;
+          if (params.freightId) expData.freightId = params.freightId;
+          await this.prisma.truckExpense.create({ data: expData });
           result = JSON.stringify({ status: 'created', message: `Gasto registrado: ${params.type} $${params.amount}` });
           break;
         }
         case 'register_truck_income': {
-          await this.prisma.truckIncome.create({ data: { truckId: params.truckId, companyId: params.companyId, concept: params.concept, amount: params.amount, currency: params.currency || 'UYU', date: new Date(params.date), status: params.status || 'PENDING', freightId: params.freightId || null, createdById: params.createdById } });
+          const incData: any = { truckId: params.truckId, companyId: params.companyId, concept: params.concept, amount: params.amount, currency: params.currency || 'UYU', date: new Date(params.date), status: params.status || 'PENDING', createdById: params.createdById || user.sub };
+          if (params.freightId) incData.freightId = params.freightId;
+          await this.prisma.truckIncome.create({ data: incData });
           result = JSON.stringify({ status: 'created', message: `Ingreso registrado: "${params.concept}" $${params.amount}` });
           break;
         }
         case 'register_truck_movement': {
-          await this.prisma.truckMovement.create({ data: { truckId: params.truckId, companyId: params.companyId, type: params.type, description: params.description || null, originName: params.originName || null, destName: params.destName || null, kmDriven: params.kmDriven || null, fuelLiters: params.fuelLiters || null, fuelCost: params.fuelCost || null, tollCost: params.tollCost || null, createdById: params.createdById } });
+          const movData: any = { truckId: params.truckId, companyId: params.companyId, type: params.type, createdById: params.createdById || user.sub };
+          if (params.description) movData.description = params.description;
+          if (params.originName) movData.originName = params.originName;
+          if (params.destName) movData.destName = params.destName;
+          if (params.kmDriven != null) movData.kmDriven = params.kmDriven;
+          if (params.fuelLiters != null) movData.fuelLiters = params.fuelLiters;
+          if (params.fuelCost != null) movData.fuelCost = params.fuelCost;
+          if (params.tollCost != null) movData.tollCost = params.tollCost;
+          await this.prisma.truckMovement.create({ data: movData });
           result = JSON.stringify({ status: 'created', message: `Movimiento registrado: ${params.type}${params.kmDriven ? ' (' + params.kmDriven + ' km)' : ''}` });
           break;
         }
