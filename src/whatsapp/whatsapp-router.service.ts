@@ -1025,12 +1025,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           await this.handleAiChat(phone, user, 'No, cancelar.');
           break;
         }
-        case 'ai_confirm': {
-          // Generic confirmation for any staged AI action
+        case 'ai_confirm':
+        case 'confirm': {
+          // Generic confirmation for any staged AI action (fleet tools use 'confirm', freight tools use 'ai_confirm')
           await this.handleAiChat(phone, user, 'Confirmar.');
           break;
         }
-        case 'ai_cancel': {
+        case 'ai_cancel':
+        case 'cancel': {
           // Generic cancellation for any staged AI action
           await this.handleAiChat(phone, user, 'No, cancelar.');
           break;
