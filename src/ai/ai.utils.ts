@@ -34,9 +34,16 @@ export function resolveActiveRole(user: any): { isChofer: boolean; isAdmin: bool
   // Fallback to user.role if no membership found (legacy / single-company)
   const effectiveRole = activeRole || user.role || 'operario';
 
-  // platform_admin is always admin regardless of membership
+  // platform_admin: use membership role if available, but always grant admin as minimum
   if (user.role === 'platform_admin') {
-    return { isChofer: false, isAdmin: true, userRole: 'admin' };
+    // If they have a membership role in the active company, respect it but ensure admin access
+    const memberRole = activeRole || 'admin';
+    const isPlatformChofer = memberRole === 'chofer';
+    return {
+      isChofer: false, // platform_admin is never limited to chofer
+      isAdmin: true,   // always has admin tools
+      userRole: isPlatformChofer ? 'admin' : (memberRole === 'gerente' ? 'gerente' : 'admin'),
+    };
   }
 
   const isChofer = effectiveRole === 'chofer';

@@ -784,6 +784,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         model: 'whisper-1',
         file,
         language: 'es',
+        prompt: 'Tolvink, flete, planta, camión, productor, cosechadora, tractor',
       });
 
       const text = transcription.text?.trim();

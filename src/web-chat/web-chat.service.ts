@@ -205,7 +205,8 @@ export class WebChatService {
       const transcription = await this.openai.audio.transcriptions.create({
         model: 'whisper-1',
         file,
-        language: 'es',
+        language: 'es', // Primary user base is Spanish (Uruguay/Argentina); Whisper handles accents well
+        prompt: 'Tolvink, flete, planta, camión, productor, cosechadora, tractor',  // Domain vocabulary hint
       });
 
       const text = transcription.text?.trim();

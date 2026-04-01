@@ -642,6 +642,11 @@ export class AiService implements OnModuleDestroy {
         /no (se )?encontr/i, /no tiene acceso/i, /no se puede/i, /solo.*pueden/i,
         /no.*permiso/i, /ya existe/i, /no pertenec/i, /flete.*no/i, /campo.*no/i,
         /lote.*no/i, /camión.*no/i, /código.*requerido/i, /inválid/i,
+        /no.*asignaci/i, /no.*disponible/i, /no.*registrad/i, /estado.*no permite/i,
+        /debe.*primero/i, /falta.*obligatori/i, /ya.*está/i, /no.*existe/i,
+        /planta.*no/i, /productor.*no/i, /transportista.*no/i, /chofer.*no/i,
+        /máquina.*no/i, /documento.*no/i, /sesión.*no/i, /empresa.*no/i,
+        /bloqueado/i, /cancelad/i, /finalizad/i, /vencid/i,
       ];
       const isSafe = SAFE_PATTERNS.some(p => p.test(e.message || ''));
       const safeMsg = isSafe ? e.message : 'Error al procesar la solicitud.';
