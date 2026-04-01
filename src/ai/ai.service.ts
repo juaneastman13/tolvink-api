@@ -213,16 +213,12 @@ export class AiService implements OnModuleDestroy {
       }
     }
 
-    // Pending document: inject context so AI knows to use attach_document
+    // Pending document: inject context so AI knows to use attach_document or attach_truck_document
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
       const activeCode = state.activeContext?.lastFreightCode;
-      if (activeCode) {
-        messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}). ADJUNTAR DIRECTAMENTE al flete activo ${this.sanitizeForPrompt(activeCode)}. Usar attach_document(code="${this.sanitizeForPrompt(activeCode)}") y mostrar confirmación con botones. NO preguntar a qué flete.]\n\n${messageToSend}`;
-      } else {
-        messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}). No hay flete activo. Preguntar a qué flete adjuntarlo o buscar fletes recientes.]\n\n${messageToSend}`;
-      }
+      messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}, URL: ${doc.url}). El usuario puede querer adjuntarlo a:\n- Un FLETE → usar attach_document(code)\n- Un CAMIÓN, GASTO, INGRESO o MOVIMIENTO → usar attach_truck_document(plate, linkTo, linkId)\nAnalizar el mensaje del usuario para determinar a qué adjuntar. Si menciona gasto, ingreso, camión o patente → attach_truck_document. Si menciona flete o código de flete → attach_document.${activeCode ? ` Flete activo: ${this.sanitizeForPrompt(activeCode)}.` : ''} Si no queda claro, preguntar.]\n\n${messageToSend}`;
     }
 
     // Inject active context — directive format so Claude acts on active freight directly
