@@ -53,11 +53,6 @@ export class PromptBuilderService {
 
     const { isChofer, isAdmin, userRole } = resolveActiveRole(user);
 
-    // --- Conditional flags by role ---
-    const canCreateFreight = !isChofer && (hasType(companyType, 'producer') || hasType(companyType, 'plant'));
-    const canManageFleet = !isChofer && (hasType(companyType, 'transporter') || ownFleet);
-    const canAssignTransport = !isChofer && (hasType(companyType, 'plant') || hasType(companyType, 'transporter'));
-
     // --- Batch plantAccessMap resolution BEFORE role block ---
     let readonlyPlants: string[] = [];
     let operatorPlants: string[] = [];
@@ -76,6 +71,12 @@ export class PromptBuilderService {
         }
       } catch { /* ignore lookup failures */ }
     }
+
+    // --- Conditional flags by role ---
+    const allReadonly = readonlyPlants.length > 0 && operatorPlants.length === 0;
+    const canCreateFreight = !isChofer && !allReadonly && (hasType(companyType, 'producer') || hasType(companyType, 'plant'));
+    const canManageFleet = !isChofer && !allReadonly && (hasType(companyType, 'transporter') || ownFleet);
+    const canAssignTransport = !isChofer && !allReadonly && (hasType(companyType, 'plant') || hasType(companyType, 'transporter'));
 
     // --- Build role block with integrated access levels ---
     const roleParts: string[] = [];
@@ -141,7 +142,8 @@ NO PUEDE: crear, modificar ni cancelar fletes. No puede gestionar recursos.`);
       allowedScreens.push('calendar', 'locations', 'documents', 'analytics', 'linked');
       if (canCreateFreight) allowedScreens.push('new');
       if (canManageFleet) allowedScreens.push('trucks');
-      if (isAdmin) allowedScreens.push('admin', 'queue');
+      if (hasType(companyType, 'plant')) allowedScreens.push('queue');
+      if (isAdmin) allowedScreens.push('admin');
     }
 
     // --- Assemble prompt with XML tags ---
@@ -154,12 +156,12 @@ ${roleBlock}${ownFleetNote}${multiCompanyNote}
 <tone>
 TONO Y FORMATO:
 - Hablás español rioplatense: tuteo natural, vocabulario del campo. Profesional pero cercano.
-- ${isWeb ? 'Mensajes concisos pero podés explayarte cuando el contexto lo amerite. Usar **negritas** para datos clave, listas con - para múltiples items.' : 'Mensajes cortos — esto es WhatsApp, no un email. Máximo 3-4 líneas salvo resúmenes.'}
+- ${isWeb ? 'Mensajes concisos pero podés explayarte cuando el contexto lo amerite. Usar **negritas** para datos clave, listas con - para múltiples items.' : 'Mensajes cortos — esto es WhatsApp, no un email.'}
 - Sin disclaimers, sin tecnicismos.${isWeb ? '' : ' Sin *negritas* ni markdown.'}
 - No mencionar nombres de herramientas ni estados internos (in_progress, pending_assignment, etc.) — traducir siempre.
 - No repetir información ya dada. No saludar si ya lo hiciste.
 - Emojis solo como bullets al inicio de línea: 🌾📦🚛📍📅🕒👤🏢✅⚠️❌⏳
-- ${isWeb ? 'Largo máximo: sin límite estricto, pero ser conciso.' : 'Largo máximo: 3-4 líneas salvo resúmenes, dashboard o listas. WhatsApp fragmenta mensajes largos.'}
+- ${isWeb ? 'Largo máximo: sin límite estricto, pero ser conciso.' : 'Largo máximo: 3-4 líneas salvo resúmenes, dashboard, listas o datos faltantes al crear flete. WhatsApp fragmenta mensajes largos.'}
 
 SINÓNIMOS:
 - matrícula = patente = chapa (del camión). Si preguntan "qué matrícula tiene", responder con la patente del camión asignado.
@@ -263,6 +265,8 @@ Cuando hay pregunta pendiente, interpretar respuestas cortas en contexto:
 
 BOTONES DE RESPUESTA:
 ${isWeb ? '- En web: usar botones interactivos amplios. Pueden mostrarse varios botones en fila.' : '- En WhatsApp: usar Reply Buttons (máx 3) para opciones cortas y List Messages para 4+ opciones. Texto de botón máx 20 caracteres.'}
+
+ERRORES: No mostrar errores técnicos. "Hubo un problema, ¿podés intentar de nuevo?" Si no soporta la acción, decirlo claro.
 </behavior>`;
 
     // --- Conditional: create freight ---
@@ -360,7 +364,7 @@ LISTAS Y SELECCIÓN:
 RESOLUCIÓN DE ENTIDADES:
 - Usar fuzzy search para nombres de plantas, campos, sucursales.
 - Match único con score alto → usar sin preguntar.
-- Múltiples matches → Reply Buttons (2-3 opciones) o List Message (4+).
+- Múltiples matches → ${isWeb ? 'mostrar opciones como lista interactiva.' : 'Reply Buttons (2-3 opciones) o List Message (4+).'}
 - Sin match → decirlo y sugerir opciones cercanas.
 
 AMBIGÜEDAD: Si el mensaje no es claro, hacer UNA pregunta clarificadora. Preferir Reply Buttons para sí/no y opciones cortas.
@@ -409,10 +413,10 @@ PROACTIVIDAD: Flete finalizado sin datos de viaje → sugerir cargar. Docs venci
 
 <documents>
 DOCUMENTOS:
-- Archivo pendiente + flete → attach_document(code) directo.
+- Archivo pendiente + flete → attach_document(code) directo.${canManageFleet ? `
 - Archivo pendiente + camión/gasto/ingreso/movimiento → attach_truck_document(plate, linkTo, linkId). SÍ se puede adjuntar archivos a gastos, ingresos y movimientos de camión por WhatsApp.
+- Si el usuario dice "cargá esta foto al gasto X" o "adjuntá al ingreso del camión" → usar attach_truck_document.` : ''}
 - Foto de remito/pesaje → ocr_analyze.
-- Si el usuario dice "cargá esta foto al gasto X" o "adjuntá al ingreso del camión" → usar attach_truck_document.
 </documents>
 
 <locations>
@@ -421,8 +425,6 @@ UBICACIONES:
 - Con mapLink → frase + link. Sin mapLink → "Ubicación no disponible."
 - Marcar ubicación → generate_location_link.
 </locations>
-
-ERRORES: No mostrar errores técnicos. "Hubo un problema, ¿podés intentar de nuevo?" Si no soporta la acción, decirlo claro.
 
 <links>
 LINKS:
