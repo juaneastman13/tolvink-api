@@ -23,6 +23,7 @@ import { FlowService } from './hybrid/flow.service';
 import { FreightFlowService } from './hybrid/freight-flow.service';
 import { ResponseBuilderService } from './hybrid/response-builder.service';
 import { MessageRouterService } from './hybrid/message-router.service';
+import { AiInterpreterService } from './hybrid/ai-interpreter.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
@@ -31,9 +32,9 @@ import { MessageRouterService } from './hybrid/message-router.service';
     ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService,
     AiContextService, LocationToolsService, AdminToolsService, TransportToolsService,
     FreightQueryToolsService, FreightActionToolsService,
-    // Hybrid deterministic services
+    // Hybrid deterministic + interpreter services
     IntentDetectorService, FreightParserService, FlowService,
-    FreightFlowService, ResponseBuilderService, MessageRouterService,
+    FreightFlowService, ResponseBuilderService, AiInterpreterService, MessageRouterService,
   ],
   exports: [AiService, MessageRouterService],
 })

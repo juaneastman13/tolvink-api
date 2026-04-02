@@ -13,10 +13,11 @@
 import { Injectable, Logger, Inject, forwardRef, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { IntentDetectorService, DetectedIntentResult } from './intent-detector.service';
-import { FreightParserService } from './freight-parser.service';
+import { FreightParserService, ParsedFreightData } from './freight-parser.service';
 import { FreightFlowService } from './freight-flow.service';
 import { FlowService, FlowState } from './flow.service';
 import { ResponseBuilderService, HybridResponse } from './response-builder.service';
+import { AiInterpreterService, InterpreterResult } from './ai-interpreter.service';
 import { AiService } from '../ai.service';
 import { AiContextService } from '../tools/ai-context.service';
 import { SessionManagerService } from '../session/session-manager.service';
@@ -70,6 +71,7 @@ export class MessageRouterService implements OnModuleDestroy {
     private freightFlow: FreightFlowService,
     private flowService: FlowService,
     private responseBuilder: ResponseBuilderService,
+    private interpreter: AiInterpreterService,
     @Inject(forwardRef(() => AiService)) private aiService: AiService,
     private aiContext: AiContextService,
     private sessionManager: SessionManagerService,
@@ -120,8 +122,7 @@ export class MessageRouterService implements OnModuleDestroy {
         // Flow returned null (shouldn't happen) — fall through to intent detection
       }
 
-      // ── FIX #6: Smart heuristics BEFORE LLM fallback ──
-      // Try to catch messages that the intent detector might miss
+      // ── LAYER 1: Smart heuristics (zero cost) ──
       const heuristicResult = this.trySmartHeuristics(message, session);
       if (heuristicResult) {
         const result = await this.routeDeterministic(heuristicResult, message, user, session);
@@ -131,14 +132,13 @@ export class MessageRouterService implements OnModuleDestroy {
         }
       }
 
-      // 2. Standard intent detection (only when NO active flow)
+      // ── LAYER 2: Regex intent detection (zero cost) ──
       const hasPendingAction = !!(session?.flowState as any)?.pendingAction;
       const hasPendingFreight = !!(session?.flowState as any)?.pendingFreight;
       const detected = this.intentDetector.detect(message, false, hasPendingAction || hasPendingFreight);
 
       this.logger.log(`[hybrid] Intent: ${detected.intent} (confidence=${detected.confidence})`);
 
-      // 3. If confidence is high enough, route deterministically
       if (detected.confidence >= CONFIDENCE_THRESHOLD) {
         const result = await this.routeDeterministic(detected, message, user, session);
         if (result) {
@@ -147,7 +147,30 @@ export class MessageRouterService implements OnModuleDestroy {
         }
       }
 
-      // 4. Fallback to LLM — only for truly ambiguous messages
+      // ── LAYER 3: Lightweight LLM interpreter (~$0.0003/call) ──
+      // Only called when regex fails — fills the gap before full LLM chat
+      if (!this.interpreter.shouldSkip(message, !!activeFlow, hasPendingAction || hasPendingFreight)) {
+        const interpreted = await this.interpreter.interpret(message);
+        if (interpreted && interpreted.confidence >= 0.6) {
+          this.logger.log(`[hybrid] Interpreter: ${interpreted.intent} (confidence=${interpreted.confidence}) in ${Date.now() - startTime}ms`);
+
+          const interpretedIntent = this.interpreter.toDetectedIntent(interpreted);
+
+          // For create_freight, merge interpreter data with parser data for richer extraction
+          if (interpretedIntent.intent === 'create_freight') {
+            const interpreterData = this.interpreter.toFreightData(interpreted);
+            const parserData = this.freightParser.parse(message);
+            interpretedIntent.entities._interpreterData = this.mergeFreightData(parserData, interpreterData);
+          }
+
+          const result = await this.routeDeterministic(interpretedIntent, message, user, session);
+          if (result) {
+            return { ...result, deterministic: true };
+          }
+        }
+      }
+
+      // ── LAYER 4: Full LLM chat fallback (expensive, last resort) ──
       this.logger.log(`[hybrid] Falling back to LLM for: "${message.slice(0, 80)}..."`);
       const llmResult = await this.aiService.chat(phone, message, user, session);
       this.logger.log(`[hybrid] LLM handled in ${Date.now() - startTime}ms`);
@@ -289,14 +312,36 @@ export class MessageRouterService implements OnModuleDestroy {
           return this.responseBuilder.formatError('Solo los productores pueden crear fletes.');
         }
 
-        // Start the flow — FreightFlowService ALWAYS returns done=false on first call
+        // If interpreter provided enriched data, pre-seed the parser message
+        // so the flow starts with more fields already extracted
+        let messageForFlow = message;
+        const interpreterData = detected.entities._interpreterData as ParsedFreightData | undefined;
+        if (interpreterData) {
+          // Inject interpreter-extracted data into the flow by creating a synthetic
+          // message that the parser will handle. But actually, we'll feed the data
+          // directly into the flow by starting it with pre-collected fields.
+          const flowResult = this.freightFlow.processMessageWithData(message, null, interpreterData);
+
+          await this.flowService.saveFlowToSession(session.id, flowResult.flow);
+
+          if (flowResult.flow.awaitingConfirmation) {
+            return {
+              text: flowResult.response || 'Error al procesar datos del flete.',
+              buttons: [
+                { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
+                { id: 'ai_cancel_freight', title: 'CANCELAR' },
+              ],
+            };
+          }
+          return { text: flowResult.response || 'Iniciando creación de flete...' };
+        }
+
+        // Standard flow — regex-only parsing
         const flowResult = this.freightFlow.processMessage(message, null);
 
-        // Save flow state (flow will NEVER be done here — confirmation is always required)
         await this.flowService.saveFlowToSession(session.id, flowResult.flow);
 
         if (flowResult.flow.awaitingConfirmation) {
-          // All data parsed in one shot — show summary with confirm buttons
           return {
             text: flowResult.response || 'Error al procesar datos del flete.',
             buttons: [
@@ -577,5 +622,23 @@ export class MessageRouterService implements OnModuleDestroy {
   private generateActionId(sessionId: string, input: Record<string, any>): string {
     const key = `${sessionId}:${input.grain}:${input.tons}:${input.loadDate}:${input.truckCount || ''}`;
     return crypto.createHash('md5').update(key).digest('hex').slice(0, 16);
+  }
+
+  /**
+   * Merge parser data (regex) with interpreter data (LLM).
+   * Parser takes priority for fields it extracted confidently.
+   * Interpreter fills gaps (fuzzy names, informal language).
+   */
+  private mergeFreightData(parser: ParsedFreightData, interpreter: ParsedFreightData): ParsedFreightData {
+    return {
+      grain: parser.grain || interpreter.grain || undefined,
+      tons: parser.tons || interpreter.tons || undefined,
+      loadDate: parser.loadDate || interpreter.loadDate || undefined,
+      loadTime: parser.loadTime || interpreter.loadTime || undefined,
+      truckCount: parser.truckCount ?? interpreter.truckCount ?? undefined,
+      useOwnFleet: parser.useOwnFleet ?? interpreter.useOwnFleet ?? undefined,
+      destName: parser.destName || interpreter.destName || undefined,
+      originName: parser.originName || interpreter.originName || undefined,
+    };
   }
 }

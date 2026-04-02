@@ -38,6 +38,61 @@ export class FreightFlowService {
   ) {}
 
   /**
+   * Start a new flow with pre-extracted data from the AI interpreter.
+   * Merges interpreter data with parser data (parser fills gaps).
+   * Same safety guarantees as processMessage: never returns done=true.
+   */
+  processMessageWithData(
+    message: string,
+    existingFlow: FlowState | null,
+    preExtracted: ParsedFreightData,
+  ): { response: string | null; flow: FlowState; done: boolean; prepareInput?: Record<string, any> } {
+    // Parse with regex first
+    const parsed = this.parser.parse(message);
+
+    // Merge: parser wins for fields it extracted, interpreter fills gaps
+    const merged: ParsedFreightData = {
+      grain: parsed.grain || preExtracted.grain || undefined,
+      tons: parsed.tons || preExtracted.tons || undefined,
+      loadDate: parsed.loadDate || preExtracted.loadDate || undefined,
+      loadTime: parsed.loadTime || preExtracted.loadTime || undefined,
+      truckCount: parsed.truckCount ?? preExtracted.truckCount ?? undefined,
+      useOwnFleet: parsed.useOwnFleet ?? preExtracted.useOwnFleet ?? undefined,
+      destName: parsed.destName || preExtracted.destName || undefined,
+      originName: parsed.originName || preExtracted.originName || undefined,
+    };
+
+    // Auto truck count
+    if (merged.tons && merged.truckCount === undefined) {
+      merged.truckCount = Math.ceil(merged.tons / 30);
+    }
+
+    const missing = this.parser.getMissingFields(merged);
+    const flow = this.flowService.createFlow('create_freight', { ...merged }, missing);
+
+    if (missing.length === 0) {
+      const summary = this.buildCollectedSummary(merged);
+      this.flowService.setAwaitingConfirmation(flow, summary);
+      return {
+        response: `📋 *Nuevo flete — Confirmar datos*\n\n${summary}\n\n¿Confirmás la creación?`,
+        flow,
+        done: false,
+      };
+    }
+
+    const nextField = missing[0];
+    this.flowService.setAwaitingField(flow, nextField);
+    const gotParts = this.buildCollectedSummary(merged);
+    const question = FIELD_QUESTIONS[nextField] || `¿Cuál es el valor de ${nextField}?`;
+
+    return {
+      response: gotParts ? `📋 *Nuevo flete*\n${gotParts}\n\n${question}` : `📋 *Nuevo flete*\n\n${question}`,
+      flow,
+      done: false,
+    };
+  }
+
+  /**
    * Start or continue the freight creation flow.
    * Returns { response, done, prepareInput } where:
    * - response: message to send to the user
