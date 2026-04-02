@@ -13,7 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 
 const MODEL_ID = 'claude-sonnet-4-6';
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 2048;
 const MAX_TOOL_LOOPS = 3;
 
 const TOOLS: any[] = [

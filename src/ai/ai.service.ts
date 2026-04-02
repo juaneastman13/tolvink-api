@@ -110,6 +110,7 @@ export class AiService implements OnModuleDestroy {
   // Cache system prompts per session (avoids 5-10 DB queries per message)
   private _promptCache = new Map<string, { prompt: string; ts: number }>();
   private readonly PROMPT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private _sonnetRetried: Map<string, number> | null = null; // track Sonnet escalation per session
 
   onModuleDestroy() { clearInterval(this.rateCleanupTimer); }
 
@@ -263,7 +264,7 @@ export class AiService implements OnModuleDestroy {
 
     let response: any;
     let loopCount = 0;
-    const currentMessages = [...trimmed];
+    let currentMessages = [...trimmed];
 
     // Initialize per-call side-effects accumulator (tools write here, merged at end)
     this._chatSideEffects.delete(session.id);
@@ -272,7 +273,7 @@ export class AiService implements OnModuleDestroy {
     const filteredTools = this.getFilteredTools(user, companyType, isWeb);
 
     // Select model based on message complexity (Haiku for simple, Sonnet for complex)
-    const selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
+    let selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
     if (selectedModel !== MODEL_ID) {
       this.logger.log(`Using fast model (${selectedModel}) for simple query`);
     }
@@ -288,8 +289,8 @@ export class AiService implements OnModuleDestroy {
           break;
         }
 
-        // Use fast model only on first loop; tool-result loops need full reasoning
-        const modelForLoop = loopCount === 1 ? selectedModel : MODEL_ID;
+        // Use selected model for all loops (Haiku by default; Sonnet only on retry)
+        const modelForLoop = selectedModel;
         this.logger.log(`Sending to Claude (loop ${loopCount}, model=${modelForLoop}), messages: ${currentMessages.length}`);
         const createParams = {
           model: modelForLoop,
@@ -382,6 +383,26 @@ export class AiService implements OnModuleDestroy {
                 tool_use_id: (block as any).id,
                 content: result,
               });
+            }
+          }
+
+          // Detect prepare_freight failure on Haiku → escalate to Sonnet and retry
+          if (selectedModel === MODEL_ID_FAST) {
+            const prepareBlock = toolBlocks.find((b: any) => b.name === 'prepare_freight');
+            if (prepareBlock) {
+              const prepareResult = toolResults.find((r: any) => r.tool_use_id === prepareBlock.id);
+              const resultStr = prepareResult?.content || '';
+              const hasMissingFields = /error|falt|requerid|obligatori|invalid/i.test(resultStr);
+              if (hasMissingFields && !this._sonnetRetried?.has(session.id)) {
+                this.logger.warn('prepare_freight failed on Haiku — retrying entire conversation with Sonnet');
+                if (!this._sonnetRetried) this._sonnetRetried = new Map();
+                this._sonnetRetried.set(session.id, Date.now());
+                // Reset messages to before this tool loop and switch to Sonnet
+                selectedModel = MODEL_ID;
+                currentMessages = currentMessages.slice(0, -1); // remove assistant tool_use
+                loopCount--; // redo this loop
+                continue;
+              }
             }
           }
 

@@ -86,26 +86,10 @@ export class IntentRouterService {
 
   /** Classify message complexity to pick the right model.
    *  Simple queries → Haiku (faster). Complex queries → Sonnet (smarter). */
-  selectModel(message: string, hasHistory: boolean): string {
-    const lower = message.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const simplePatterns = [
-      /^(hola|buenas|buen dia|buenos dias|hey|che)\b/,
-      /^(si|no|ok|dale|listo|perfecto|gracias|confirmo|cancelo)\b/,
-      /\b(estado|status)\b.{0,20}\b(flete|flt)/,
-      /^(mis fletes|fletes pendientes|pendientes)/,
-      /^(resumen del dia|resumen diario)/,
-      /\b(como (van|estan|esta)|que hay de nuevo)\b/,
-    ];
-    const complexPatterns = [
-      /\b(crear|creat|nuevo flete|solicitar|agendar)\b/,
-      /\b(analiz|compar|recomiend|optimiz|reporte detallado)\b/,
-      /\b(cambiar empresa|switch|modificar)\b/,
-      /\b(adjunt|document|archivo)\b/,
-    ];
-    if (complexPatterns.some(p => p.test(lower))) return MODEL_ID;
-    if (!hasHistory && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
-    if (message.length < 40 && simplePatterns.some(p => p.test(lower))) return MODEL_ID_FAST;
-    return MODEL_ID;
+  /** Always use Haiku by default. Sonnet is only used as retry fallback
+   *  when prepare_freight fails (triggered by ai.service.ts retry logic). */
+  selectModel(_message: string, _hasHistory: boolean): string {
+    return MODEL_ID_FAST;
   }
 
   // ======================== TOOL FILTERING ========================
