@@ -10,15 +10,22 @@ if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — 
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 export const OWN_FLEET_SHORTCUT = 'own_fleet';
 
-// Model configuration — Claude Sonnet 4.6
-// NOTE: Anthropic API supports temperature, top_p, top_k.
-// It does NOT support presence_penalty / frequency_penalty (those are OpenAI-only).
-// temperature 0.4  → better interpretation of ambiguous messages while keeping operational precision.
-// max_tokens 1200  → enough room for context-aware responses + lists in Spanish.
-export const MODEL_ID = 'claude-sonnet-4-6';
-export const MODEL_ID_FAST = 'claude-haiku-4-5-20251001';
+// Model configuration — Haiku/Sonnet tiered routing
+// Haiku: read-only queries, greetings, status. ~$1/$5 per MTok.
+// Sonnet: freight creation, assignments, mutations. ~$3/$15 per MTok.
+export const MODELS = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+} as const;
+export type ModelTier = keyof typeof MODELS;
+
+// Legacy aliases (used by existing code)
+export const MODEL_ID = MODELS.sonnet;
+export const MODEL_ID_FAST = MODELS.haiku;
 export const MODEL_TEMPERATURE = 0.4;
 export const MODEL_MAX_TOKENS = 1200;
+export const HAIKU_MAX_TOKENS = 512;
+export const SONNET_MAX_TOKENS = 4096;
 export const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
 export const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
 export const URUGUAY_UTC_OFFSET_MS = -3 * 60 * 60 * 1000; // UTC-3 (Uruguay has no DST)

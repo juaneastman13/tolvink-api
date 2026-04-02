@@ -1200,4 +1200,24 @@ export const AI_TOOL_DEFINITIONS: AiToolDefinition[] = [
       required: ['code'],
     },
   },
+
+  // ====================== ESCALAMIENTO HAIKU → SONNET ======================
+  {
+    name: 'escalate_to_sonnet',
+    description: 'Usar cuando el usuario pide una acción que no podés ejecutar con tus herramientas disponibles: crear flete, cancelar, asignar transportista, iniciar viaje, confirmar carga/entrega, registrar gastos, adjuntar documentos, autorizar. Respondé "Dame un momento que proceso eso" y llamá esta tool.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Breve descripción de qué acción necesita el usuario. Ej: "create_freight", "cancel_freight", "assign_transporter"',
+        },
+        user_message: {
+          type: 'string',
+          description: 'El mensaje original del usuario que necesita procesamiento complejo',
+        },
+      },
+      required: ['reason'],
+    },
+  },
 ];
