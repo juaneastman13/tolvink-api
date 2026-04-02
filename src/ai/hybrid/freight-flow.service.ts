@@ -98,8 +98,8 @@ export class FreightFlowService {
     // Normalize once for all checks
     const normMsg = message.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 
-    // Check if user wants to cancel
-    if (/^(no|cancela[r]?|anula[r]?|dejalo?|parar?|nada)\s*[.!]?\s*$/.test(normMsg)) {
+    // Check if user wants to cancel — handles button text "No, cancelar." and free-form
+    if (/^(no[,.]?\s*(cancelar?)?|cancela[r]?|anula[r]?|dejalo?|parar?|nada)\s*[.!]?\s*$/.test(normMsg)) {
       return { response: '❌ Creación de flete cancelada.', flow, done: false, prepareInput: undefined };
     }
 
@@ -115,7 +115,7 @@ export class FreightFlowService {
     if (flow.awaitingConfirmation) {
       // Strip repeated words: "dale dale" → "dale", "si si" → "si"
       const deduped = normMsg.replace(/\b(\w+)(\s+\1)+\b/g, '$1');
-      if (/^(si|sí|dale|ok|okey|oka|confirmo?|listo|va|vamos|manda(le)?|correcto|exacto|eso|claro|afirmativo|procede)\s*[.!]?\s*$/.test(deduped)) {
+      if (/^(si|sí|dale|ok|okey|oka|confirmar?|confirmo|listo|va|vamos|manda(le)?|correcto|exacto|eso|claro|afirmativo|procede)\s*[.!]?\s*$/.test(deduped)) {
         return {
           response: null,
           flow,
