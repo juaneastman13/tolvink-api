@@ -723,6 +723,18 @@ export class FreightActionToolsService {
       userType: 'producer',
     };
 
+    // Pre-validate destination exists before building DTO
+    const destId = pending.branchId || pending.destPlantId;
+    if (destId) {
+      const plantExists = await this.prisma.plant.findFirst({ where: { id: destId, active: true } });
+      if (!plantExists) {
+        const companyExists = await this.prisma.company.findFirst({ where: { id: destId, active: true } });
+        if (!companyExists) {
+          return JSON.stringify({ error: `Planta destino no encontrada (ID: ${destId.slice(0,8)}...). Usá search_plants para buscar la planta correcta.` });
+        }
+      }
+    }
+
     const dto: any = {
       items: [{ grain: pending.grain, tons: pending.tons }],
       loadDate: pending.loadDate,
