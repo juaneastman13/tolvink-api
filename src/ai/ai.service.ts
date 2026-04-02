@@ -537,7 +537,8 @@ export class AiService implements OnModuleDestroy {
 
   /** @deprecated Use PromptBuilderService.build() */
   private async buildSystemPrompt(user: any, companyType: string, isWeb = false): Promise<string> {
-    return this.promptBuilder.build(user, companyType, isWeb);
+    const blocks = await this.promptBuilder.build(user, companyType, isWeb);
+    return blocks.system.map(b => b.text).join('\n');
   }
 
   // Tool sets moved to IntentRouterService
