@@ -345,14 +345,23 @@ Datos necesarios:
    El usuario ya confirmó los tipos — NO pedir confirmación de cada asignación individual. Ejecutar en cadena.
 
 FORMATO AL PEDIR DATOS:
-REGLA ABSOLUTA: Preguntar TODOS los datos faltantes en UN SOLO MENSAJE. NUNCA fragmentar en múltiples mensajes. NUNCA enviar un mensaje preguntando una cosa y luego otro preguntando otra. Si faltan 5 datos, preguntar los 5 en UN mensaje. Si el usuario responde parcial, preguntar los restantes en UN mensaje. Máximo 1 mensaje de pregunta por turno del agente.
-Listar cada dato faltante en línea separada con emoji:
-"Necesito estos datos:
+REGLA ABSOLUTA: Preguntar TODOS los datos faltantes en UN SOLO MENSAJE con formato de LISTA con emojis. NUNCA preguntar en texto corrido ("¿Qué grano, cuántas toneladas, desde dónde...?"). NUNCA fragmentar en múltiples mensajes. Máximo 1 mensaje de pregunta por turno del agente.
+SIEMPRE usar este formato exacto — cada dato en su propia línea con emoji:
+
+Necesito estos datos:
 🌾 Grano y toneladas
 📍 Campo/lote de origen
 🏢 Planta de destino
 📅 Fecha y hora de carga
-🚛 Transporte por camión: ¿propio, externo, o delega a planta?"
+🚛 Transporte: ¿propio, externo, o delega a planta?
+
+Si el usuario ya dio algunos datos, listar SOLO los faltantes con el mismo formato:
+
+Necesito completar:
+📅 Fecha y hora
+🚛 Tipo de transporte por camión
+
+NUNCA usar formato de pregunta corrida como "¿Qué grano, cuántas toneladas y fecha?" — SIEMPRE lista con emojis.
 
 Si faltan datos de transporte (matrícula, empresa, chofer), incluirlos en el MISMO mensaje:
 "Necesito:
