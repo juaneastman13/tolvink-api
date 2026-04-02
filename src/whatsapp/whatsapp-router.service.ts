@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AiService } from '../ai/ai.service';
+import { MessageRouterService } from '../ai/hybrid/message-router.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
@@ -67,6 +68,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
     private ai: AiService,
+    private messageRouter: MessageRouterService,
   ) {
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
@@ -496,7 +498,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // Show "typing" indicator so user sees the bot is working
       this.wa.sendTypingIndicator(phone).catch((err) => this.logger.debug(`[typing] indicator failed: ${err.message}`));
 
-      const result = await this.ai.chat(phone, text, user, session);
+      // Route through hybrid system: deterministic first, LLM fallback
+      const result = await this.messageRouter.handleMessage(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;
 

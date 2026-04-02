@@ -16,6 +16,13 @@ import { AdminToolsService } from './tools/admin-tools.service';
 import { TransportToolsService } from './tools/transport-tools.service';
 import { FreightQueryToolsService } from './tools/freight-query-tools.service';
 import { FreightActionToolsService } from './tools/freight-action-tools.service';
+// Hybrid services — deterministic routing (90% of messages without LLM)
+import { IntentDetectorService } from './hybrid/intent-detector.service';
+import { FreightParserService } from './hybrid/freight-parser.service';
+import { FlowService } from './hybrid/flow.service';
+import { FreightFlowService } from './hybrid/freight-flow.service';
+import { ResponseBuilderService } from './hybrid/response-builder.service';
+import { MessageRouterService } from './hybrid/message-router.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
@@ -24,7 +31,10 @@ import { FreightActionToolsService } from './tools/freight-action-tools.service'
     ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService,
     AiContextService, LocationToolsService, AdminToolsService, TransportToolsService,
     FreightQueryToolsService, FreightActionToolsService,
+    // Hybrid deterministic services
+    IntentDetectorService, FreightParserService, FlowService,
+    FreightFlowService, ResponseBuilderService, MessageRouterService,
   ],
-  exports: [AiService],
+  exports: [AiService, MessageRouterService],
 })
 export class AiModule {}
