@@ -42,10 +42,8 @@ import {
   MODEL_ID, MODEL_ID_FAST, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
   URUGUAY_UTC_OFFSET_MS, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, AUDIO_FILLERS,
   AI_RATE_LIMIT_WINDOW_MS, AI_RATE_LIMIT_MAX,
-  MODELS, ModelTier, HAIKU_MAX_TOKENS, SONNET_MAX_TOKENS,
 } from './ai.constants';
 import { AI_TOOL_DEFINITIONS } from './ai-tool-definitions';
-import { routeMessage, PromptBlocks, estimateCost } from './prompt/prompt-builder.service';
 
 const aiRateMap = new Map<string, { count: number; resetAt: number }>();
 
@@ -109,8 +107,8 @@ export class AiService implements OnModuleDestroy {
     }
   }
 
-  // Cache prompt blocks per session+tier (avoids 5-10 DB queries per message)
-  private _promptCache = new Map<string, { prompt: PromptBlocks; ts: number }>();
+  // Cache system prompts per session (avoids 5-10 DB queries per message)
+  private _promptCache = new Map<string, { prompt: string; ts: number }>();
   private readonly PROMPT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private _sonnetRetried: Map<string, number> | null = null; // track Sonnet escalation per session
 
@@ -191,23 +189,15 @@ export class AiService implements OnModuleDestroy {
     const state = (session?.flowState as any) || {};
     const aiMessages: any[] = state.aiMessages || [];
 
-    // ═══ PASO 1: Route message → decide Haiku vs Sonnet ═══
-    const sessionStateForRouter = {
-      activeFlow: state.pendingFreight ? 'create_freight' : (state.pendingAction ? 'confirm' : undefined),
-      pendingConfirmation: !!(state.pendingAction || state.pendingFreight),
-    };
-    const route = routeMessage(cleanedMessage, sessionStateForRouter);
-    let currentTier: ModelTier = route.model;
-
-    // ═══ PASO 2: Build prompt blocks (cached per session+tier, 5min TTL) ═══
-    const promptCacheKey = `${session.id}:${companyType}:${isWeb}:${currentTier}`;
+    // Build system prompt (cached per session, 5min TTL)
+    const promptCacheKey = `${session.id}:${companyType}:${isWeb}`;
     const cachedPrompt = this._promptCache.get(promptCacheKey);
-    let promptBlocks: PromptBlocks;
+    let systemPrompt: string;
     if (cachedPrompt && Date.now() - cachedPrompt.ts < this.PROMPT_CACHE_TTL) {
-      promptBlocks = cachedPrompt.prompt;
+      systemPrompt = cachedPrompt.prompt;
     } else {
-      promptBlocks = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap, currentTier);
-      this._promptCache.set(promptCacheKey, { prompt: promptBlocks, ts: Date.now() });
+      systemPrompt = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap);
+      this._promptCache.set(promptCacheKey, { prompt: systemPrompt, ts: Date.now() });
       if (this._promptCache.size > 500) {
         const now = Date.now();
         for (const [k, v] of this._promptCache) { if (now - v.ts > this.PROMPT_CACHE_TTL) this._promptCache.delete(k); }
@@ -279,15 +269,14 @@ export class AiService implements OnModuleDestroy {
     // Initialize per-call side-effects accumulator (tools write here, merged at end)
     this._chatSideEffects.delete(session.id);
 
-    // ═══ PASO 3: Filter tools by tier + role ═══
-    let filteredTools = this.tools.filter(t => promptBlocks.toolFilter.has(t.name));
-    // Also apply existing role-based filtering for tools not in the v2 sets
-    const roleFilteredTools = this.getFilteredTools(user, companyType, isWeb);
-    const roleToolNames = new Set(roleFilteredTools.map((t: any) => t.name));
-    filteredTools = filteredTools.filter(t => roleToolNames.has(t.name) || t.name === 'escalate_to_sonnet');
+    // Filter tools by role
+    const filteredTools = this.getFilteredTools(user, companyType, isWeb);
 
-    let selectedModel = MODELS[currentTier];
-    this.logger.log(`[route] ${currentTier} (reason: ${route.reason}), tools: ${filteredTools.length}`);
+    // Select model (Haiku default, Sonnet on retry)
+    let selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
+    if (selectedModel !== MODEL_ID) {
+      this.logger.log(`Using fast model (${selectedModel}) for simple query`);
+    }
 
     // Global timeout for entire tool execution loop (H1: prevent hanging)
     const loopDeadline = Date.now() + 90_000; // 90s max for all loops
@@ -300,15 +289,13 @@ export class AiService implements OnModuleDestroy {
           break;
         }
 
-        // Use selected model consistently through entire loop
         const modelForLoop = selectedModel;
-        const maxTokensForModel = modelForLoop === MODELS.haiku ? HAIKU_MAX_TOKENS : SONNET_MAX_TOKENS;
         this.logger.log(`Sending to Claude (loop ${loopCount}, model=${modelForLoop}), messages: ${currentMessages.length}`);
         const createParams = {
           model: modelForLoop,
-          max_tokens: maxTokensForModel,
+          max_tokens: MODEL_MAX_TOKENS,
           temperature: MODEL_TEMPERATURE,
-          system: promptBlocks.system as any,
+          system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           tools: filteredTools.map((t, i, arr) =>
             i === arr.length - 1 ? { ...t, cache_control: { type: 'ephemeral' } } : t,
           ) as any,
@@ -398,24 +385,23 @@ export class AiService implements OnModuleDestroy {
             }
           }
 
-          // Detect escalate_to_sonnet tool call from Haiku → switch to Sonnet and retry
-          const escalationBlock = toolBlocks.find((b: any) => b.name === 'escalate_to_sonnet');
-          if (escalationBlock && selectedModel === MODELS.haiku && !this._sonnetRetried?.has(session.id)) {
-            const escalateReason = (escalationBlock as any).input?.reason || 'unknown';
-            this.logger.warn(`Haiku escalated to Sonnet (reason: ${escalateReason})`);
-            if (!this._sonnetRetried) this._sonnetRetried = new Map();
-            this._sonnetRetried.set(session.id, Date.now());
-            // Switch to Sonnet: rebuild prompt with full tool set
-            currentTier = 'sonnet';
-            selectedModel = MODELS.sonnet;
-            promptBlocks = await this.promptBuilder.build(user, companyType, isWeb, plantAccessMap, 'sonnet');
-            filteredTools = this.tools.filter(t => promptBlocks.toolFilter.has(t.name));
-            const roleFiltered2 = this.getFilteredTools(user, companyType, isWeb);
-            const roleNames2 = new Set(roleFiltered2.map((t: any) => t.name));
-            filteredTools = filteredTools.filter(t => roleNames2.has(t.name));
-            currentMessages = currentMessages.slice(0, -1); // remove assistant tool_use with escalate
-            loopCount--; // redo this loop with Sonnet
-            continue;
+          // Detect prepare_freight failure on Haiku → escalate to Sonnet and retry
+          if (selectedModel === MODEL_ID_FAST) {
+            const prepareBlock = toolBlocks.find((b: any) => b.name === 'prepare_freight');
+            if (prepareBlock) {
+              const prepareResult = toolResults.find((r: any) => r.tool_use_id === prepareBlock.id);
+              const resultStr = prepareResult?.content || '';
+              const hasMissingFields = /error|falt|requerid|obligatori|invalid/i.test(resultStr);
+              if (hasMissingFields && !this._sonnetRetried?.has(session.id)) {
+                this.logger.warn('prepare_freight failed on Haiku — retrying with Sonnet');
+                if (!this._sonnetRetried) this._sonnetRetried = new Map();
+                this._sonnetRetried.set(session.id, Date.now());
+                selectedModel = MODEL_ID;
+                currentMessages = currentMessages.slice(0, -1);
+                loopCount--;
+                continue;
+              }
+            }
           }
 
           currentMessages.push({ role: 'user', content: toolResults });
@@ -449,17 +435,13 @@ export class AiService implements OnModuleDestroy {
       const textBlocks = response.content.filter((b: any) => b.type === 'text');
       let finalText = textBlocks.map((b: any) => b.text).join('\n') || 'No se pudo procesar el mensaje.';
 
-      // ═══ COST LOGGING (T10) ═══
-      const finalModelTier: ModelTier = selectedModel === MODELS.haiku ? 'haiku' : 'sonnet';
-      const wasEscalated = this._sonnetRetried?.has(session.id) && route.model === 'haiku';
+      // Cost logging
       if (response.usage) {
-        const cost = estimateCost(finalModelTier, response.usage);
-        this.logger.log(`[cost] model=${finalModelTier} escalated=${wasEscalated} route=${route.reason} ` +
+        const model = selectedModel === MODEL_ID_FAST ? 'haiku' : 'sonnet';
+        const escalated = this._sonnetRetried?.has(session.id) || false;
+        this.logger.log(`[cost] model=${model} escalated=${escalated} ` +
           `input=${response.usage.input_tokens} output=${response.usage.output_tokens} ` +
-          `cacheRead=${response.usage.cache_read_input_tokens ?? 0} ` +
-          `cacheWrite=${response.usage.cache_creation_input_tokens ?? 0} ` +
-          `tools=${response.content.filter((b: any) => b.type === 'tool_use').map((b: any) => b.name).join(',')} ` +
-          `cost=$${cost.toFixed(6)} loops=${loopCount}`);
+          `cacheRead=${response.usage.cache_read_input_tokens ?? 0} loops=${loopCount}`);
       }
 
       // Post-process: validate quality, strip UUIDs, enforce length
@@ -537,8 +519,7 @@ export class AiService implements OnModuleDestroy {
 
   /** @deprecated Use PromptBuilderService.build() */
   private async buildSystemPrompt(user: any, companyType: string, isWeb = false): Promise<string> {
-    const blocks = await this.promptBuilder.build(user, companyType, isWeb);
-    return blocks.system.map(b => b.text).join('\n');
+    return this.promptBuilder.build(user, companyType, isWeb);
   }
 
   // Tool sets moved to IntentRouterService
