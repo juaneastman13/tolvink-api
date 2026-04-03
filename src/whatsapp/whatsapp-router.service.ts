@@ -498,8 +498,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // Show "typing" indicator so user sees the bot is working
       this.wa.sendTypingIndicator(phone).catch((err) => this.logger.debug(`[typing] indicator failed: ${err.message}`));
 
-      // Route through hybrid system: deterministic first, LLM fallback
-      const result = await this.messageRouter.handleMessage(phone, text, user, session);
+      // Route directly to AI agent (prompt-orchestrated)
+      const result = await this.ai.chat(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;
 
