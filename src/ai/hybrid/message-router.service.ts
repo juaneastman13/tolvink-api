@@ -305,54 +305,10 @@ export class MessageRouterService implements OnModuleDestroy {
       }
 
       // ---- CREATE FREIGHT ----
-      case 'create_freight': {
-        const { isChofer } = resolveActiveRole(user);
-        if (isChofer) return this.responseBuilder.formatError('Los choferes no pueden crear fletes.');
-        if (!companyType.includes('producer')) {
-          return this.responseBuilder.formatError('Solo los productores pueden crear fletes.');
-        }
-
-        // If interpreter provided enriched data, pre-seed the parser message
-        // so the flow starts with more fields already extracted
-        let messageForFlow = message;
-        const interpreterData = detected.entities._interpreterData as ParsedFreightData | undefined;
-        if (interpreterData) {
-          // Inject interpreter-extracted data into the flow by creating a synthetic
-          // message that the parser will handle. But actually, we'll feed the data
-          // directly into the flow by starting it with pre-collected fields.
-          const flowResult = this.freightFlow.processMessageWithData(message, null, interpreterData);
-
-          await this.flowService.saveFlowToSession(session.id, flowResult.flow);
-
-          if (flowResult.flow.awaitingConfirmation) {
-            return {
-              text: flowResult.response || 'Error al procesar datos del flete.',
-              buttons: [
-                { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
-                { id: 'ai_cancel_freight', title: 'CANCELAR' },
-              ],
-            };
-          }
-          return { text: flowResult.response || 'Iniciando creación de flete...' };
-        }
-
-        // Standard flow — regex-only parsing
-        const flowResult = this.freightFlow.processMessage(message, null);
-
-        await this.flowService.saveFlowToSession(session.id, flowResult.flow);
-
-        if (flowResult.flow.awaitingConfirmation) {
-          return {
-            text: flowResult.response || 'Error al procesar datos del flete.',
-            buttons: [
-              { id: 'ai_confirm_freight', title: 'CONFIRMAR' },
-              { id: 'ai_cancel_freight', title: 'CANCELAR' },
-            ],
-          };
-        }
-
-        return { text: flowResult.response || 'Iniciando creación de flete...' };
-      }
+      // Delegate to LLM (Sonnet) — it handles one-shot extraction, fuzzy matching,
+      // branch selection, and multi-step flows much better than regex parsing.
+      case 'create_freight':
+        return null;
 
       // ---- CONFIRM ----
       case 'confirm': {
