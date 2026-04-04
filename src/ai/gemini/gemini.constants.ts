@@ -1,0 +1,21 @@
+// =====================================================================
+// TOLVINK — Gemini Service Constants
+// Google Gemini model configuration (Flash default, Pro fallback)
+// =====================================================================
+
+export const GEMINI_MODELS = {
+  flash: 'gemini-2.5-flash-preview-05-20',
+  pro: 'gemini-2.5-pro-preview-05-06',
+} as const;
+export type GeminiModelTier = keyof typeof GEMINI_MODELS;
+
+// Token limits
+export const GEMINI_FLASH_MAX_TOKENS = 1200;   // Match Anthropic config
+export const GEMINI_PRO_MAX_TOKENS = 4096;     // Pro fallback gets more room
+export const GEMINI_TEMPERATURE = 0.4;         // Match Anthropic config
+
+// Cost per million tokens (USD) — for logging/estimation
+export const GEMINI_PRICING = {
+  flash: { input: 0.15, output: 0.60, cachedInput: 0.0375 },
+  pro:   { input: 1.25, output: 10.0, cachedInput: 0.3125 },
+} as const;

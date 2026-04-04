@@ -3,12 +3,13 @@
 // Routes incoming WhatsApp messages to appropriate handlers
 // =====================================================================
 
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AiService } from '../ai/ai.service';
+import { GeminiService } from '../ai/gemini/gemini.service';
 import { MessageRouterService } from '../ai/hybrid/message-router.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
@@ -62,14 +63,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   /** Periodic cleanup timer for unbounded maps */
   private mapCleanupTimer: ReturnType<typeof setInterval>;
 
+  /** AI provider flag: "anthropic" (default) or "gemini" */
+  private readonly aiProvider: 'anthropic' | 'gemini';
+
   constructor(
     private prisma: PrismaService,
     private wa: WhatsAppService,
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
     private ai: AiService,
+    @Optional() private gemini: GeminiService,
     private messageRouter: MessageRouterService,
   ) {
+    // Resolve AI provider from env
+    const provider = (process.env.AI_PROVIDER || 'anthropic').toLowerCase();
+    this.aiProvider = provider === 'gemini' ? 'gemini' : 'anthropic';
+    this.logger.log(`AI provider: ${this.aiProvider}`);
+
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
       this.openai = new OpenAI({ apiKey: openaiKey });
@@ -498,8 +508,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // Show "typing" indicator so user sees the bot is working
       this.wa.sendTypingIndicator(phone).catch((err) => this.logger.debug(`[typing] indicator failed: ${err.message}`));
 
-      // Route directly to AI agent (prompt-orchestrated)
-      const result = await this.ai.chat(phone, text, user, session);
+      // Route to AI agent — provider selected by AI_PROVIDER env var
+      const useGemini = this.aiProvider === 'gemini' && this.gemini?.isEnabled();
+      const result = useGemini
+        ? await this.gemini.chat(phone, text, user, session)
+        : await this.ai.chat(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;
 
