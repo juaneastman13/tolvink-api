@@ -36,6 +36,11 @@ import { AiInterpreterService } from './hybrid/ai-interpreter.service';
     IntentDetectorService, FreightParserService, FlowService,
     FreightFlowService, ResponseBuilderService, AiInterpreterService, MessageRouterService,
   ],
-  exports: [AiService, MessageRouterService],
+  exports: [
+    AiService, MessageRouterService,
+    // Shared services used by GeminiModule
+    ResponseFormatterService, SessionManagerService, IntentRouterService,
+    AiContextService, LocationToolsService,
+  ],
 })
 export class AiModule {}
