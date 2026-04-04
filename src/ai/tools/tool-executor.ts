@@ -689,6 +689,8 @@ export class ToolExecutorService {
     if (!hasDestination) {
       return JSON.stringify({ error: 'Falta destino. Indique planta destino o destino personalizado.' });
     }
+    const ownFleetValidationError = await this.ensureOwnFleetSelectionForPrepare(input, user);
+    if (ownFleetValidationError) return JSON.stringify({ error: ownFleetValidationError });
     const destResolutionError = await this.resolvePendingDestination(input, user);
     if (destResolutionError) return JSON.stringify({ error: destResolutionError });
 
@@ -704,6 +706,58 @@ export class ToolExecutorService {
       summary: { grain: input.grain, tons: input.tons, truckCount: Number(input.truckCount), origin: input.originName || input.originLotId || 'Sin definir', dest: input.destName || input.destPlantId || 'Sin definir', date: input.loadDate, time: input.loadTime },
       IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma.',
     });
+  }
+
+  private async ensureOwnFleetSelectionForPrepare(input: any, user: any): Promise<string | null> {
+    if (!input?.useOwnFleet) return null;
+
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return null;
+
+    const ownTrucks = await this.prisma.truck.findMany({
+      where: { companyId: producerCompanyId, active: true },
+      select: { id: true, plate: true },
+      orderBy: { plate: 'asc' },
+      take: 100,
+    });
+    if (!ownTrucks.length) {
+      return 'Indicó flota propia, pero no hay camiones activos en su empresa.';
+    }
+
+    const hasOwnTruckInArray = Array.isArray(input?.trucks) && input.trucks.some((t: any) => t && !t.isExternal && !!t.truckId);
+    const hasOwnDriverInArray = Array.isArray(input?.trucks) && input.trucks.some((t: any) => t && !t.isExternal && !!t.driverId);
+    const hasOwnTruckSelected = !!(input?.truckId || input?.ownTruckId || hasOwnTruckInArray);
+    const hasOwnDriverSelected = !!(input?.driverId || input?.ownDriverId || hasOwnDriverInArray);
+
+    if (ownTrucks.length === 1) {
+      if (!hasOwnTruckSelected) input.truckId = ownTrucks[0].id;
+      if (!hasOwnDriverSelected) input.driverId = 'self';
+      return null;
+    }
+
+    if (hasOwnTruckSelected && hasOwnDriverSelected) return null;
+
+    const drivers = await this.prisma.userCompany.findMany({
+      where: { companyId: producerCompanyId, active: true, role: 'chofer' },
+      select: { userId: true, user: { select: { name: true, phone: true } } },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+    });
+
+    const truckOptions = ownTrucks.slice(0, 12).map((t: any) => `- ${t.plate || 'SIN PATENTE'}`).join('\n');
+    const driverOptions = [
+      `1) Yo (${user?.name || 'solicitante'})`,
+      ...drivers.slice(0, 12).map((d: any, idx: number) => `${idx + 2}) ${d.user?.name || 'Sin nombre'}${d.user?.phone ? ` (${d.user.phone})` : ''}`),
+    ].join('\n');
+
+    return [
+      'Para flota propia necesito que indique camión y chofer antes de confirmar.',
+      'Camiones disponibles:',
+      truckOptions || '- (sin datos)',
+      'Choferes disponibles:',
+      driverOptions,
+      'Responda indicando: patente + chofer.',
+    ].join('\n');
   }
 
   private async resolvePendingDestination(input: any, user: any): Promise<string | null> {
