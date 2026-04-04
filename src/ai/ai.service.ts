@@ -33,6 +33,8 @@ import { AdminToolsService } from './tools/admin-tools.service';
 import { TransportToolsService } from './tools/transport-tools.service';
 import { FreightQueryToolsService } from './tools/freight-query-tools.service';
 import { FreightActionToolsService } from './tools/freight-action-tools.service';
+import { MessageInterceptorService } from './interceptor/message-interceptor.service';
+import { detectDomains, getToolNamesForDomains } from './routing/tool-domain-router';
 import { createSignedToken } from '../common/signed-token';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../common/fuzzy-match';
 import * as crypto from 'crypto';
@@ -94,6 +96,7 @@ export class AiService implements OnModuleDestroy {
     private transportTools: TransportToolsService,
     private freightQueryTools: FreightQueryToolsService,
     private freightActionTools: FreightActionToolsService,
+    private interceptor: MessageInterceptorService,
   ) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
     if (apiKey) {
@@ -176,6 +179,36 @@ export class AiService implements OnModuleDestroy {
     const synUser = this.aiContext.buildSyntheticUser(user);
     const companyType = this.aiContext.resolveCompanyType(user);
     const isWeb = phone === 'web';
+
+    // ═══ LAYER 0: Intercept without AI ═══
+    const state0 = (session?.flowState as any) || {};
+    try {
+      const interceptResult = await this.interceptor.intercept(
+        userMessage, user, companyType, state0, isWeb,
+      );
+      if (interceptResult.handled) {
+        this.logger.log(`[layer0] action=${interceptResult.action} cost=$0.00`);
+        const aiMessages0: any[] = state0.aiMessages || [];
+        aiMessages0.push({ role: 'user', content: userMessage });
+        aiMessages0.push({ role: 'assistant', content: [{ type: 'text', text: interceptResult.response || '' }] });
+        await this.prisma.whatsAppSession.update({
+          where: { id: session.id },
+          data: {
+            flowState: { ...state0, aiMessages: aiMessages0.slice(-MAX_HISTORY), lastMessageAt: new Date().toISOString() },
+            expiresAt: new Date(Date.now() + AI_SESSION_TIMEOUT_MIN * 60 * 1000),
+          },
+        });
+        this._chatLocks.delete(session.id);
+        return {
+          text: interceptResult.response || '',
+          buttons: interceptResult.interactive?.action?.buttons?.map((b: any) => b.reply) || undefined,
+          navigate: interceptResult.navigate,
+        };
+      }
+    } catch (e: any) {
+      this.logger.warn(`[layer0] intercept error: ${e.message}`);
+    }
+    // ═══ LAYER 1: Claude AI ═══
 
     // Resolve plant access (needed for both prompt and tool execution)
     const plantAccessMap = await this.resolveUserPlantAccess(user);
@@ -269,8 +302,17 @@ export class AiService implements OnModuleDestroy {
     // Initialize per-call side-effects accumulator (tools write here, merged at end)
     this._chatSideEffects.delete(session.id);
 
-    // Filter tools by role
-    const filteredTools = this.getFilteredTools(user, companyType, isWeb);
+    // Filter tools by role AND domain
+    const roleFilteredTools = this.getFilteredTools(user, companyType, isWeb);
+    const sessionStateForRouter = {
+      activeFlow: state.pendingFreight ? 'create_freight' : undefined,
+      pendingAction: state.pendingAction,
+      pendingFreight: state.pendingFreight,
+    };
+    const domains = detectDomains(cleanedMessage, sessionStateForRouter);
+    const allowedToolNames = getToolNamesForDomains(domains);
+    const filteredTools = roleFilteredTools.filter(t => allowedToolNames.has(t.name));
+    this.logger.log(`[tools] domains=${[...domains].join(',')} tools=${filteredTools.length}/${roleFilteredTools.length}`);
 
     // Select model (Haiku default, Sonnet on retry)
     let selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
