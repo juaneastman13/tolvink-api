@@ -295,26 +295,17 @@ export class AgentService implements OnModuleDestroy {
   }
 
   /**
-   * Remove legacy functionCall parts that don't contain thought signatures.
-   * This prevents INVALID_ARGUMENT errors for sessions persisted before the fix.
+   * Keep only textual history for persisted turns.
+   * Tool parts from previous sessions can create invalid Gemini turn ordering
+   * (or missing thought signatures). Runtime tool turns in the current request
+   * are still preserved in-memory by the main loop.
    */
   private sanitizeHistoryForToolParts(messages: GeminiMessage[]): GeminiMessage[] {
-    const hasThoughtSignature = (part: any): boolean => {
-      if (!part?.functionCall) return true;
-      return !!(
-        part?.thought_signature ||
-        part?.thoughtSignature ||
-        part?.functionCall?.thought_signature ||
-        part?.functionCall?.thoughtSignature
-      );
-    };
-
     const cleaned: GeminiMessage[] = [];
     for (const msg of messages) {
       const filteredParts = (msg.parts || []).filter((p: any) => {
-        // Keep text and functionResponse as-is.
-        if (!p?.functionCall) return true;
-        return hasThoughtSignature(p);
+        // Persisted history: keep text only, drop functionCall/functionResponse.
+        return !!p?.text;
       });
       if (filteredParts.length > 0) {
         cleaned.push({ ...msg, parts: filteredParts });
