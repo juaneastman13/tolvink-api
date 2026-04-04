@@ -24,6 +24,7 @@ import { FreightFlowService } from './hybrid/freight-flow.service';
 import { ResponseBuilderService } from './hybrid/response-builder.service';
 import { MessageRouterService } from './hybrid/message-router.service';
 import { AiInterpreterService } from './hybrid/ai-interpreter.service';
+import { MessageInterceptorService } from './interceptor/message-interceptor.service';
 
 @Module({
   imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
@@ -35,12 +36,13 @@ import { AiInterpreterService } from './hybrid/ai-interpreter.service';
     // Hybrid deterministic + interpreter services
     IntentDetectorService, FreightParserService, FlowService,
     FreightFlowService, ResponseBuilderService, AiInterpreterService, MessageRouterService,
+    MessageInterceptorService,
   ],
   exports: [
     AiService, MessageRouterService,
     // Shared services used by GeminiModule
     ResponseFormatterService, SessionManagerService, IntentRouterService,
-    AiContextService, LocationToolsService,
+    AiContextService, LocationToolsService, MessageInterceptorService,
   ],
 })
 export class AiModule {}

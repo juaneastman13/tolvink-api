@@ -40,7 +40,7 @@ export class GeminiPromptBuilderService {
     return null;
   }
 
-  async build(user: any, companyType: string, isWeb = false, plantAccessMap?: Map<string, string>): Promise<string> {
+  async build(user: any, companyType: string, isWeb = false, plantAccessMap?: Map<string, string>): Promise<{ fullPrompt: string; proactiveData?: string }> {
     const name = sanitizeForPrompt(user.name?.split(' ')[0] || 'usuario');
     const nowUY = new Date(Date.now() + URUGUAY_UTC_OFFSET_MS);
     const today = nowUY.toISOString().split('T')[0];
@@ -441,16 +441,12 @@ LINKS: Web: ${APP_URL}. Detalle: campo "link" de get_freight_detail. Mapa: gener
       }
     } catch (e: any) { this.logger.warn(`Proactive data loading failed: ${e.message}`); }
 
+    // Proactive data returned separately — injected as first turn, not in system prompt
+    let proactiveData: string | undefined;
     if (proactiveLines.length > 0) {
-      basePrompt += `
-
-<proactive_data>
-DATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):
-${proactiveLines.join('\n')}
-AUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión), seleccionarla automáticamente sin preguntar.
-</proactive_data>`;
+      proactiveData = `DATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):\n${proactiveLines.join('\n')}\nAUTO-SELECCIÓN: Si hay una sola opción (1 campo, 1 lote, 1 planta, 1 camión), seleccionarla automáticamente sin preguntar.`;
     }
 
-    return basePrompt;
+    return { fullPrompt: basePrompt, proactiveData };
   }
 }
