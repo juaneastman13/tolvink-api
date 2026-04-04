@@ -33,6 +33,8 @@ export interface GeminiCallResult {
 export class GeminiClient implements OnModuleInit {
   private readonly logger = new Logger(GeminiClient.name);
   private ai: GoogleGenAI | null = null;
+  private readonly maxRetries = 3;
+  private readonly baseRetryDelayMs = 400;
 
   onModuleInit() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -128,11 +130,28 @@ export class GeminiClient implements OnModuleInit {
       };
     }
 
-    const response = await this.ai.models.generateContent({
-      model: AI_MODEL,
-      contents: contents as any,
-      config,
-    });
+    let response: any;
+    let lastErr: any;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        response = await this.ai.models.generateContent({
+          model: AI_MODEL,
+          contents: contents as any,
+          config,
+        });
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        if (!this.isRetryableUnavailable(e) || attempt === this.maxRetries) {
+          throw e;
+        }
+        const jitter = Math.floor(Math.random() * 120);
+        const waitMs = this.baseRetryDelayMs * Math.pow(2, attempt) + jitter;
+        this.logger.warn(`Gemini UNAVAILABLE (attempt ${attempt + 1}/${this.maxRetries + 1}), retrying in ${waitMs}ms`);
+        await this.sleep(waitMs);
+      }
+    }
+    if (!response) throw lastErr || new Error('Gemini response unavailable');
 
     // Extract text
     let text: string | null = null;
@@ -161,5 +180,15 @@ export class GeminiClient implements OnModuleInit {
       finishReason,
       usageMetadata: response.usageMetadata,
     };
+  }
+
+  private isRetryableUnavailable(err: any): boolean {
+    const msg = String(err?.message || '');
+    const code = err?.status ?? err?.code ?? err?.error?.code;
+    return code === 503 || msg.includes('status":"UNAVAILABLE"') || msg.includes('currently experiencing high demand');
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
