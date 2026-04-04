@@ -7,6 +7,9 @@ import { ConfigModule } from '@nestjs/config';
 import { FreightsModule } from '../freights/freights.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { OcrModule } from '../ocr/ocr.module';
+import { FieldsService } from '../fields/fields.service';
+import { TrucksService } from '../trucks/trucks.controller';
+import { AdminService } from '../admin/admin.controller';
 
 // Core
 import { AgentService } from './core/agent.service';
@@ -41,6 +44,9 @@ import { ToolExecutorService } from './tools/tool-executor';
     ContextBuilderService,
     ToolRegistryService,
     ToolExecutorService,
+    FieldsService,
+    TrucksService,
+    AdminService,
   ],
   exports: [AgentService, SessionManagerService],
 })
