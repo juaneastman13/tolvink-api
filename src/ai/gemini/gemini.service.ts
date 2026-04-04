@@ -217,7 +217,7 @@ export class GeminiService implements OnModuleDestroy {
     const geminiTools = convertAllToolsToGemini(filteredTools);
 
     // Select model — Flash default
-    let selectedModel = GEMINI_MODELS.flash;
+    let selectedModel: string = GEMINI_MODELS.flash;
     let maxTokens = GEMINI_FLASH_MAX_TOKENS;
 
     // Global timeout
@@ -260,7 +260,7 @@ export class GeminiService implements OnModuleDestroy {
                 systemInstruction: systemPrompt,
                 temperature: GEMINI_TEMPERATURE,
                 maxOutputTokens: maxTokens,
-                tools: [geminiTools],
+                tools: [geminiTools] as any,
               },
             });
             return await Promise.race([apiCall, timeout]);
