@@ -90,26 +90,31 @@ export class FreightQueryToolsService {
 
   // ---- summarize_freights ----
   async toolSummarizeFreights(synUser: any, input: any): Promise<string> {
+    // Pre-filter: resolve transporter company ID before query to avoid fetching 100 records
+    let transporterCompanyId: string | undefined;
+    if (input.transporterName) {
+      const companies = await this.prisma.company.findMany({
+        where: { name: { contains: input.transporterName, mode: 'insensitive' }, active: true },
+        select: { id: true },
+        take: 5,
+      });
+      if (companies.length > 0) {
+        transporterCompanyId = companies[0].id;
+      }
+    }
+
     const result = await this.freights.findAll(synUser, {
       status: input.status,
       dateFrom: input.dateFrom,
       dateTo: input.dateTo,
       grain: input.grain,
+      transporterCompanyId,
       limit: 100,
       page: 1,
     } as any);
 
-    // Post-query filter: transporter name (requires join data, can't easily DB-filter)
     let filtered = result.data.sort((a: any, b: any) =>
       (a.destName || '').localeCompare(b.destName || '') || (a.originName || '').localeCompare(b.originName || ''));
-    if (input.transporterName) {
-      const t = input.transporterName.toLowerCase();
-      filtered = filtered.filter((f: any) =>
-        f.assignments?.some((a: any) =>
-          (a.transportCompany?.name || '').toLowerCase().includes(t),
-        ) ?? false,
-      );
-    }
 
     // Warn if results were truncated by the 100-record limit
     const truncated = result.total > 100;

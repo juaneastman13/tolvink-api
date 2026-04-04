@@ -75,6 +75,10 @@ export class MessageInterceptorService {
       return this.getFreightQuickStatus(sessionState.activeContext.lastFreightCode, user, isWeb);
     }
 
+    if (this.isFleetQuery(msgLower)) {
+      return this.getFleetQuickList(user, isWeb);
+    }
+
     return { handled: false };
   }
 
@@ -95,11 +99,15 @@ export class MessageInterceptorService {
   }
 
   private isDashboardQuery(msg: string): boolean {
-    return /^(mis fletes|dashboard|resumen|qu[eé] tengo|fletes|ver fletes)\s*[?!.]*$/i.test(msg);
+    return /^(mis fletes|dashboard|resumen|qu[eé] tengo|fletes|ver fletes|dame resumen|mostrame mis fletes|listar fletes|listado|listame)\s*[?!.]*$/i.test(msg);
   }
 
   private isStatusQuery(msg: string): boolean {
-    return /^(estado|c[oó]mo va|qu[eé] pas[oó]|novedades|update|cómo está)\s*[?!.]*$/i.test(msg);
+    return /^(estado|c[oó]mo va|qu[eé] pas[oó]|novedades|update|cómo está|en qu[eé] va|progreso|avance)\s*[?!.]*$/i.test(msg);
+  }
+
+  private isFleetQuery(msg: string): boolean {
+    return /^(mis camiones|mi flota|camiones|mis veh[ií]culos|flota|mis chatas)\s*[?!.]*$/i.test(msg);
   }
 
   private async getDashboard(user: any, isWeb: boolean): Promise<InterceptResult> {
@@ -147,6 +155,24 @@ export class MessageInterceptorService {
         navigate: isWeb ? { screen: 'detail', params: { freightId: freight.id } } : undefined,
         action: 'freight_status',
       };
+    } catch {
+      return { handled: false };
+    }
+  }
+
+  private async getFleetQuickList(user: any, isWeb: boolean): Promise<InterceptResult> {
+    const companyId = user.activeCompanyId || user.companyId;
+    try {
+      const trucks = await this.prisma.truck.findMany({
+        where: { companyId, active: true },
+        select: { plate: true, model: true, assignedUser: { select: { name: true } } },
+        take: 10,
+      });
+      if (trucks.length === 0) {
+        return { handled: true, response: 'No tenés camiones registrados.', navigate: isWeb ? { screen: 'trucks' } : undefined, action: 'fleet_empty' };
+      }
+      const lines = trucks.map((t: any) => `🚛 ${t.plate}${t.model ? ` · ${t.model}` : ''}${t.assignedUser?.name ? ` · ${t.assignedUser.name}` : ''}`);
+      return { handled: true, response: `Tu flota:\n\n${lines.join('\n')}`, navigate: isWeb ? { screen: 'trucks' } : undefined, action: 'fleet_list' };
     } catch {
       return { handled: false };
     }

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { MAX_RESPONSE_CHARS, AUDIO_FILLERS } from '../ai.constants';
+import { MAX_RESPONSE_CHARS, WEB_MAX_RESPONSE_CHARS, AUDIO_FILLERS } from '../ai.constants';
 
 @Injectable()
 export class ResponseFormatterService {
@@ -27,16 +27,17 @@ export class ResponseFormatterService {
       return '[ID interno]';
     });
 
-    if (!isWeb && clean.length > MAX_RESPONSE_CHARS && !/F\d{2}-[A-Z]{3}\.\d{4}|FLT-\d{4,}/i.test(clean)) {
-      const lineBreak = clean.lastIndexOf('\n', MAX_RESPONSE_CHARS);
-      if (lineBreak > MAX_RESPONSE_CHARS * 0.5) {
+    const maxChars = isWeb ? WEB_MAX_RESPONSE_CHARS : MAX_RESPONSE_CHARS;
+    if (clean.length > maxChars && !/F\d{2}-[A-Z]{3}\.\d{4}|FLT-\d{4,}/i.test(clean)) {
+      const lineBreak = clean.lastIndexOf('\n', maxChars);
+      if (lineBreak > maxChars * 0.5) {
         clean = clean.slice(0, lineBreak);
       } else {
-        const sentenceBreak = clean.lastIndexOf('. ', MAX_RESPONSE_CHARS);
-        if (sentenceBreak > MAX_RESPONSE_CHARS * 0.5) {
+        const sentenceBreak = clean.lastIndexOf('. ', maxChars);
+        if (sentenceBreak > maxChars * 0.5) {
           clean = clean.slice(0, sentenceBreak + 1);
         } else {
-          clean = clean.slice(0, MAX_RESPONSE_CHARS);
+          clean = clean.slice(0, maxChars);
         }
       }
     }

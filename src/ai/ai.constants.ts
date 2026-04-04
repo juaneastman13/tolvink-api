@@ -5,7 +5,7 @@
 
 export const MAX_HISTORY = 25;
 export const MAX_TOOL_LOOPS = 5;  // 5 loops needed: crear flete = search_plants + list_fields + list_lots + prepare_freight + confirm
-export const AI_SESSION_TIMEOUT_MIN = 30;
+export const AI_SESSION_TIMEOUT_MIN = 60;  // Was 30; field workers pause 45-60 min (lunch, travel)
 if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — using tolvink.com fallback');
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
 export const OWN_FLEET_SHORTCUT = 'own_fleet';
@@ -23,10 +23,11 @@ export type ModelTier = keyof typeof MODELS;
 export const MODEL_ID = MODELS.sonnet;
 export const MODEL_ID_FAST = MODELS.haiku;
 export const MODEL_TEMPERATURE = 0.4;
-export const MODEL_MAX_TOKENS = 1200;
+export const MODEL_MAX_TOKENS = 800;     // Avg Haiku response is 200-400t; 1200 was overkill
 export const HAIKU_MAX_TOKENS = 512;
 export const SONNET_MAX_TOKENS = 4096;
-export const MAX_RESPONSE_CHARS = 3000;   // Hard cap before truncation (WhatsApp ~4096, chunking handles split)
+export const MAX_RESPONSE_CHARS = 1600;   // WhatsApp fragments >~1600 chars; web uses WEB_MAX_RESPONSE_CHARS
+export const WEB_MAX_RESPONSE_CHARS = 3000;
 export const STALE_SESSION_MIN = 10;      // Minutes gap that triggers context reminder
 export const URUGUAY_UTC_OFFSET_MS = -3 * 60 * 60 * 1000; // UTC-3 (Uruguay has no DST)
 

@@ -131,10 +131,10 @@ export class PromptBuilderService {
 
     basePrompt += `\n\n<documents>\nDOCUMENTOS:\n- Archivo + flete → attach_document(code) directo.${canManageFleet ? '\n- Archivo + camión/gasto/ingreso → attach_truck_document(plate, linkTo, linkId).' : ''}\n- Foto remito/pesaje → ocr_analyze.\n</documents>\n\n<locations>\nUBICACIONES:\n- No mostrar coordenadas crudas.${isAdmin ? ' Admins pueden pedir coordenadas.' : ''}\n- Con mapLink → frase + link. Sin mapLink → "Ubicación no disponible."\n- Marcar ubicación → generate_location_link.\n</locations>\n\n<links>\nLINKS: Web: ${APP_URL}. Detalle: campo "link" de get_freight_detail. Mapa: generate_daily_map_link. PDF: generate_report_link.${isWeb ? `\nNAVEGACIÓN: navigate_app → ${allowedScreens.join(', ')}. Solo cuando pide ver algo o acción completada.` : ''}\n</links>`;
 
-    // Proactive data
+    // Proactive data — skip for chofer (only needs assigned freights, not fields/plants/fleet)
     const proactiveLines: string[] = [];
     try {
-      if (activeCoId) {
+      if (activeCoId && !isChofer) {
         if (hasType(companyType, 'producer')) {
           const producerCoId = this.resolveProducerCompanyId(user);
           if (producerCoId) {

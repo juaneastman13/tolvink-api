@@ -288,18 +288,19 @@ export class FreightActionToolsService {
     // ── AUTO-RESOLVE: destination name → plant ID ──
     if (!input.destPlantId && input.destName) {
       if (producerCompanyId) {
-        // LEGACY: PlantProducerAccess — to be migrated to CompanyAccess
-        const accesses = await this.prisma.plantProducerAccess.findMany({
-          where: { producerCompanyId, active: true },
-          select: { plantCompanyId: true },
-          take: 100,
-        });
-        // CompanyAccess: plants that granted OPERATOR access to this producer
-        const caRecords = await this.prisma.companyAccess.findMany({
-          where: { granteeCompanyId: producerCompanyId, isActive: true, accessLevel: 'OPERATOR' },
-          select: { grantorCompanyId: true },
-          take: 200,
-        });
+        // Parallel: legacy PlantProducerAccess + new CompanyAccess
+        const [accesses, caRecords] = await Promise.all([
+          this.prisma.plantProducerAccess.findMany({
+            where: { producerCompanyId, active: true },
+            select: { plantCompanyId: true },
+            take: 100,
+          }),
+          this.prisma.companyAccess.findMany({
+            where: { granteeCompanyId: producerCompanyId, isActive: true, accessLevel: 'OPERATOR' },
+            select: { grantorCompanyId: true },
+            take: 200,
+          }),
+        ]);
         const plantCompanyIds = [...new Set([
           ...accesses.map(a => a.plantCompanyId),
           ...caRecords.map(r => r.grantorCompanyId),
@@ -576,56 +577,46 @@ export class FreightActionToolsService {
       });
     }
 
-    // Resolve display names
+    // Resolve display names — parallel queries for all needed lookups
+    const truckOwnerCompany = user.activeCompanyId || user.companyId;
+    const [plantResult, branchResult, lotResult, truckResult, driverResult] = await Promise.all([
+      input.destPlantId
+        ? this.prisma.plant.findUnique({ where: { id: input.destPlantId }, select: { name: true, company: { select: { name: true } } } })
+          .then(p => p || this.prisma.company.findUnique({ where: { id: input.destPlantId }, select: { name: true } }).then(c => c ? { name: '', company: { name: c.name } } : null))
+        : Promise.resolve(null),
+      input.branchId
+        ? this.prisma.plant.findUnique({ where: { id: input.branchId }, select: { name: true } })
+        : Promise.resolve(null),
+      input.originLotId
+        ? this.prisma.lot.findUnique({ where: { id: input.originLotId }, select: { name: true, field: { select: { name: true } } } })
+        : Promise.resolve(null),
+      input.truckId
+        ? this.prisma.truck.findFirst({ where: { id: input.truckId, companyId: truckOwnerCompany, active: true }, select: { plate: true, model: true } })
+        : Promise.resolve(null),
+      input.driverId && input.driverId !== user.id
+        ? this.prisma.user.findUnique({ where: { id: input.driverId }, select: { name: true } })
+        : Promise.resolve(null),
+    ]);
+
     let destDisplayName = input.destName || 'Sin destino';
-    if (input.destPlantId) {
-      const plant = await this.prisma.plant.findUnique({
-        where: { id: input.destPlantId },
-        select: { name: true, company: { select: { name: true } } },
-      });
-      if (plant) {
-        destDisplayName = `${plant.company?.name || ''} - ${plant.name}`;
-      } else {
-        const company = await this.prisma.company.findUnique({
-          where: { id: input.destPlantId },
-          select: { name: true },
-        });
-        destDisplayName = company?.name || destDisplayName;
-      }
+    if (plantResult) {
+      destDisplayName = `${(plantResult as any).company?.name || ''} - ${(plantResult as any).name || ''}`.replace(/^\s*-\s*/, '');
     }
-    // Append branch name if selected
-    if (input.branchId) {
-      const branch = await this.prisma.plant.findUnique({ where: { id: input.branchId }, select: { name: true } });
-      if (branch) destDisplayName += ` (${branch.name})`;
-    }
+    if (branchResult) destDisplayName += ` (${(branchResult as any).name})`;
 
     let originDisplayName = input.customOriginName || 'Sin origen';
-    if (input.originLotId) {
-      const lot = await this.prisma.lot.findUnique({
-        where: { id: input.originLotId },
-        select: { name: true, field: { select: { name: true } } },
-      });
-      if (lot) originDisplayName = lot.field?.name ? `${lot.field.name} - ${lot.name}` : lot.name;
+    if (lotResult) {
+      originDisplayName = (lotResult as any).field?.name ? `${(lotResult as any).field.name} - ${(lotResult as any).name}` : (lotResult as any).name;
     }
 
-    // Resolve truck + driver display if own fleet
     let truckDisplay: string | null = null;
+    if (truckResult) truckDisplay = (truckResult as any).model ? `${(truckResult as any).plate} (${(truckResult as any).model})` : (truckResult as any).plate;
+
     let driverDisplay: string | null = null;
-    if (input.truckId) {
-      const truckOwnerCompany = user.activeCompanyId || user.companyId;
-      const truck = await this.prisma.truck.findFirst({
-        where: { id: input.truckId, companyId: truckOwnerCompany, active: true },
-        select: { plate: true, model: true },
-      });
-      if (truck) truckDisplay = truck.model ? `${truck.plate} (${truck.model})` : truck.plate;
-    }
-    if (input.driverId) {
-      if (input.driverId === user.id) {
-        driverDisplay = user.name || 'Yo';
-      } else {
-        const driver = await this.prisma.user.findUnique({ where: { id: input.driverId }, select: { name: true } });
-        driverDisplay = driver?.name || null;
-      }
+    if (input.driverId === user.id) {
+      driverDisplay = user.name || 'Yo';
+    } else if (driverResult) {
+      driverDisplay = (driverResult as any).name || null;
     }
 
     // Auto-calculate truck count if not provided: 1 truck per 30 tons (round up)

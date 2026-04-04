@@ -71,32 +71,31 @@ const DOMAIN_PATTERNS: Array<{ domain: ToolDomain; patterns: RegExp[] }> = [
       /\b(mand[áa]|envi[áa]|despach[áa])\b/i,
       /\bprepara(r|me)?\b/i,
       /\b(repet[ií]|lo mismo|igual que antes|como el [úu]ltimo)\b/i,
-      /\b\d+\s*(t|ton|tonelada)\b/i,
-      /\b(soja|ma[ií]z|trigo|girasol|sorgo|cebada)\b/i,
+      /\b\d+\s*(tonelada|ton\b|t\b)\s/i,  // Require "tonelada/ton/t" not just any number
+      /\b(soja|ma[ií]z|trigo|girasol|sorgo|cebada)\b.*\b\d/i,  // Grain + number together
     ],
   },
   {
     domain: 'freight_ops',
     patterns: [
-      /\b(cancelar?|cancel[áa])\b/i,
+      /\b(cancel[áa]r?)\b.*\b(flete|viaje|carga)\b/i,  // Require freight context
       /\b(asigna[r]?|asign[áa]|autoriza[r]?)\b/i,
       /\b(inici[áa]|sal[ií]|empez[áa])\b.*\b(viaje|flete)\b/i,
       /\b(ya cargu[ée]|ya llegu[ée]|confirm[áa])\b/i,
       /\b(adjunt[áa]|foto|remito|pesaje)\b/i,
       /\bflota propia\b/i,
-      /\b(externo|delegad[oa])\b/i,
-      /\bF\d{2}-[A-Z]/i,
+      /\bF\d{2}-[A-Z]{2,5}\.\d+/i,  // Full freight code pattern only
     ],
   },
   {
     domain: 'fleet',
     patterns: [
       /\b(mis camiones|mi flota|camiones|flota)\b/i,
-      /\b(gasto|ingreso|gasoil|peaje|km|rendimiento)\b/i,
+      /\b(gasto|ingreso|gasoil|peaje|rendimiento)\b/i,
       /\b(registr[áa]|anot[áa])\b.*\b(gasto|ingreso|movimiento)\b/i,
       /\b(cu[áa]nto gast[ée]|cu[áa]nto me deben|resumen.*flota)\b/i,
       /\b(documentos?|papeles|vencimiento)\b.*\b(cami[oó]n|flota)\b/i,
-      /\b[A-Z]{3}\s?\d{3,4}\b/,
+      /\b[A-Z]{3}\d{3,4}\b/,  // Plate without spaces (LAF0303), not "ABC 123"
     ],
   },
   {

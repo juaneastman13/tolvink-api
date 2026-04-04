@@ -215,8 +215,10 @@ export class AiService implements OnModuleDestroy {
 
     // Cap message length to prevent context window abuse (5000 chars max)
     const cappedMessage = userMessage.length > 5000 ? userMessage.slice(0, 5000) : userMessage;
-    // Preprocess: clean audio fillers, normalize whitespace
-    const cleanedMessage = this.responseFormatter.preprocessMessage(cappedMessage);
+    // Preprocess: clean audio fillers, normalize whitespace, convert spoken numbers
+    const cleanedMessage = this.intentRouter.normalizeSpokenNumbers(
+      this.responseFormatter.preprocessMessage(cappedMessage),
+    );
 
     // Load conversation history from session
     const state = (session?.flowState as any) || {};
@@ -247,27 +249,29 @@ export class AiService implements OnModuleDestroy {
       }
     }
 
-    // Pending document: inject context so AI knows to use attach_document or attach_truck_document
+    // Pending document: compact injection
     if (state.pendingDocument) {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()áéíóúñÁÉÍÓÚÑ]/g, '').slice(0, 60);
       const activeCode = state.activeContext?.lastFreightCode;
-      messageToSend = `[Sistema: ARCHIVO PENDIENTE "${safeName}" (${doc.type}, URL: ${doc.url}). El usuario puede querer adjuntarlo a:\n- Un FLETE → usar attach_document(code)\n- Un CAMIÓN, GASTO, INGRESO o MOVIMIENTO → usar attach_truck_document(plate, linkTo, linkId)\nAnalizar el mensaje del usuario para determinar a qué adjuntar. Si menciona gasto, ingreso, camión o patente → attach_truck_document. Si menciona flete o código de flete → attach_document.${activeCode ? ` Flete activo: ${this.sanitizeForPrompt(activeCode)}.` : ''} Si no queda claro, preguntar.]\n\n${messageToSend}`;
+      messageToSend = `[ARCHIVO: "${safeName}" (${doc.type}, URL: ${doc.url}).${activeCode ? ` Flete activo: ${this.sanitizeForPrompt(activeCode)}.` : ''} Adjuntar con attach_document(code) o attach_truck_document(plate,linkTo,linkId).]\n\n${messageToSend}`;
     }
 
-    // Inject lastLocation so AI can pass coordinates to prepare_freight
+    // Inject lastLocation — compact
     if (state.lastLocation) {
       const loc = state.lastLocation;
-      messageToSend = `[Sistema: UBICACIÓN GUARDADA — lat: ${loc.lat}, lng: ${loc.lng}${loc.name ? `, nombre: "${this.sanitizeForPrompt(loc.name)}"` : ''}${loc.address ? `, dirección: "${this.sanitizeForPrompt(loc.address)}"` : ''}. Cuando el usuario pida crear un flete con destino u origen personalizado, usar estos valores en customDestLat/customDestLng (o customOriginLat/customOriginLng) de prepare_freight. Si el nombre no fue proporcionado, usar la dirección o "Ubicación personalizada".]\n\n${messageToSend}`;
+      messageToSend = `[UBICACIÓN: lat=${loc.lat}, lng=${loc.lng}${loc.name ? `, "${this.sanitizeForPrompt(loc.name)}"` : ''}. Usar en prepare_freight customDest/customOrigin.]\n\n${messageToSend}`;
     }
 
-    // Inject active context — directive format so Claude acts on active freight directly
+    // Inject active context — only if not already in recent history (dedup saves ~150 tokens/turn)
     if (state.activeContext && !state.pendingDocument) {
       const ac = state.activeContext;
-      if (ac.lastFreightCode) {
-        messageToSend = `[FLETE ACTIVO: ${this.sanitizeForPrompt(ac.lastFreightCode)}. REGLA: Toda acción del usuario sobre "el flete", "este", "ese", o sin especificar código, se ejecuta sobre ${this.sanitizeForPrompt(ac.lastFreightCode)}. NO preguntar cuál flete. Resumen: ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}. Última acción: ${this.sanitizeForPrompt(ac.lastAction || 'ninguna')}.${ac.lastSearchFilter ? ` Último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}.` : ''}]\n\n${messageToSend}`;
-      } else if (ac.lastSearchFilter) {
-        messageToSend = `[Contexto activo: último filtro: ${this.sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
+      const lastUserMsg = aiMessages.length > 0 ? JSON.stringify(aiMessages[aiMessages.length - 1]?.content || '') : '';
+      const alreadyInjected = ac.lastFreightCode && lastUserMsg.includes(ac.lastFreightCode);
+      if (ac.lastFreightCode && !alreadyInjected) {
+        messageToSend = `[FLETE ACTIVO: ${this.sanitizeForPrompt(ac.lastFreightCode)}. Resumen: ${this.sanitizeForPrompt(ac.lastFreightSummary || '')}. Última acción: ${this.sanitizeForPrompt(ac.lastAction || 'ninguna')}.]\n\n${messageToSend}`;
+      } else if (ac.lastSearchFilter && !alreadyInjected) {
+        messageToSend = `[Contexto: filtro=${this.sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
       }
     }
 
