@@ -669,8 +669,10 @@ export class ToolExecutorService {
     const producerCompanyId = targetCompanyId ? this.resolveProducerCompanyIdForCompany(user, targetCompanyId) : this.resolveProducerCompanyId(user);
     if (!producerCompanyId) return JSON.stringify({ error: 'No se encontro empresa productora.' });
     const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
+    const actorUserId = producerSynUser.sub || user.sub || user.id;
 
     const dto: any = { items: [{ grain: pending.grain, tons: pending.tons }], loadDate: pending.loadDate, loadTime: pending.loadTime, truckCount: pending.truckCount || 1, notes: pending.notes };
+    if (pending.useOwnFleet !== undefined) dto.useOwnFleet = !!pending.useOwnFleet;
     if (pending.branchId) dto.destPlantId = pending.branchId;
     else if (pending.destPlantId) dto.destPlantId = pending.destPlantId;
     else if (pending.destName) dto.customDestName = pending.destName;
@@ -678,10 +680,174 @@ export class ToolExecutorService {
     else if (pending.customOriginName) dto.customOriginName = pending.customOriginName;
     else if (pending.originName) dto.customOriginName = pending.originName;
     if (pending.truckId) dto.truckId = pending.truckId;
-    if (pending.driverId) dto.driverId = pending.driverId;
+    const normalizedDriverId = this.normalizePendingDriverId(pending.driverId, actorUserId);
+    if (normalizedDriverId) dto.driverId = normalizedDriverId;
 
     const freight = await this.freights.create(dto, producerSynUser);
-    return JSON.stringify({ status: 'created', code: (freight as any).code, link: `${APP_URL}/freight/${(freight as any).id}` });
+    const assignmentResult = await this.autoAssignPendingFreightTrucks(
+      (freight as any).id,
+      pending,
+      producerSynUser,
+      producerCompanyId,
+      actorUserId,
+    );
+    return JSON.stringify({
+      status: 'created',
+      code: (freight as any).code,
+      link: `${APP_URL}/freight/${(freight as any).id}`,
+      assignment: assignmentResult,
+    });
+  }
+
+  private normalizePendingDriverId(driverId: any, actorUserId: string | null): string | null {
+    if (!driverId) return null;
+    if (typeof driverId === 'string' && ['self', 'me', 'yo'].includes(driverId.trim().toLowerCase())) {
+      return actorUserId || null;
+    }
+    return typeof driverId === 'string' ? driverId : null;
+  }
+
+  private normalizePlate(value: any): string | null {
+    if (!value || typeof value !== 'string') return null;
+    const normalized = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().trim();
+    return normalized || null;
+  }
+
+  private extractExternalPlateFromText(pending: any): string | null {
+    const haystack = [
+      pending?.notes,
+      pending?.rawText,
+      pending?.message,
+      pending?.summary,
+      pending?.originName,
+      pending?.destName,
+    ].filter(Boolean).join(' ');
+    const match = haystack.match(/\b[A-Z]{3}\d{3,4}\b/i);
+    return match ? this.normalizePlate(match[0]) : null;
+  }
+
+  private async autoAssignPendingFreightTrucks(
+    freightId: string,
+    pending: any,
+    actionUser: any,
+    producerCompanyId: string,
+    actorUserId: string | null,
+  ): Promise<any> {
+    const desiredTruckCount = Math.max(1, Number(pending?.truckCount || 1));
+    const freightState = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: {
+        id: true,
+        code: true,
+        assignedTruckCount: true,
+        assignments: {
+          where: { status: { in: ['active', 'accepted'] } },
+          select: { truckId: true, plate: true, isExternal: true },
+        },
+      },
+    });
+    const existingCount = Number(freightState?.assignedTruckCount || 0);
+    const missingSlots = Math.max(0, desiredTruckCount - existingCount);
+    if (!missingSlots) {
+      return { requestedTruckCount: desiredTruckCount, alreadyAssigned: existingCount, assignedNow: 0, pendingSlots: 0, warnings: [] };
+    }
+
+    const existingTruckIds = new Set((freightState?.assignments || []).map((a: any) => a.truckId).filter(Boolean));
+    const existingPlates = new Set((freightState?.assignments || []).map((a: any) => this.normalizePlate(a.plate)).filter(Boolean));
+    const candidates: any[] = [];
+
+    const addInternal = (truckId?: string, driverIdRaw?: string, transportCompanyId?: string) => {
+      const driverId = this.normalizePendingDriverId(driverIdRaw, actorUserId);
+      if (!truckId && !driverId) return;
+      candidates.push({
+        isExternal: false,
+        truckId: truckId || undefined,
+        driverId: driverId || undefined,
+        transportCompanyId: transportCompanyId || producerCompanyId,
+      });
+    };
+    const addExternal = (plateRaw?: string, externalCompanyName?: string, externalDriverName?: string) => {
+      const plate = this.normalizePlate(plateRaw);
+      if (!plate) return;
+      candidates.push({
+        isExternal: true,
+        plate,
+        externalCompanyName: externalCompanyName || undefined,
+        externalDriverName: externalDriverName || undefined,
+      });
+    };
+
+    addInternal(pending?.truckId, pending?.driverId, pending?.transportCompanyId);
+    addInternal(pending?.ownTruckId, pending?.ownDriverId, pending?.ownTransportCompanyId);
+    addExternal(pending?.externalPlate, pending?.externalCompanyName, pending?.externalDriverName);
+    addExternal(pending?.externalTruckPlate, pending?.externalCompanyName, pending?.externalDriverName);
+
+    if (Array.isArray(pending?.trucks)) {
+      for (const t of pending.trucks) {
+        if (!t || typeof t !== 'object') continue;
+        if (t.isExternal || t.external === true) {
+          addExternal(t.plate, t.externalCompanyName, t.externalDriverName);
+        } else if (t.truckId || t.driverId || t.transportCompanyId) {
+          addInternal(t.truckId, t.driverId, t.transportCompanyId);
+        } else if (t.plate && (t.externalCompanyName || t.externalDriverName)) {
+          addExternal(t.plate, t.externalCompanyName, t.externalDriverName);
+        }
+      }
+    }
+
+    const inferredExternalPlate = this.extractExternalPlateFromText(pending);
+    if (inferredExternalPlate) {
+      addExternal(inferredExternalPlate, pending?.externalCompanyName, pending?.externalDriverName);
+    }
+
+    // If user said "yo manejo" and there's exactly one truck linked to that driver, infer it.
+    const currentDriverId = this.normalizePendingDriverId(pending?.driverId || pending?.ownDriverId, actorUserId);
+    if (currentDriverId && !pending?.truckId && !pending?.ownTruckId) {
+      const ownCandidates = await this.prisma.truck.findMany({
+        where: { companyId: producerCompanyId, active: true, assignedUserId: currentDriverId },
+        select: { id: true },
+        take: 2,
+      });
+      if (ownCandidates.length === 1) addInternal(ownCandidates[0].id, currentDriverId, producerCompanyId);
+    }
+
+    const uniqueCandidates = candidates.filter((c: any) => {
+      if (c.isExternal) {
+        const plate = this.normalizePlate(c.plate);
+        if (!plate) return false;
+        if (existingPlates.has(plate)) return false;
+        existingPlates.add(plate);
+        return true;
+      }
+      if (c.truckId) {
+        if (existingTruckIds.has(c.truckId)) return false;
+        existingTruckIds.add(c.truckId);
+      }
+      return true;
+    });
+
+    let assignedNow = 0;
+    const warnings: string[] = [];
+    for (const candidate of uniqueCandidates.slice(0, missingSlots)) {
+      try {
+        await this.freights.assignTruck(freightId, candidate, actionUser);
+        assignedNow += 1;
+      } catch (e: any) {
+        warnings.push(sanitizeConfirmError(e));
+      }
+    }
+
+    const refreshed = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { assignedTruckCount: true },
+    });
+    const totalAssigned = Number(refreshed?.assignedTruckCount || existingCount + assignedNow);
+    const pendingSlots = Math.max(0, desiredTruckCount - totalAssigned);
+    if (pendingSlots > 0 && warnings.length === 0) {
+      warnings.push('No se pudo completar la asignacion de todos los camiones con la informacion disponible.');
+    }
+
+    return { requestedTruckCount: desiredTruckCount, alreadyAssigned: existingCount, assignedNow, totalAssigned, pendingSlots, warnings };
   }
 
   // ---- confirm_action (generic) ----
@@ -746,6 +912,30 @@ export class ToolExecutorService {
           if (params.driverId) dto.driverId = params.driverId;
           await this.freights.assignTruck(params.freightId, dto, plantSyn);
           result = JSON.stringify({ status: 'assigned', code: params.code }); break;
+        }
+        case 'assign_external_truck': {
+          const dto: any = {
+            isExternal: true,
+            plate: params.plate,
+            externalCompanyName: params.externalCompanyName,
+            externalDriverName: params.externalDriverName,
+          };
+          await this.freights.assign(params.freightId, dto, synUser);
+          result = JSON.stringify({ status: 'assigned', code: params.code }); break;
+        }
+        case 'assign_multi_trucks':
+        case 'assign_mixed_trucks': {
+          const trucks = Array.isArray(params.trucks) ? params.trucks : [];
+          await this.freights.assignMulti(params.freightId, { trucks }, synUser);
+          result = JSON.stringify({ status: 'assigned', code: params.code, trucksAssigned: trucks.length }); break;
+        }
+        case 'edit_external_assignment': {
+          await this.freights.updateAssignment(params.freightId, params.assignmentId, {
+            plate: params.plate,
+            externalCompanyName: params.externalCompanyName,
+            externalDriverName: params.externalDriverName,
+          } as any, synUser);
+          result = JSON.stringify({ status: 'updated', code: params.code }); break;
         }
         case 'reactivate_user': {
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: true } });
@@ -864,6 +1054,34 @@ export class ToolExecutorService {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         return this.sessionManager.stageAction(session.id, 'assign_external_truck', { freightId: r.freight.id, code: r.freight.code, plate: input.plate, externalCompanyName: input.externalCompanyName, externalDriverName: input.externalDriverName }, `Asignar externo ${input.plate} a ${r.freight.code}`, user);
+      }
+      case 'assign_multi_trucks':
+      case 'assign_mixed_trucks': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        const trucks = Array.isArray(input.trucks) ? input.trucks : [];
+        if (trucks.length === 0) return JSON.stringify({ error: 'Debe indicar al menos un camion.' });
+        return this.sessionManager.stageAction(session.id, toolName, { freightId: r.freight.id, code: r.freight.code, trucks }, `Asignar ${trucks.length} camion(es) a ${r.freight.code}`, user);
+      }
+      case 'edit_external_assignment': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        const assignmentId = input.assignmentId || r.freight.assignments?.find((a: any) => !!a.id)?.id;
+        if (!assignmentId) return JSON.stringify({ error: 'No hay asignacion externa para editar.' });
+        return this.sessionManager.stageAction(
+          session.id,
+          'edit_external_assignment',
+          {
+            freightId: r.freight.id,
+            code: r.freight.code,
+            assignmentId,
+            plate: input.plate,
+            externalCompanyName: input.externalCompanyName,
+            externalDriverName: input.externalDriverName,
+          },
+          `Editar asignacion externa de ${r.freight.code}`,
+          user,
+        );
       }
       default:
         return JSON.stringify({ error: `Herramienta de transporte no implementada: ${toolName}` });
