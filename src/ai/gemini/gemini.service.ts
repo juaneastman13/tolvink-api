@@ -475,8 +475,13 @@ export class GeminiService implements OnModuleDestroy {
 
   /**
    * Convert Anthropic-format session history to Gemini contents format.
-   * Anthropic: { role: 'user'|'assistant', content: string | ContentBlock[] }
-   * Gemini:    { role: 'user'|'model', parts: Part[] }
+   * Gemini enforces strict turn ordering:
+   *   - Turns must alternate user/model
+   *   - functionCall (model turn) must be followed by functionResponse (user turn)
+   *   - No consecutive same-role turns
+   *
+   * If the history from a previous Anthropic session can't be cleanly converted,
+   * we drop it and start fresh (Gemini will still have the system prompt context).
    */
   private convertHistoryToGemini(aiMessages: any[]): any[] {
     const contents: any[] = [];
@@ -486,22 +491,28 @@ export class GeminiService implements OnModuleDestroy {
         if (typeof msg.content === 'string') {
           contents.push({ role: 'user', parts: [{ text: msg.content }] });
         } else if (Array.isArray(msg.content)) {
-          // Tool results from Anthropic format
-          const parts: any[] = [];
+          // Tool results from Anthropic format → functionResponse
+          const fnParts: any[] = [];
+          const textParts: any[] = [];
           for (const block of msg.content) {
             if (block.type === 'tool_result') {
-              parts.push({
+              fnParts.push({
                 functionResponse: {
                   name: block.tool_use_id || 'unknown',
                   response: { result: block.content || '' },
                 },
               });
             } else if (block.type === 'text') {
-              parts.push({ text: block.text });
+              textParts.push({ text: block.text });
             }
           }
-          if (parts.length > 0) {
-            contents.push({ role: 'user', parts });
+          // Function responses go in their own user turn
+          if (fnParts.length > 0) {
+            contents.push({ role: 'user', parts: fnParts });
+          }
+          // Text parts go in a separate user turn
+          if (textParts.length > 0) {
+            contents.push({ role: 'user', parts: textParts });
           }
         }
       } else if (msg.role === 'assistant') {
@@ -525,7 +536,52 @@ export class GeminiService implements OnModuleDestroy {
       }
     }
 
+    // Validate turn ordering for Gemini:
+    // 1. Must start with 'user'
+    // 2. No consecutive same-role turns (except user→user for fn response after text)
+    // 3. functionCall (model) must be followed by functionResponse (user)
+    const valid = this.validateGeminiTurns(contents);
+    if (!valid) {
+      this.logger.warn(`Invalid Gemini history (${contents.length} turns from Anthropic session) — starting fresh`);
+      return [];
+    }
+
     return contents;
+  }
+
+  /**
+   * Validate Gemini conversation turns.
+   * Returns false if the turn sequence would cause a 400 error.
+   */
+  private validateGeminiTurns(contents: any[]): boolean {
+    if (contents.length === 0) return true;
+
+    // Must start with user
+    if (contents[0].role !== 'user') return false;
+
+    for (let i = 0; i < contents.length; i++) {
+      const curr = contents[i];
+      const prev = i > 0 ? contents[i - 1] : null;
+
+      // Check: model turn with functionCall must be followed by user turn with functionResponse
+      if (prev?.role === 'model') {
+        const hasFnCall = prev.parts?.some((p: any) => p.functionCall);
+        if (hasFnCall) {
+          if (curr.role !== 'user') return false;
+          const hasFnResponse = curr.parts?.some((p: any) => p.functionResponse);
+          if (!hasFnResponse) return false;
+        }
+      }
+
+      // Check: no two consecutive model turns
+      if (curr.role === 'model' && prev?.role === 'model') return false;
+    }
+
+    // Must not end with a model turn that has functionCall (no response)
+    const last = contents[contents.length - 1];
+    if (last.role === 'model' && last.parts?.some((p: any) => p.functionCall)) return false;
+
+    return true;
   }
 
   /**
