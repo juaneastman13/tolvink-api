@@ -455,6 +455,8 @@ export class ToolExecutorService {
         return await this.executeLocationTool(toolName, input, user, synUser, session);
 
       // ---- Search shortcuts ----
+      case 'list_fields':
+      case 'list_lots':
       case 'search_plants':
       case 'search_fields':
       case 'search_lots':
@@ -759,6 +761,38 @@ export class ToolExecutorService {
           await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
           result = JSON.stringify({ status: 'done', user: params.userName }); break;
         }
+        case 'register_truck_expense': {
+          await this.trucksService.addExpense(params.truckId, synUser, {
+            type: params.type,
+            amount: params.amount,
+            currency: params.currency,
+            date: params.date,
+            description: params.description,
+          });
+          result = JSON.stringify({ status: 'created', type: 'expense' }); break;
+        }
+        case 'register_truck_income': {
+          await this.trucksService.addIncome(params.truckId, synUser, {
+            concept: params.concept,
+            amount: params.amount,
+            currency: params.currency,
+            date: params.date,
+            status: params.status,
+          });
+          result = JSON.stringify({ status: 'created', type: 'income' }); break;
+        }
+        case 'register_truck_movement': {
+          await this.trucksService.addMovement(params.truckId, synUser, params.body || {});
+          result = JSON.stringify({ status: 'created', type: 'movement' }); break;
+        }
+        case 'register_trip_data': {
+          await this.trucksService.updateTripData(params.freightId, params.assignmentId, synUser, params.body || {});
+          result = JSON.stringify({ status: 'updated', type: 'trip_data' }); break;
+        }
+        case 'attach_truck_document': {
+          await this.trucksService.addDocument(params.truckId, synUser, params.body || {});
+          result = JSON.stringify({ status: 'attached', type: 'truck_document' }); break;
+        }
         default: result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
       return result;
@@ -962,6 +996,38 @@ export class ToolExecutorService {
   private async executeSearchTool(toolName: string, input: any, user: any, session: any): Promise<string> {
     const producerCompanyId = this.resolveProducerCompanyId(user);
     switch (toolName) {
+      case 'list_fields': {
+        const fields = await this.fieldsService.getFields(user);
+        if (!fields || fields.length === 0) return JSON.stringify({ total: 0, message: 'No hay campos.' });
+        return JSON.stringify({
+          total: fields.length,
+          fields: fields.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            address: f.address || null,
+            lotCount: Array.isArray(f.lots) ? f.lots.length : 0,
+          })),
+        });
+      }
+      case 'list_lots': {
+        if (input.fieldId) {
+          const lots = await this.fieldsService.getLots(user, input.fieldId);
+          if (!lots || lots.length === 0) return JSON.stringify({ total: 0, message: 'No hay lotes.' });
+          return JSON.stringify({ total: lots.length, lots });
+        }
+        const fields = await this.fieldsService.getFields(user);
+        const lots = (fields || []).flatMap((f: any) =>
+          (Array.isArray(f.lots) ? f.lots : []).map((l: any) => ({
+            id: l.id,
+            name: l.name,
+            hectares: l.hectares ?? null,
+            fieldId: f.id,
+            fieldName: f.name,
+          })),
+        );
+        if (lots.length === 0) return JSON.stringify({ total: 0, message: 'No hay lotes.' });
+        return JSON.stringify({ total: lots.length, lots });
+      }
       case 'search_plants': {
         if (!producerCompanyId) return JSON.stringify({ error: 'No es productor.' });
         const accesses = await this.prisma.plantProducerAccess.findMany({ where: { producerCompanyId, active: true }, select: { plantCompanyId: true }, take: 500 });
@@ -1007,7 +1073,10 @@ export class ToolExecutorService {
       if (truckId) return truckId;
       if (!plate) return null;
       const norm = plate.replace(/[\s\-\.]/g, '').toUpperCase();
-      const trucks = await this.prisma.truck.findMany({ where: { companyId, active: true }, select: { id: true, plate: true } });
+      const trucks = await this.prisma.truck.findMany({
+        where: { OR: [{ companyId }, { ownerCompanyId: companyId }], active: true },
+        select: { id: true, plate: true },
+      });
       return (trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase() === norm) || trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase().includes(norm)))?.id || null;
     };
 
@@ -1015,9 +1084,40 @@ export class ToolExecutorService {
       case 'get_truck_detail': {
         const tid = await resolveTruck(input.plate, input.truckId);
         if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
-        const t = await this.prisma.truck.findFirst({ where: { id: tid, companyId }, include: { assignedUser: { select: { name: true } } } }) as any;
-        if (!t) return JSON.stringify({ error: 'Camion no encontrado' });
-        return JSON.stringify({ plate: t.plate, model: t.model, driver: t.assignedUser?.name || 'Sin chofer' });
+        const detail = await this.trucksService.getDetail(tid, user);
+        return JSON.stringify(detail);
+      }
+      case 'get_truck_documents': {
+        const tid = await resolveTruck(input.plate, input.truckId);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
+        const detail: any = await this.trucksService.getDetail(tid, user);
+        let docs = Array.isArray(detail?.documents) ? detail.documents : [];
+        const filter = String(input.filter || 'all');
+        if (filter === 'expired') docs = docs.filter((d: any) => d.expiryStatus === 'expired');
+        else if (filter === 'expiring') docs = docs.filter((d: any) => d.expiryStatus === 'expiring_soon');
+        else if (filter === 'valid') docs = docs.filter((d: any) => d.expiryStatus === 'valid');
+        return JSON.stringify({ total: docs.length, documents: docs });
+      }
+      case 'get_expiring_documents': {
+        const days = Number(input.days || 30);
+        const docs = await this.trucksService.getExpiringDocuments(user, Number.isFinite(days) && days > 0 ? days : 30);
+        return JSON.stringify({ total: docs.length, documents: docs });
+      }
+      case 'attach_truck_document': {
+        const tid = await resolveTruck(input.plate, input.truckId);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
+        const pendingDoc = this.sessionManager.getSideEffects(session.id)?.pendingDocument || (session.flowState as any)?.pendingDocument;
+        if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay archivo pendiente.' });
+        const body = {
+          type: input.docType || 'OTHER',
+          name: pendingDoc.name || 'Documento',
+          fileUrl: pendingDoc.url,
+          fileName: pendingDoc.name || 'documento',
+          ...(input.linkTo === 'expense' ? { expenseId: input.linkId } : {}),
+          ...(input.linkTo === 'income' ? { incomeId: input.linkId } : {}),
+          ...(input.linkTo === 'movement' ? { movementId: input.linkId } : {}),
+        };
+        return this.sessionManager.stageAction(session.id, 'attach_truck_document', { truckId: tid, body }, `Adjuntar documento a camion ${input.plate || input.truckId}`);
       }
       case 'register_truck_expense': {
         const tid = await resolveTruck(input.plate);
@@ -1040,9 +1140,67 @@ export class ToolExecutorService {
         const total = expenses.reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
         return JSON.stringify({ total: Math.round(total), count: expenses.length, expenses: expenses.map((e: any) => ({ type: e.type, amount: Number(e.amount), date: e.date?.toISOString().split('T')[0], description: e.description })) });
       }
+      case 'list_truck_incomes': {
+        const tid = await resolveTruck(input.plate);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
+        const incomes = await this.trucksService.listIncomes(tid, user, input.from, input.to, input.status);
+        const total = incomes.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+        return JSON.stringify({ total: Math.round(total), count: incomes.length, incomes });
+      }
+      case 'register_truck_movement': {
+        const tid = await resolveTruck(input.plate);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
+        const body: any = {
+          type: input.type,
+          description: input.description,
+          originName: input.originName,
+          destName: input.destName,
+          kmDriven: input.kmDriven,
+          fuelLiters: input.fuelLiters,
+          fuelCost: input.fuelCost,
+          tollCost: input.tollCost,
+        };
+        return this.sessionManager.stageAction(session.id, 'register_truck_movement', { truckId: tid, body }, `Registrar movimiento ${input.type || ''}`.trim());
+      }
+      case 'list_truck_movements': {
+        const tid = await resolveTruck(input.plate);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
+        const movements = await this.trucksService.listMovements(tid, user, input.from, input.to, input.type);
+        return JSON.stringify({ count: movements.length, movements });
+      }
+      case 'register_trip_data': {
+        const code = input.freightCode || input.code;
+        const r = await this.resolveFreightWithAccess(code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        const assignmentId = r.freight.assignments?.[0]?.id;
+        if (!assignmentId) return JSON.stringify({ error: 'No hay asignacion activa para registrar datos de viaje.' });
+        const body: any = {
+          kmLoaded: input.kmLoaded,
+          kmEmpty: input.kmEmpty,
+          kmTotal: input.kmTotal,
+          fuelLiters: input.fuelLiters,
+          fuelCostPerLiter: input.fuelCostPerLiter,
+          tollCost: input.tollCost,
+          odometerStart: input.odometerStart,
+          odometerEnd: input.odometerEnd,
+          loadingMinutes: input.loadingMinutes,
+          unloadingMinutes: input.unloadingMinutes,
+        };
+        return this.sessionManager.stageAction(session.id, 'register_trip_data', { freightId: r.freight.id, assignmentId, body }, `Registrar datos de viaje ${r.freight.code}`);
+      }
+      case 'get_truck_economic_summary': {
+        const tid = await resolveTruck(input.plate);
+        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
+        const summary = await this.trucksService.getEconomicSummary(tid, user, input.from, input.to);
+        return JSON.stringify(summary);
+      }
+      case 'get_fleet_alerts': {
+        const alerts = await this.trucksService.getFleetAlerts(user);
+        return JSON.stringify(alerts);
+      }
       case 'get_fleet_summary': {
-        const trucks = await this.prisma.truck.findMany({ where: { companyId, active: true }, select: { id: true, plate: true } });
-        return JSON.stringify({ totalTrucks: trucks.length, plates: trucks.map(t => t.plate) });
+        const summary = await this.trucksService.getFleetSummary(user);
+        return JSON.stringify(summary);
       }
       default:
         return JSON.stringify({ error: `Fleet tool no implementada: ${toolName}` });

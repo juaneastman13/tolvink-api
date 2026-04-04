@@ -24,7 +24,7 @@ export interface GeminiFunctionDeclaration {
 
 export interface GeminiCallResult {
   text: string | null;
-  functionCalls: Array<{ name: string; args: any }> | null;
+  functionCalls: Array<{ name: string; args: any; raw: any; rawPart: any }> | null;
   finishReason: string;
   usageMetadata?: any;
 }
@@ -140,12 +140,16 @@ export class GeminiClient implements OnModuleInit {
     if (textPart) text = (textPart as any).text;
 
     // Extract function calls
-    let functionCalls: Array<{ name: string; args: any }> | null = null;
+    let functionCalls: Array<{ name: string; args: any; raw: any; rawPart: any }> | null = null;
     const fcParts = response.candidates?.[0]?.content?.parts?.filter((p: any) => p.functionCall) || [];
     if (fcParts.length > 0) {
       functionCalls = fcParts.map((p: any) => ({
         name: p.functionCall.name,
         args: p.functionCall.args || {},
+        // Preserve the full functionCall payload (including thought_signature).
+        raw: p.functionCall,
+        // Preserve the entire part because thought signature can be at part level.
+        rawPart: p,
       }));
     }
 

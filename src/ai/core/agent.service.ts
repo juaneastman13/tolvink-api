@@ -121,6 +121,8 @@ export class AgentService implements OnModuleDestroy {
 
     // Build Gemini-format history
     let geminiMessages: GeminiMessage[] = this.historyManager.buildGeminiHistory(storedMessages);
+    // Defensive cleanup: old persisted messages may have functionCall parts without thought signature.
+    geminiMessages = this.sanitizeHistoryForToolParts(geminiMessages);
 
     // Add user message
     geminiMessages.push({ role: 'user', parts: [{ text: messageToSend }] });
@@ -174,7 +176,8 @@ export class AgentService implements OnModuleDestroy {
           const modelParts: any[] = [];
           if (result.text) modelParts.push({ text: result.text });
           for (const fc of result.functionCalls) {
-            modelParts.push({ functionCall: { name: fc.name, args: fc.args } });
+            // Keep Gemini part intact (includes thought signature when present).
+            modelParts.push(fc.rawPart || { functionCall: fc.raw || { name: fc.name, args: fc.args } });
           }
           geminiMessages.push({ role: 'model', parts: modelParts });
 
@@ -289,5 +292,34 @@ export class AgentService implements OnModuleDestroy {
     const map = new Map<string, string>();
     for (const a of accesses) map.set(a.grantorCompanyId, a.accessLevel);
     return map;
+  }
+
+  /**
+   * Remove legacy functionCall parts that don't contain thought signatures.
+   * This prevents INVALID_ARGUMENT errors for sessions persisted before the fix.
+   */
+  private sanitizeHistoryForToolParts(messages: GeminiMessage[]): GeminiMessage[] {
+    const hasThoughtSignature = (part: any): boolean => {
+      if (!part?.functionCall) return true;
+      return !!(
+        part?.thought_signature ||
+        part?.thoughtSignature ||
+        part?.functionCall?.thought_signature ||
+        part?.functionCall?.thoughtSignature
+      );
+    };
+
+    const cleaned: GeminiMessage[] = [];
+    for (const msg of messages) {
+      const filteredParts = (msg.parts || []).filter((p: any) => {
+        // Keep text and functionResponse as-is.
+        if (!p?.functionCall) return true;
+        return hasThoughtSignature(p);
+      });
+      if (filteredParts.length > 0) {
+        cleaned.push({ ...msg, parts: filteredParts });
+      }
+    }
+    return cleaned;
   }
 }
