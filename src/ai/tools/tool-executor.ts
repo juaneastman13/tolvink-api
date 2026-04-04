@@ -820,6 +820,7 @@ export class ToolExecutorService {
     if (!rows.length) return JSON.stringify({ error: 'No hay un flete pendiente. Usa prepare_freight primero.' });
     const pending = rows[0].old_state?.pendingFreight;
     if (!pending) return JSON.stringify({ error: 'No hay un flete pendiente.' });
+    pending._lastUserText = this.extractLastUserText(rows[0].old_state?.aiMessages);
 
     const targetCompanyId = pending._sessionCompanyId || user.activeCompanyId;
     const producerCompanyId = targetCompanyId ? this.resolveProducerCompanyIdForCompany(user, targetCompanyId) : this.resolveProducerCompanyId(user);
@@ -851,6 +852,21 @@ export class ToolExecutorService {
       link: `${APP_URL}/freight/${(freight as any).id}`,
       assignment: assignmentResult,
     });
+  }
+
+  private extractLastUserText(aiMessages: any): string | null {
+    if (!Array.isArray(aiMessages)) return null;
+    for (let i = aiMessages.length - 1; i >= 0; i--) {
+      const msg = aiMessages[i];
+      if (msg?.role !== 'user') continue;
+      const parts = Array.isArray(msg.parts) ? msg.parts : [];
+      const text = parts
+        .map((p: any) => (typeof p?.text === 'string' ? p.text.trim() : ''))
+        .filter(Boolean)
+        .join(' ');
+      if (text) return text;
+    }
+    return null;
   }
 
   private normalizePendingDriverId(driverId: any, actorUserId: string | null): string | null {
@@ -934,11 +950,24 @@ export class ToolExecutorService {
       pending?.rawText,
       pending?.message,
       pending?.summary,
+      pending?._lastUserText,
       pending?.originName,
       pending?.destName,
     ].filter(Boolean).join(' ');
     const match = haystack.match(/\b[A-Z]{3}\d{3,4}\b/i);
     return match ? this.normalizePlate(match[0]) : null;
+  }
+
+  private buildPendingTextHaystack(pending: any): string {
+    return [
+      pending?.notes,
+      pending?.rawText,
+      pending?.message,
+      pending?.summary,
+      pending?._lastUserText,
+      pending?.originName,
+      pending?.destName,
+    ].filter(Boolean).join(' ').toLowerCase();
   }
 
   private async autoAssignPendingFreightTrucks(
@@ -949,6 +978,10 @@ export class ToolExecutorService {
     actorUserId: string | null,
   ): Promise<any> {
     const desiredTruckCount = Math.max(1, Number(pending?.truckCount || 1));
+    const textHaystack = this.buildPendingTextHaystack(pending);
+    const mentionsOwnFleet = /\b(mi\s+flota|flota\s+propia|propio|interno)\b/.test(textHaystack);
+    const mentionsExternal = /\b(externo|tercero|de\s+afuera)\b/.test(textHaystack);
+    const mentionsSelfDriver = /\b(yo\s+manejo|manejo\s+yo|lo\s+manejo|manejo)\b/.test(textHaystack);
     const freightState = await this.prisma.freight.findUnique({
       where: { id: freightId },
       select: {
@@ -1016,7 +1049,8 @@ export class ToolExecutorService {
     }
 
     // If user said "yo manejo" and there's exactly one truck linked to that driver, infer it.
-    const currentDriverId = this.normalizePendingDriverId(pending?.driverId || pending?.ownDriverId, actorUserId);
+    let currentDriverId = this.normalizePendingDriverId(pending?.driverId || pending?.ownDriverId, actorUserId);
+    if (!currentDriverId && mentionsSelfDriver && actorUserId) currentDriverId = actorUserId;
     if (currentDriverId && !pending?.truckId && !pending?.ownTruckId) {
       const ownCandidates = await this.prisma.truck.findMany({
         where: { companyId: producerCompanyId, active: true, assignedUserId: currentDriverId },
@@ -1024,6 +1058,32 @@ export class ToolExecutorService {
         take: 2,
       });
       if (ownCandidates.length === 1) addInternal(ownCandidates[0].id, currentDriverId, producerCompanyId);
+    }
+
+    const hasInternalCandidate = candidates.some((c: any) => !c.isExternal);
+    if (mentionsOwnFleet && !hasInternalCandidate) {
+      const fallbackOwn = await this.prisma.truck.findFirst({
+        where: {
+          companyId: producerCompanyId,
+          active: true,
+          ...(currentDriverId ? { OR: [{ assignedUserId: currentDriverId }, { assignedUserId: null }] } : {}),
+        },
+        select: { id: true, assignedUserId: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (fallbackOwn?.id) {
+        addInternal(
+          fallbackOwn.id,
+          currentDriverId || fallbackOwn.assignedUserId || undefined,
+          producerCompanyId,
+        );
+      }
+    }
+
+    const hasExternalCandidate = candidates.some((c: any) => !!c.isExternal);
+    if (mentionsExternal && !hasExternalCandidate) {
+      const inferredPlate = this.extractExternalPlateFromText(pending);
+      if (inferredPlate) addExternal(inferredPlate, pending?.externalCompanyName, pending?.externalDriverName);
     }
 
     const uniqueCandidates = candidates.filter((c: any) => {

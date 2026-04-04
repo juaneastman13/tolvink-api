@@ -459,7 +459,22 @@ export class AgentService implements OnModuleDestroy {
     try {
       const obj = JSON.parse(raw);
       if (obj?.error) return { text: String(obj.error) };
-      if (obj?.status === 'created' && obj?.code) return { text: `Listo. El flete *${obj.code}* fue creado correctamente.` };
+      if (obj?.status === 'created' && obj?.code) {
+        const pendingSlots = Number(obj?.assignment?.pendingSlots || 0);
+        const assignedNow = Number(obj?.assignment?.assignedNow || 0);
+        const requested = Number(obj?.assignment?.requestedTruckCount || 0);
+        if (pendingSlots > 0) {
+          return {
+            text: `Listo. El flete *${obj.code}* fue creado, pero faltan *${pendingSlots}* asignacion(es) de camion (${assignedNow}/${requested} completadas).`,
+          };
+        }
+        if (requested > 0) {
+          return {
+            text: `Listo. El flete *${obj.code}* fue creado y quedaron *${assignedNow}/${requested}* camiones asignados.`,
+          };
+        }
+        return { text: `Listo. El flete *${obj.code}* fue creado correctamente.` };
+      }
       if (obj?.status && obj?.code) return { text: `Listo. Accion aplicada sobre *${obj.code}*.` };
       return { text: fallbackOk };
     } catch {
