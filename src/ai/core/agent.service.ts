@@ -462,15 +462,16 @@ export class AgentService implements OnModuleDestroy {
       if (obj?.status === 'created' && obj?.code) {
         const pendingSlots = Number(obj?.assignment?.pendingSlots || 0);
         const assignedNow = Number(obj?.assignment?.assignedNow || 0);
+        const totalAssigned = Number(obj?.assignment?.totalAssigned || 0);
         const requested = Number(obj?.assignment?.requestedTruckCount || 0);
         if (pendingSlots > 0) {
           return {
-            text: `Listo. El flete *${obj.code}* fue creado, pero faltan *${pendingSlots}* asignacion(es) de camion (${assignedNow}/${requested} completadas).`,
+            text: `Listo. El flete *${obj.code}* fue creado, pero faltan *${pendingSlots}* asignacion(es) de camion (${totalAssigned}/${requested} completadas).`,
           };
         }
         if (requested > 0) {
           return {
-            text: `Listo. El flete *${obj.code}* fue creado y quedaron *${assignedNow}/${requested}* camiones asignados.`,
+            text: `Listo. El flete *${obj.code}* fue creado y quedaron *${totalAssigned}/${requested}* camiones asignados.`,
           };
         }
         return { text: `Listo. El flete *${obj.code}* fue creado correctamente.` };

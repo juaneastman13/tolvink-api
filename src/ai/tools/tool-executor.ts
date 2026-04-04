@@ -1103,7 +1103,8 @@ export class ToolExecutorService {
 
     let assignedNow = 0;
     const warnings: string[] = [];
-    for (const candidate of uniqueCandidates.slice(0, missingSlots)) {
+    for (const candidate of uniqueCandidates) {
+      if (assignedNow >= missingSlots) break;
       try {
         await this.freights.assignTruck(freightId, candidate, actionUser);
         assignedNow += 1;
