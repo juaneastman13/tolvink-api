@@ -6,6 +6,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GoogleGenAI, Type as GeminiType } from '@google/genai';
 import { AI_MODEL, MODEL_TEMPERATURE } from './constants';
+import { RunTree } from 'langsmith/run_trees';
 
 export interface GeminiMessage {
   role: 'user' | 'model';
@@ -35,6 +36,7 @@ export class GeminiClient implements OnModuleInit {
   private ai: GoogleGenAI | null = null;
   private readonly maxRetries = 3;
   private readonly baseRetryDelayMs = 400;
+  private readonly langsmithEnabled = String(process.env.LANGSMITH_TRACING || '').toLowerCase() === 'true' && !!process.env.LANGSMITH_API_KEY;
   private readonly fallbackModels = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash')
     .split(',')
     .map(s => s.trim())
@@ -118,6 +120,28 @@ export class GeminiClient implements OnModuleInit {
     thinkingBudget?: number,
   ): Promise<GeminiCallResult> {
     if (!this.ai) throw new Error('Gemini client not initialized');
+    let llmTrace: RunTree | null = null;
+    if (this.langsmithEnabled) {
+      try {
+        llmTrace = new RunTree({
+          name: 'gemini.generate_content',
+          run_type: 'llm',
+          inputs: {
+            model: AI_MODEL,
+            fallbackModels: this.fallbackModels,
+            messageCount: contents.length,
+            toolsCount: functionDeclarations.length,
+            thinkingBudget: thinkingBudget || 0,
+          },
+          tags: ['tolvink', 'ai', 'gemini'],
+          metadata: { component: 'GeminiClient' },
+        });
+        await llmTrace.postRun();
+      } catch (e: any) {
+        this.logger.warn(`LangSmith llm trace init failed: ${e.message}`);
+        llmTrace = null;
+      }
+    }
 
     const config: any = {
       systemInstruction,
@@ -158,6 +182,12 @@ export class GeminiClient implements OnModuleInit {
           if (!this.isRetryableUnavailable(e) || attempt === retriesForModel) {
             // If this model is exhausted and there is another fallback, try next model.
             if (this.isRetryableUnavailable(e) && modelIdx < modelsToTry.length - 1) break;
+            if (llmTrace) {
+              try {
+                await llmTrace.end({ status: 'error', model: modelName, attempt }, String(e?.message || 'llm_error'));
+                await llmTrace.patchRun();
+              } catch {}
+            }
             throw e;
           }
           const jitter = Math.floor(Math.random() * 120);
@@ -190,6 +220,20 @@ export class GeminiClient implements OnModuleInit {
     }
 
     const finishReason = response.candidates?.[0]?.finishReason || 'STOP';
+    if (llmTrace) {
+      try {
+        await llmTrace.end({
+          status: 'ok',
+          finishReason,
+          textChars: text?.length || 0,
+          functionCallCount: functionCalls?.length || 0,
+          promptTokens: response?.usageMetadata?.promptTokenCount || 0,
+          outputTokens: response?.usageMetadata?.candidatesTokenCount || 0,
+          totalTokens: response?.usageMetadata?.totalTokenCount || 0,
+        });
+        await llmTrace.patchRun();
+      } catch {}
+    }
 
     return {
       text,

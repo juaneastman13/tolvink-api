@@ -39,6 +39,7 @@
     "cookie-parser": "^1.4.7",
     "exceljs": "^4.4.0",
     "helmet": "^7.1.0",
+    "langsmith": "^0.5.16",
     "nanoid": "^3.3.11",
     "openai": "^6.22.0",
     "prisma": "^5.8.0",

@@ -16,6 +16,7 @@ import { filterToolsByRole, READ_ONLY_TOOLS } from '../tools/tool-permissions';
 import { selectThinkingLevel } from './thinking-router';
 import { checkRateLimit, cleanupRateLimits } from '../utils/rate-limiter';
 import { preprocessMessage, validateResponse, normalizeSpokenNumbers, ensureConfirmationButtons } from '../utils/message-formatter';
+import { RunTree } from 'langsmith/run_trees';
 import {
   MAX_TOOL_ITERATIONS, TOOL_TIMEOUT_MS, SESSION_TIMEOUT_MS,
   MAX_HISTORY_MESSAGES, PROMPT_CACHE_TTL_MS, APP_URL,
@@ -28,6 +29,7 @@ export class AgentService implements OnModuleDestroy {
   private _promptCache = new Map<string, { prompt: string; ts: number }>();
   private readonly LOCK_WAIT_MS = 8_000;
   private readonly LOCK_WAIT_STEP_MS = 250;
+  private readonly langsmithEnabled = String(process.env.LANGSMITH_TRACING || '').toLowerCase() === 'true' && !!process.env.LANGSMITH_API_KEY;
 
   private cleanupTimer = setInterval(() => {
     cleanupRateLimits();
@@ -89,6 +91,30 @@ export class AgentService implements OnModuleDestroy {
       }
     }
     this._chatLocks.add(lockKey);
+    let chatTrace: RunTree | null = null;
+    if (this.langsmithEnabled) {
+      try {
+        chatTrace = new RunTree({
+          name: 'agent.chat',
+          run_type: 'chain',
+          inputs: {
+            sessionId: session?.id,
+            userId: user?.id || null,
+            companyId: user?.activeCompanyId || user?.companyId || null,
+            phoneChannel: phone === 'web' ? 'web' : 'whatsapp',
+            messageChars: (userMessage || '').length,
+          },
+          tags: ['tolvink', 'ai', 'chat'],
+          metadata: {
+            component: 'AgentService',
+          },
+        });
+        await chatTrace.postRun();
+      } catch (e: any) {
+        this.logger.warn(`LangSmith chat trace init failed: ${e.message}`);
+        chatTrace = null;
+      }
+    }
 
     // Session company override (WhatsApp company selection is session-scoped)
     const sessionState = (session?.flowState as any) || {};
@@ -116,6 +142,13 @@ export class AgentService implements OnModuleDestroy {
     // Fast-path for button confirmations/cancellations to avoid LLM loops.
     const quickResolved = await this.tryResolvePendingByIntent(cleanedMessage, state, user, synUser, session, plantAccessMap);
     if (quickResolved) {
+      if (chatTrace) {
+        try {
+          await chatTrace.end({ status: 'ok', quickResolved: true, responseChars: (quickResolved.text || '').length });
+          await chatTrace.patchRun();
+        } catch {}
+      }
+      this._chatLocks.delete(lockKey);
       return quickResolved;
     }
 
@@ -286,10 +319,28 @@ export class AgentService implements OnModuleDestroy {
       });
 
       const resolvedButtons = ensureConfirmationButtons(finalText, pendingButtons);
+      if (chatTrace) {
+        try {
+          await chatTrace.end({
+            status: 'ok',
+            quickResolved: false,
+            loopCount,
+            responseChars: finalText.length,
+            buttonsCount: resolvedButtons.length,
+          });
+          await chatTrace.patchRun();
+        } catch {}
+      }
       return { text: finalText, buttons: resolvedButtons.length > 0 ? resolvedButtons : undefined, navigate: _navigate };
     } catch (e: any) {
       this.sessionManager.deleteSideEffects(session.id);
       this.logger.error(`Chat error [session=${session.id} user=${user.id}]: ${e.message}`, e.stack?.slice(0, 500));
+      if (chatTrace) {
+        try {
+          await chatTrace.end({ status: 'error' }, String(e?.message || 'chat_error'));
+          await chatTrace.patchRun();
+        } catch {}
+      }
       return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente.' };
     } finally {
       this._chatLocks.delete(lockKey);

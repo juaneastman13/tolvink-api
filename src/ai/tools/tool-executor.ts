@@ -20,12 +20,14 @@ import { APP_URL, OWN_FLEET_SHORTCUT, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHOR
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { createSignedToken } from '../../common/signed-token';
+import { RunTree } from 'langsmith/run_trees';
 import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
 
 @Injectable()
 export class ToolExecutorService {
   private readonly logger = new Logger(ToolExecutorService.name);
+  private readonly langsmithEnabled = String(process.env.LANGSMITH_TRACING || '').toLowerCase() === 'true' && !!process.env.LANGSMITH_API_KEY;
   /** Per-user GPS request cooldown */
   private locationCooldowns = new Map<string, number>();
 
@@ -186,6 +188,29 @@ export class ToolExecutorService {
     session: any,
     plantAccessMap?: Map<string, string>,
   ): Promise<string> {
+    let toolTrace: RunTree | null = null;
+    if (this.langsmithEnabled) {
+      try {
+        toolTrace = new RunTree({
+          name: 'tool.execute',
+          run_type: 'tool',
+          inputs: {
+            toolName,
+            sessionId: session?.id || null,
+            userId: user?.id || null,
+            companyId: user?.activeCompanyId || user?.companyId || null,
+            input,
+          },
+          tags: ['tolvink', 'ai', 'tool', toolName],
+          metadata: { component: 'ToolExecutorService' },
+        });
+        await toolTrace.postRun();
+      } catch (e: any) {
+        this.logger.warn(`LangSmith tool trace init failed (${toolName}): ${e.message}`);
+        toolTrace = null;
+      }
+    }
+
     try {
       // Pre-check: block action tools for CONSULTA users
       if (plantAccessMap && CONSULTA_BLOCKED_TOOLS.has(toolName)) {
@@ -196,7 +221,14 @@ export class ToolExecutorService {
             const co = await this.prisma.company.findUnique({ where: { id: plantId }, select: { name: true } });
             if (co?.name) { plantName = co.name; break; }
           }
-          return JSON.stringify({ blocked: true, message: `Esta accion la gestiona ${plantName}. Contactalos directamente.` });
+          const blocked = JSON.stringify({ blocked: true, message: `Esta accion la gestiona ${plantName}. Contactalos directamente.` });
+          if (toolTrace) {
+            try {
+              await toolTrace.end({ status: 'blocked', toolName, blocked: true });
+              await toolTrace.patchRun();
+            } catch {}
+          }
+          return blocked;
         }
       }
 
@@ -227,9 +259,26 @@ export class ToolExecutorService {
         this.sessionManager.updateActiveContext(session.id, { lastAction: `${toolName}${input.code ? ` (${input.code})` : ''}` });
       }
 
+      if (toolTrace) {
+        try {
+          await toolTrace.end({
+            status: 'ok',
+            toolName,
+            resultChars: (result || '').length,
+            resultPreview: (result || '').slice(0, 600),
+          });
+          await toolTrace.patchRun();
+        } catch {}
+      }
       return result;
     } catch (e) {
       this.logger.error(`Tool ${toolName} error: ${e.message}`);
+      if (toolTrace) {
+        try {
+          await toolTrace.end({ status: 'error', toolName }, String((e as any)?.message || 'tool_error'));
+          await toolTrace.patchRun();
+        } catch {}
+      }
       return sanitizeToolError(e);
     }
   }
