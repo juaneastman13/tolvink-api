@@ -689,6 +689,8 @@ export class ToolExecutorService {
     if (!hasDestination) {
       return JSON.stringify({ error: 'Falta destino. Indique planta destino o destino personalizado.' });
     }
+    const destResolutionError = await this.resolvePendingDestination(input, user);
+    if (destResolutionError) return JSON.stringify({ error: destResolutionError });
 
     const effects = this.sessionManager.getSideEffects(session.id);
     const prepareCompanyId = user.activeCompanyId || user.companyId;
@@ -702,6 +704,111 @@ export class ToolExecutorService {
       summary: { grain: input.grain, tons: input.tons, truckCount: Number(input.truckCount), origin: input.originName || input.originLotId || 'Sin definir', dest: input.destName || input.destPlantId || 'Sin definir', date: input.loadDate, time: input.loadTime },
       IMPORTANT: 'El flete NO fue creado todavia. Mostra el resumen y pregunta al usuario si confirma.',
     });
+  }
+
+  private async resolvePendingDestination(input: any, user: any): Promise<string | null> {
+    // Keep explicit custom destinations as-is.
+    if (input.customDestName) return null;
+
+    // If branch is explicit, trust it.
+    if (input.branchId) return null;
+
+    const producerCompanyId = this.resolveProducerCompanyId(user);
+    if (!producerCompanyId) return null;
+
+    const accesses = await this.prisma.plantProducerAccess.findMany({
+      where: { producerCompanyId, active: true },
+      select: { plantCompanyId: true },
+      take: 500,
+    });
+    const plantCompanyIds = accesses.map((a) => a.plantCompanyId);
+    if (!plantCompanyIds.length) return null;
+
+    const companies = await this.prisma.company.findMany({
+      where: { id: { in: plantCompanyIds }, active: true },
+      select: {
+        id: true,
+        name: true,
+        plants: { where: { active: true }, select: { id: true, name: true } },
+      },
+      take: 100,
+    });
+
+    const applyCompanySelection = async (company: any): Promise<string | null> => {
+      const branches = company?.plants || [];
+      if (branches.length === 1) {
+        input.branchId = branches[0].id;
+        input.destPlantId = company.id;
+        input.destName = company.name;
+        return null;
+      }
+      if (branches.length > 1) {
+        // Try infer branch from destName if user wrote it.
+        if (input.destName) {
+          const branchMatches = fuzzySearch(String(input.destName), branches, (b: any) => b.name, { threshold: 0.45, maxResults: 5, aliases: ENTITY_ALIASES });
+          const branchClass = classifyFuzzyResult(branchMatches);
+          if ((branchClass === 'exact' || branchClass === 'confident') && branchMatches[0]) {
+            input.branchId = branchMatches[0].item.id;
+            input.destPlantId = company.id;
+            input.destName = company.name;
+            return null;
+          }
+        }
+        return `La planta ${company.name} tiene varias sucursales. Indique la sucursal exacta.`;
+      }
+      // Company without plants: fallback to company-level destination.
+      input.destPlantId = company.id;
+      input.destName = company.name;
+      return null;
+    };
+
+    // destPlantId can be either branchId or companyId.
+    if (input.destPlantId) {
+      const plant = await this.prisma.plant.findFirst({
+        where: { id: input.destPlantId, active: true },
+        select: { id: true, companyId: true, name: true, company: { select: { id: true, name: true, plants: { where: { active: true }, select: { id: true, name: true } } } } },
+      });
+      if (plant) {
+        input.branchId = plant.id;
+        input.destPlantId = plant.companyId;
+        input.destName = plant.company?.name || input.destName;
+        return null;
+      }
+
+      const company = companies.find((c: any) => c.id === input.destPlantId);
+      if (company) return await applyCompanySelection(company);
+      return 'No se encontro la planta destino indicada.';
+    }
+
+    if (input.destName) {
+      const query = String(input.destName).trim();
+      // 1) Match company names first.
+      const companyMatches = fuzzySearch(query, companies, (c: any) => c.name, { threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES });
+      const companyClass = classifyFuzzyResult(companyMatches);
+      if ((companyClass === 'exact' || companyClass === 'confident') && companyMatches[0]) {
+        return await applyCompanySelection(companyMatches[0].item);
+      }
+
+      // 2) Match branch names across companies.
+      const branchRows = companies.flatMap((c: any) => (c.plants || []).map((b: any) => ({ companyId: c.id, companyName: c.name, branchId: b.id, branchName: b.name })));
+      const branchMatches = fuzzySearch(query, branchRows, (b: any) => b.branchName, { threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES });
+      const branchClass = classifyFuzzyResult(branchMatches);
+      if ((branchClass === 'exact' || branchClass === 'confident') && branchMatches[0]) {
+        const top = branchMatches[0].item;
+        input.branchId = top.branchId;
+        input.destPlantId = top.companyId;
+        input.destName = top.companyName;
+        return null;
+      }
+
+      if (companyClass === 'ambiguous' || branchClass === 'ambiguous') {
+        return 'Destino ambiguo. Indique la planta o sucursal exacta.';
+      }
+
+      return 'No reconozco la planta destino. Indique el nombre exacto de la planta o sucursal habilitada.';
+    }
+
+    return null;
   }
 
   // ---- confirm_create_freight ----
