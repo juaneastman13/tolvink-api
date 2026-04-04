@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
 import { DocType, OcrResult } from './ocr.dto';
 
-const MODEL_ID = 'gemini-3.1-flash-lite';
+const MODEL_ID = 'gemini-3.1-flash-lite-preview';
 const MAX_TOKENS = 2000;
 const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];

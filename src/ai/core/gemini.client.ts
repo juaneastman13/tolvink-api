@@ -1,6 +1,6 @@
 // =====================================================================
 // TOLVINK — Google Gemini API client wrapper
-// Uses @google/genai SDK with gemini-3.1-flash-lite
+// Uses @google/genai SDK with gemini-3.1-flash-lite-preview
 // =====================================================================
 
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';

@@ -12,7 +12,7 @@ import { PartsLookupService } from './parts-lookup.service';
 import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'crypto';
 
-const MODEL_ID = 'gemini-3.1-flash-lite';
+const MODEL_ID = 'gemini-3.1-flash-lite-preview';
 const MAX_TOKENS = 2048;
 const MAX_TOOL_LOOPS = 3;
 
