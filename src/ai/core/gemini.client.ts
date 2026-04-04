@@ -35,6 +35,11 @@ export class GeminiClient implements OnModuleInit {
   private ai: GoogleGenAI | null = null;
   private readonly maxRetries = 3;
   private readonly baseRetryDelayMs = 400;
+  private readonly fallbackModels = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(m => m !== AI_MODEL);
 
   onModuleInit() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -130,26 +135,38 @@ export class GeminiClient implements OnModuleInit {
       };
     }
 
+    const modelsToTry = [AI_MODEL, ...this.fallbackModels];
     let response: any;
     let lastErr: any;
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      try {
-        response = await this.ai.models.generateContent({
-          model: AI_MODEL,
-          contents: contents as any,
-          config,
-        });
-        break;
-      } catch (e: any) {
-        lastErr = e;
-        if (!this.isRetryableUnavailable(e) || attempt === this.maxRetries) {
-          throw e;
+
+    for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx++) {
+      const modelName = modelsToTry[modelIdx];
+      const retriesForModel = modelIdx === 0 ? this.maxRetries : Math.max(1, Math.floor(this.maxRetries / 2));
+      for (let attempt = 0; attempt <= retriesForModel; attempt++) {
+        try {
+          response = await this.ai.models.generateContent({
+            model: modelName,
+            contents: contents as any,
+            config,
+          });
+          if (modelIdx > 0) {
+            this.logger.warn(`Gemini fallback model used: ${modelName}`);
+          }
+          break;
+        } catch (e: any) {
+          lastErr = e;
+          if (!this.isRetryableUnavailable(e) || attempt === retriesForModel) {
+            // If this model is exhausted and there is another fallback, try next model.
+            if (this.isRetryableUnavailable(e) && modelIdx < modelsToTry.length - 1) break;
+            throw e;
+          }
+          const jitter = Math.floor(Math.random() * 120);
+          const waitMs = this.baseRetryDelayMs * Math.pow(2, attempt) + jitter;
+          this.logger.warn(`Gemini UNAVAILABLE on ${modelName} (attempt ${attempt + 1}/${retriesForModel + 1}), retrying in ${waitMs}ms`);
+          await this.sleep(waitMs);
         }
-        const jitter = Math.floor(Math.random() * 120);
-        const waitMs = this.baseRetryDelayMs * Math.pow(2, attempt) + jitter;
-        this.logger.warn(`Gemini UNAVAILABLE (attempt ${attempt + 1}/${this.maxRetries + 1}), retrying in ${waitMs}ms`);
-        await this.sleep(waitMs);
       }
+      if (response) break;
     }
     if (!response) throw lastErr || new Error('Gemini response unavailable');
 
