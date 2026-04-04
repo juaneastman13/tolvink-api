@@ -263,8 +263,9 @@ export class FreightActionToolsService {
         sectionTitle: 'GRANOS',
       }, 'grain_selection', { partialFreight: input });
     }
-    if (!input.tons || isNaN(Number(input.tons)) || Number(input.tons) <= 0) {
-      return JSON.stringify({ error: 'Falta la cantidad de toneladas (tons) o es inválida.' });
+    // Tons are optional — don't reject if not provided
+    if (input.tons !== undefined && input.tons !== null && (isNaN(Number(input.tons)) || Number(input.tons) < 0)) {
+      return JSON.stringify({ error: 'Toneladas inválidas.' });
     }
     if (!input.loadDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.loadDate)) {
       return JSON.stringify({ error: 'Falta la fecha de carga (loadDate) o formato inválido. Usa YYYY-MM-DD.' });
@@ -619,13 +620,13 @@ export class FreightActionToolsService {
       driverDisplay = (driverResult as any).name || null;
     }
 
-    // Auto-calculate truck count if not provided: 1 truck per 30 tons (round up)
+    // truckCount is mandatory — if missing and tons available, auto-calc
     if (!input.truckCount || isNaN(Number(input.truckCount)) || Number(input.truckCount) < 1) {
       const tons = Number(input.tons);
       if (tons > 0) {
         input.truckCount = Math.ceil(tons / 30);
       } else {
-        return JSON.stringify({ error: 'Debe indicar la cantidad de camiones (truckCount) o las toneladas para calcularlo automáticamente.' });
+        return JSON.stringify({ error: 'Falta la cantidad de camiones (truckCount). Preguntar al usuario.' });
       }
     }
     const truckCount = Number(input.truckCount);

@@ -41,7 +41,7 @@ import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
 import {
   MAX_HISTORY, MAX_TOOL_LOOPS, AI_SESSION_TIMEOUT_MIN, APP_URL, OWN_FLEET_SHORTCUT,
-  MODEL_ID, MODEL_ID_FAST, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
+  MODEL_ID, MODEL_ID_FAST, MODEL_TEMPERATURE, MODEL_MAX_TOKENS, HAIKU_MAX_TOKENS, SONNET_MAX_TOKENS, MAX_RESPONSE_CHARS, STALE_SESSION_MIN,
   URUGUAY_UTC_OFFSET_MS, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, AUDIO_FILLERS,
   AI_RATE_LIMIT_WINDOW_MS, AI_RATE_LIMIT_MAX,
 } from './ai.constants';
@@ -318,11 +318,14 @@ export class AiService implements OnModuleDestroy {
     const filteredTools = roleFilteredTools.filter(t => allowedToolNames.has(t.name));
     this.logger.log(`[tools] domains=${[...domains].join(',')} tools=${filteredTools.length}/${roleFilteredTools.length}`);
 
-    // Select model (Haiku default, Sonnet on retry)
-    let selectedModel = this.selectModel(cleanedMessage, aiMessages.length > 0);
-    if (selectedModel !== MODEL_ID) {
-      this.logger.log(`Using fast model (${selectedModel}) for simple query`);
-    }
+    // Select model — Haiku for queries, Sonnet for creation/mutations
+    const modelSessionState = {
+      activeFlow: state.pendingFreight ? 'create_freight' : undefined,
+      pendingFreight: state.pendingFreight,
+    };
+    let selectedModel = this.intentRouter.selectModel(cleanedMessage, aiMessages.length > 0, modelSessionState);
+    const modelMaxTokens = selectedModel === MODEL_ID ? SONNET_MAX_TOKENS : HAIKU_MAX_TOKENS;
+    this.logger.log(`Model: ${selectedModel === MODEL_ID ? 'sonnet' : 'haiku'} (max_tokens=${modelMaxTokens})`);
 
     // Global timeout for entire tool execution loop (H1: prevent hanging)
     const loopDeadline = Date.now() + 90_000; // 90s max for all loops
@@ -339,7 +342,7 @@ export class AiService implements OnModuleDestroy {
         this.logger.log(`Sending to Claude (loop ${loopCount}, model=${modelForLoop}), messages: ${currentMessages.length}`);
         const createParams = {
           model: modelForLoop,
-          max_tokens: MODEL_MAX_TOKENS,
+          max_tokens: modelMaxTokens,
           temperature: MODEL_TEMPERATURE,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           tools: filteredTools.map((t, i, arr) =>
@@ -428,25 +431,6 @@ export class AiService implements OnModuleDestroy {
                 tool_use_id: (block as any).id,
                 content: result,
               });
-            }
-          }
-
-          // Detect prepare_freight failure on Haiku → escalate to Sonnet and retry
-          if (selectedModel === MODEL_ID_FAST) {
-            const prepareBlock = toolBlocks.find((b: any) => b.name === 'prepare_freight');
-            if (prepareBlock) {
-              const prepareResult = toolResults.find((r: any) => r.tool_use_id === prepareBlock.id);
-              const resultStr = prepareResult?.content || '';
-              const hasMissingFields = /error|falt|requerid|obligatori|invalid/i.test(resultStr);
-              if (hasMissingFields && !this._sonnetRetried?.has(session.id)) {
-                this.logger.warn('prepare_freight failed on Haiku — retrying with Sonnet');
-                if (!this._sonnetRetried) this._sonnetRetried = new Map();
-                this._sonnetRetried.set(session.id, Date.now());
-                selectedModel = MODEL_ID;
-                currentMessages = currentMessages.slice(0, -1);
-                loopCount--;
-                continue;
-              }
             }
           }
 

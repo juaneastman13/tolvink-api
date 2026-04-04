@@ -84,11 +84,47 @@ export class IntentRouterService {
 
   // ======================== MODEL SELECTION ========================
 
-  /** Classify message complexity to pick the right model.
-   *  Simple queries → Haiku (faster). Complex queries → Sonnet (smarter). */
-  /** Always use Haiku by default. Sonnet is only used as retry fallback
-   *  when prepare_freight fails (triggered by ai.service.ts retry logic). */
-  selectModel(_message: string, _hasHistory: boolean): string {
+  /** Sonnet patterns — messages that require complex reasoning/parsing */
+  private static readonly SONNET_PATTERNS: RegExp[] = [
+    // Freight creation — complex multi-entity parsing
+    /\b(mand[áa]|envi[áa]|despach[áa]|crear?\s*(flete|carga))\b/i,
+    /\b(soja|ma[ií]z|trigo|girasol|sorgo|cebada)\b.*\b\d/i,
+    /\b\d+\s*(tonelada|ton\b|t\b)\b/i,
+    /\b(repet[ií]|lo mismo|igual que antes|duplicar?)\b.*\b(flete|carga)\b/i,
+    // Assignment — multi-step reasoning
+    /\b(asign[áa]r?|asign[áa])\b.*\b(transport|cami[oó]n|flota|externo)\b/i,
+    /\bflota propia\b/i,
+    /\b(externo|delegad[oa])\b.*\b(l[oó]pez|cami[oó]n|patente|chapa)\b/i,
+    // Cancellation with context
+    /\b(cancel[áa]r?)\b.*\b(flete|viaje|carga)\b/i,
+    // Updates requiring reasoning
+    /\b(cambiar?|modific[áa]r?|actualiz[áa]r?)\b.*\b(fecha|hora|destino|planta|cami[oó]n)\b/i,
+  ];
+
+  /** Active session states that require Sonnet */
+  private static readonly SONNET_SESSION_STATES = new Set([
+    'create_freight', 'assign_transport',
+  ]);
+
+  /**
+   * Route to Haiku (fast, cheap) or Sonnet (smart, expensive).
+   * Haiku: greetings, status queries, dashboard, confirmations, simple lookups.
+   * Sonnet: freight creation, assignments, cancellations, complex parsing.
+   */
+  selectModel(message: string, _hasHistory: boolean, sessionState?: { activeFlow?: string; pendingFreight?: any }): string {
+    // Active freight creation/assignment flow → Sonnet
+    if (sessionState?.pendingFreight) return MODEL_ID;
+    if (sessionState?.activeFlow && IntentRouterService.SONNET_SESSION_STATES.has(sessionState.activeFlow)) return MODEL_ID;
+
+    // Short confirmations during active flow → Haiku (just calls confirm_action)
+    if (/^(s[ií]|dale|va|ok|confirmar?|confirmo)\s*[.!]*$/i.test(message)) return MODEL_ID_FAST;
+
+    // Pattern match for complex messages → Sonnet
+    for (const pattern of IntentRouterService.SONNET_PATTERNS) {
+      if (pattern.test(message)) return MODEL_ID;
+    }
+
+    // Everything else → Haiku
     return MODEL_ID_FAST;
   }
 

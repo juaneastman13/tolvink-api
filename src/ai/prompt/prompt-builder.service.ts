@@ -142,17 +142,45 @@ Confirmación 2 etapas: prepare → resumen → confirm. Sin confirm = NO ejecut
 
     if (canCreateFreight) {
       basePrompt += `\n\n<create_freight>
-PARSING ORIGEN: "bajo el trillo"→search_fields("trillo")+search_lots("bajo"). "alto de cerros negros"→campo:"cerros negros",lote:"alto". Buscar campo primero, luego lote. Quitar artículos si falla.
-ONE-SHOT: Extraer TODOS los datos del mensaje. search_fields+search_plants en paralelo → prepare_freight.
-Datos: 1.Origen(campo+lote) 2.Destino(planta+sucursal) 3.Grano+tons 4.Fecha(YYYY-MM-DD)+hora 5.Camiones(auto 1/30t) 6.Transporte: PROPIO("mi flota","manejo yo")/EXTERNO("externo de X")/DELEGA.
-NUNCA confirmar sin tipo transporte. Datos faltantes todos juntos con emojis: 🌾📍🏢📅🚛
-Post-creación: PROPIO→assign_truck_to_freight(own_fleet). EXTERNO→assign_external_truck. DELEGADO→nada.
+CREAR FLETE — ONE-SHOT:
+Extraer TODOS los datos del mensaje sin preguntar lo que ya dijo. Llamar search_fields + search_plants EN PARALELO.
+
+PARSING ORIGEN (campo + lote):
+- "bajo el trillo" → search_fields("trillo"), luego search_lots("bajo")
+- "alto de cerros negros" → campo "cerros negros", lote "alto"
+- Buscar campo primero (palabra principal sin artículos), luego lote dentro del campo.
+
+DATOS NECESARIOS:
+1. ORIGEN: campo + lote. 1 campo → auto. 1 lote → auto.
+2. DESTINO: planta + sucursal. search_plants retorna branches[]. 1 → auto. 2+ → lista.
+3. GRANO. TONELADAS son OPCIONALES (no preguntar si no las dio).
+4. FECHA y HORA (YYYY-MM-DD, HH:mm). Resolver "mañana", "el lunes", "a las 8".
+5. CAMIONES: cantidad OBLIGATORIA. Preguntar si no la indicó.
+6. TRANSPORTE POR CAMIÓN:
+   a) FLOTA PROPIA ("mi flota", "propio", "manejo yo"): elegir chofer de los registrados o "self" si dice "yo".
+   b) EXTERNO ("externo de López", "OAD2334"): SOLO patente es obligatoria. Empresa y chofer son OPCIONALES — NO preguntar.
+   c) DELEGA A PLANTA: sin datos adicionales.
+   - Mezclar tipos si tiene múltiples camiones.
+
+CONFIRMACIÓN: prepare_freight → resumen → usuario confirma → confirm_create_freight.
+Post-creación: PROPIO→assign_truck_to_freight(own_fleet). EXTERNO→assign_external_truck(plate). DELEGADO→nada.
+
+DATOS FALTANTES — todos juntos:
+🌾 Grano
+📍 Campo/lote
+🏢 Planta destino
+📅 Fecha y hora
+🚛 Cantidad de camiones y tipo de transporte
 </create_freight>`;
     }
 
     if (canAssignTransport) {
       basePrompt += `\n\n<assign_transport>
-Propia→assign_transporter("own_fleet"). Empresa→list_transporters→assign_transporter. Externo→assign_external_truck(plate). AMBAS partes confirman carga/entrega.
+ASIGNAR TRANSPORTISTA:
+- Flota propia → assign_transporter(transporterCompanyId="own_fleet"). Chofer: registrado o "self".
+- Empresa → list_transporters → selección → assign_transporter → confirm_action.
+- Externo → assign_external_truck(code, plate). Empresa y chofer OPCIONALES — no preguntar.
+- Carga/entrega: confirmación de AMBAS partes (productor + transportista).
 </assign_transport>`;
     }
 
