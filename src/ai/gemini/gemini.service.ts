@@ -254,6 +254,7 @@ export class GeminiService implements OnModuleDestroy {
     const sessionStateForRouter = {
       activeFlow: state.pendingFreight ? 'create_freight' : undefined,
       pendingAction: state.pendingAction,
+      pendingFreight: state.pendingFreight,
     };
     const domains = detectDomains(cleanedMessage, sessionStateForRouter);
     const allowedToolNames = getToolNamesForDomains(domains);
@@ -519,7 +520,7 @@ export class GeminiService implements OnModuleDestroy {
       });
 
       return { text: finalText, buttons: pendingButtons, navigate: _navigate };
-    } catch (e) {
+    } catch (e: any) {
       this._chatSideEffects.delete(session.id);
       this.logger.error(`Gemini chat error [session=${session.id} user=${user.id}]: ${e.message}`, e.stack?.slice(0, 500));
       return { text: 'Se produjo un inconveniente técnico. Por favor, intente nuevamente o utilice las opciones del menú.' };

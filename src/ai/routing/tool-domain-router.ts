@@ -120,11 +120,28 @@ export function detectDomains(
 ): Set<ToolDomain> {
   const domains = new Set<ToolDomain>(['core']);
 
+  // Session state: pending freight → always load freight_create tools
   if (sessionState?.pendingFreight || sessionState?.activeFlow === 'create_freight') {
     domains.add('freight_create');
   }
   if (sessionState?.pendingAction) {
     domains.add('freight_ops');
+  }
+
+  // Interactive replies related to freight creation (truck selection, confirmations)
+  if (/ownfleet_truck:|ai_confirm|confirm_freight|seleccione.*cami[oó]n/i.test(message)) {
+    domains.add('freight_create');
+    domains.add('fleet');
+  }
+
+  // Short confirmations during active flows — keep current domains
+  if (/^(si|sí|dale|va|ok|confirmar?|confirmo|externo|propio|delegado)\s*[.!]*$/i.test(message)) {
+    if (sessionState?.pendingFreight) {
+      domains.add('freight_create');
+    }
+    if (sessionState?.pendingAction) {
+      domains.add('freight_ops');
+    }
   }
 
   for (const { domain, patterns } of DOMAIN_PATTERNS) {
