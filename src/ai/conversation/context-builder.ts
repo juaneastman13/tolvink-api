@@ -9,6 +9,13 @@ import { STALE_SESSION_MIN } from '../core/constants';
 
 @Injectable()
 export class ContextBuilderService {
+  private isNewFreightRequest(message: string): boolean {
+    const m = (message || '').toLowerCase();
+    // Explicit create intent + typical freight payload hints.
+    const hasCreateVerb = /\b(manda|mandá|mandá|mandar|envia|enviar|crear?\s+flete|nuevo\s+flete)\b/i.test(m);
+    const hasFreightHints = /\b(tonelad|soja|maiz|trigo|girasol|sorgo|cebada|camion|camiones|planta|lote|campo|manana|mañana|hoy|fecha)\b/i.test(m);
+    return hasCreateVerb && hasFreightHints;
+  }
 
   /** Enrich user message with session context injections. */
   buildContextualMessage(
@@ -17,6 +24,7 @@ export class ContextBuilderService {
     aiMessagesCount: number,
   ): string {
     let messageToSend = cleanedMessage;
+    const newFreightRequest = this.isNewFreightRequest(cleanedMessage);
 
     // Stale session detection
     const lastMsgTime = state.lastMessageAt ? new Date(state.lastMessageAt).getTime() : 0;
@@ -45,9 +53,17 @@ export class ContextBuilderService {
     if (state.activeContext && !state.pendingDocument) {
       const ac = state.activeContext;
       if (ac.lastFreightCode) {
-        messageToSend = `[FLETE ACTIVO: ${sanitizeForPrompt(ac.lastFreightCode)}. Resumen: ${sanitizeForPrompt(ac.lastFreightSummary || '')}. Ultima accion: ${sanitizeForPrompt(ac.lastAction || 'ninguna')}.]\n\n${messageToSend}`;
+        if (!newFreightRequest) {
+          messageToSend = `[FLETE ACTIVO: ${sanitizeForPrompt(ac.lastFreightCode)}. Resumen: ${sanitizeForPrompt(ac.lastFreightSummary || '')}. Ultima accion: ${sanitizeForPrompt(ac.lastAction || 'ninguna')}.]\n\n${messageToSend}`;
+        } else {
+          messageToSend = `[Sistema: el usuario inicio un NUEVO pedido de flete. No arrastrar filtros ni acciones previas, y priorizar prepare_freight.]\n\n${messageToSend}`;
+        }
       } else if (ac.lastSearchFilter) {
-        messageToSend = `[Contexto: filtro=${sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
+        if (!newFreightRequest) {
+          messageToSend = `[Contexto: filtro=${sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
+        } else {
+          messageToSend = `[Sistema: ignorar filtro previo de busqueda (${sanitizeForPrompt(ac.lastSearchFilter)}) porque el usuario inicio un NUEVO pedido de flete.]\n\n${messageToSend}`;
+        }
       }
     }
 
@@ -64,7 +80,7 @@ export class ContextBuilderService {
     }
 
     // Inject pending action context (skip when creating freight to avoid stale-action interference)
-    if (state.pendingAction && !state.pendingFreight) {
+    if (state.pendingAction && !state.pendingFreight && !newFreightRequest) {
       const pa = state.pendingAction;
       messageToSend = `[Sistema: hay una accion pendiente de confirmacion: ${sanitizeForPrompt(pa.summary || pa.tool || '')}. Si el usuario confirma -> confirm_action. Si cancela o cambia de tema -> ignorar la accion pendiente.]\n\n${messageToSend}`;
     }
