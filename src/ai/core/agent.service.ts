@@ -103,6 +103,12 @@ export class AgentService implements OnModuleDestroy {
     const state = (session?.flowState as any) || {};
     const storedMessages: any[] = state.aiMessages || [];
 
+    // Fast-path for button confirmations/cancellations to avoid LLM loops.
+    const quickResolved = await this.tryResolvePendingByIntent(cleanedMessage, state, user, synUser, session, plantAccessMap);
+    if (quickResolved) {
+      return quickResolved;
+    }
+
     // Build system prompt (cached)
     const promptCacheKey = `${session.id}:${companyType}:${isWeb}`;
     const cachedPrompt = this._promptCache.get(promptCacheKey);
@@ -292,6 +298,72 @@ export class AgentService implements OnModuleDestroy {
     const map = new Map<string, string>();
     for (const a of accesses) map.set(a.grantorCompanyId, a.accessLevel);
     return map;
+  }
+
+  private isConfirmIntent(text: string): boolean {
+    const t = (text || '').trim().toLowerCase();
+    return /^(confirmar|si|sí|dale|ok|va|metele|confirmo)\b/.test(t);
+  }
+
+  private isCancelIntent(text: string): boolean {
+    const t = (text || '').trim().toLowerCase();
+    return /^(cancelar|cancelo|no|deja|olvidate|par[aá])\b/.test(t);
+  }
+
+  private parseToolResultText(raw: string, fallbackOk: string): { text: string } {
+    try {
+      const obj = JSON.parse(raw);
+      if (obj?.error) return { text: String(obj.error) };
+      if (obj?.status === 'created' && obj?.code) return { text: `Listo. El flete *${obj.code}* fue creado correctamente.` };
+      if (obj?.status && obj?.code) return { text: `Listo. Accion aplicada sobre *${obj.code}*.` };
+      return { text: fallbackOk };
+    } catch {
+      return { text: fallbackOk };
+    }
+  }
+
+  private async clearPendingState(sessionId: string): Promise<void> {
+    const s = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+    const fs: any = (s?.flowState as any) || {};
+    const { pendingFreight: _pf, pendingAction: _pa, _pendingButtons: _pb, ...rest } = fs;
+    await this.prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: { flowState: rest },
+    });
+  }
+
+  private async tryResolvePendingByIntent(
+    cleanedMessage: string,
+    state: any,
+    user: any,
+    synUser: any,
+    session: any,
+    plantAccessMap: Map<string, string>,
+  ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }>; navigate?: { screen: string; freightId?: string } } | null> {
+    const wantsConfirm = this.isConfirmIntent(cleanedMessage);
+    const wantsCancel = this.isCancelIntent(cleanedMessage);
+    const hasPendingFreight = !!state?.pendingFreight;
+    const hasPendingAction = !!state?.pendingAction;
+    if (!wantsConfirm && !wantsCancel) return null;
+    if (!hasPendingFreight && !hasPendingAction) return null;
+
+    if (wantsCancel) {
+      await this.clearPendingState(session.id);
+      return { text: 'Perfecto, cancelado. No se realizaron cambios.' };
+    }
+
+    // Confirm intent: prioritize freight creation when both are present.
+    if (hasPendingFreight) {
+      const res = await this.toolExecutor.executeTool('confirm_create_freight', {}, user, synUser, session, plantAccessMap);
+      const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
+      return { text: parsed.text };
+    }
+    if (hasPendingAction) {
+      const res = await this.toolExecutor.executeTool('confirm_action', {}, user, synUser, session, plantAccessMap);
+      const parsed = this.parseToolResultText(res, 'Listo, accion confirmada.');
+      return { text: parsed.text };
+    }
+    return null;
   }
 
   /**

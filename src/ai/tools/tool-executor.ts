@@ -636,6 +636,10 @@ export class ToolExecutorService {
       if (tons > 0) input.truckCount = Math.ceil(tons / 30);
       else return JSON.stringify({ error: 'Falta cantidad de camiones (truckCount).' });
     }
+    const hasDestination = !!(input.branchId || input.destPlantId || input.destName || input.customDestName);
+    if (!hasDestination) {
+      return JSON.stringify({ error: 'Falta destino. Indique planta destino o destino personalizado.' });
+    }
 
     const effects = this.sessionManager.getSideEffects(session.id);
     const prepareCompanyId = user.activeCompanyId || user.companyId;

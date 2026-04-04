@@ -63,8 +63,8 @@ export class ContextBuilderService {
       }
     }
 
-    // Inject pending action context
-    if (state.pendingAction) {
+    // Inject pending action context (skip when creating freight to avoid stale-action interference)
+    if (state.pendingAction && !state.pendingFreight) {
       const pa = state.pendingAction;
       messageToSend = `[Sistema: hay una accion pendiente de confirmacion: ${sanitizeForPrompt(pa.summary || pa.tool || '')}. Si el usuario confirma -> confirm_action. Si cancela o cambia de tema -> ignorar la accion pendiente.]\n\n${messageToSend}`;
     }
