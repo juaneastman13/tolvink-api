@@ -30,6 +30,38 @@ export class AgentService implements OnModuleDestroy {
   private readonly LOCK_WAIT_MS = 8_000;
   private readonly LOCK_WAIT_STEP_MS = 250;
   private readonly langsmithEnabled = String(process.env.LANGSMITH_TRACING || '').toLowerCase() === 'true' && !!process.env.LANGSMITH_API_KEY;
+  private readonly CORE_TOOLS = new Set<string>([
+    'list_freights', 'get_freight_detail', 'summarize_freights', 'get_dashboard',
+    'prepare_freight', 'confirm_create_freight', 'confirm_action',
+    'search_plants', 'search_fields', 'search_lots', 'list_fields', 'list_lots',
+    'generate_location_link', 'generate_tracking_link', 'generate_report_link',
+  ]);
+  private readonly FREIGHT_ACTION_TOOLS = new Set<string>([
+    'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded', 'confirm_finished',
+    'cancel_freight', 'authorize_freight', 'duplicate_freight', 'update_freight',
+    'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
+    'assign_transporter', 'assign_truck_to_trip', 'assign_truck_to_freight',
+    'assign_multi_trucks', 'cancel_assignment', 'update_assignment',
+    'assign_external_truck', 'assign_mixed_trucks', 'edit_external_assignment',
+  ]);
+  private readonly TRUCK_TOOLS = new Set<string>([
+    'list_trucks', 'create_truck', 'update_truck', 'deactivate_truck',
+    'list_drivers', 'create_driver', 'deactivate_driver',
+    'get_truck_detail', 'get_truck_documents', 'get_expiring_documents',
+    'attach_truck_document', 'register_truck_expense', 'list_truck_expenses',
+    'register_truck_income', 'list_truck_incomes', 'register_truck_movement',
+    'list_truck_movements', 'register_trip_data', 'get_truck_economic_summary',
+    'get_fleet_summary', 'get_fleet_alerts',
+  ]);
+  private readonly ADMIN_TOOLS = new Set<string>([
+    'get_user_profile', 'list_company_users', 'create_user', 'update_user_role',
+    'deactivate_user', 'reactivate_user', 'update_user_admin', 'update_profile',
+    'switch_company', 'update_company', 'list_branches', 'create_branch', 'update_branch', 'delete_branch',
+    'list_enabled_plants', 'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
+  ]);
+  private readonly DOC_TOOLS = new Set<string>([
+    'attach_document', 'list_documents', 'delete_document', 'ocr_analyze', 'save_ocr_data', 'rename_document',
+  ]);
 
   private cleanupTimer = setInterval(() => {
     cleanupRateLimits();
@@ -182,7 +214,9 @@ export class AgentService implements OnModuleDestroy {
     // Filter tools by role
     const allTools = this.toolRegistry.getAllDefinitions();
     const filteredToolDefs = filterToolsByRole(allTools, user, companyType, isWeb);
-    const functionDeclarations = this.gemini.convertToolDeclarations(filteredToolDefs);
+    const selectedToolDefs = this.selectToolsForTurn(filteredToolDefs, cleanedMessage, state);
+    let functionDeclarations = this.gemini.convertToolDeclarations(selectedToolDefs);
+    const hasToolPrefilter = selectedToolDefs.length < filteredToolDefs.length;
 
     // Select thinking level
     const hasActiveFlow = !!state.pendingFreight;
@@ -261,6 +295,12 @@ export class AgentService implements OnModuleDestroy {
           // Add tool responses to messages
           geminiMessages.push({ role: 'user', parts: toolResponses });
         } else {
+          // Fallback safety: if filtered tool set was too narrow for this turn, retry once with full role-allowed tools.
+          if (loopCount === 1 && hasToolPrefilter && this.shouldExpandTools(cleanedMessage, result.text)) {
+            this.logger.warn(`Tool prefilter fallback: expanding ${functionDeclarations.length} -> ${filteredToolDefs.length} tools`);
+            functionDeclarations = this.gemini.convertToolDeclarations(filteredToolDefs);
+            continue;
+          }
           // No function calls — model is done
           break;
         }
@@ -345,6 +385,50 @@ export class AgentService implements OnModuleDestroy {
     } finally {
       this._chatLocks.delete(lockKey);
     }
+  }
+
+  private selectToolsForTurn(toolDefs: any[], cleanedMessage: string, state: any): any[] {
+    const msg = (cleanedMessage || '').toLowerCase();
+    const include = new Set<string>([...this.CORE_TOOLS]);
+
+    const hasPendingFlow = !!state?.pendingFreight || !!state?.pendingAction;
+    if (hasPendingFlow) {
+      include.add('confirm_create_freight');
+      include.add('confirm_action');
+    }
+
+    const isFreightIntent = /\b(manda|mandá|mandar|crear?\s+flete|nuevo\s+flete|flete|tonelad|carga|entrega|inicia|confirma)\b/i.test(msg);
+    const isAssignmentIntent = /\b(asign|transportista|flota|camion|externo|chofer)\b/i.test(msg);
+    const isTruckIntent = /\b(camion|camiones|chofer|patente|matricula|gasto|ingreso|movimiento|documento|itv|seguro)\b/i.test(msg);
+    const isAdminIntent = /\b(usuario|usuarios|rol|empresa|sucursal|acceso|perfil)\b/i.test(msg);
+    const isDocIntent = /\b(documento|foto|imagen|ocr|adjunt|archivo)\b/i.test(msg);
+
+    if (isFreightIntent) for (const t of this.FREIGHT_ACTION_TOOLS) include.add(t);
+    if (isAssignmentIntent) {
+      include.add('assign_transporter');
+      include.add('assign_truck_to_freight');
+      include.add('assign_external_truck');
+      include.add('assign_mixed_trucks');
+      include.add('list_transporters');
+      include.add('list_trucks');
+      include.add('list_drivers');
+    }
+    if (isTruckIntent) for (const t of this.TRUCK_TOOLS) include.add(t);
+    if (isAdminIntent) for (const t of this.ADMIN_TOOLS) include.add(t);
+    if (isDocIntent) for (const t of this.DOC_TOOLS) include.add(t);
+
+    // Keep set bounded but safe. If nothing matches beyond core, use role-filtered tools.
+    const selected = toolDefs.filter((t: any) => include.has(t.name));
+    if (selected.length < 8) return toolDefs;
+    return selected;
+  }
+
+  private shouldExpandTools(cleanedMessage: string, modelText: string | null): boolean {
+    const msg = (cleanedMessage || '').toLowerCase();
+    const txt = (modelText || '').toLowerCase();
+    const actionLike = /\b(manda|mandar|crear|asign|cancel|confirm|camion|chofer|flete|planta|lote|campo)\b/i.test(msg);
+    const weakResponse = !txt || /no se pudo|requiere mas pasos|intente nuevamente|no tengo|no encontro|error/i.test(txt);
+    return actionLike || weakResponse;
   }
 
   /** Resolve user's plant access levels (for CONSULTA blocking). */
