@@ -26,6 +26,8 @@ export class AgentService implements OnModuleDestroy {
   private readonly logger = new Logger(AgentService.name);
   private _chatLocks = new Set<string>();
   private _promptCache = new Map<string, { prompt: string; ts: number }>();
+  private readonly LOCK_WAIT_MS = 8_000;
+  private readonly LOCK_WAIT_STEP_MS = 250;
 
   private cleanupTimer = setInterval(() => {
     cleanupRateLimits();
@@ -74,11 +76,19 @@ export class AgentService implements OnModuleDestroy {
       return { text: 'Ha enviado muchos mensajes en poco tiempo. Por favor aguarde unos minutos.' };
     }
 
-    // Per-session lock
-    if (this._chatLocks.has(session.id)) {
-      return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
+    const lockKey = session?.id || `phone:${phone}`;
+
+    // Per-session lock with short wait window (helps with duplicated webhooks / near-simultaneous retries)
+    if (this._chatLocks.has(lockKey)) {
+      const deadline = Date.now() + this.LOCK_WAIT_MS;
+      while (this._chatLocks.has(lockKey) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, this.LOCK_WAIT_STEP_MS));
+      }
+      if (this._chatLocks.has(lockKey)) {
+        return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
+      }
     }
-    this._chatLocks.add(session.id);
+    this._chatLocks.add(lockKey);
 
     // Session company override (WhatsApp company selection is session-scoped)
     const sessionState = (session?.flowState as any) || {};
@@ -282,7 +292,7 @@ export class AgentService implements OnModuleDestroy {
       this.logger.error(`Chat error [session=${session.id} user=${user.id}]: ${e.message}`, e.stack?.slice(0, 500));
       return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente.' };
     } finally {
-      this._chatLocks.delete(session.id);
+      this._chatLocks.delete(lockKey);
     }
   }
 
