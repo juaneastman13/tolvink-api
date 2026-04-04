@@ -725,9 +725,7 @@ export class ToolExecutorService {
     if (pending.branchId) dto.destPlantId = pending.branchId;
     else if (pending.destPlantId) dto.destPlantId = pending.destPlantId;
     else if (pending.destName) dto.customDestName = pending.destName;
-    if (pending.originLotId) dto.originLotId = pending.originLotId;
-    else if (pending.customOriginName) dto.customOriginName = pending.customOriginName;
-    else if (pending.originName) dto.customOriginName = pending.originName;
+    await this.applyPendingOriginToCreateDto(dto, pending, producerCompanyId);
     if (pending.truckId) dto.truckId = pending.truckId;
     const normalizedDriverId = this.normalizePendingDriverId(pending.driverId, actorUserId);
     if (normalizedDriverId) dto.driverId = normalizedDriverId;
@@ -754,6 +752,67 @@ export class ToolExecutorService {
       return actorUserId || null;
     }
     return typeof driverId === 'string' ? driverId : null;
+  }
+
+  private async applyPendingOriginToCreateDto(dto: any, pending: any, producerCompanyId: string): Promise<void> {
+    if (pending?.originLotId) {
+      dto.originLotId = pending.originLotId;
+      return;
+    }
+
+    const latRaw = pending?.customOriginLat ?? pending?.originLat ?? pending?.overrideOriginLat;
+    const lngRaw = pending?.customOriginLng ?? pending?.originLng ?? pending?.overrideOriginLng;
+    const lat = Number(latRaw);
+    const lng = Number(lngRaw);
+    const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+    if (hasCoords) {
+      dto.overrideOriginLat = lat;
+      dto.overrideOriginLng = lng;
+      if (pending?.customOriginName || pending?.originName) {
+        dto.customOriginName = pending.customOriginName || pending.originName;
+      }
+      return;
+    }
+
+    const originName = String(pending?.originName || pending?.customOriginName || '').trim();
+    if (!originName) return;
+
+    // Resolve to producer lots first (more specific than field).
+    const lots = await this.prisma.lot.findMany({
+      where: { companyId: producerCompanyId, active: true },
+      select: { id: true, name: true },
+      take: 300,
+    });
+    if (lots.length > 0) {
+      const lotMatches = fuzzySearch(originName, lots, (l) => l.name, { threshold: 0.45, maxResults: 5, aliases: ENTITY_ALIASES });
+      if (lotMatches.length > 0) {
+        const lotDecision = classifyFuzzyResult(lotMatches);
+        if (lotDecision === 'exact' || lotDecision === 'confident') {
+          dto.originLotId = lotMatches[0].item.id;
+          return;
+        }
+      }
+    }
+
+    // Fallback to field coordinates / fieldId.
+    const fields = await this.prisma.field.findMany({
+      where: { companyId: producerCompanyId, active: true },
+      select: { id: true, name: true, lat: true, lng: true },
+      take: 300,
+    });
+    if (fields.length > 0) {
+      const fieldMatches = fuzzySearch(originName, fields, (f) => f.name, { threshold: 0.45, maxResults: 5, aliases: ENTITY_ALIASES });
+      if (fieldMatches.length > 0) {
+        const fieldDecision = classifyFuzzyResult(fieldMatches);
+        if (fieldDecision === 'exact' || fieldDecision === 'confident') {
+          dto.fieldId = fieldMatches[0].item.id;
+          return;
+        }
+      }
+    }
+
+    // Last fallback: keep custom origin name (FreightsService will still need map coords/lot/field).
+    dto.customOriginName = originName;
   }
 
   private normalizePlate(value: any): string | null {
