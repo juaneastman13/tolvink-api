@@ -676,6 +676,7 @@ export class ToolExecutorService {
     else if (pending.destName) dto.customDestName = pending.destName;
     if (pending.originLotId) dto.originLotId = pending.originLotId;
     else if (pending.customOriginName) dto.customOriginName = pending.customOriginName;
+    else if (pending.originName) dto.customOriginName = pending.originName;
     if (pending.truckId) dto.truckId = pending.truckId;
     if (pending.driverId) dto.driverId = pending.driverId;
 
