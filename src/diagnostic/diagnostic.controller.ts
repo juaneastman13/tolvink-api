@@ -9,10 +9,10 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../database/prisma.service';
 import { PartsLookupService } from './parts-lookup.service';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'crypto';
 
-const MODEL_ID = 'claude-sonnet-4-6';
+const MODEL_ID = 'gemini-3.1-flash-lite';
 const MAX_TOKENS = 2048;
 const MAX_TOOL_LOOPS = 3;
 
@@ -60,19 +60,19 @@ class ResolveSessionDto {
 @Injectable()
 export class DiagnosticService {
   private readonly logger = new Logger('DiagnosticService');
-  private client: Anthropic | null = null;
+  private client: GoogleGenAI | null = null;
 
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
     private partsLookup: PartsLookupService,
   ) {
-    const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
+    const apiKey = this.config.get<string>('GEMINI_API_KEY');
     if (apiKey) {
-      this.client = new Anthropic({ apiKey });
+      this.client = new GoogleGenAI({ apiKey });
       this.logger.log('Mechanic diagnostic agent enabled');
     } else {
-      this.logger.warn('ANTHROPIC_API_KEY not set — diagnostic agent disabled');
+      this.logger.warn('GEMINI_API_KEY not set — diagnostic agent disabled');
     }
   }
 
@@ -172,66 +172,85 @@ export class DiagnosticService {
 
   private async callClaude(machine: any, messages: any[], mediaUrls?: string[]): Promise<{ text: string; parts: any[] }> {
     const systemPrompt = this.buildSystemPrompt(machine);
-    const claudeMessages = this.buildClaudeMessages(messages, mediaUrls);
+    const geminiContents = this.buildGeminiMessages(messages, mediaUrls);
     const collectedParts: any[] = [];
 
-    let currentMessages = [...claudeMessages];
+    // Convert tools to Gemini functionDeclarations format
+    const functionDeclarations = TOOLS.map((t: any) => ({
+      name: t.name,
+      description: t.description,
+      parameters: {
+        type: 'OBJECT',
+        properties: Object.fromEntries(
+          Object.entries(t.input_schema.properties || {}).map(([k, v]: [string, any]) => [k, {
+            type: v.type?.toUpperCase() || 'STRING',
+            description: v.description || '',
+            ...(v.enum ? { enum: v.enum } : {}),
+          }]),
+        ),
+        ...(t.input_schema.required?.length ? { required: t.input_schema.required } : {}),
+      },
+    }));
+
+    let contents = [...geminiContents];
 
     for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
-      const response = await this.client.messages.create({
+      const response = await this.client!.models.generateContent({
         model: MODEL_ID,
-        max_tokens: MAX_TOKENS,
-        system: systemPrompt,
-        messages: currentMessages,
-        tools: TOOLS,
+        contents,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: MAX_TOKENS,
+          tools: [{ functionDeclarations }] as any,
+        },
       });
 
-      // If no tool use, extract text and return
-      if (response.stop_reason !== 'tool_use') {
-        const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined;
-        return { text: textBlock?.text || 'No pude generar una respuesta.', parts: collectedParts };
+      const candidate = response.candidates?.[0];
+      const parts = candidate?.content?.parts || [];
+      const functionCalls = parts.filter((p: any) => p.functionCall);
+      const textParts = parts.filter((p: any) => p.text);
+
+      if (functionCalls.length === 0) {
+        const text = textParts.map((p: any) => p.text).join('\n') || 'No pude generar una respuesta.';
+        return { text, parts: collectedParts };
       }
 
-      // Process tool calls
-      const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
-      const toolResults: any[] = [];
+      // Add model response to contents
+      contents.push({ role: 'model', parts } as any);
 
-      for (const block of toolUseBlocks) {
-        const tu = block as any;
+      // Process function calls
+      const functionResponses: any[] = [];
+      for (const fc of functionCalls) {
+        const { name, args: rawArgs } = fc.functionCall;
+        const args = (rawArgs || {}) as Record<string, any>;
         let result: any;
         try {
-          if (tu.name === 'search_parts') {
-            const parts = await this.partsLookup.searchParts({
-              machineBrand: tu.input.machine_brand,
-              machineModel: tu.input.machine_model,
-              partDescription: tu.input.part_description,
-              partCategory: tu.input.part_category,
+          if (name === 'search_parts') {
+            const found = await this.partsLookup.searchParts({
+              machineBrand: args.machine_brand,
+              machineModel: args.machine_model,
+              partDescription: args.part_description,
+              partCategory: args.part_category,
             });
-            collectedParts.push(...parts);
-            result = parts.length > 0 ? parts : { found: false, message: 'No se encontraron resultados verificados para esta pieza.' };
-          } else if (tu.name === 'verify_part_number') {
-            const part = await this.partsLookup.verifyPartNumber(tu.input.part_number);
+            collectedParts.push(...found);
+            result = found.length > 0 ? found : { found: false, message: 'No se encontraron resultados verificados.' };
+          } else if (name === 'verify_part_number') {
+            const part = await this.partsLookup.verifyPartNumber(args.part_number);
             if (part) collectedParts.push(part);
-            result = part || { found: false, message: `No se pudo verificar el número de pieza ${tu.input.part_number}.` };
+            result = part || { found: false, message: `No se pudo verificar ${args.part_number}.` };
           } else {
-            result = { error: `Tool ${tu.name} not found` };
+            result = { error: `Tool ${name} not found` };
           }
-        } catch (err) {
-          this.logger.error(`Tool ${tu.name} error: ${err.message}`);
-          result = { error: 'Error al buscar repuestos. Intentá de nuevo.' };
+        } catch (err: any) {
+          this.logger.error(`Tool ${name} error: ${err.message}`);
+          result = { error: 'Error al buscar repuestos.' };
         }
-        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(result) });
+        functionResponses.push({ functionResponse: { name, response: { result: JSON.stringify(result) } } });
       }
 
-      // Add assistant response + tool results for next loop
-      currentMessages = [
-        ...currentMessages,
-        { role: 'assistant', content: response.content },
-        { role: 'user', content: toolResults },
-      ];
+      contents.push({ role: 'user', parts: functionResponses } as any);
     }
 
-    // If we exhausted loops, return last text
     return { text: 'No pude completar la búsqueda de repuestos. Intentá de nuevo.', parts: collectedParts };
   }
 
@@ -290,24 +309,16 @@ ${maintenance}
 6. Si no tenés suficiente información para diagnosticar, pedí más datos específicos.`;
   }
 
-  private buildClaudeMessages(messages: any[], mediaUrls?: string[]): any[] {
+  private buildGeminiMessages(messages: any[], mediaUrls?: string[]): any[] {
     return messages.map((msg: any) => {
       if (msg.role === 'assistant') {
-        return { role: 'assistant', content: msg.content };
+        return { role: 'model', parts: [{ text: msg.content }] };
       }
-      // User message - may include images
-      const content: any[] = [];
-      if (msg.mediaUrls?.length > 0) {
-        for (let i = 0; i < msg.mediaUrls.length; i++) {
-          const url = msg.mediaUrls[i];
-          const type = msg.mediaTypes?.[i] || 'image';
-          if (type === 'image') {
-            content.push({ type: 'image', source: { type: 'url', url } });
-          }
-        }
-      }
-      content.push({ type: 'text', text: msg.content });
-      return { role: 'user', content };
+      const parts: any[] = [];
+      // Note: Gemini fileData requires uploaded files, not raw URLs
+      // For now, just include text content. Image analysis via inline data handled separately.
+      parts.push({ text: msg.content });
+      return { role: 'user', parts };
     });
   }
 

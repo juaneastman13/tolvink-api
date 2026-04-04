@@ -1,9 +1,9 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import { DocType, OcrResult } from './ocr.dto';
 
-const MODEL_ID = 'claude-sonnet-4-6';
+const MODEL_ID = 'gemini-3.1-flash-lite';
 const MAX_TOKENS = 2000;
 const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -125,16 +125,16 @@ const STRUCTURED_FIELDS = [
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
-  private client: Anthropic | null = null;
+  private client: GoogleGenAI | null = null;
   private supabaseUrl: string;
 
   constructor(private config: ConfigService) {
-    const apiKey = config.get<string>('ANTHROPIC_API_KEY');
+    const apiKey = config.get<string>('GEMINI_API_KEY');
     if (apiKey) {
-      this.client = new Anthropic({ apiKey });
-      this.logger.log('OCR service enabled (Claude Vision)');
+      this.client = new GoogleGenAI({ apiKey });
+      this.logger.log('OCR service enabled (Gemini Vision)');
     } else {
-      this.logger.warn('ANTHROPIC_API_KEY not set — OCR disabled');
+      this.logger.warn('GEMINI_API_KEY not set — OCR disabled');
     }
     this.supabaseUrl = config.get<string>('SUPABASE_URL') || '';
   }
@@ -209,19 +209,21 @@ export class OcrService {
     }
   }
 
-  /** Call Claude Vision API with timeout */
+  /** Call Gemini Vision API with timeout */
   private async callClaude(base64: string, mimeType: string, prompt: string): Promise<string> {
-    const apiCall = this.client!.messages.create({
+    const apiCall = this.client!.models.generateContent({
       model: MODEL_ID,
-      max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
-      messages: [{
+      contents: [{
         role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mimeType as any, data: base64 } },
-          { type: 'text', text: prompt },
+        parts: [
+          { inlineData: { mimeType, data: base64 } },
+          { text: prompt },
         ],
       }],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        maxOutputTokens: MAX_TOKENS,
+      },
     });
 
     let timeoutHandle: ReturnType<typeof setTimeout>;
@@ -236,8 +238,9 @@ export class OcrService {
       clearTimeout(timeoutHandle!);
     }
 
-    const textBlock = (response as any).content?.find((b: any) => b.type === 'text');
-    return textBlock?.text || '';
+    const candidate = response?.candidates?.[0];
+    const textPart = candidate?.content?.parts?.find((p: any) => p.text);
+    return textPart?.text || '';
   }
 
   /** Analyze from a public Supabase URL */
