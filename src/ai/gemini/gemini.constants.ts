@@ -4,8 +4,8 @@
 // =====================================================================
 
 export const GEMINI_MODELS = {
-  flash: 'gemini-2.5-flash-preview-04-17',
-  pro: 'gemini-2.5-pro-preview-03-25',
+  flash: 'gemini-2.0-flash',
+  pro: 'gemini-2.0-pro',
 } as const;
 export type GeminiModelTier = keyof typeof GEMINI_MODELS;
 
