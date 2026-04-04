@@ -3,7 +3,7 @@
 // Shared configuration, status labels, and rate limiting parameters
 // =====================================================================
 
-export const MAX_HISTORY = 25;
+export const MAX_HISTORY = 15;  // Was 25; reduces token cost per turn, 15 covers 3 full tool loops
 export const MAX_TOOL_LOOPS = 5;  // 5 loops needed: crear flete = search_plants + list_fields + list_lots + prepare_freight + confirm
 export const AI_SESSION_TIMEOUT_MIN = 60;  // Was 30; field workers pause 45-60 min (lunch, travel)
 if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — using tolvink.com fallback');
@@ -23,7 +23,7 @@ export type ModelTier = keyof typeof MODELS;
 export const MODEL_ID = MODELS.sonnet;
 export const MODEL_ID_FAST = MODELS.haiku;
 export const MODEL_TEMPERATURE = 0.4;
-export const MODEL_MAX_TOKENS = 800;     // Avg Haiku response is 200-400t; 1200 was overkill
+export const MODEL_MAX_TOKENS = 600;     // Avg Haiku response is 200-400t; 600 covers lists/summaries
 export const HAIKU_MAX_TOKENS = 512;
 export const SONNET_MAX_TOKENS = 4096;
 export const MAX_RESPONSE_CHARS = 1600;   // WhatsApp fragments >~1600 chars; web uses WEB_MAX_RESPONSE_CHARS
