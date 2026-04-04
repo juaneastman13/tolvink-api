@@ -134,7 +134,12 @@ export class GeminiClient implements OnModuleInit {
             thinkingBudget: thinkingBudget || 0,
           },
           tags: ['tolvink', 'ai', 'gemini'],
-          metadata: { component: 'GeminiClient' },
+          metadata: {
+            component: 'GeminiClient',
+            ls_provider: 'google_genai',
+            ls_model_name: AI_MODEL,
+            ls_temperature: MODEL_TEMPERATURE,
+          },
         });
         await llmTrace.postRun();
       } catch (e: any) {
@@ -161,6 +166,7 @@ export class GeminiClient implements OnModuleInit {
 
     const modelsToTry = [AI_MODEL, ...this.fallbackModels];
     let response: any;
+    let usedModelName = AI_MODEL;
     let lastErr: any;
 
     for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx++) {
@@ -173,6 +179,7 @@ export class GeminiClient implements OnModuleInit {
             contents: contents as any,
             config,
           });
+          usedModelName = modelName;
           if (modelIdx > 0) {
             this.logger.warn(`Gemini fallback model used: ${modelName}`);
           }
@@ -220,13 +227,27 @@ export class GeminiClient implements OnModuleInit {
     }
 
     const finishReason = response.candidates?.[0]?.finishReason || 'STOP';
+    const usageMetadata = {
+      input_tokens: Number(response?.usageMetadata?.promptTokenCount || 0),
+      output_tokens: Number(response?.usageMetadata?.candidatesTokenCount || 0),
+      total_tokens: Number(response?.usageMetadata?.totalTokenCount || 0),
+    };
     if (llmTrace) {
       try {
+        llmTrace.extra.metadata = {
+          ...(llmTrace.extra.metadata || {}),
+          ls_provider: 'google_genai',
+          ls_model_name: usedModelName,
+          ls_temperature: MODEL_TEMPERATURE,
+          usage_metadata: usageMetadata,
+        };
         await llmTrace.end({
           status: 'ok',
+          model: usedModelName,
           finishReason,
           textChars: text?.length || 0,
           functionCallCount: functionCalls?.length || 0,
+          usage_metadata: usageMetadata,
           promptTokens: response?.usageMetadata?.promptTokenCount || 0,
           outputTokens: response?.usageMetadata?.candidatesTokenCount || 0,
           totalTokens: response?.usageMetadata?.totalTokenCount || 0,
