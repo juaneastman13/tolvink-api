@@ -3,11 +3,10 @@
 // Bridges the web frontend to the AI agent (reuses AiService.chat)
 // =====================================================================
 
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
-import { AiService } from '../ai/ai.service';
-import { GeminiService } from '../ai/gemini/gemini.service';
+import { AgentService } from '../ai/core/agent.service';
 import { SseService } from '../sse/sse.service';
 import OpenAI from 'openai';
 import { OcrService } from '../ocr/ocr.service';
@@ -24,20 +23,13 @@ export class WebChatService {
   // In-memory cache for user data to avoid repeated DB queries within a chat session
   private userCache = new Map<string, { data: any; expiresAt: number }>();
 
-  /** AI provider flag: "anthropic" (default) or "gemini" */
-  private readonly aiProvider: 'anthropic' | 'gemini';
-
   constructor(
     private prisma: PrismaService,
-    private ai: AiService,
-    @Optional() private gemini: GeminiService,
+    private ai: AgentService,
     private sse: SseService,
     private config: ConfigService,
     private ocr: OcrService,
   ) {
-    const provider = (process.env.AI_PROVIDER || 'anthropic').toLowerCase();
-    this.aiProvider = provider === 'gemini' ? 'gemini' : 'anthropic';
-
     const openaiKey = this.config.get<string>('OPENAI_API_KEY');
     if (openaiKey) {
       this.openai = new OpenAI({ apiKey: openaiKey });
@@ -124,10 +116,7 @@ export class WebChatService {
     const chatStart = Date.now();
     this.logger.log(`Web chat start: user=${dbUser.id} text="${text.slice(0, 50)}"`);
     // Pass full dbUser (not synUser) — ai/gemini service needs name, memberships, company for prompt building
-    const useGemini = this.aiProvider === 'gemini' && this.gemini?.isEnabled();
-    const result = useGemini
-      ? await this.gemini.chat(WEB_PHONE, text, dbUser, session, onDelta)
-      : await this.ai.chat(WEB_PHONE, text, dbUser, session, onDelta);
+    const result = await this.ai.chat(WEB_PHONE, text, dbUser, session, onDelta);
     this.logger.log(`Web chat done: user=${dbUser.id} ${Date.now() - chatStart}ms`);
 
     // Buttons (including pending selections) are already merged by ai.chat()

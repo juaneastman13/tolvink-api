@@ -1,48 +1,47 @@
+// =====================================================================
+// TOLVINK — AI Module (Gemini rebuild)
+// =====================================================================
+
 import { Module, forwardRef } from '@nestjs/common';
-import { AiService } from './ai.service';
+import { ConfigModule } from '@nestjs/config';
 import { FreightsModule } from '../freights/freights.module';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { OcrModule } from '../ocr/ocr.module';
-import { FieldsService } from '../fields/fields.service';
-import { TrucksService } from '../trucks/trucks.controller';
-import { AdminService } from '../admin/admin.controller';
-import { ResponseFormatterService } from './response/response-formatter.service';
-import { SessionManagerService } from './session/session-manager.service';
-import { PromptBuilderService } from './prompt/prompt-builder.service';
-import { IntentRouterService } from './routing/intent-router.service';
-import { AiContextService } from './tools/ai-context.service';
-import { LocationToolsService } from './tools/location-tools.service';
-import { AdminToolsService } from './tools/admin-tools.service';
-import { TransportToolsService } from './tools/transport-tools.service';
-import { FreightQueryToolsService } from './tools/freight-query-tools.service';
-import { FreightActionToolsService } from './tools/freight-action-tools.service';
-// Hybrid services — deterministic routing (90% of messages without LLM)
-import { IntentDetectorService } from './hybrid/intent-detector.service';
-import { FreightParserService } from './hybrid/freight-parser.service';
-import { FlowService } from './hybrid/flow.service';
-import { FreightFlowService } from './hybrid/freight-flow.service';
-import { ResponseBuilderService } from './hybrid/response-builder.service';
-import { MessageRouterService } from './hybrid/message-router.service';
-import { AiInterpreterService } from './hybrid/ai-interpreter.service';
-import { MessageInterceptorService } from './interceptor/message-interceptor.service';
+
+// Core
+import { AgentService } from './core/agent.service';
+import { GeminiClient } from './core/gemini.client';
+
+// Prompt
+import { PromptBuilderService } from './prompt/prompt-builder';
+
+// Conversation
+import { SessionManagerService } from './conversation/session-manager';
+import { HistoryManagerService } from './conversation/history-manager';
+import { ContextBuilderService } from './conversation/context-builder';
+
+// Tools
+import { ToolRegistryService } from './tools/tool-registry';
+import { ToolExecutorService } from './tools/tool-executor';
 
 @Module({
-  imports: [forwardRef(() => FreightsModule), forwardRef(() => WhatsAppModule), OcrModule],
+  imports: [
+    ConfigModule,
+    forwardRef(() => FreightsModule),
+    forwardRef(() => WhatsAppModule),
+    OcrModule,
+  ],
   providers: [
-    AiService, FieldsService, TrucksService, AdminService,
-    ResponseFormatterService, SessionManagerService, PromptBuilderService, IntentRouterService,
-    AiContextService, LocationToolsService, AdminToolsService, TransportToolsService,
-    FreightQueryToolsService, FreightActionToolsService,
-    // Hybrid deterministic + interpreter services
-    IntentDetectorService, FreightParserService, FlowService,
-    FreightFlowService, ResponseBuilderService, AiInterpreterService, MessageRouterService,
-    MessageInterceptorService,
+    AgentService,
+    { provide: 'AiService', useExisting: AgentService },
+    GeminiClient,
+    PromptBuilderService,
+    SessionManagerService,
+    HistoryManagerService,
+    ContextBuilderService,
+    ToolRegistryService,
+    ToolExecutorService,
   ],
-  exports: [
-    AiService, MessageRouterService,
-    // Shared services used by GeminiModule
-    ResponseFormatterService, SessionManagerService, IntentRouterService,
-    AiContextService, LocationToolsService, MessageInterceptorService,
-  ],
+  exports: [AgentService, SessionManagerService],
 })
 export class AiModule {}
