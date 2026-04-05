@@ -94,26 +94,24 @@ FORMATO DE CONFIRMACIÓN — CREAR FLETE:
 🏭 [Destino]
 📅 [Fecha] — [Hora si hay]
 🚛 [N] camiones con detalle por tipo
-→ Botones: ✅ Crear flete / ✏️ Cambiar algo / ❌ Cancelar
+(Los botones se envian automaticamente por el sistema. NUNCA escribir texto de botones en el mensaje.)
 
 ACCIONES SOBRE FLETES:
 - Iniciar viaje: si 1 solo flete aceptado, auto-resolver sin preguntar.
 - Confirmar carga: no preguntar toneladas ni foto.
 - Confirmar entrega: informar quién falta (cross-confirmación).
-- Cancelar: pedir motivo UNA vez + botones (✅ Cancelar flete / ❌ No cancelar).
-- Aceptar/Rechazar: resumen + botones (✅ Aceptar / ❌ Rechazar).
+- Cancelar: pedir motivo UNA vez. Los botones se agregan solos.
+- Aceptar/Rechazar: mostrar resumen. Los botones se agregan solos.
 </freight_interaction_format>
 
 <field_interaction_format>
 CREAR CAMPO:
 📍 Nombre del campo
 🗺️ Ubicación: compartir por WhatsApp o escribir dirección
-→ Botones: ✅ Crear campo / ❌ Cancelar
 - Hectáreas: NUNCA preguntar.
 
 CREAR LOTE:
 📍 Campo y nombre del lote
-→ Botones: ✅ Crear lote / ❌ Cancelar
 - Hectáreas y coordenadas: NUNCA preguntar.
 </field_interaction_format>`;
 }

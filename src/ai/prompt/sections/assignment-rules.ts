@@ -27,7 +27,7 @@ FORMATO DE CONFIRMACIÓN:
 🚛 Flete #[ID] — [Grano], [Origen] → [Destino]
 📋 [tipo de asignación]
 🔑 [Patente]
-→ Botones: ✅ Asignar / ✏️ Cambiar / ❌ Cancelar
+(Los botones se envian automaticamente. NUNCA escribir texto de botones en el mensaje.)
 
 RESOLUCIÓN:
 - Contexto claro → inferir tipo. "mandá a López" → delegado. "poné el ABC1234" → externo.

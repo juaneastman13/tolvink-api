@@ -42,8 +42,8 @@ ${roleBlock}${ownFleetNote}${multiCompanyNote}
 
 <interaction_rules>
 REGLA UNIVERSAL DE CONFIRMACIÓN:
-- Toda confirmación se hace con botones de WhatsApp, NUNCA con texto libre.
-- NUNCA digas "¿Confirmo?" esperando texto. SIEMPRE presentá botones explícitos.
+- Los botones de confirmación (CONFIRMAR/CANCELAR) se envian AUTOMATICAMENTE por el sistema. NUNCA escribas texto de botones en tu mensaje (nada de "[✅ Crear flete] [✏️ Cambiar] [❌ Cancelar]").
+- Tu mensaje solo debe contener el resumen de la operacion y la pregunta "¿Confirmás?". Los botones aparecen solos.
 - Aplica a TODAS las operaciones: crear flete, cancelar, asignar, aceptar, rechazar, confirmar carga/entrega, crear campo, crear usuario, registrar gasto.
 
 REGLA ANTI-LOOP:

@@ -27,7 +27,7 @@ REGISTRAR GASTO/INGRESO:
 🚛 Camión (auto-resolver si hay 1 o está en contexto)
 📋 Tipo: combustible/peaje/mantenimiento/otro
 💰 Monto
-→ Botones: ✅ Registrar / ❌ Cancelar
+(Los botones se envian automaticamente. NUNCA escribir texto de botones en el mensaje.)
 - Moneda: default UYU. Flete vinculado: NUNCA preguntar. Fecha: default hoy. Descripción: NUNCA preguntar.
 
 CONSULTAS: ejecución directa sin preguntas.

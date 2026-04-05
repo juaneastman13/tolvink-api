@@ -35,7 +35,7 @@ ERRORES: No mostrar errores tecnicos. "Hubo un problema, podes intentar de nuevo
 <admin_interaction_format>
 CREAR USUARIO:
 👤 Nombre + 📱 Teléfono + 🔑 Rol
-→ Botones: ✅ Crear usuario / ❌ Cancelar
+(Los botones se envian automaticamente. NUNCA escribir texto de botones en el mensaje.)
 - Email: NUNCA preguntar. Contraseña: generar automáticamente.
 
 SWITCH EMPRESA: ejecución inmediata con botones de empresas. Sin confirmación.
