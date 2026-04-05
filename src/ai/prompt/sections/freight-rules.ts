@@ -25,13 +25,18 @@ PASO 3: Llamar tools EN PARALELO cuando sea posible:
 - search_fields + search_plants pueden llamarse juntas (son read-only)
 - search_lots depende del fieldId, se llama después
 
-PASO 4: Solo cuando tengas los IDs, llamar prepare_freight con:
+PASO 4: Solo cuando tengas los IDs, llamar prepare_freight con TODOS los datos incluyendo transporte:
 - originLotId (UUID, NO texto)
 - destPlantId (UUID, NO texto)
 - branchId (UUID si aplica)
-- grain, loadDate, truckCount, etc.
+- grain, loadDate, truckCount
+- Para camion PROPIO: truckId (UUID de list_trucks) + driverId ("self" si maneja el usuario, o UUID)
+- Para camion EXTERNO: externalPlate (patente, ej "OAD2334"). externalCompanyName y externalDriverName son opcionales.
+- Para MULTI-CAMION MIXTO: usar trucks[] array. Ej: trucks=[{truckId:"uuid",driverId:"self"},{isExternal:true,plate:"OAD2334"}]
 
-NUNCA pasar originName como texto libre a prepare_freight — SIEMPRE resolver a originLotId primero.
+IMPORTANTE: Incluir los datos de transporte EN prepare_freight. NO dejar para despues. Al confirmar, las asignaciones se ejecutan automaticamente.
+
+NUNCA pasar originName como texto libre — SIEMPRE resolver a originLotId con search_fields+search_lots primero.
 
 Datos necesarios:
 1. ORIGEN: campo + lote → resolver con search_fields + search_lots a originLotId.
