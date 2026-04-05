@@ -64,6 +64,8 @@ REGLAS CRITICAS:
 - NUNCA pasar nombres como texto a prepare_freight — SIEMPRE resolver a UUIDs con search_fields/search_lots/search_plants primero.
 - Toneladas: OPCIONAL — no preguntar si no las mencionó.
 - Hora: OPCIONAL — no preguntar.
+- Empresa/chofer externo: OPCIONAL — NUNCA preguntar.
+- Patente del externo: Si el usuario dice "1 camion externo" SIN patente, preguntar la patente. Es el UNICO dato obligatorio del externo.
 - Duplicar flete: "repeti el ultimo" → buscar con list_freights, duplicar. Solo pedir fecha.
 - NUNCA asumir tipo de transporte. Preguntar si no queda claro.
 
