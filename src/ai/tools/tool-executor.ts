@@ -1413,6 +1413,12 @@ export class ToolExecutorService {
           await this.freights.registerPlantArrival(params.freightId, synUser);
           result = JSON.stringify({ status: 'arrived', code: params.code }); break;
         }
+        case 'save_ocr_data': {
+          const freight = await this.prisma.freight.findFirst({ where: { code: params.code?.toUpperCase() }, select: { id: true } });
+          if (!freight) { result = JSON.stringify({ error: `Flete ${params.code} no encontrado.` }); break; }
+          await this.freights.saveOcrData(freight.id, params.documentId, params.ocrData, synUser);
+          result = JSON.stringify({ status: 'saved', code: params.code }); break;
+        }
         default: result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
       return result;

@@ -196,6 +196,7 @@ export class UpdateCompanyDto {
   @ApiProperty({ required: false }) @IsOptional() @IsEmail() email?: string;
   @ApiProperty({ required: false }) @IsOptional() @MaxLength(20) rut?: string;
   @ApiProperty({ required: false }) @IsOptional() @IsBoolean() hasInternalFleet?: boolean;
+  @ApiProperty({ required: false }) @IsOptional() @IsBoolean() autonomousDriverEnabled?: boolean;
   @ApiProperty({ required: false }) @IsOptional() @IsNumber() lat?: number;
   @ApiProperty({ required: false }) @IsOptional() @IsNumber() lng?: number;
 }
@@ -491,6 +492,7 @@ export class AdminService {
     if (dto.email !== undefined) data.email = dto.email;
     if (dto.rut !== undefined) data.rut = dto.rut;
     if (dto.hasInternalFleet !== undefined) data.hasInternalFleet = dto.hasInternalFleet;
+    if (dto.autonomousDriverEnabled !== undefined) data.autonomousDriverEnabled = dto.autonomousDriverEnabled;
     if (dto.lat !== undefined) data.lat = dto.lat;
     if (dto.lng !== undefined) data.lng = dto.lng;
 
