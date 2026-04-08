@@ -397,7 +397,12 @@ export class AgentService implements OnModuleDestroy {
     }
   }
 
-  private selectToolsForTurn(toolDefs: any[], cleanedMessage: string, state: any, isAutonomousDriver = false): any[] {
+  /** Pass through all role-filtered tools. Previously filtered by intent, removed to avoid context-switch bugs. */
+  private selectToolsForTurn(toolDefs: any[], _cleanedMessage: string, _state: any, _isAutonomousDriver = false): any[] {
+    return toolDefs;
+  }
+
+  private _selectToolsForTurn_DISABLED(toolDefs: any[], cleanedMessage: string, state: any, isAutonomousDriver = false): any[] {
     const msg = (cleanedMessage || '').toLowerCase();
     const include = new Set<string>([...this.CORE_TOOLS]);
 

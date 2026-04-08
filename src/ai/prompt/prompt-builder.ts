@@ -76,14 +76,16 @@ export class PromptBuilderService {
     const freightRules = canCreateFreight ? buildFreightRulesSection(isWeb) : '';
     const assignmentRules = canAssignTransport ? buildAssignmentRulesSection() : '';
     const fleetRules = canManageFleet ? buildFleetRulesSection() : '';
-    const whatsappFormat = buildWhatsappFormatSection(isWeb, isAdmin, APP_URL, canManageFleet, canCreateFreight);
+    const whatsappFormat = buildWhatsappFormatSection(isWeb, isAdmin, APP_URL, canManageFleet, canCreateFreight, isChofer && isAutonomousDriver);
     const safetyRules = buildSafetyRulesSection(isWeb);
 
     // Proactive data
+    const isAutoChofer = isChofer && isAutonomousDriver;
     let proactiveLines: string[] = [];
     try {
       if (activeCoId) {
-        if (hasType(companyType, 'producer')) {
+        // Skip fields/lots/plant-access queries for autonomous chofer (they don't need them)
+        if (hasType(companyType, 'producer') && !isAutoChofer) {
           const producerCoId = this.resolveProducerCompanyId(user);
           if (producerCoId) {
             const [fields, lotCount] = await Promise.all([

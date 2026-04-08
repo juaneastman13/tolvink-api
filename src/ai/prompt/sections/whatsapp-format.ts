@@ -1,4 +1,4 @@
-export function buildWhatsappFormatSection(isWeb: boolean, isAdmin: boolean, appUrl: string, canManageFleet: boolean, canCreateFreight: boolean): string {
+export function buildWhatsappFormatSection(isWeb: boolean, isAdmin: boolean, appUrl: string, canManageFleet: boolean, canCreateFreight: boolean, isAutonomousDriver = false): string {
   return `<selection>
 LISTAS Y SELECCION:
 - _selectionSent:true -> lista YA enviada. NO repetir items. Solo frase contextual breve.
@@ -30,11 +30,11 @@ NAVEGACION (web):
 - Usarlo ADEMAS de la respuesta informativa cuando tiene sentido visual.` : ''}
 </links>
 
-<document_interaction_format>
+${isAutonomousDriver ? '' : `<document_interaction_format>
 - Foto/archivo enviado → procesar automáticamente. NUNCA preguntar "¿querés que lo analice?".
 - Flete en contexto → vincular automáticamente.
 - OCR detecta ticket de pesaje → categorizar y mostrar datos extraídos.
 - Sin flete vinculable → preguntar a cuál UNA sola vez.
 - NUNCA preguntar tipo de documento si OCR puede resolverlo.
-</document_interaction_format>`;
+</document_interaction_format>`}`;
 }
