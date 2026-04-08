@@ -13,6 +13,7 @@ import { ContextBuilderService } from '../conversation/context-builder';
 import { ToolExecutorService } from '../tools/tool-executor';
 import { ToolRegistryService } from '../tools/tool-registry';
 import { filterToolsByRole, READ_ONLY_TOOLS } from '../tools/tool-permissions';
+import { resolveActiveRole } from '../utils/ai-utils';
 import { selectThinkingLevel } from './thinking-router';
 import { checkRateLimit, cleanupRateLimits } from '../utils/rate-limiter';
 import { preprocessMessage, validateResponse, normalizeSpokenNumbers, ensureConfirmationButtons } from '../utils/message-formatter';
@@ -61,6 +62,9 @@ export class AgentService implements OnModuleDestroy {
   ]);
   private readonly DOC_TOOLS = new Set<string>([
     'attach_document', 'list_documents', 'delete_document', 'ocr_analyze', 'save_ocr_data', 'rename_document',
+  ]);
+  private readonly AUTONOMOUS_TOOLS = new Set<string>([
+    'prepare_autonomous_freight', 'finish_autonomous_freight', 'register_plant_arrival',
   ]);
 
   private cleanupTimer = setInterval(() => {
@@ -214,7 +218,13 @@ export class AgentService implements OnModuleDestroy {
     // Filter tools by role
     const allTools = this.toolRegistry.getAllDefinitions();
     const filteredToolDefs = filterToolsByRole(allTools, user, companyType, isWeb);
-    const selectedToolDefs = this.selectToolsForTurn(filteredToolDefs, cleanedMessage, state);
+    // Detect autonomous driver for tool selection
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = (user.memberships || []).find((m: any) => m.companyId === activeCoId);
+    const { isChofer: _isChofer } = resolveActiveRole(user);
+    const isAutonomousDriver = _isChofer && !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
+    const selectedToolDefs = this.selectToolsForTurn(filteredToolDefs, cleanedMessage, state, isAutonomousDriver);
+    this.logger.debug(`[tools] filtered=${filteredToolDefs.length} selected=${selectedToolDefs.length} autonomous=${isAutonomousDriver}`);
     let functionDeclarations = this.gemini.convertToolDeclarations(selectedToolDefs);
     const hasToolPrefilter = selectedToolDefs.length < filteredToolDefs.length;
 
@@ -387,9 +397,14 @@ export class AgentService implements OnModuleDestroy {
     }
   }
 
-  private selectToolsForTurn(toolDefs: any[], cleanedMessage: string, state: any): any[] {
+  private selectToolsForTurn(toolDefs: any[], cleanedMessage: string, state: any, isAutonomousDriver = false): any[] {
     const msg = (cleanedMessage || '').toLowerCase();
     const include = new Set<string>([...this.CORE_TOOLS]);
+
+    // Autonomous driver: always include their 3 core tools (chofer may say "salí con soja" without warning)
+    if (isAutonomousDriver) {
+      for (const t of this.AUTONOMOUS_TOOLS) include.add(t);
+    }
 
     const hasPendingFlow = !!state?.pendingFreight || !!state?.pendingAction;
     if (hasPendingFlow) {
