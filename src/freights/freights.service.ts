@@ -5,7 +5,8 @@ import { CompanyResolutionService } from '../common/services/company-resolution.
 import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
 import { SseService } from '../sse/sse.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
+import { CreateFreightDto, CreateAutonomousFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto } from './freights.dto';
+import { normalizeGrain } from './grain-normalizer';
 import { Prisma, FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
 import { randomInt } from 'crypto';
 
@@ -512,6 +513,343 @@ export class FreightsService {
     this.calculateRoute(freight.id, originLat, originLng, destLat, destLng).catch((err) => this.logger.warn(`[createFreight] route calculation failed: ${err.message}`));
 
     return freight;
+  }
+
+  // ======================== AUTONOMOUS FREIGHT ============================
+
+  async createAutonomousFreight(dto: CreateAutonomousFreightDto, user: any) {
+    // Validate: user must be chofer
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const membership = await this.prisma.userCompany.findFirst({
+      where: { userId: user.sub, companyId: activeCoId, active: true },
+      include: { company: { select: { id: true, name: true, autonomousDriverEnabled: true, type: true, types: true } } },
+    });
+    if (!membership || membership.role !== 'chofer') {
+      throw new ForbiddenException('Solo choferes pueden crear fletes autónomos');
+    }
+    if (!membership.company.autonomousDriverEnabled) {
+      throw new ForbiddenException('Tu empresa no tiene habilitada la función de chofer autónomo');
+    }
+
+    const companyId = membership.companyId;
+
+    // Resolve origin: try to match Field/Lot or use free text
+    let originLotId: string | null = null;
+    let fieldId: string | null = null;
+    let originName = dto.origin || 'Sin especificar';
+    let originLat: any = null;
+    let originLng: any = null;
+    let originFreeText: string | null = null;
+
+    if (dto.originLotId) {
+      const lot = await this.prisma.lot.findFirst({
+        where: { id: dto.originLotId, active: true },
+        include: { field: true },
+      });
+      if (lot) {
+        originLotId = lot.id;
+        fieldId = lot.fieldId;
+        originName = lot.name;
+        originLat = lot.lat || lot.field?.lat || null;
+        originLng = lot.lng || lot.field?.lng || null;
+      }
+    } else if (dto.fieldId) {
+      const field = await this.prisma.field.findFirst({
+        where: { id: dto.fieldId, active: true },
+      });
+      if (field) {
+        fieldId = field.id;
+        originName = field.name;
+        originLat = field.lat || null;
+        originLng = field.lng || null;
+      }
+    } else if (dto.origin) {
+      // Free text — no GPS
+      originFreeText = dto.origin;
+      originName = dto.origin;
+    }
+
+    // Resolve destination: try to match Plant or use free text
+    let destPlantId: string | null = null;
+    let destCompanyId: string | null = null;
+    let destName = dto.destination;
+    let destLat: any = null;
+    let destLng: any = null;
+    let destinationFreeText: string | null = null;
+
+    if (dto.destPlantId) {
+      const plant = await this.prisma.plant.findFirst({
+        where: { id: dto.destPlantId, active: true },
+        include: { company: true },
+      });
+      if (plant) {
+        destPlantId = plant.id;
+        destCompanyId = plant.companyId;
+        destName = dto.destination || plant.name;
+        destLat = plant.lat || null;
+        destLng = plant.lng || null;
+      }
+    }
+    if (!destPlantId) {
+      // Free text destination
+      destinationFreeText = dto.destination;
+    }
+
+    // Normalize grain
+    const { grain: normalizedGrain } = normalizeGrain(dto.grain);
+
+    // Resolve truck: auto-detect if chofer has a single truck
+    let truckId: string | null = dto.truckId || null;
+    let truckPlate: string | null = null;
+    if (!truckId) {
+      const trucks = await this.prisma.truck.findMany({
+        where: { companyId, active: true, assignedUserId: user.sub },
+        select: { id: true, plate: true },
+        take: 2,
+      });
+      if (trucks.length === 1) {
+        truckId = trucks[0].id;
+        truckPlate = trucks[0].plate;
+      } else if (trucks.length === 0) {
+        // Try any truck assigned to user via driver relationship
+        const anyTruck = await this.prisma.truck.findFirst({
+          where: { companyId, active: true },
+          select: { id: true, plate: true },
+        });
+        if (anyTruck) {
+          truckId = anyTruck.id;
+          truckPlate = anyTruck.plate;
+        }
+      }
+    } else {
+      const truck = await this.prisma.truck.findFirst({
+        where: { id: truckId, active: true },
+        select: { plate: true },
+      });
+      truckPlate = truck?.plate || null;
+    }
+
+    const today = new Date();
+    const loadDate = today.toISOString().split('T')[0];
+    const loadTime = `${String(today.getHours()).padStart(2, '0')}:${String(today.getMinutes()).padStart(2, '0')}`;
+
+    // Participants
+    const participantIds = [...new Set([companyId, destCompanyId].filter(Boolean))] as string[];
+    const participants = participantIds.map(id => ({ companyId: id }));
+
+    // Create freight in loaded state (autonomous)
+    const freight = await this.prisma.$transaction(async (tx) => {
+      // Generate unique code
+      let code: string;
+      let attempts = 0;
+      do {
+        code = this.generateFreightCode();
+        const existing = await tx.freight.findUnique({ where: { code } });
+        if (!existing) break;
+        attempts++;
+      } while (attempts < 10);
+      if (attempts >= 10) throw new InternalServerErrorException('No se pudo generar un código único');
+
+      const tons = dto.weightKg ? dto.weightKg / 1000 : undefined;
+
+      const f = await tx.freight.create({
+        data: {
+          code,
+          status: FreightStatus.loaded,
+          isAutonomous: true,
+          originCompanyId: companyId,
+          originLotId,
+          fieldId,
+          originName,
+          originLat,
+          originLng,
+          originFreeText,
+          destCompanyId,
+          destPlantId,
+          destName,
+          destLat,
+          destLng,
+          destinationFreeText,
+          loadDate: new Date(loadDate),
+          loadTime,
+          scheduledAt: today,
+          requestedById: user.sub,
+          notes: dto.notes || null,
+          needsPlantApproval: false,
+          useOwnFleet: true,
+          truckCount: 1,
+          assignedTruckCount: 1,
+          isMultiTruck: false,
+          loadedAt: today,
+          startedAt: today,
+          transporterLoadedConfirmedAt: today,
+          producerLoadedConfirmedAt: today,
+          participantCompanyIds: participantIds,
+          items: {
+            create: [{
+              grain: normalizedGrain,
+              tons: tons ?? null,
+            }],
+          },
+          conversation: {
+            create: { participants: { create: participants } },
+          },
+        } as any,
+        include: { items: true, conversation: { select: { id: true } } },
+      });
+
+      // Create assignment pre-accepted
+      await tx.freightAssignment.create({
+        data: {
+          freightId: f.id,
+          transportCompanyId: companyId,
+          status: AssignmentStatus.accepted,
+          assignedById: user.sub,
+          truckId,
+          plate: truckPlate,
+          driverId: user.sub,
+          driverName: user.name || null,
+          tripStatus: 'loaded',
+          tripNumber: 1,
+          loadedAt: today,
+          startedAt: today,
+          transporterLoadedConfirmedAt: today,
+          producerLoadedConfirmedAt: today,
+          tons: tons ?? null,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight',
+          entityId: f.id,
+          freightId: f.id,
+          action: 'created_autonomous',
+          toValue: 'loaded',
+          userId: user.sub,
+          metadata: { autonomous: true, grain: normalizedGrain, truck: truckPlate },
+        },
+      });
+
+      return f;
+    });
+
+    // SSE
+    this.broadcastAndInvalidate(freight.id, { id: freight.id, code: freight.code, status: freight.status }, user.sub);
+
+    // Route calculation (fire-and-forget)
+    this.calculateRoute(freight.id, originLat, originLng, destLat, destLng)
+      .catch(err => this.logger.warn(`[autonomousFreight] route calc failed: ${err.message}`));
+
+    return freight;
+  }
+
+  // ======================== AUTONOMOUS: REGISTER PLANT ARRIVAL ===========
+
+  async registerPlantArrival(freightId: string, user: any) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { isAutonomous: true, requestedById: true, status: true, arrivedAtPlantAt: true },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (!freight.isAutonomous) throw new BadRequestException('Solo aplica a fletes autónomos');
+    if (freight.requestedById !== user.sub) throw new ForbiddenException('No sos el chofer de este flete');
+    if (freight.arrivedAtPlantAt) throw new BadRequestException('Ya se registró la llegada a planta');
+
+    const updated = await this.prisma.freight.update({
+      where: { id: freightId },
+      data: { arrivedAtPlantAt: new Date() },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        entityType: 'freight',
+        entityId: freightId,
+        freightId,
+        action: 'arrived_at_plant',
+        fromValue: freight.status,
+        toValue: freight.status,
+        userId: user.sub,
+      },
+    });
+
+    this.broadcastAndInvalidate(freightId, { id: freightId, status: freight.status }, user.sub);
+
+    return updated;
+  }
+
+  // ======================== AUTONOMOUS: FINISH ===========================
+
+  async finishAutonomousFreight(freightId: string, user: any, destinationWeightKg?: number, notes?: string) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      include: { assignments: { where: { status: { in: ['active', 'accepted'] } } } },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+    if (!freight.isAutonomous) throw new BadRequestException('Solo aplica a fletes autónomos');
+    if (freight.requestedById !== user.sub) throw new ForbiddenException('No sos el chofer de este flete');
+    if (freight.status !== FreightStatus.loaded) {
+      throw new BadRequestException(`El flete debe estar en estado "loaded" para finalizar. Estado actual: "${freight.status}"`);
+    }
+
+    const now = new Date();
+    const tons = destinationWeightKg ? destinationWeightKg / 1000 : undefined;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const data: any = {
+        status: FreightStatus.finished,
+        finishedAt: now,
+        transporterFinishedConfirmedAt: now,
+        plantFinishedConfirmedAt: now,
+      };
+      if (!freight.arrivedAtPlantAt) data.arrivedAtPlantAt = now;
+      if (notes) data.notes = [freight.notes, notes].filter(Boolean).join(' | ');
+
+      const u = await tx.freight.update({ where: { id: freightId }, data });
+
+      // Update assignment
+      const assignData: any = {
+        tripStatus: 'finished',
+        finishedAt: now,
+        transporterFinishedConfirmedAt: now,
+        plantFinishedConfirmedAt: now,
+      };
+      if (tons) assignData.loadedTons = tons;
+      await tx.freightAssignment.updateMany({
+        where: { freightId, status: { in: ['active', 'accepted'] } },
+        data: assignData,
+      });
+
+      // Update freight item tons if weight provided
+      if (tons) {
+        const firstItem = await tx.freightItem.findFirst({ where: { freightId } });
+        if (firstItem) {
+          await tx.freightItem.update({
+            where: { id: firstItem.id },
+            data: { tons },
+          });
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          entityType: 'freight',
+          entityId: freightId,
+          freightId,
+          action: 'finished',
+          fromValue: 'loaded',
+          toValue: 'finished',
+          userId: user.sub,
+          metadata: { autonomous: true, destinationWeightKg },
+        },
+      });
+
+      return u;
+    });
+
+    this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub);
+
+    return updated;
   }
 
   /** Calculate route between origin and destination using Google Directions API */
@@ -1640,6 +1978,15 @@ export class FreightsService {
 
     let ct = await this.resolveCompanyType(user);
 
+    // Autonomous freight: chofer acts as transporter regardless of company type
+    const autonomousCheck = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { isAutonomous: true, requestedById: true },
+    });
+    if (autonomousCheck?.isAutonomous && autonomousCheck.requestedById === user.sub) {
+      ct = 'transporter';
+    }
+
     // Plant-centric: plant can confirm finished on behalf of CONSULTA transporter
     let plantActingAsTransporter = false;
     // Own fleet: origin company (any type) acts as transporter for their own fleet
@@ -1683,16 +2030,18 @@ export class FreightsService {
           throw new BadRequestException('El transportista ya confirmó la entrega');
         }
 
+        // Autonomous freights: auto-confirm plant side (no cross-confirmation needed)
+        const isAutonomousFinish = !!(freight as any).isAutonomous;
+
         const callerCfIds = await this.resolveAllCompanyIds(user);
         const hasAssignment = freight.assignments?.some(a => callerCfIds.includes(a.transportCompanyId));
-        if (!hasAssignment && !plantActingAsTransporter) {
+        if (!hasAssignment && !plantActingAsTransporter && !isAutonomousFinish) {
             throw new ForbiddenException('No sos el transportista asignado a este flete');
         }
-
         // Own fleet: auto-confirm plant side when caller is also the dest plant, or when no dest company
         const isOwnFleetNoDest = plantActingAsTransporter && !freight.destCompanyId;
         const callerIsAlsoDest = plantActingAsTransporter && freight.destCompanyId && callerCfIds.includes(freight.destCompanyId);
-        const autoConfirmPlant = isOwnFleetNoDest || callerIsAlsoDest;
+        const autoConfirmPlant = isOwnFleetNoDest || callerIsAlsoDest || isAutonomousFinish;
         const plantAlsoConfirmed = !!freight.plantFinishedConfirmedAt || autoConfirmPlant;
         const data: any = { transporterFinishedConfirmedAt: new Date() };
         if (autoConfirmPlant) data.plantFinishedConfirmedAt = new Date();
@@ -1833,7 +2182,20 @@ export class FreightsService {
   // ======================== CANCEL ====================================
 
   async cancel(freightId: string, dto: CancelFreightDto, user: any) {
-    if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden cancelar fletes');
+    // Autonomous drivers can cancel their own autonomous freights
+    const isChofer = user.role === 'chofer' ||
+      (user.memberships || []).some((m: any) => m.companyId === (user.activeCompanyId || user.companyId) && m.role === 'chofer');
+
+    if (isChofer) {
+      // Pre-check: only allow if the freight is autonomous and created by this chofer
+      const preCheck = await this.prisma.freight.findUnique({
+        where: { id: freightId },
+        select: { isAutonomous: true, requestedById: true },
+      });
+      if (!preCheck?.isAutonomous || preCheck.requestedById !== user.sub) {
+        throw new ForbiddenException('Los choferes no pueden cancelar fletes');
+      }
+    }
     await this.assertNotConsultaProducer(freightId, user);
 
     const cancelCt = await this.resolveCompanyType(user);
@@ -1847,10 +2209,12 @@ export class FreightsService {
         include: { assignments: { where: { status: { in: [AssignmentStatus.active, AssignmentStatus.accepted] } } } },
       });
       if (!freight) throw new NotFoundException('Flete no encontrado');
-      const isParticipant = callerIds.includes(freight.originCompanyId) || (freight.destCompanyId && callerIds.includes(freight.destCompanyId));
+      const isParticipant = callerIds.includes(freight.originCompanyId) || (freight.destCompanyId && callerIds.includes(freight.destCompanyId))
+        || (freight.isAutonomous && freight.requestedById === user.sub);
       if (!isParticipant) throw new ForbiddenException('Solo participantes del flete pueden cancelarlo');
 
-      if (freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) {
+      // Autonomous freights can be canceled even in loaded state
+      if ((freight.status === FreightStatus.in_progress || freight.status === FreightStatus.loaded) && !freight.isAutonomous) {
         throw new BadRequestException('No se puede cancelar un flete a campo o a planta');
       }
 

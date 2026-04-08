@@ -111,7 +111,8 @@ model Company {
   email            String?     @db.VarChar(255)
   rut              String?     @db.VarChar(20)
   active           Boolean     @default(true)
-  hasInternalFleet Boolean     @default(false) @map("has_internal_fleet")
+  hasInternalFleet         Boolean     @default(false) @map("has_internal_fleet")
+  autonomousDriverEnabled  Boolean     @default(false) @map("autonomous_driver_enabled")
   enabledModules   String[]    @default(["logistics"]) @map("enabled_modules")
   lat              Decimal?    @db.Decimal(10, 6)
   lng              Decimal?    @db.Decimal(10, 6)
@@ -722,6 +723,12 @@ model Freight {
   // Own fleet decision (per-freight, set at creation)
   // true = producer chose own fleet, false = delegated to plant, null = N/A or legacy
   useOwnFleet Boolean? @map("use_own_fleet")
+
+  // Autonomous driver freight
+  isAutonomous        Boolean   @default(false) @map("is_autonomous")
+  originFreeText      String?   @map("origin_free_text")
+  destinationFreeText String?   @map("destination_free_text")
+  arrivedAtPlantAt    DateTime? @map("arrived_at_plant_at")
 
   // Materialized participant company IDs for fast multi-tenant filtering
   // Contains: originCompanyId, destCompanyId, and all active assignment transportCompanyIds

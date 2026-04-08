@@ -234,6 +234,66 @@ export class CancelFreightDto {
   reason: string;
 }
 
+// ======================== AUTONOMOUS FREIGHT DTO =========================
+
+export class CreateAutonomousFreightDto {
+  @ApiProperty({ required: false, description: 'Nombre de origen (campo/lote o texto libre)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  origin?: string;
+
+  @ApiProperty({ description: 'Nombre de destino (planta o texto libre)' })
+  @IsNotEmpty({ message: 'Destino obligatorio' })
+  @IsString()
+  @MaxLength(255)
+  destination: string;
+
+  @ApiProperty({ description: 'Grano/cultivo (texto libre, se normaliza)' })
+  @IsNotEmpty({ message: 'Grano obligatorio' })
+  @IsString()
+  @MaxLength(100)
+  grain: string;
+
+  @ApiProperty({ required: false, description: 'Peso en kg' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  weightKg?: number;
+
+  @ApiProperty({ required: false, description: 'ID del camión del chofer (auto-detectar si tiene uno solo)' })
+  @IsOptional()
+  @IsUUID()
+  truckId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+
+  @ApiProperty({ required: false, description: 'ID del campo de origen (si se resolvió)' })
+  @IsOptional()
+  @IsUUID()
+  fieldId?: string;
+
+  @ApiProperty({ required: false, description: 'ID del lote de origen (si se resolvió)' })
+  @IsOptional()
+  @IsUUID()
+  originLotId?: string;
+
+  @ApiProperty({ required: false, description: 'ID de planta destino (si se resolvió)' })
+  @IsOptional()
+  @IsUUID()
+  destPlantId?: string;
+
+  @ApiProperty({ required: false, description: 'ID de sucursal destino' })
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+}
+
 // ======================== MULTI-TRUCK DTOs ==============================
 
 export class TruckAssignmentDto {

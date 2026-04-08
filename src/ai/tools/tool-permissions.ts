@@ -60,6 +60,16 @@ const CHOFER_TOOLS = new Set([
   'register_trip_data',
 ]);
 
+// Additional tools unlocked for autonomous drivers (chofer + autonomousDriverEnabled)
+const AUTONOMOUS_DRIVER_EXTRA_TOOLS = new Set([
+  'prepare_autonomous_freight',
+  'finish_autonomous_freight',
+  'register_plant_arrival',
+  'cancel_freight',
+  'save_ocr_data',
+  'search_fields', 'search_lots', 'search_plants',
+]);
+
 // Plant-only tools
 const PLANT_ONLY = new Set([
   'authorize_freight', 'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
@@ -118,11 +128,19 @@ export function filterToolsByRole(
   const hasOwnFleet = !!(activeMem?.company?.hasInternalFleet || user.company?.hasInternalFleet);
   const canManageFleet = !isChofer && (isTransporter || hasOwnFleet);
 
+  // Check if autonomous driver (chofer + company has autonomousDriverEnabled)
+  const isAutonomousDriver = isChofer &&
+    !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
+
   return allTools.filter(tool => {
     const name = tool.name;
 
-    // Chofer: limited set
-    if (isChofer) return CHOFER_TOOLS.has(name);
+    // Chofer: limited set + autonomous extras if enabled
+    if (isChofer) {
+      if (CHOFER_TOOLS.has(name)) return true;
+      if (isAutonomousDriver && AUTONOMOUS_DRIVER_EXTRA_TOOLS.has(name)) return true;
+      return false;
+    }
 
     // Web-only: navigate_app
     if (name === 'navigate_app' && !isWeb) return false;

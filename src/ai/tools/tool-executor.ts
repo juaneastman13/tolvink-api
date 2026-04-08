@@ -133,7 +133,7 @@ export class ToolExecutorService {
       where: { code: code.toUpperCase() },
       select: {
         id: true, code: true, status: true, truckCount: true, assignedTruckCount: true,
-        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true,
+        isMultiTruck: true, destCompanyId: true, originCompanyId: true, useOwnFleet: true, isAutonomous: true, requestedById: true,
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { id: true, tripNumber: true, transportCompanyId: true, driverId: true, tripStatus: true, tons: true, truck: { select: { plate: true } }, driver: { select: { name: true } } } },
       },
     });
@@ -442,6 +442,9 @@ export class ToolExecutorService {
       case 'save_ocr_data':
       case 'ocr_analyze':
       case 'reactivate_user':
+      case 'prepare_autonomous_freight':
+      case 'finish_autonomous_freight':
+      case 'register_plant_arrival':
         return await this.executeFreightAction(toolName, input, user, synUser, session);
 
       // ---- Transport & Assignment ----
@@ -668,6 +671,29 @@ export class ToolExecutorService {
         return this.sessionManager.stageAction(session.id, 'reactivate_user', { membershipId: membership.id, targetUserId: membership.user.id, userName: membership.user.name }, `Reactivar "${membership.user.name}"`);
       }
 
+      // ---- Autonomous Driver Tools ----
+      case 'prepare_autonomous_freight':
+        return await this.executePrepareAutonomousFreight(input, user, session);
+
+      case 'finish_autonomous_freight': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        if (!(r.freight as any).isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
+        const weightKg = input.destinationWeightKg ? Number(input.destinationWeightKg) : undefined;
+        return this.sessionManager.stageAction(session.id, 'finish_autonomous_freight', {
+          freightId: r.freight.id, code: r.freight.code, destinationWeightKg: weightKg, notes: input.notes,
+        }, `Finalizar flete autonomo ${r.freight.code}${weightKg ? ` (${weightKg} kg)` : ''}`);
+      }
+
+      case 'register_plant_arrival': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        if (!(r.freight as any).isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
+        return this.sessionManager.stageAction(session.id, 'register_plant_arrival', {
+          freightId: r.freight.id, code: r.freight.code,
+        }, `Registrar llegada a planta del flete ${r.freight.code}`);
+      }
+
       default:
         return JSON.stringify({ error: 'Accion no reconocida.' });
     }
@@ -863,6 +889,57 @@ export class ToolExecutorService {
     }
 
     return null;
+  }
+
+  // ---- prepare_autonomous_freight ----
+  private async executePrepareAutonomousFreight(input: any, user: any, session: any): Promise<string> {
+    if (!input.destination) return JSON.stringify({ error: 'Destino obligatorio.' });
+    if (!input.grain) return JSON.stringify({ error: 'Grano obligatorio.' });
+
+    // Build summary for confirmation
+    const origin = input.origin || 'Sin especificar';
+    const destination = input.destination;
+    const grain = input.grain;
+    const weightKg = input.weightKg ? Number(input.weightKg) : null;
+    const weightDisplay = weightKg ? `${weightKg} kg` : 'sin especificar';
+
+    // Auto-detect truck
+    const companyId = user.activeCompanyId || user.companyId;
+    let truckInfo = '';
+    let truckId = input.truckId || null;
+    if (!truckId) {
+      const trucks = await this.prisma.truck.findMany({
+        where: { companyId, active: true, assignedUserId: user.sub },
+        select: { id: true, plate: true },
+        take: 2,
+      });
+      if (trucks.length === 1) {
+        truckId = trucks[0].id;
+        truckInfo = trucks[0].plate;
+      } else if (trucks.length === 0) {
+        const anyTruck = await this.prisma.truck.findFirst({
+          where: { companyId, active: true },
+          select: { id: true, plate: true },
+        });
+        if (anyTruck) { truckId = anyTruck.id; truckInfo = anyTruck.plate; }
+      } else {
+        // Multiple trucks — ask user
+        const list = trucks.map(t => t.plate).join(', ');
+        return JSON.stringify({ error: `Tenes varios camiones: ${list}. ¿Con cual salis?` });
+      }
+    } else {
+      const truck = await this.prisma.truck.findFirst({ where: { id: truckId, active: true }, select: { plate: true } });
+      truckInfo = truck?.plate || 'desconocido';
+    }
+
+    const summary = `📋 Flete autónomo:\n🚛 Camión: ${truckInfo || 'auto-detectar'}\n📍 Origen: ${origin}\n🏭 Destino: ${destination}\n🌾 Grano: ${grain}\n⚖️ Peso: ${weightDisplay}`;
+
+    return this.sessionManager.stageAction(session.id, 'create_autonomous_freight', {
+      origin: input.origin, destination: input.destination, grain: input.grain,
+      weightKg, notes: input.notes, truckId,
+      fieldId: input.fieldId, originLotId: input.originLotId,
+      destPlantId: input.destPlantId, branchId: input.branchId,
+    }, summary, user);
   }
 
   // ---- confirm_create_freight ----
@@ -1317,6 +1394,24 @@ export class ToolExecutorService {
         case 'attach_truck_document': {
           await this.trucksService.addDocument(params.truckId, synUser, params.body || {});
           result = JSON.stringify({ status: 'attached', type: 'truck_document' }); break;
+        }
+        // ---- Autonomous Driver Actions ----
+        case 'create_autonomous_freight': {
+          const af = await this.freights.createAutonomousFreight({
+            origin: params.origin, destination: params.destination, grain: params.grain,
+            weightKg: params.weightKg, notes: params.notes, truckId: params.truckId,
+            fieldId: params.fieldId, originLotId: params.originLotId,
+            destPlantId: params.destPlantId, branchId: params.branchId,
+          }, synUser);
+          result = JSON.stringify({ status: 'created', code: (af as any).code, freightId: (af as any).id }); break;
+        }
+        case 'finish_autonomous_freight': {
+          await this.freights.finishAutonomousFreight(params.freightId, synUser, params.destinationWeightKg, params.notes);
+          result = JSON.stringify({ status: 'finished', code: params.code }); break;
+        }
+        case 'register_plant_arrival': {
+          await this.freights.registerPlantArrival(params.freightId, synUser);
+          result = JSON.stringify({ status: 'arrived', code: params.code }); break;
         }
         default: result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }

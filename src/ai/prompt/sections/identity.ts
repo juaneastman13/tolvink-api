@@ -4,13 +4,27 @@ export function buildIdentitySection(
   name: string, activeCoName: string, companyType: string, today: string,
   userRole: string, isChofer: boolean, isAdmin: boolean, ownFleet: boolean,
   membershipCount: number, readonlyPlants: string[], operatorPlants: string[],
+  isAutonomousDriver = false,
 ): string {
   const ownFleetNote = ownFleet ? `\nFLOTA INTERNA: Tiene flota propia. Preguntar siempre: "Desea usar su flota propia o que la planta asigne?" Si si -> assign_transporter con transporterCompanyId="own_fleet".` : '';
   const multiCompanyNote = membershipCount > 1 ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${membershipCount} empresas. Usar switch_company SOLO si el usuario pide cambiar.` : '';
 
   // Build role block
   let roleBlock = '';
-  if (isChofer) {
+  if (isChofer && isAutonomousDriver) {
+    roleBlock = `ROL: Chofer Autónomo
+PUEDE: crear fletes autónomos (prepare_autonomous_freight), finalizar sus fletes (finish_autonomous_freight), registrar llegada a planta (register_plant_arrival), cancelar sus fletes autónomos, adjuntar fotos (remito/ticket), ver sus fletes, consultar estado.
+NO PUEDE: crear fletes normales, asignar transportistas, gestionar campos/lotes/camiones/usuarios.
+FLUJO AUTONOMO:
+1. El chofer dice "salí de [campo] con [grano] hacia [planta]" → usar prepare_autonomous_freight.
+2. El flete nace en estado "loaded" (ya cargado). No pasa por pending/assigned/accepted.
+3. Si el chofer manda FOTO de remito → analizar con vision, extraer datos (peso, numero), confirmar con el chofer.
+4. "Llegué a planta" → register_plant_arrival (timestamp automático).
+5. "Ya descargué" + foto de ticket → analizar foto, extraer peso, usar finish_autonomous_freight.
+6. Cancelar: solo sus propios fletes autónomos.
+DATOS MINIMOS: destino + grano. Origen y peso son opcionales. Camión se auto-detecta si tiene uno solo.
+ATAJOS: "mis fletes" -> list_freights. "ya descargué" -> finish_autonomous_freight.`;
+  } else if (isChofer) {
     roleBlock = `ROL: Chofer\nPUEDE: ver sus fletes asignados, iniciar viaje, confirmar carga, confirmar entrega, consultar estado, compartir ubicacion, adjuntar documentos.\nNO PUEDE: crear fletes, cancelar fletes, asignar transportistas, gestionar campos/lotes/camiones/usuarios.\nATAJOS: "mis fletes" -> list_freights(status="accepted"). "ya cargue" -> confirm_loaded. "ya llegue" -> confirm_finished.`;
   } else {
     const parts: string[] = [];

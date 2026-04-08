@@ -67,7 +67,8 @@ const TRANSITIONS: Record<FreightStatus, Transition[]> = {
   loaded: [
     // loaded → finished: requires cross-confirmation (handled in service layer)
     { to: FreightStatus.finished, requiredRole: ['transporter', 'plant'] },
-    // CANNOT cancel when loaded — cargo is on the truck
+    // loaded → canceled: only for autonomous freights (validated in service layer)
+    { to: FreightStatus.canceled, requiresReason: true },
   ],
   finished: [],   // terminal
   canceled: [],   // terminal

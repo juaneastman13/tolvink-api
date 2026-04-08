@@ -46,6 +46,7 @@ export class PromptBuilderService {
     const activeCoName = sanitizeForPrompt(activeMem?.company?.name || user.company?.name || '');
     const hasOwnFleet = activeMem?.company?.hasInternalFleet || (!activeMem && user.company?.hasInternalFleet);
     const ownFleet = !!hasOwnFleet;
+    const isAutonomousDriver = !!(activeMem?.company?.autonomousDriverEnabled || (!activeMem && user.company?.autonomousDriverEnabled));
     const { isChofer, isAdmin, userRole } = resolveActiveRole(user);
 
     // Resolve plant access levels
@@ -70,7 +71,7 @@ export class PromptBuilderService {
     const canAssignTransport = !isChofer && !allReadonly && (hasType(companyType, 'plant') || hasType(companyType, 'transporter'));
 
     // Build sections
-    const identity = buildIdentitySection(name, activeCoName, companyType, today, userRole, isChofer, isAdmin, ownFleet, activeMemberships.length, readonlyPlants, operatorPlants);
+    const identity = buildIdentitySection(name, activeCoName, companyType, today, userRole, isChofer, isAdmin, ownFleet, activeMemberships.length, readonlyPlants, operatorPlants, isChofer && isAutonomousDriver);
     const userContext = buildUserContextSection(isWeb, isChofer, isAdmin);
     const freightRules = canCreateFreight ? buildFreightRulesSection(isWeb) : '';
     const assignmentRules = canAssignTransport ? buildAssignmentRulesSection() : '';
