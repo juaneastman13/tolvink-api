@@ -922,10 +922,11 @@ export class ToolExecutorService {
       const grain = activeFreight.items?.[0]?.grain || 'producto';
       const tons = activeFreight.items?.[0]?.tons ? `${activeFreight.items[0].tons} tn` : '';
       const dest = activeFreight.destName || activeFreight.originFreeText || '';
-      // Stage finish action so CONFIRMAR/CANCELAR buttons appear
+      // Stage finish action with custom buttons
       return this.sessionManager.stageAction(session.id, 'finish_autonomous_freight', {
         freightId: activeFreight.id, code: activeFreight.code,
-      }, `Ya tenés un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons}` : ''}\n🏭 ${dest}\n\n¿Querés finalizarlo para crear uno nuevo?`);
+      }, `Ya tenés un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons}` : ''}\n🏭 ${dest}\n\n¿Querés finalizarlo para crear uno nuevo?`,
+      undefined, { confirm: 'FINALIZAR VIAJE', cancel: 'CANCELAR VIAJE' });
     }
 
     if (!input.origin) return JSON.stringify({ error: 'Origen obligatorio. Preguntar al chofer de dónde sale.' });

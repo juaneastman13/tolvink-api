@@ -86,13 +86,14 @@ export class SessionManagerService {
     params: Record<string, any>,
     summary: string,
     user?: any,
+    customButtons?: { confirm?: string; cancel?: string },
   ): string {
     const effects = this._chatSideEffects.get(sessionId) || {};
     const stagedCompanyId = user?.activeCompanyId || user?.companyId || params?.actionSynUser?.companyId || null;
     effects.pendingAction = { tool, params, summary, createdAt: Date.now(), stagedCompanyId };
     effects._pendingButtons = [
-      { id: 'ai_confirm', title: 'CONFIRMAR' },
-      { id: 'ai_cancel', title: 'CANCELAR' },
+      { id: 'ai_confirm', title: customButtons?.confirm || 'CONFIRMAR' },
+      { id: 'ai_cancel', title: customButtons?.cancel || 'CANCELAR' },
     ];
     effects._ts = effects._ts || Date.now();
     this._chatSideEffects.set(sessionId, effects);

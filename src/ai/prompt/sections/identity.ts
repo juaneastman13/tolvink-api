@@ -40,9 +40,8 @@ NO PUEDE:
 
 REGLA DE FLETE ÚNICO:
 El chofer NO puede crear un flete nuevo si tiene uno activo.
-NO verificar con list_freights — el backend lo valida automáticamente.
-Si prepare_autonomous_freight o confirm_action devuelve error con "flete activo" → informar al chofer:
-"Ya tenés un flete activo. Finalizalo con 'ya descargué' o cancelalo antes de crear uno nuevo."
+NO verificar manualmente — prepare_autonomous_freight lo detecta automáticamente y ofrece finalizar.
+Simplemente llamar prepare_autonomous_freight con los datos del chofer. Si hay flete activo, la tool maneja todo.
 
 DATOS REQUERIDOS: origen + destino + grano + peso (todos obligatorios)
 DATOS OPCIONALES: notas
