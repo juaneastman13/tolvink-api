@@ -380,13 +380,11 @@ export class AgentService implements OnModuleDestroy {
     return m?.[1] || null;
   }
 
-  // Only clear history for actions that truly end a complete workflow.
-  // finish_autonomous_freight and cancel_freight removed — the user may be
-  // finishing/canceling an old freight as a step before creating a new one,
-  // and clearing history would lose the data they already provided.
-  private static TERMINAL_ACTIONS = new Set([
-    'confirm_create_freight',
-  ]);
+  // No terminal actions clear history anymore. With 40-message history and
+  // 200K context, there's no need for aggressive cleanup. Clearing history
+  // causes Claude to lose track of which freight was just created, leading
+  // to photos being attached to the wrong freight.
+  private static TERMINAL_ACTIONS = new Set<string>();
 
   private async clearPendingState(sessionId: string): Promise<void> {
     const s = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
@@ -433,29 +431,6 @@ export class AgentService implements OnModuleDestroy {
       }
       const res = await this.toolExecutor.executeTool('confirm_create_freight', { actionId: freightActionIdFromText || state.pendingFreight?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
-      // Update activeContext to the newly created freight so photos attach to it
-      try {
-        const obj = JSON.parse(res);
-        if (obj?.code) {
-          await this.prisma.whatsAppSession.update({
-            where: { id: session.id },
-            data: {
-              flowState: {
-                ...(((await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } }))?.flowState as any) || {}),
-                activeContext: { lastFreightCode: obj.code, lastAction: 'confirm_create_freight', updatedAt: new Date().toISOString() },
-                aiMessages: [],
-                pendingAction: null,
-                pendingFreight: null,
-                _pendingButtons: null,
-              },
-            },
-          });
-        } else {
-          await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
-        }
-      } catch {
-        await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
-      }
       return { text: parsed.text };
     }
 
