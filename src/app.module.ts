@@ -26,8 +26,6 @@ import { SharedLinksModule } from './shared-links/shared-links.module';
 import { ModulesController, ModulesService } from './modules/modules.controller';
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
-import { DiagnosticController, DiagnosticPublicController, DiagnosticService } from './diagnostic/diagnostic.controller';
-import { PartsLookupService } from './diagnostic/parts-lookup.service';
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 
 @Module({
@@ -63,8 +61,6 @@ import { MechanicDashboardController, MechanicDashboardService } from './mechani
     MachineTemplatesController,
     MachinesController,
     MaintenanceController,
-    DiagnosticController,
-    DiagnosticPublicController,
     MechanicDashboardController,
   ],
   providers: [
@@ -73,8 +69,6 @@ import { MechanicDashboardController, MechanicDashboardService } from './mechani
     ModulesService,
     MachinesService,
     MaintenanceService,
-    DiagnosticService,
-    PartsLookupService,
     MechanicDashboardService,
     TrucksService,
     PlantAccessService,

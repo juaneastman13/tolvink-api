@@ -1,26 +1,20 @@
 // =====================================================================
-// TOLVINK — AI Service Constants
+// TOLVINK — AI Service Constants (Claude Sonnet)
 // =====================================================================
 
-// Provider selection: 'openai' | 'gemini'
-export const AI_PROVIDER = (process.env.AI_PROVIDER || 'openai').toLowerCase();
-
-// Gemini
-export const AI_MODEL = 'gemini-2.5-pro';
-
-// OpenAI
-export const AI_MODEL_OPENAI = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
-export const MAX_TOOL_ITERATIONS = 5;
-export const TOOL_TIMEOUT_MS = 90_000;
-export const MAX_HISTORY_MESSAGES = 15;
+export const AI_MODEL = 'claude-sonnet-4-20250514';
+export const MAX_TOOL_ITERATIONS = 15;
+export const TOOL_TIMEOUT_MS = 120_000;
+export const MAX_HISTORY_MESSAGES = 40;
 export const SESSION_TIMEOUT_MS = 60 * 60 * 1000; // 60 min
 export const RATE_LIMIT_MESSAGES = 20;
 export const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 export const MAX_RESPONSE_CHARS = 1600; // WhatsApp
 export const WEB_MAX_RESPONSE_CHARS = 3000;
-export const MODEL_TEMPERATURE = 0.4;
-export const STALE_SESSION_MIN = 10;
+export const MODEL_TEMPERATURE = 0.3;
+export const MAX_OUTPUT_TOKENS = 2048;
 export const PROMPT_CACHE_TTL_MS = 5 * 60 * 1000;
+export const STALE_SESSION_MIN = 15;
 
 if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — using tolvink.com fallback');
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';

@@ -14,7 +14,6 @@ export class MechanicDashboardService {
       where: { companyId, status: { not: 'inactive' } },
       include: {
         maintenanceAlerts: { where: { status: 'pending' } },
-        diagnosticSessions: { where: { status: 'open' }, select: { id: true } },
         maintenanceRecords: { orderBy: { date: 'desc' }, take: 1, select: { type: true, date: true, horometerReading: true } },
         maintenancePlan: { select: { intervals: true, customIntervals: true } },
       },
@@ -25,13 +24,11 @@ export class MechanicDashboardService {
 
     const machineList = machines.map(m => {
       const alerts = m.maintenanceAlerts || [];
-      const openDiags = m.diagnosticSessions?.length || 0;
       const hasOverdue = alerts.some(a => a.severity === 'overdue');
       const hasWarning = alerts.some(a => a.severity === 'warning');
 
       let status: string;
-      if (openDiags > 0) { status = 'open_issue'; openIssues++; }
-      else if (hasOverdue) { status = 'overdue'; alertCount++; }
+      if (hasOverdue) { status = 'overdue'; alertCount++; }
       else if (hasWarning) { status = 'alert'; alertCount++; }
       else { status = 'up_to_date'; upToDate++; }
 
@@ -57,7 +54,6 @@ export class MechanicDashboardService {
         photoUrl: (m.photos as any[])?.[0] || null,
         status,
         alertsCount: alerts.length,
-        openDiagnosticsCount: openDiags,
         nextMaintenance,
         lastMaintenance: lastMaint ? {
           type: lastMaint.type,
@@ -75,17 +71,6 @@ export class MechanicDashboardService {
       take: 5,
     });
 
-    // Recent open diagnostics (top 5)
-    const recentDiagnostics = await this.prisma.diagnosticSession.findMany({
-      where: { companyId, status: 'open' },
-      select: {
-        id: true, machineId: true, title: true, status: true, createdAt: true, messages: true,
-        machine: { select: { id: true, brand: true, model: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    });
-
     return {
       summary: {
         totalMachines: machines.length,
@@ -97,12 +82,6 @@ export class MechanicDashboardService {
         id: a.id, machineId: a.machineId,
         machineBrand: a.machine.brand, machineModel: a.machine.model,
         label: a.label, message: a.message, severity: a.severity, status: a.status,
-      })),
-      recentDiagnostics: recentDiagnostics.map(d => ({
-        id: d.id, machineId: d.machineId,
-        machineBrand: d.machine.brand, machineModel: d.machine.model,
-        title: d.title, status: d.status, createdAt: d.createdAt,
-        messagesCount: Array.isArray(d.messages) ? (d.messages as any[]).length : 0,
       })),
     };
   }

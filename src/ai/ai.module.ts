@@ -1,5 +1,5 @@
 // =====================================================================
-// TOLVINK — AI Module (Gemini rebuild)
+// TOLVINK — AI Module (Claude Sonnet rewrite)
 // =====================================================================
 
 import { Module, forwardRef } from '@nestjs/common';
@@ -13,16 +13,13 @@ import { AdminService } from '../admin/admin.controller';
 
 // Core
 import { AgentService } from './core/agent.service';
-import { GeminiClient } from './core/gemini.client';
-import { OpenAIClient } from './core/openai.client';
+import { ClaudeClient } from './core/claude.client';
 
 // Prompt
 import { PromptBuilderService } from './prompt/prompt-builder';
 
 // Conversation
 import { SessionManagerService } from './conversation/session-manager';
-import { HistoryManagerService } from './conversation/history-manager';
-import { ContextBuilderService } from './conversation/context-builder';
 
 // Tools
 import { ToolRegistryService } from './tools/tool-registry';
@@ -37,13 +34,9 @@ import { ToolExecutorService } from './tools/tool-executor';
   ],
   providers: [
     AgentService,
-    { provide: 'AiService', useExisting: AgentService },
-    GeminiClient,
-    OpenAIClient,
+    ClaudeClient,
     PromptBuilderService,
     SessionManagerService,
-    HistoryManagerService,
-    ContextBuilderService,
     ToolRegistryService,
     ToolExecutorService,
     FieldsService,

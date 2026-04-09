@@ -45,32 +45,6 @@ export function validateResponse(text: string, isWeb = false): string {
   return clean.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** Button type for WhatsApp reply buttons. */
-interface Button { id: string; title: string; }
-
-const CONFIRMATION_PATTERNS: Array<{ pattern: RegExp; buttons: Button[] }> = [
-  { pattern: /crear?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_edit', title: 'CAMBIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /cancelar?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'NO CANCELAR' }] },
-  { pattern: /asignar?/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_edit', title: 'CAMBIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /aceptar?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'ACEPTAR' }, { id: 'ai_cancel', title: 'RECHAZAR' }] },
-  { pattern: /iniciar?\s*(el\s*)?viaje/i, buttons: [{ id: 'ai_confirm', title: 'INICIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /confirmar?\s*(la\s*)?carga/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /confirmar?\s*(la\s*)?entrega/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /crear?\s*(el\s*)?campo/i, buttons: [{ id: 'ai_confirm', title: 'CREAR CAMPO' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /crear?\s*(el\s*)?lote/i, buttons: [{ id: 'ai_confirm', title: 'CREAR LOTE' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /crear?\s*(el\s*)?usuario/i, buttons: [{ id: 'ai_confirm', title: 'CREAR USUARIO' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-  { pattern: /registrar?/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
-];
-
-/** Ensure confirmation buttons are present when the response text implies a confirmation action. */
-export function ensureConfirmationButtons(text: string, existingButtons?: Button[]): Button[] {
-  if (existingButtons && existingButtons.length > 0) return existingButtons;
-  for (const { pattern, buttons } of CONFIRMATION_PATTERNS) {
-    if (pattern.test(text)) return buttons;
-  }
-  return [];
-}
-
 /** Normalize spoken numbers to digits. */
 export function normalizeSpokenNumbers(text: string): string {
   const map: Record<string, string> = {

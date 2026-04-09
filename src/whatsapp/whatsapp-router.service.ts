@@ -70,7 +70,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     private freights: FreightsService,
     private ai: AgentService,
   ) {
-    this.logger.log('AI provider: gemini (AgentService)');
+    this.logger.log('AI provider: claude (AgentService)');
 
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
