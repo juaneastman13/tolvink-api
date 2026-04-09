@@ -190,6 +190,9 @@ export class WhatsAppController implements OnModuleDestroy {
         }
       }
 
+      // Mark as read immediately — don't wait for locks/processing
+      this.wa.markRead(waMessageId).catch(() => {});
+
       // Per-phone rate limiting — prevent abuse/spam from a single number
       const now = Date.now();
       const phoneRate = this.phoneRateMap.get(phone);

@@ -118,22 +118,19 @@ export class AgentService implements OnModuleDestroy {
 
     const lockKey = session?.id || `phone:${phone}`;
 
-    // Per-session lock with short wait window (helps with duplicated webhooks / near-simultaneous retries)
+    // Per-session in-memory lock (single instance — no PG advisory lock needed)
     if (this._chatLocks.has(lockKey)) {
-      const deadline = Date.now() + this.LOCK_WAIT_MS;
+      // Short wait for near-simultaneous duplicates only
+      const deadline = Date.now() + 2000;
       while (this._chatLocks.has(lockKey) && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, this.LOCK_WAIT_STEP_MS));
+        await new Promise((r) => setTimeout(r, 200));
       }
       if (this._chatLocks.has(lockKey)) {
-        return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
+        return { text: 'Estoy procesando tu mensaje anterior, aguardá un momento.' };
       }
     }
-    const distLockKey = `ai_chat:${lockKey}`;
-    const hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, this.LOCK_WAIT_MS, this.LOCK_WAIT_STEP_MS);
-    if (!hasDistLock) {
-      return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
-    }
     this._chatLocks.add(lockKey);
+    const distLockKey = `ai_chat:${lockKey}`; // kept for release calls downstream
     let chatTrace: RunTree | null = null;
     if (this.langsmithEnabled) {
       try {
