@@ -130,15 +130,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 12000, 150);
     }
     if (!hasDistLock) {
-      this.logger.warn(`Distributed lock busy for phone=${phone.slice(-4)} after extended wait; request skipped to avoid race`);
-      this.wa.sendText(phone, 'Estoy terminando de procesar tu mensaje anterior. Reintenta en unos segundos.')
-        .catch((err) => this.logger.warn(`[dist-lock] feedback send failed: ${sanitizeErrorForLog(err?.message)}`));
-      return;
+      // Degrade gracefully: keep processing with in-process phone lock to avoid dropping user interactions.
+      // We still have cross-instance dedup in webhook + AI/session locks downstream.
+      this.logger.warn(`Distributed lock busy for phone=${phone.slice(-4)} after extended wait; proceeding with local lock fallback`);
     }
     try {
       return await this._handleMessage(phone, type, payload, waMessageId);
     } finally {
-      await releasePgLock(this.prisma as any, distLockKey);
+      if (hasDistLock) await releasePgLock(this.prisma as any, distLockKey);
       unlock!();
       if (this.phoneLocks.get(phone) === lock) this.phoneLocks.delete(phone);
     }
