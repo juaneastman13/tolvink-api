@@ -24,6 +24,9 @@ const CONFIRM_SAFE_ERRORS: [RegExp, string][] = [
   [/chofer no encontrado/i, 'El chofer indicado no fue encontrado en la empresa.'],
   [/empresa.*no.*encontr/i, 'La empresa indicada no fue encontrada.'],
   [/membres[ií]a/i, 'El usuario ya no pertenece a la empresa.'],
+  [/ya ten[eé]s un flete activo/i, ''],  // pass through — message is already user-friendly
+  [/flete activo/i, ''],  // pass through
+  [/finalizalo o cancelalo/i, ''],  // pass through
 ];
 
 /** Determine if an error message is safe to show to the user. */
