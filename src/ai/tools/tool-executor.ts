@@ -676,22 +676,43 @@ export class ToolExecutorService {
         return await this.executePrepareAutonomousFreight(input, user, session);
 
       case 'finish_autonomous_freight': {
-        const r = await this.resolveFreightWithAccess(input.code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        if (!(r.freight as any).isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
+        let freight: any;
+        if (input.code) {
+          const r = await this.resolveFreightWithAccess(input.code, user);
+          if (r.error) return JSON.stringify({ error: r.error });
+          freight = r.freight;
+        } else {
+          // Auto-detect: find the user's active autonomous freight
+          freight = await this.prisma.freight.findFirst({
+            where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
+            select: { id: true, code: true, status: true, isAutonomous: true, requestedById: true },
+          });
+          if (!freight) return JSON.stringify({ error: 'No tenés fletes autónomos activos para finalizar.' });
+        }
+        if (!freight.isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
         const weightKg = input.destinationWeightKg ? Number(input.destinationWeightKg) : undefined;
         return this.sessionManager.stageAction(session.id, 'finish_autonomous_freight', {
-          freightId: r.freight.id, code: r.freight.code, destinationWeightKg: weightKg, notes: input.notes,
-        }, `Finalizar flete autonomo ${r.freight.code}${weightKg ? ` (${weightKg} kg)` : ''}`);
+          freightId: freight.id, code: freight.code, destinationWeightKg: weightKg, notes: input.notes,
+        }, `Finalizar flete autonomo ${freight.code}${weightKg ? ` (${weightKg} kg)` : ''}`);
       }
 
       case 'register_plant_arrival': {
-        const r = await this.resolveFreightWithAccess(input.code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        if (!(r.freight as any).isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
+        let freight: any;
+        if (input.code) {
+          const r = await this.resolveFreightWithAccess(input.code, user);
+          if (r.error) return JSON.stringify({ error: r.error });
+          freight = r.freight;
+        } else {
+          freight = await this.prisma.freight.findFirst({
+            where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
+            select: { id: true, code: true, status: true, isAutonomous: true, requestedById: true },
+          });
+          if (!freight) return JSON.stringify({ error: 'No tenés fletes autónomos activos.' });
+        }
+        if (!freight.isAutonomous) return JSON.stringify({ error: 'Este flete no es autonomo.' });
         return this.sessionManager.stageAction(session.id, 'register_plant_arrival', {
-          freightId: r.freight.id, code: r.freight.code,
-        }, `Registrar llegada a planta del flete ${r.freight.code}`);
+          freightId: freight.id, code: freight.code,
+        }, `Registrar llegada a planta del flete ${freight.code}`);
       }
 
       default:
