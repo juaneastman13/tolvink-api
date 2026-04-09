@@ -893,15 +893,17 @@ export class ToolExecutorService {
 
   // ---- prepare_autonomous_freight ----
   private async executePrepareAutonomousFreight(input: any, user: any, session: any): Promise<string> {
+    if (!input.origin) return JSON.stringify({ error: 'Origen obligatorio. Preguntar al chofer de dónde sale.' });
     if (!input.destination) return JSON.stringify({ error: 'Destino obligatorio.' });
     if (!input.grain) return JSON.stringify({ error: 'Grano obligatorio.' });
+    if (!input.weightKg || isNaN(Number(input.weightKg)) || Number(input.weightKg) <= 0) return JSON.stringify({ error: 'Peso obligatorio. Preguntar al chofer cuántos kilos o toneladas cargó.' });
 
     // Build summary for confirmation
-    const origin = input.origin || 'Sin especificar';
+    const origin = input.origin;
     const destination = input.destination;
     const grain = input.grain;
-    const weightKg = input.weightKg ? Number(input.weightKg) : null;
-    const weightDisplay = weightKg ? `${weightKg} kg` : 'sin especificar';
+    const weightKg = Number(input.weightKg);
+    const weightDisplay = `${weightKg} kg`;
 
     // Auto-detect truck
     const companyId = user.activeCompanyId || user.companyId;
