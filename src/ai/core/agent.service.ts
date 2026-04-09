@@ -524,14 +524,15 @@ export class AgentService implements OnModuleDestroy {
     return fs;
   }
 
-  /** Clear history after a terminal action so next message starts fresh. */
+  /** Clear history after a terminal action so next message starts fresh.
+   *  Preserves activeContext so the next message (e.g., a photo) knows which freight is active. */
   private async clearHistoryAfterTerminalAction(sessionId: string, actionName: string): Promise<void> {
     if (!AgentService.TERMINAL_ACTIONS.has(actionName)) return;
     this.logger.log(`History cleared after terminal action: ${actionName}`);
-    // Single raw update — no findUnique needed, just set aiMessages to empty array
+    // Clear aiMessages but preserve activeContext, awaitingAnswer, lastMessageAt
     await this.prisma.$executeRaw`
       UPDATE "whatsapp_sessions"
-      SET "flow_state" = COALESCE("flow_state", '{}'::jsonb) || '{"aiMessages":[]}'::jsonb
+      SET "flow_state" = COALESCE("flow_state", '{}'::jsonb) || '{"aiMessages":[],"pendingAction":null,"pendingFreight":null,"_pendingButtons":null}'::jsonb
       WHERE "id" = ${sessionId}
     `.catch(() => {});
   }

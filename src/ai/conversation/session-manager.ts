@@ -122,7 +122,7 @@ export class SessionManagerService {
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
-      IMPORTANT: 'La accion NO fue ejecutada todavia. Presente el resumen y consulte al usuario si confirma. Se enviaran botones CONFIRMAR/CANCELAR automaticamente.',
+      IMPORTANT: 'La accion NO fue ejecutada todavia. Responde con el texto del campo summary TAL CUAL, sin modificar ni agregar nada. Los botones CONFIRMAR/CANCELAR se envian automaticamente. NO escribir "Confirmas?" ni texto de botones.',
     });
   }
 }

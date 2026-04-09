@@ -1311,6 +1311,12 @@ export class ToolExecutorService {
             fieldId: params.fieldId, originLotId: params.originLotId,
             destPlantId: params.destPlantId, branchId: params.branchId,
           }, synUser);
+          // Set active context so next message (photo, etc.) knows about this freight
+          this.sessionManager.updateActiveContext(session.id, {
+            lastFreightId: (af as any).id,
+            lastFreightCode: (af as any).code,
+            lastAction: 'create_autonomous_freight',
+          });
           result = JSON.stringify({ status: 'created', code: (af as any).code, freightId: (af as any).id }); break;
         }
         case 'finish_autonomous_freight': {
