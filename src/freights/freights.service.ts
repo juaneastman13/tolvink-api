@@ -531,9 +531,9 @@ export class FreightsService {
       throw new ForbiddenException('Tu empresa no tiene habilitada la función de chofer autónomo');
     }
 
-    // Check: no active autonomous freight allowed
+    // Check: no active autonomous freight allowed (any non-terminal state)
     const activeAutonomous = await this.prisma.freight.findFirst({
-      where: { requestedById: user.sub, isAutonomous: true, status: FreightStatus.loaded },
+      where: { requestedById: user.sub, isAutonomous: true, status: { notIn: [FreightStatus.finished, FreightStatus.canceled] } },
       select: { code: true, destName: true, items: { select: { grain: true }, take: 1 } },
     });
     if (activeAutonomous) {
@@ -766,6 +766,7 @@ export class FreightsService {
     if (!freight) throw new NotFoundException('Flete no encontrado');
     if (!freight.isAutonomous) throw new BadRequestException('Solo aplica a fletes autónomos');
     if (freight.requestedById !== user.sub) throw new ForbiddenException('No sos el chofer de este flete');
+    if (freight.status !== FreightStatus.loaded) throw new BadRequestException('Solo se puede registrar llegada cuando el flete está en estado "loaded"');
     if (freight.arrivedAtPlantAt) throw new BadRequestException('Ya se registró la llegada a planta');
 
     const updated = await this.prisma.freight.update({

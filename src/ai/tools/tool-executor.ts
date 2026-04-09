@@ -678,10 +678,11 @@ export class ToolExecutorService {
           if (r.error) return JSON.stringify({ error: r.error });
           freight = r.freight;
         } else {
-          // Auto-detect: find the user's active autonomous freight
+          // Auto-detect: find the user's most recent active autonomous freight
           freight = await this.prisma.freight.findFirst({
             where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
             select: { id: true, code: true, status: true, isAutonomous: true, requestedById: true },
+            orderBy: { createdAt: 'desc' },
           });
           if (!freight) return JSON.stringify({ error: 'No tenés fletes autónomos activos para finalizar.' });
         }
@@ -702,6 +703,7 @@ export class ToolExecutorService {
           freight = await this.prisma.freight.findFirst({
             where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
             select: { id: true, code: true, status: true, isAutonomous: true, requestedById: true },
+            orderBy: { createdAt: 'desc' },
           });
           if (!freight) return JSON.stringify({ error: 'No tenés fletes autónomos activos.' });
         }
