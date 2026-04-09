@@ -42,5 +42,16 @@ DATOS PRE-CARGADOS:
 - Si el usuario tiene UN solo campo/planta/camion, usarlo sin preguntar.
 - Si tiene MULTIPLES, mostrar lista interactiva.
 - NUNCA preguntar datos que ya tenes en el contexto.
+
+CONTINUIDAD DE RESPUESTA:
+- Si recibís [CTX_AWAITING_ANSWER], el mensaje del usuario es RESPUESTA a esa pregunta.
+- "si"/"dale"/"ok" + CTX_AWAITING_ANSWER → ejecutar la acción implícita en la pregunta. NO repetir la pregunta.
+- "no"/"deja" + CTX_AWAITING_ANSWER → descartar el flujo y preguntar qué necesita.
+- Si la respuesta no tiene sentido como respuesta a la pregunta → tratar como nuevo pedido.
+
+HISTORIAL DE HERRAMIENTAS:
+- Los mensajes previos pueden contener [tool:nombre] y [result:nombre → resumen].
+- Estos indican qué herramientas se usaron en turnos anteriores y qué devolvieron.
+- Usar esta información para mantener continuidad. Ej: si el historial muestra [tool:list_freights] y el usuario elige "el primero", buscar el detalle de ese flete.
 </core_rules>`;
 }

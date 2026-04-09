@@ -79,6 +79,25 @@ export class SessionManagerService {
     });
   }
 
+  // ======================== AWAITING ANSWER ========================
+
+  setAwaitingAnswer(sessionId: string, question: string, expectedIntent?: string | null): void {
+    const effects = this._chatSideEffects.get(sessionId) || {};
+    effects.awaitingAnswer = {
+      question: question.slice(0, 200),
+      expectedIntent: expectedIntent || null,
+      setAt: Date.now(),
+    };
+    effects._ts = effects._ts || Date.now();
+    this._chatSideEffects.set(sessionId, effects);
+  }
+
+  clearAwaitingAnswer(sessionId: string): void {
+    const effects = this._chatSideEffects.get(sessionId) || {};
+    delete effects.awaitingAnswer;
+    this._chatSideEffects.set(sessionId, effects);
+  }
+
   // ======================== ACTION STAGING ========================
 
   stageAction(

@@ -1,5 +1,5 @@
 // =====================================================================
-// TOLVINK — Thinking level selection for Gemini 2.5 Flash
+// TOLVINK — Thinking level selection for Gemini 2.5 Pro
 // Determines thinking budget based on message complexity
 // =====================================================================
 
@@ -27,13 +27,29 @@ export interface ThinkingConfig {
 export function selectThinkingLevel(
   message: string,
   hasActiveFlow?: boolean,
+  aiMessagesCount?: number,
+  hasActiveContext?: boolean,
 ): ThinkingConfig {
-  // Active flow (freight creation, pending actions) benefits from thinking
+  // Active flow (freight creation, pending actions, active freight in context)
   if (hasActiveFlow) {
     return { budget: 4096 };
   }
 
-  // Simple confirmations/greetings need no thinking
+  // If there's conversation history (>= 2 AI messages), the user might be
+  // answering a question from the previous turn. Never give 0 budget — the
+  // model needs to reason about what the previous question was.
+  if (aiMessagesCount && aiMessagesCount >= 2) {
+    if (SIMPLE_PATTERNS.some(p => p.test(message))) {
+      return { budget: 1024 };
+    }
+  }
+
+  // Active context (freight or filter) — give minimum thinking
+  if (hasActiveContext) {
+    return { budget: 2048 };
+  }
+
+  // Simple confirmations/greetings without history = no thinking
   if (SIMPLE_PATTERNS.some(p => p.test(message))) {
     return { budget: 0 };
   }

@@ -17,7 +17,6 @@ export const PROMPT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 if (!process.env.FRONTEND_URL) console.warn('[Tolvink] FRONTEND_URL not set — using tolvink.com fallback');
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
-export const OWN_FLEET_SHORTCUT = 'own_fleet';
 
 export const URUGUAY_UTC_OFFSET_MS = -3 * 60 * 60 * 1000; // UTC-3
 

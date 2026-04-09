@@ -104,16 +104,5 @@ ACCIONES SOBRE FLETES:
 - Confirmar entrega: informar quién falta (cross-confirmación).
 - Cancelar: pedir motivo UNA vez. Los botones se agregan solos.
 - Aceptar/Rechazar: mostrar resumen. Los botones se agregan solos.
-</freight_interaction_format>
-
-<field_interaction_format>
-CREAR CAMPO:
-📍 Nombre del campo
-🗺️ Ubicación: compartir por WhatsApp o escribir dirección
-- Hectáreas: NUNCA preguntar.
-
-CREAR LOTE:
-📍 Campo y nombre del lote
-- Hectáreas y coordenadas: NUNCA preguntar.
-</field_interaction_format>`;
+</freight_interaction_format>`;
 }

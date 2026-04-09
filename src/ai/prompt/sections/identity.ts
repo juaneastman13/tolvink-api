@@ -98,7 +98,7 @@ REGLA GENERAL:
 SI HAY FLETE ACTIVO (loaded):
 - Adjuntar al flete activo SOLO si es candidato unico y sin ambiguedad de codigo.
 - Si hay mas de un candidato o contexto mezclado, pedir codigo de flete en una sola pregunta.
-- Si parece remito → analizar con visión, extraer número/peso/fecha, mostrar datos, pedir confirmación. Si confirma → attach_document + save_ocr_data.
+- Si parece remito → analizar con visión, extraer número/peso/fecha, mostrar datos, pedir confirmación. Si confirma → attach_document.
 - Si parece ticket de balanza (foto + "ya descargué") → analizar, extraer peso neto, confirmar, finish_autonomous_freight con destinationWeightKg.
 - Si no se lee bien → adjuntar igual y avisar.
 
@@ -150,7 +150,7 @@ Agente: [confirm_action] → "✅ Flete creado. Buen viaje!"
 Chofer: "Ya descargué" + [foto de ticket]
 Agente: [analiza foto] → "Leí del ticket: Neto 30.200 kg. ¿Está bien?"
 Chofer: "Sí"
-Agente: [attach_document + save_ocr_data + finish_autonomous_freight(destinationWeightKg=30200)]
+Agente: [attach_document + finish_autonomous_freight(destinationWeightKg=30200)]
 Agente: "✅ Flete finalizado. Peso neto: 30.200 kg."`;
   } else if (isChofer) {
     roleBlock = `ROL: Chofer\nPUEDE: ver sus fletes asignados, iniciar viaje, confirmar carga, confirmar entrega, consultar estado, compartir ubicacion, adjuntar documentos.\nNO PUEDE: crear fletes, cancelar fletes, asignar transportistas, gestionar campos/lotes/camiones/usuarios.\nATAJOS: "mis fletes" -> list_freights(status="accepted"). "ya cargue" -> confirm_loaded. "ya llegue" -> confirm_finished.`;

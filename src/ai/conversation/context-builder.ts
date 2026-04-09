@@ -32,6 +32,18 @@ export class ContextBuilderService {
     const newFreightRequest = this.isNewFreightRequest(cleanedMessage);
     const destructiveIntent = this.isDestructiveFreightIntent(cleanedMessage);
 
+    // Inject awaiting answer from previous turn — MUST be first CTX so it frames the user's reply
+    if (state.awaitingAnswer) {
+      const aa = state.awaitingAnswer;
+      const age = aa.setAt ? Math.round((Date.now() - aa.setAt) / 60000) : 0;
+      if (age < 10) {
+        const intentHint = aa.expectedIntent
+          ? ` expectedIntent="${sanitizeForPrompt(aa.expectedIntent)}"`
+          : '';
+        messageToSend = `[CTX_AWAITING_ANSWER question="${sanitizeForPrompt(aa.question)}"${intentHint}]\n\n${messageToSend}`;
+      }
+    }
+
     // Stale session detection
     const lastMsgTime = state.lastMessageAt ? new Date(state.lastMessageAt).getTime() : 0;
     if (lastMsgTime && aiMessagesCount > 0) {

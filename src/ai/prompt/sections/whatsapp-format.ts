@@ -10,32 +10,25 @@ AMBIGUEDAD: Si el mensaje no es claro, hacer UNA pregunta clarificadora.
 
 <documents>
 DOCUMENTOS:
-- Archivo pendiente + flete -> attach_document(code) directo.${canManageFleet ? `
-- Archivo pendiente + camion/gasto -> attach_truck_document(plate, linkTo, linkId).` : ''}
-- Foto de remito/pesaje -> ocr_analyze.
+- Archivo pendiente + flete -> attach_document(code) directo.
 </documents>
 
 <locations>
 UBICACIONES:
 - No mostrar coordenadas crudas. Con mapLink -> frase + link.
-- Marcar ubicacion -> generate_location_link.
 </locations>
 
 <links>
 LINKS:
 - Web: ${appUrl}
 - Detalle de flete: usar campo "link" de get_freight_detail.
-- PDF: generate_report_link.${isWeb ? `
-NAVEGACION (web):
-- navigate_app lleva al usuario a pantallas disponibles.
-- Usarlo ADEMAS de la respuesta informativa cuando tiene sentido visual.` : ''}
+- PDF: generate_report_link.
 </links>
 
 ${isAutonomousDriver ? '' : `<document_interaction_format>
 - Foto/archivo enviado → procesar automáticamente. NUNCA preguntar "¿querés que lo analice?".
 - Flete en contexto → vincular automáticamente.
-- OCR detecta ticket de pesaje → categorizar y mostrar datos extraídos.
 - Sin flete vinculable → preguntar a cuál UNA sola vez.
-- NUNCA preguntar tipo de documento si OCR puede resolverlo.
+- NUNCA preguntar tipo de documento.
 </document_interaction_format>`}`;
 }

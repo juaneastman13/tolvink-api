@@ -3,7 +3,7 @@
 // Mirrors the original _executeToolInner switch/case from ai.service.ts
 // =====================================================================
 
-import { Injectable, Logger, Inject, forwardRef, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
@@ -16,14 +16,13 @@ import { SessionManagerService } from '../conversation/session-manager';
 import { sanitizeForPrompt, hasType, resolveActiveRole, resolveCompanyTypes, isProducerMembership } from '../utils/ai-utils';
 import { sanitizeToolError, sanitizeConfirmError, sanitizeErrorForLog, classifyAiError } from '../utils/error-handler';
 import { CONSULTA_BLOCKED_TOOLS, ACTION_TOOLS, SEARCH_TOOLS } from './tool-permissions';
-import { APP_URL, OWN_FLEET_SHORTCUT, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, URUGUAY_UTC_OFFSET_MS } from '../core/constants';
+import { APP_URL, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, URUGUAY_UTC_OFFSET_MS } from '../core/constants';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { createSignedToken } from '../../common/signed-token';
 import { buildFreightSelectionItems } from './handlers/freight-query.handlers';
 import { RunTree } from 'langsmith/run_trees';
 import * as crypto from 'crypto';
-import * as bcryptAi from 'bcryptjs';
 
 @Injectable()
 export class ToolExecutorService {
@@ -423,21 +422,12 @@ export class ToolExecutorService {
       case 'update_freight':
       case 'duplicate_freight':
       case 'authorize_freight':
-      case 'approve_pending_change':
-      case 'reject_pending_change':
       case 'respond_trip':
       case 'start_trip':
       case 'confirm_trip_loaded':
       case 'confirm_trip_finished':
-      case 'create_field':
-      case 'create_lot':
-      case 'update_field':
-      case 'update_lot':
       case 'attach_document':
       case 'delete_document':
-      case 'save_ocr_data':
-      case 'ocr_analyze':
-      case 'reactivate_user':
       case 'prepare_autonomous_freight':
       case 'finish_autonomous_freight':
       case 'register_plant_arrival':
@@ -445,7 +435,6 @@ export class ToolExecutorService {
 
       // ---- Transport & Assignment ----
       case 'list_trucks':
-      case 'create_truck':
       case 'list_transporters':
       case 'assign_transporter':
       case 'assign_truck_to_trip':
@@ -453,52 +442,25 @@ export class ToolExecutorService {
       case 'list_drivers':
       case 'cancel_assignment':
       case 'update_assignment':
-      case 'create_driver':
-      case 'deactivate_truck':
-      case 'update_truck':
-      case 'deactivate_driver':
-      case 'assign_multi_trucks':
-      case 'view_driver_queue':
-      case 'reorder_driver_queue':
       case 'assign_external_truck':
-      case 'assign_mixed_trucks':
       case 'edit_external_assignment':
         return await this.executeTransportTool(toolName, input, user, synUser, session);
 
-      // ---- Admin & User Management ----
+      // ---- User & Company ----
       case 'get_user_profile':
-      case 'create_user':
-      case 'list_company_users':
-      case 'update_user_role':
-      case 'deactivate_user':
       case 'switch_company':
       case 'update_profile':
-      case 'update_user_admin':
-      case 'update_company':
       case 'list_enabled_plants':
       case 'list_enabled_producers':
       case 'grant_producer_access':
       case 'revoke_producer_access':
-      case 'list_branches':
-      case 'create_branch':
-      case 'update_branch':
-      case 'delete_branch':
-      case 'get_assignment_suggestions':
         return await this.executeAdminTool(toolName, input, user, synUser, session);
 
       // ---- Location & Maps ----
-      case 'generate_location_link':
       case 'generate_tracking_link':
-      case 'generate_map_link':
       case 'generate_report_link':
-      case 'generate_shared_link':
-      case 'generate_daily_map_link':
-      case 'generate_batch_report_link':
       case 'share_live_location':
       case 'view_live_locations':
-      case 'request_location':
-      case 'navigate_app':
-      case 'generate_share_link_with_details':
       case 'rename_document':
         return await this.executeLocationTool(toolName, input, user, synUser, session);
 
@@ -509,16 +471,6 @@ export class ToolExecutorService {
       case 'search_fields':
       case 'search_lots':
         return await this.executeSearchTool(toolName, input, user, session);
-
-      // ---- Fleet economics ----
-      case 'get_truck_detail': case 'get_truck_documents': case 'get_expiring_documents':
-      case 'attach_truck_document':
-      case 'register_truck_expense': case 'list_truck_expenses':
-      case 'register_truck_income': case 'list_truck_incomes':
-      case 'register_truck_movement': case 'list_truck_movements':
-      case 'register_trip_data': case 'get_truck_economic_summary':
-      case 'get_fleet_summary': case 'get_fleet_alerts':
-        return await this.executeFleetTool(toolName, input, user, session);
 
       default:
         return JSON.stringify({ error: 'Herramienta no reconocida' });
@@ -618,29 +570,6 @@ export class ToolExecutorService {
         return this.sessionManager.stageAction(session.id, actionMap[toolName], { freightId: r.freight.id, code: r.freight.code, assignmentId, action: input.action, reason: input.reason, loadedTons: input.loadedTons }, `${toolName} para ${r.freight.code}`);
       }
 
-      case 'approve_pending_change': case 'reject_pending_change': {
-        const r = await this.resolveFreightWithAccess(input.code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        return this.sessionManager.stageAction(session.id, toolName, { freightId: r.freight.id, code: r.freight.code, changeId: input.changeId, reason: input.reason }, `${toolName === 'approve_pending_change' ? 'Aprobar' : 'Rechazar'} cambio en ${r.freight.code}`);
-      }
-
-      case 'create_field': {
-        const producerCompanyId = this.resolveProducerCompanyId(user);
-        const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
-        if (input.lat == null || input.lng == null) return JSON.stringify({ error: 'La ubicacion es obligatoria. Use generate_location_link.' });
-        return this.sessionManager.stageAction(session.id, 'create_field', { producerSynUser, dto: { name: input.name, address: input.address, lat: input.lat, lng: input.lng } }, `Crear campo "${input.name}"`);
-      }
-
-      case 'create_lot': {
-        const producerCompanyId = this.resolveProducerCompanyId(user);
-        const producerSynUser = { ...synUser, companyId: producerCompanyId, companyType: 'producer', userType: 'producer' };
-        if (input.lat == null || input.lng == null) return JSON.stringify({ error: 'La ubicacion es obligatoria. Use generate_location_link.' });
-        return this.sessionManager.stageAction(session.id, 'create_lot', { producerSynUser, fieldId: input.fieldId, dto: { name: input.name, hectares: input.hectares, lat: input.lat, lng: input.lng } }, `Crear lote "${input.name}"`);
-      }
-
-      case 'update_field': case 'update_lot':
-        return JSON.stringify({ error: 'Use la plataforma web para editar campos y lotes.' });
-
       case 'attach_document': {
         if (!input.code || String(input.code).trim().length < 3) {
           return JSON.stringify({ error: 'Para adjuntar necesito el codigo exacto del flete.' });
@@ -657,22 +586,6 @@ export class ToolExecutorService {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         return this.sessionManager.stageAction(session.id, 'delete_document', { freightId: r.freight.id, code: r.freight.code, documentId: input.documentId, docName: 'documento' }, `Eliminar documento de ${r.freight.code}`);
-      }
-
-      case 'save_ocr_data':
-        return this.sessionManager.stageAction(session.id, 'save_ocr_data', { code: input.code, documentId: input.documentId, ocrData: input.ocrData, docName: 'documento' }, `Guardar datos OCR en ${input.code}`);
-
-      case 'ocr_analyze': {
-        const result = await this.ocrService.analyze(input.url, input.docType || 'general');
-        return JSON.stringify(result);
-      }
-
-      case 'reactivate_user': {
-        const companyId = user.activeCompanyId || user.companyId;
-        if (!this.isCallerAdminForCompany(user, companyId)) return JSON.stringify({ error: 'Solo admin puede reactivar.' });
-        const membership = await this.prisma.userCompany.findFirst({ where: { companyId, active: false, user: { OR: [{ name: { contains: input.userIdentifier, mode: 'insensitive' } }, { email: { equals: input.userIdentifier, mode: 'insensitive' } }] } }, include: { user: { select: { id: true, name: true } } } });
-        if (!membership) return JSON.stringify({ error: `No se encontro usuario inactivo "${input.userIdentifier}".` });
-        return this.sessionManager.stageAction(session.id, 'reactivate_user', { membershipId: membership.id, targetUserId: membership.user.id, userName: membership.user.name }, `Reactivar "${membership.user.name}"`);
       }
 
       // ---- Autonomous Driver Tools ----
@@ -1349,9 +1262,6 @@ export class ToolExecutorService {
           const nf = await this.freights.create(dto, ps);
           result = JSON.stringify({ status: 'duplicated', newCode: (nf as any).code }); break;
         }
-        case 'create_field': { const f = await this.fieldsService.createField(params.producerSynUser, params.dto); result = JSON.stringify({ status: 'created', field: { id: f.id, name: f.name } }); break; }
-        case 'create_lot': { const l = await this.fieldsService.createLot(params.producerSynUser, params.fieldId, params.dto); result = JSON.stringify({ status: 'created', lot: { id: l.id, name: l.name } }); break; }
-        case 'create_truck': { const t = await this.trucksService.create(params.dto as any, params.actionSynUser); result = JSON.stringify({ status: 'created', truck: { id: (t as any).id, plate: (t as any).plate } }); break; }
         case 'attach_document': { const doc = await this.freights.addDocument(params.freightId, { name: params.document.name, url: params.document.url, type: params.document.type, step: params.step || null }, synUser); result = JSON.stringify({ status: 'attached', code: params.code }); break; }
         case 'delete_document': { await this.prisma.freightDocument.delete({ where: { id: params.documentId } }); result = JSON.stringify({ status: 'deleted', code: params.code }); break; }
         case 'respond_trip': { await this.freights.respondTrip(params.freightId, params.assignmentId, { action: params.action, reason: params.reason }, synUser); result = JSON.stringify({ status: params.action, code: params.code }); break; }
@@ -1385,12 +1295,6 @@ export class ToolExecutorService {
           await this.freights.assign(params.freightId, dto, synUser);
           result = JSON.stringify({ status: 'assigned', code: params.code }); break;
         }
-        case 'assign_multi_trucks':
-        case 'assign_mixed_trucks': {
-          const trucks = Array.isArray(params.trucks) ? params.trucks : [];
-          await this.freights.assignMulti(params.freightId, { trucks }, synUser);
-          result = JSON.stringify({ status: 'assigned', code: params.code, trucksAssigned: trucks.length }); break;
-        }
         case 'edit_external_assignment': {
           await this.freights.updateAssignment(params.freightId, params.assignmentId, {
             plate: params.plate,
@@ -1398,57 +1302,6 @@ export class ToolExecutorService {
             externalDriverName: params.externalDriverName,
           } as any, synUser);
           result = JSON.stringify({ status: 'updated', code: params.code }); break;
-        }
-        case 'reactivate_user': {
-          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: true } });
-          await this.prisma.user.update({ where: { id: params.targetUserId }, data: { active: true } });
-          result = JSON.stringify({ status: 'reactivated', userName: params.userName }); break;
-        }
-        case 'create_user': {
-          const randomPwd = crypto.randomBytes(12).toString('base64url').slice(0, 16) + 'A1!';
-          const pwdHash = await bcryptAi.hash(randomPwd, 10);
-          const newUser = await this.adminService.createUser(params.dto, pwdHash);
-          result = JSON.stringify({ status: 'created', user: { name: (newUser as any).name, email: (newUser as any).email } }); break;
-        }
-        case 'update_user_role': {
-          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { role: params.newRole } });
-          result = JSON.stringify({ status: 'done', user: params.userName, newRole: params.newRole }); break;
-        }
-        case 'deactivate_user': {
-          await this.prisma.userCompany.update({ where: { id: params.membershipId }, data: { active: false } });
-          result = JSON.stringify({ status: 'done', user: params.userName }); break;
-        }
-        case 'register_truck_expense': {
-          await this.trucksService.addExpense(params.truckId, synUser, {
-            type: params.type,
-            amount: params.amount,
-            currency: params.currency,
-            date: params.date,
-            description: params.description,
-          });
-          result = JSON.stringify({ status: 'created', type: 'expense' }); break;
-        }
-        case 'register_truck_income': {
-          await this.trucksService.addIncome(params.truckId, synUser, {
-            concept: params.concept,
-            amount: params.amount,
-            currency: params.currency,
-            date: params.date,
-            status: params.status,
-          });
-          result = JSON.stringify({ status: 'created', type: 'income' }); break;
-        }
-        case 'register_truck_movement': {
-          await this.trucksService.addMovement(params.truckId, synUser, params.body || {});
-          result = JSON.stringify({ status: 'created', type: 'movement' }); break;
-        }
-        case 'register_trip_data': {
-          await this.trucksService.updateTripData(params.freightId, params.assignmentId, synUser, params.body || {});
-          result = JSON.stringify({ status: 'updated', type: 'trip_data' }); break;
-        }
-        case 'attach_truck_document': {
-          await this.trucksService.addDocument(params.truckId, synUser, params.body || {});
-          result = JSON.stringify({ status: 'attached', type: 'truck_document' }); break;
         }
         // ---- Autonomous Driver Actions ----
         case 'create_autonomous_freight': {
@@ -1467,12 +1320,6 @@ export class ToolExecutorService {
         case 'register_plant_arrival': {
           await this.freights.registerPlantArrival(params.freightId, synUser);
           result = JSON.stringify({ status: 'arrived', code: params.code }); break;
-        }
-        case 'save_ocr_data': {
-          const freight = await this.prisma.freight.findFirst({ where: { code: params.code?.toUpperCase() }, select: { id: true } });
-          if (!freight) { result = JSON.stringify({ error: `Flete ${params.code} no encontrado.` }); break; }
-          await this.freights.saveOcrData(freight.id, params.documentId, params.ocrData, synUser);
-          result = JSON.stringify({ status: 'saved', code: params.code }); break;
         }
         default: result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
@@ -1532,30 +1379,10 @@ export class ToolExecutorService {
         const plantCompanyId = this.resolvePlantCompanyId(user) || r.freight.destCompanyId;
         return this.sessionManager.stageAction(session.id, 'assign_truck_to_freight', { freightId: r.freight.id, code: r.freight.code, transporterCompanyId: input.transporterCompanyId, plantCompanyId, truckId: input.truckId, driverId: input.driverId }, `Asignar camion a ${r.freight.code}`, user);
       }
-      case 'create_truck': {
-        const actionSynUser = { ...synUser, companyId };
-        return this.sessionManager.stageAction(session.id, 'create_truck', { dto: { plate: input.plate, model: input.model, companyId }, actionSynUser }, `Crear camion ${input.plate}`);
-      }
-      case 'create_driver': {
-        if (!this.isCallerAdminForCompany(user, companyId)) return JSON.stringify({ error: 'Solo admin puede crear choferes.' });
-        return this.sessionManager.stageAction(session.id, 'create_driver', { name: input.name, phone: input.phone, companyId }, `Crear chofer "${input.name}"`);
-      }
-      case 'deactivate_truck':
-        return this.sessionManager.stageAction(session.id, 'deactivate_truck', { truckId: input.truckId, plate: input.truckId }, `Desactivar camion`);
-      case 'deactivate_driver':
-        return this.sessionManager.stageAction(session.id, 'deactivate_driver', { driverId: input.driverId }, `Desactivar chofer`);
       case 'assign_external_truck': {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         return this.sessionManager.stageAction(session.id, 'assign_external_truck', { freightId: r.freight.id, code: r.freight.code, plate: input.plate, externalCompanyName: input.externalCompanyName, externalDriverName: input.externalDriverName }, `Asignar externo ${input.plate} a ${r.freight.code}`, user);
-      }
-      case 'assign_multi_trucks':
-      case 'assign_mixed_trucks': {
-        const r = await this.resolveFreightWithAccess(input.code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        const trucks = Array.isArray(input.trucks) ? input.trucks : [];
-        if (trucks.length === 0) return JSON.stringify({ error: 'Debe indicar al menos un camion.' });
-        return this.sessionManager.stageAction(session.id, toolName, { freightId: r.freight.id, code: r.freight.code, trucks }, `Asignar ${trucks.length} camion(es) a ${r.freight.code}`, user);
       }
       case 'edit_external_assignment': {
         const r = await this.resolveFreightWithAccess(input.code, user);
@@ -1588,11 +1415,6 @@ export class ToolExecutorService {
     switch (toolName) {
       case 'get_user_profile':
         return JSON.stringify({ name: user.name, email: user.email, phone: user.phone, role: user.role, company: user.company?.name || 'N/A', companyType: this.resolveCompanyType(user) });
-      case 'list_company_users': {
-        const members = await this.prisma.userCompany.findMany({ where: { companyId, active: true }, include: { user: { select: { id: true, name: true, email: true, phone: true } } }, take: 50 });
-        const items = members.map((m: any) => ({ id: `user:${m.user.id}`, title: (m.user.name || 'Sin nombre').slice(0, 24), description: `${m.role} | ${m.user.email || 'sin email'}`.slice(0, 72) }));
-        return this.sessionManager.storePendingSelection(session.id, items, { headerText: `${members.length} usuario(s):`, listButtonLabel: 'Ver usuarios', sectionTitle: 'USUARIOS' }, 'user_selection');
-      }
       case 'switch_company': {
         if (!input.companyId) {
           const memberships = (user.memberships || []).filter((m: any) => m.active);
@@ -1606,22 +1428,6 @@ export class ToolExecutorService {
         await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { flowState: { selectedCompanyId: input.companyId } } });
         const company = await this.prisma.company.findUnique({ where: { id: input.companyId }, select: { name: true } });
         return JSON.stringify({ status: 'switched', company: company?.name || input.companyId });
-      }
-      case 'create_user': {
-        if (!this.isCallerAdminForCompany(user, companyId)) return JSON.stringify({ error: 'Solo admin puede crear usuarios.' });
-        return this.sessionManager.stageAction(session.id, 'create_user', { dto: { name: input.name, email: input.email, phone: input.phone, role: input.role || 'operario', companyId }, roleLabel: input.role || 'operario' }, `Crear usuario "${input.name}"`);
-      }
-      case 'update_user_role': {
-        if (!this.isCallerAdminForCompany(user, companyId)) return JSON.stringify({ error: 'Solo admin.' });
-        const membership = await this.prisma.userCompany.findFirst({ where: { companyId, active: true, user: { OR: [{ name: { contains: input.userIdentifier, mode: 'insensitive' } }, { email: { equals: input.userIdentifier, mode: 'insensitive' } }] } }, include: { user: { select: { id: true, name: true } } } });
-        if (!membership) return JSON.stringify({ error: `No se encontro "${input.userIdentifier}".` });
-        return this.sessionManager.stageAction(session.id, 'update_user_role', { membershipId: membership.id, targetUserId: membership.user.id, userName: membership.user.name, newRole: input.newRole, companyId }, `Cambiar rol de "${membership.user.name}" a ${input.newRole}`);
-      }
-      case 'deactivate_user': {
-        if (!this.isCallerAdminForCompany(user, companyId)) return JSON.stringify({ error: 'Solo admin.' });
-        const membership = await this.prisma.userCompany.findFirst({ where: { companyId, active: true, user: { OR: [{ name: { contains: input.userIdentifier, mode: 'insensitive' } }, { email: { equals: input.userIdentifier, mode: 'insensitive' } }] } }, include: { user: { select: { id: true, name: true } } } });
-        if (!membership) return JSON.stringify({ error: `No se encontro "${input.userIdentifier}".` });
-        return this.sessionManager.stageAction(session.id, 'deactivate_user', { membershipId: membership.id, targetUserId: membership.user.id, userName: membership.user.name, companyId }, `Desactivar "${membership.user.name}"`);
       }
       case 'update_profile':
         return this.sessionManager.stageAction(session.id, 'update_profile', { userId: user.id || user.sub, name: input.name }, `Actualizar perfil`);
@@ -1637,72 +1443,39 @@ export class ToolExecutorService {
         const accesses = await this.prisma.plantProducerAccess.findMany({ where: { plantCompanyId: plantCoId, active: true }, include: { producerCompany: { select: { name: true } } }, take: 50 });
         return JSON.stringify({ producers: accesses.map(a => ({ name: a.producerCompany?.name })) });
       }
-      case 'list_branches': {
-        const branches = await this.prisma.plant.findMany({ where: { companyId, active: true }, select: { id: true, name: true, address: true } });
-        return JSON.stringify({ branches });
-      }
       default:
-        return JSON.stringify({ error: `Herramienta admin no implementada: ${toolName}` });
+        return JSON.stringify({ error: `Herramienta no implementada: ${toolName}` });
     }
   }
 
   // ---- Location tools ----
   private async executeLocationTool(toolName: string, input: any, user: any, synUser: any, session: any): Promise<string> {
     switch (toolName) {
-      case 'generate_location_link': {
-        const secret = this.config.get<string>('JWT_SECRET') || process.env.JWT_SECRET || 'tolvink-default-secret';
-        const token = createSignedToken({ sessionId: session.id, purpose: input.purpose }, secret, 60);
-        return JSON.stringify({ url: `${APP_URL}/set-location?token=${token}&purpose=${input.purpose}`, message: 'Abri este link para marcar la ubicacion en el mapa.' });
-      }
       case 'generate_tracking_link': {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         return JSON.stringify({ url: `${APP_URL}/freight/${r.freight.id}` });
-      }
-      case 'generate_map_link': {
-        const p = new URLSearchParams();
-        p.set('lat', String(input.lat)); p.set('lng', String(input.lng)); p.set('n', (input.name || '').slice(0, 60));
-        if (input.destLat != null) { p.set('dlat', String(input.destLat)); p.set('dlng', String(input.destLng)); p.set('dn', (input.destName || '').slice(0, 60)); }
-        return JSON.stringify({ url: `${APP_URL}/ver-mapa?${p.toString()}` });
       }
       case 'generate_report_link': {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         return JSON.stringify({ url: `${APP_URL}/freight/${r.freight.id}/report` });
       }
-      case 'generate_daily_map_link':
-        return JSON.stringify({ url: `${APP_URL}/locations` });
-      case 'generate_batch_report_link': {
-        const p = new URLSearchParams();
-        if (input.status) p.set('status', input.status);
-        if (input.dateFrom) p.set('from', input.dateFrom);
-        if (input.dateTo) p.set('to', input.dateTo);
-        return JSON.stringify({ url: `${APP_URL}/reports?${p.toString()}` });
+      case 'share_live_location': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        return JSON.stringify({ url: `${APP_URL}/freight/${r.freight.id}/live` });
       }
-      case 'navigate_app': {
-        const effects = this.sessionManager.getSideEffects(session.id);
-        effects._navigate = { screen: input.screen, freightId: input.freightId };
-        effects._ts = effects._ts || Date.now();
-        this.sessionManager.setSideEffects(session.id, effects);
-        return JSON.stringify({ navigated: true, screen: input.screen });
+      case 'view_live_locations': {
+        const r = await this.resolveFreightWithAccess(input.code, user);
+        if (r.error) return JSON.stringify({ error: r.error });
+        return JSON.stringify({ url: `${APP_URL}/freight/${r.freight.id}/live` });
       }
       case 'rename_document': {
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         await this.prisma.freightDocument.update({ where: { id: input.documentId }, data: { name: input.newName.trim() } });
         return JSON.stringify({ status: 'renamed', newName: input.newName.trim() });
-      }
-      case 'generate_share_link_with_details':
-      case 'generate_shared_link': {
-        const r = await this.resolveFreightWithAccess(input.code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        const baseUrl = process.env.FRONTEND_URL || 'https://tolvink.com';
-        try {
-          const link = await (this.freights as any).createSharedLink(r.freight.id, user);
-          return JSON.stringify({ url: `${baseUrl}/shared/${link.token}`, expiresAt: link.expiresAt, code: r.freight.code });
-        } catch (e: any) {
-          return JSON.stringify({ error: e.message || 'Error al generar link.' });
-        }
       }
       default:
         return JSON.stringify({ url: `${APP_URL}` });
@@ -1780,147 +1553,6 @@ export class ToolExecutorService {
       }
       default:
         return JSON.stringify({ error: 'Busqueda no reconocida.' });
-    }
-  }
-
-  // ---- Fleet economics tools ----
-  private async executeFleetTool(toolName: string, input: any, user: any, session: any): Promise<string> {
-    const companyId = user.activeCompanyId || user.companyId;
-    const resolveTruck = async (plate?: string, truckId?: string) => {
-      if (truckId) return truckId;
-      if (!plate) return null;
-      const norm = plate.replace(/[\s\-\.]/g, '').toUpperCase();
-      const trucks = await this.prisma.truck.findMany({
-        where: { OR: [{ companyId }, { ownerCompanyId: companyId }], active: true },
-        select: { id: true, plate: true },
-      });
-      return (trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase() === norm) || trucks.find(t => t.plate.replace(/[\s\-]/g, '').toUpperCase().includes(norm)))?.id || null;
-    };
-
-    switch (toolName) {
-      case 'get_truck_detail': {
-        const tid = await resolveTruck(input.plate, input.truckId);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
-        const detail = await this.trucksService.getDetail(tid, user);
-        return JSON.stringify(detail);
-      }
-      case 'get_truck_documents': {
-        const tid = await resolveTruck(input.plate, input.truckId);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
-        const detail: any = await this.trucksService.getDetail(tid, user);
-        let docs = Array.isArray(detail?.documents) ? detail.documents : [];
-        const filter = String(input.filter || 'all');
-        if (filter === 'expired') docs = docs.filter((d: any) => d.expiryStatus === 'expired');
-        else if (filter === 'expiring') docs = docs.filter((d: any) => d.expiryStatus === 'expiring_soon');
-        else if (filter === 'valid') docs = docs.filter((d: any) => d.expiryStatus === 'valid');
-        return JSON.stringify({ total: docs.length, documents: docs });
-      }
-      case 'get_expiring_documents': {
-        const days = Number(input.days || 30);
-        const docs = await this.trucksService.getExpiringDocuments(user, Number.isFinite(days) && days > 0 ? days : 30);
-        return JSON.stringify({ total: docs.length, documents: docs });
-      }
-      case 'attach_truck_document': {
-        const tid = await resolveTruck(input.plate, input.truckId);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate || input.truckId}" no encontrado` });
-        const pendingDoc = this.sessionManager.getSideEffects(session.id)?.pendingDocument || (session.flowState as any)?.pendingDocument;
-        if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay archivo pendiente.' });
-        const body = {
-          type: input.docType || 'OTHER',
-          name: pendingDoc.name || 'Documento',
-          fileUrl: pendingDoc.url,
-          fileName: pendingDoc.name || 'documento',
-          ...(input.linkTo === 'expense' ? { expenseId: input.linkId } : {}),
-          ...(input.linkTo === 'income' ? { incomeId: input.linkId } : {}),
-          ...(input.linkTo === 'movement' ? { movementId: input.linkId } : {}),
-        };
-        return this.sessionManager.stageAction(session.id, 'attach_truck_document', { truckId: tid, body }, `Adjuntar documento a camion ${input.plate || input.truckId}`);
-      }
-      case 'register_truck_expense': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        return this.sessionManager.stageAction(session.id, 'register_truck_expense', { truckId: tid, companyId, type: input.type, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], description: input.description, createdById: user.sub || user.id }, `Registrar gasto ${input.type} $${input.amount}`);
-      }
-      case 'register_truck_income': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        return this.sessionManager.stageAction(session.id, 'register_truck_income', { truckId: tid, companyId, concept: input.concept, amount: input.amount, currency: input.currency || 'UYU', date: input.date || new Date().toISOString().split('T')[0], status: input.status || 'PENDING', createdById: user.sub || user.id }, `Registrar ingreso "${input.concept}" $${input.amount}`);
-      }
-      case 'list_truck_expenses': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        const where: any = { truckId: tid, companyId };
-        if (input.from) where.date = { ...(where.date || {}), gte: new Date(input.from) };
-        if (input.to) where.date = { ...(where.date || {}), lte: new Date(input.to) };
-        if (input.type) where.type = input.type;
-        const expenses = await this.prisma.truckExpense.findMany({ where, orderBy: { date: 'desc' }, take: 50 });
-        const total = expenses.reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
-        return JSON.stringify({ total: Math.round(total), count: expenses.length, expenses: expenses.map((e: any) => ({ type: e.type, amount: Number(e.amount), date: e.date?.toISOString().split('T')[0], description: e.description })) });
-      }
-      case 'list_truck_incomes': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        const incomes = await this.trucksService.listIncomes(tid, user, input.from, input.to, input.status);
-        const total = incomes.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
-        return JSON.stringify({ total: Math.round(total), count: incomes.length, incomes });
-      }
-      case 'register_truck_movement': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        const body: any = {
-          type: input.type,
-          description: input.description,
-          originName: input.originName,
-          destName: input.destName,
-          kmDriven: input.kmDriven,
-          fuelLiters: input.fuelLiters,
-          fuelCost: input.fuelCost,
-          tollCost: input.tollCost,
-        };
-        return this.sessionManager.stageAction(session.id, 'register_truck_movement', { truckId: tid, body }, `Registrar movimiento ${input.type || ''}`.trim());
-      }
-      case 'list_truck_movements': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        const movements = await this.trucksService.listMovements(tid, user, input.from, input.to, input.type);
-        return JSON.stringify({ count: movements.length, movements });
-      }
-      case 'register_trip_data': {
-        const code = input.freightCode || input.code;
-        const r = await this.resolveFreightWithAccess(code, user);
-        if (r.error) return JSON.stringify({ error: r.error });
-        const assignmentId = r.freight.assignments?.[0]?.id;
-        if (!assignmentId) return JSON.stringify({ error: 'No hay asignacion activa para registrar datos de viaje.' });
-        const body: any = {
-          kmLoaded: input.kmLoaded,
-          kmEmpty: input.kmEmpty,
-          kmTotal: input.kmTotal,
-          fuelLiters: input.fuelLiters,
-          fuelCostPerLiter: input.fuelCostPerLiter,
-          tollCost: input.tollCost,
-          odometerStart: input.odometerStart,
-          odometerEnd: input.odometerEnd,
-          loadingMinutes: input.loadingMinutes,
-          unloadingMinutes: input.unloadingMinutes,
-        };
-        return this.sessionManager.stageAction(session.id, 'register_trip_data', { freightId: r.freight.id, assignmentId, body }, `Registrar datos de viaje ${r.freight.code}`);
-      }
-      case 'get_truck_economic_summary': {
-        const tid = await resolveTruck(input.plate);
-        if (!tid) return JSON.stringify({ error: `Camion "${input.plate}" no encontrado` });
-        const summary = await this.trucksService.getEconomicSummary(tid, user, input.from, input.to);
-        return JSON.stringify(summary);
-      }
-      case 'get_fleet_alerts': {
-        const alerts = await this.trucksService.getFleetAlerts(user);
-        return JSON.stringify(alerts);
-      }
-      case 'get_fleet_summary': {
-        const summary = await this.trucksService.getFleetSummary(user);
-        return JSON.stringify(summary);
-      }
-      default:
-        return JSON.stringify({ error: `Fleet tool no implementada: ${toolName}` });
     }
   }
 }

@@ -37,33 +37,15 @@ export class AgentService implements OnModuleDestroy {
     'list_freights', 'get_freight_detail', 'summarize_freights', 'get_dashboard',
     'prepare_freight', 'confirm_create_freight', 'confirm_action',
     'search_plants', 'search_fields', 'search_lots', 'list_fields', 'list_lots',
-    'generate_location_link', 'generate_tracking_link', 'generate_report_link',
+    'generate_tracking_link', 'generate_report_link',
   ]);
   private readonly FREIGHT_ACTION_TOOLS = new Set<string>([
     'accept_freight', 'reject_freight', 'start_freight', 'confirm_loaded', 'confirm_finished',
     'cancel_freight', 'authorize_freight', 'duplicate_freight', 'update_freight',
     'respond_trip', 'start_trip', 'confirm_trip_loaded', 'confirm_trip_finished',
     'assign_transporter', 'assign_truck_to_trip', 'assign_truck_to_freight',
-    'assign_multi_trucks', 'cancel_assignment', 'update_assignment',
-    'assign_external_truck', 'assign_mixed_trucks', 'edit_external_assignment',
-  ]);
-  private readonly TRUCK_TOOLS = new Set<string>([
-    'list_trucks', 'create_truck', 'update_truck', 'deactivate_truck',
-    'list_drivers', 'create_driver', 'deactivate_driver',
-    'get_truck_detail', 'get_truck_documents', 'get_expiring_documents',
-    'attach_truck_document', 'register_truck_expense', 'list_truck_expenses',
-    'register_truck_income', 'list_truck_incomes', 'register_truck_movement',
-    'list_truck_movements', 'register_trip_data', 'get_truck_economic_summary',
-    'get_fleet_summary', 'get_fleet_alerts',
-  ]);
-  private readonly ADMIN_TOOLS = new Set<string>([
-    'get_user_profile', 'list_company_users', 'create_user', 'update_user_role',
-    'deactivate_user', 'reactivate_user', 'update_user_admin', 'update_profile',
-    'switch_company', 'update_company', 'list_branches', 'create_branch', 'update_branch', 'delete_branch',
-    'list_enabled_plants', 'list_enabled_producers', 'grant_producer_access', 'revoke_producer_access',
-  ]);
-  private readonly DOC_TOOLS = new Set<string>([
-    'attach_document', 'list_documents', 'delete_document', 'ocr_analyze', 'save_ocr_data', 'rename_document',
+    'cancel_assignment', 'update_assignment',
+    'assign_external_truck', 'edit_external_assignment',
   ]);
   private readonly AUTONOMOUS_TOOLS = new Set<string>([
     'prepare_autonomous_freight', 'finish_autonomous_freight', 'register_plant_arrival',
@@ -235,8 +217,13 @@ export class AgentService implements OnModuleDestroy {
     const hasToolPrefilter = selectedToolDefs.length < filteredToolDefs.length;
 
     // Select thinking level
-    const hasActiveFlow = !!state.pendingFreight;
-    const thinking = selectThinkingLevel(cleanedMessage, hasActiveFlow);
+    const hasActiveFlow = !!state.pendingFreight || !!state.pendingAction || !!state.activeContext?.lastFreightCode;
+    const thinking = selectThinkingLevel(
+      cleanedMessage,
+      hasActiveFlow,
+      storedMessages.length,
+      !!state.activeContext,
+    );
 
     // Initialize per-call side-effects
     this.sessionManager.deleteSideEffects(session.id);
@@ -336,6 +323,9 @@ export class AgentService implements OnModuleDestroy {
       // Post-process response
       finalText = validateResponse(finalText, isWeb);
 
+      // Detect if the model is asking a question — persist for next turn continuity
+      const detectedQuestion = this.detectAwaitingAnswer(finalText);
+
       // Save updated history
       const freshSession = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } });
       const latestState = (freshSession?.flowState as any) || {};
@@ -365,6 +355,7 @@ export class AgentService implements OnModuleDestroy {
           aiMessages: _clearAiMessages ? [] : trimmedMessages,
           lastMessageAt: new Date().toISOString(),
           ...(_navigate ? { _lastNavigate: _navigate } : { _lastNavigate: null }),
+          awaitingAnswer: detectedQuestion || null,
         },
         expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS),
       };
@@ -414,47 +405,6 @@ export class AgentService implements OnModuleDestroy {
   /** Pass through all role-filtered tools. Previously filtered by intent, removed to avoid context-switch bugs. */
   private selectToolsForTurn(toolDefs: any[], _cleanedMessage: string, _state: any, _isAutonomousDriver = false): any[] {
     return toolDefs;
-  }
-
-  private _selectToolsForTurn_DISABLED(toolDefs: any[], cleanedMessage: string, state: any, isAutonomousDriver = false): any[] {
-    const msg = (cleanedMessage || '').toLowerCase();
-    const include = new Set<string>([...this.CORE_TOOLS]);
-
-    // Autonomous driver: always include their 3 core tools (chofer may say "salí con soja" without warning)
-    if (isAutonomousDriver) {
-      for (const t of this.AUTONOMOUS_TOOLS) include.add(t);
-    }
-
-    const hasPendingFlow = !!state?.pendingFreight || !!state?.pendingAction;
-    if (hasPendingFlow) {
-      include.add('confirm_create_freight');
-      include.add('confirm_action');
-    }
-
-    const isFreightIntent = /\b(manda|mandá|mandar|crear?\s+flete|nuevo\s+flete|flete|tonelad|carga|entrega|inicia|confirma)\b/i.test(msg);
-    const isAssignmentIntent = /\b(asign|transportista|flota|camion|externo|chofer)\b/i.test(msg);
-    const isTruckIntent = /\b(camion|camiones|chofer|patente|matricula|gasto|ingreso|movimiento|documento|itv|seguro)\b/i.test(msg);
-    const isAdminIntent = /\b(usuario|usuarios|rol|empresa|sucursal|acceso|perfil)\b/i.test(msg);
-    const isDocIntent = /\b(documento|foto|imagen|ocr|adjunt|archivo)\b/i.test(msg);
-
-    if (isFreightIntent) for (const t of this.FREIGHT_ACTION_TOOLS) include.add(t);
-    if (isAssignmentIntent) {
-      include.add('assign_transporter');
-      include.add('assign_truck_to_freight');
-      include.add('assign_external_truck');
-      include.add('assign_mixed_trucks');
-      include.add('list_transporters');
-      include.add('list_trucks');
-      include.add('list_drivers');
-    }
-    if (isTruckIntent) for (const t of this.TRUCK_TOOLS) include.add(t);
-    if (isAdminIntent) for (const t of this.ADMIN_TOOLS) include.add(t);
-    if (isDocIntent) for (const t of this.DOC_TOOLS) include.add(t);
-
-    // Keep set bounded but safe. If nothing matches beyond core, use role-filtered tools.
-    const selected = toolDefs.filter((t: any) => include.has(t.name));
-    if (selected.length < 8) return toolDefs;
-    return selected;
   }
 
   private shouldExpandTools(cleanedMessage: string, modelText: string | null): boolean {
@@ -624,22 +574,101 @@ export class AgentService implements OnModuleDestroy {
   }
 
   /**
-   * Keep only textual history for persisted turns.
-   * Tool parts from previous sessions can create invalid Gemini turn ordering
-   * (or missing thought signatures). Runtime tool turns in the current request
-   * are still preserved in-memory by the main loop.
+   * Sanitize persisted history: convert raw functionCall/functionResponse parts
+   * into text summaries so the model retains conversational context about what
+   * tools were used, while avoiding Gemini turn-ordering issues with raw
+   * function parts from prior sessions.
    */
   private sanitizeHistoryForToolParts(messages: GeminiMessage[]): GeminiMessage[] {
     const cleaned: GeminiMessage[] = [];
+
     for (const msg of messages) {
-      const filteredParts = (msg.parts || []).filter((p: any) => {
-        // Persisted history: keep text only, drop functionCall/functionResponse.
-        return !!p?.text;
-      });
-      if (filteredParts.length > 0) {
-        cleaned.push({ ...msg, parts: filteredParts });
+      const textParts = (msg.parts || []).filter((p: any) => !!p?.text);
+      const funcCallParts = (msg.parts || []).filter((p: any) => !!p?.functionCall);
+      const funcResponseParts = (msg.parts || []).filter((p: any) => !!p?.functionResponse);
+
+      if (msg.role === 'model' && funcCallParts.length > 0) {
+        // Model turn with function calls → convert to text summary
+        const callSummaries = funcCallParts.map((p: any) => {
+          const name = p.functionCall?.name || 'unknown';
+          const args = p.functionCall?.args || {};
+          const relevantArgs = this.summarizeToolArgs(name, args);
+          return `[tool:${name}${relevantArgs ? ` ${relevantArgs}` : ''}]`;
+        });
+        const parts: any[] = [...textParts, { text: callSummaries.join(' ') }];
+        cleaned.push({ role: 'model', parts });
+
+      } else if (msg.role === 'user' && funcResponseParts.length > 0) {
+        // User turn with function responses → convert to text summary
+        const responseSummaries = funcResponseParts.map((p: any) => {
+          const name = p.functionResponse?.name || 'unknown';
+          const result = p.functionResponse?.response?.result || '';
+          const summary = this.summarizeToolResult(name, result);
+          return `[result:${name} → ${summary}]`;
+        });
+        const parts: any[] = [...textParts, { text: responseSummaries.join(' ') }];
+        cleaned.push({ role: 'user', parts });
+
+      } else if (textParts.length > 0) {
+        // Normal text message — keep as is
+        cleaned.push({ ...msg, parts: textParts });
       }
     }
+
     return cleaned;
+  }
+
+  /** Extract only relevant args for the tool call summary (no UUIDs). */
+  private summarizeToolArgs(_toolName: string, args: any): string {
+    const parts: string[] = [];
+    if (args.code) parts.push(`code=${args.code}`);
+    if (args.status) parts.push(`status=${args.status}`);
+    if (args.plate) parts.push(`plate=${args.plate}`);
+    if (args.grain) parts.push(`grain=${args.grain}`);
+    if (args.query) parts.push(`query=${args.query}`);
+    return parts.join(', ');
+  }
+
+  /** Summarize a tool result to a short text for history context. */
+  private summarizeToolResult(_toolName: string, result: string): string {
+    if (!result || result.length === 0) return 'ok';
+    try {
+      const obj = JSON.parse(result);
+      if (obj.error) return `error: ${String(obj.error).slice(0, 80)}`;
+      if (obj._selectionSent) return `lista de ${obj.total || '?'} items enviada`;
+      if (obj.status === 'pending_confirmation') return `pendiente confirmación`;
+      if (obj.status === 'created' && obj.code) return `creado: ${obj.code}`;
+      if (obj.code && obj.status) return `${obj.code} → ${obj.status}`;
+      if (typeof obj.total === 'number') return `${obj.total} resultados`;
+      if (obj.activeFreights !== undefined) return `${obj.activeFreights} fletes activos`;
+      if (obj.code && obj.origin && obj.dest) return `${obj.code}: ${obj.origin} → ${obj.dest} (${obj.status})`;
+      return String(result).slice(0, 100);
+    } catch {
+      return String(result).slice(0, 100);
+    }
+  }
+
+  /** Detect if the model's response ends with a question — used for next-turn continuity. */
+  private detectAwaitingAnswer(text: string): { question: string; expectedIntent: string | null; setAt: number } | null {
+    if (!text) return null;
+
+    const lines = text.split('\n').filter(l => l.trim());
+    const lastLine = lines[lines.length - 1]?.trim() || '';
+
+    if (!lastLine.endsWith('?')) return null;
+
+    let expectedIntent: string | null = null;
+
+    if (/confirm[aá]s?\??|lo (marcamos|hacemos|creamos)|est[aá] bien|dale\??/i.test(lastLine)) {
+      expectedIntent = 'confirmation';
+    } else if (/cu[aá]l|qu[eé] flete|a cu[aá]l/i.test(lastLine)) {
+      expectedIntent = 'selection';
+    } else if (/ya (descarg|termin|lleg)|descargaste|terminaste|llegaste/i.test(lastLine)) {
+      expectedIntent = 'status_confirmation';
+    } else if (/cu[aá]nto|qu[eé] (cantidad|peso|tipo)/i.test(lastLine)) {
+      expectedIntent = 'data_input';
+    }
+
+    return { question: lastLine.slice(0, 200), expectedIntent, setAt: Date.now() };
   }
 }

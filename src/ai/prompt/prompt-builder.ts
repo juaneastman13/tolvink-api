@@ -67,7 +67,7 @@ export class PromptBuilderService {
 
     const allReadonly = readonlyPlants.length > 0 && operatorPlants.length === 0;
     const canCreateFreight = !isChofer && !allReadonly && (hasType(companyType, 'producer') || hasType(companyType, 'plant'));
-    const canManageFleet = !isChofer && !allReadonly && (hasType(companyType, 'transporter') || ownFleet);
+    const canManageFleet = false; // Fleet economics tools removed — managed from web only
     const canAssignTransport = !isChofer && !allReadonly && (hasType(companyType, 'plant') || hasType(companyType, 'transporter'));
 
     // Build sections
@@ -114,10 +114,7 @@ export class PromptBuilderService {
           const fList = recentFreights.map(f => `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status})`).join(', ');
           proactiveLines.push(`Ultimos fletes: ${fList}`);
         }
-        if (hasOwnFleet) {
-          const truckCount = await this.prisma.truck.count({ where: { companyId: activeCoId, active: true } });
-          proactiveLines.push(`Flota propia: ${truckCount} camion(es)`);
-        }
+        // Fleet truck count proactive data removed — fleet tools managed from web only
       }
     } catch (e: any) { this.logger.warn(`Proactive data failed: ${e.message}`); }
 
