@@ -536,20 +536,15 @@ export class AgentService implements OnModuleDestroy {
   }
 
   /** Clear history after a terminal action so next message starts fresh. */
-  private async clearHistoryAfterTerminalAction(sessionId: string, actionName: string, lastMessage: string): Promise<void> {
+  private async clearHistoryAfterTerminalAction(sessionId: string, actionName: string): Promise<void> {
     if (!AgentService.TERMINAL_ACTIONS.has(actionName)) return;
     this.logger.log(`History cleared after terminal action: ${actionName}`);
-    const s = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
-    const fs: any = (s?.flowState as any) || {};
-    await this.prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: {
-        flowState: {
-          ...fs,
-          aiMessages: [],
-        },
-      },
-    });
+    // Single raw update — no findUnique needed, just set aiMessages to empty array
+    await this.prisma.$executeRaw`
+      UPDATE "whatsapp_sessions"
+      SET "flow_state" = COALESCE("flow_state", '{}'::jsonb) || '{"aiMessages":[]}'::jsonb
+      WHERE "id" = ${sessionId}
+    `.catch(() => {});
   }
 
   private async tryResolvePendingByIntent(
@@ -576,14 +571,14 @@ export class AgentService implements OnModuleDestroy {
     if (hasPendingFreight) {
       const res = await this.toolExecutor.executeTool('confirm_create_freight', {}, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
-      await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight', parsed.text);
+      await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
       return { text: parsed.text };
     }
     if (hasPendingAction) {
       const actionName = state.pendingAction?.tool || '';
       const res = await this.toolExecutor.executeTool('confirm_action', {}, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, accion confirmada.');
-      await this.clearHistoryAfterTerminalAction(session.id, actionName, parsed.text);
+      await this.clearHistoryAfterTerminalAction(session.id, actionName);
       return { text: parsed.text };
     }
     return null;
