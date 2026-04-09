@@ -1943,10 +1943,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     ];
 
     const userInclude = {
-      company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } },
+      company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true, autonomousDriverEnabled: true } },
       memberships: {
         where: { active: true },
-        include: { company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true } } },
+        include: { company: { select: { id: true, name: true, type: true, types: true, hasInternalFleet: true, autonomousDriverEnabled: true } } },
       },
     };
 

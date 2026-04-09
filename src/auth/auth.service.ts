@@ -20,7 +20,7 @@ const MAX_CODE_ATTEMPTS = 3;
 const MAX_CODES_PER_HOUR = 3;
 
 // Company select with types field (Json field not yet in generated Prisma client)
-const COMPANY_SELECT = { id: true, name: true, type: true, types: true, hasInternalFleet: true } as any;
+const COMPANY_SELECT = { id: true, name: true, type: true, types: true, hasInternalFleet: true, autonomousDriverEnabled: true } as any;
 
 @Injectable()
 export class AuthService {
