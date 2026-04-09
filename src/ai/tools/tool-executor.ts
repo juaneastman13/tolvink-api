@@ -1442,6 +1442,13 @@ export class ToolExecutorService {
         }
         default: result = JSON.stringify({ error: `Accion no reconocida: ${tool}` });
       }
+      // Clear history after terminal actions so next message starts fresh
+      const TERMINAL_ACTIONS = new Set(['create_autonomous_freight', 'finish_autonomous_freight', 'cancel_freight', 'confirm_create_freight', 'confirm_finished']);
+      if (TERMINAL_ACTIONS.has(tool)) {
+        const effects = this.sessionManager.getSideEffects(session.id) || {};
+        effects._clearAiMessages = true;
+        this.sessionManager.setSideEffects(session.id, effects);
+      }
       return result;
     } catch (e) {
       await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { flowState: { ...preExecState, pendingAction: pending } } }).catch(() => {});
