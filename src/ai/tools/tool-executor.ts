@@ -14,12 +14,13 @@ import { WhatsAppService } from '../../whatsapp/whatsapp.service';
 import { OcrService } from '../../ocr/ocr.service';
 import { SessionManagerService } from '../conversation/session-manager';
 import { sanitizeForPrompt, hasType, resolveActiveRole, resolveCompanyTypes, isProducerMembership } from '../utils/ai-utils';
-import { sanitizeToolError, sanitizeConfirmError } from '../utils/error-handler';
+import { sanitizeToolError, sanitizeConfirmError, sanitizeErrorForLog, classifyAiError } from '../utils/error-handler';
 import { CONSULTA_BLOCKED_TOOLS, ACTION_TOOLS, SEARCH_TOOLS } from './tool-permissions';
 import { APP_URL, OWN_FLEET_SHORTCUT, FREIGHT_STATUS_LABELS, FREIGHT_STATUS_SHORT, URUGUAY_UTC_OFFSET_MS } from '../core/constants';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { createSignedToken } from '../../common/signed-token';
+import { buildFreightSelectionItems } from './handlers/freight-query.handlers';
 import { RunTree } from 'langsmith/run_trees';
 import * as crypto from 'crypto';
 import * as bcryptAi from 'bcryptjs';
@@ -206,7 +207,7 @@ export class ToolExecutorService {
         });
         await toolTrace.postRun();
       } catch (e: any) {
-        this.logger.warn(`LangSmith tool trace init failed (${toolName}): ${e.message}`);
+        this.logger.warn(`LangSmith tool trace init failed (${toolName}): ${sanitizeErrorForLog(e?.message)}`);
         toolTrace = null;
       }
     }
@@ -272,10 +273,11 @@ export class ToolExecutorService {
       }
       return result;
     } catch (e) {
-      this.logger.error(`Tool ${toolName} error: ${e.message}`);
+      const errCode = classifyAiError(e);
+      this.logger.error(`Tool ${toolName} error [code=${errCode}]: ${sanitizeErrorForLog((e as any)?.message)}`);
       if (toolTrace) {
         try {
-          await toolTrace.end({ status: 'error', toolName }, String((e as any)?.message || 'tool_error'));
+          await toolTrace.end({ status: 'error', toolName, errorCode: errCode }, sanitizeErrorForLog(String((e as any)?.message || 'tool_error')));
           await toolTrace.patchRun();
         } catch {}
       }
@@ -310,14 +312,8 @@ export class ToolExecutorService {
         const result = await this.freights.findAll(synUser, { status: input.status, dateFrom: input.dateFrom, dateTo: input.dateTo, grain: input.grain, limit: 50, page: 1 } as any);
         const filtered = result.data.sort((a: any, b: any) => (a.destName || '').localeCompare(b.destName || '') || (a.originName || '').localeCompare(b.originName || ''));
         if (filtered.length === 0) return JSON.stringify({ total: 0, message: 'No hay fletes que coincidan con los filtros.' });
-        const items = filtered.map((f: any) => {
-          const grain = f.items?.[0]?.grain || 'N/A';
-          const tons = f.items?.[0]?.tons || 0;
-          const origin = f.originName || f.originCompany?.name || '?';
-          const dest = f.destName || f.destCompany?.name || '?';
-          const status = FREIGHT_STATUS_SHORT[f.status] || f.status;
-          return { id: `freight:${f.id}`, title: `${f.code} | ${grain} ${tons}tn`.slice(0, 24), description: `${origin} -> ${dest} | ${status}`.slice(0, 72) };
-        });
+        const enriched = filtered.map((f: any) => ({ ...f, statusShort: FREIGHT_STATUS_SHORT[f.status] || f.status }));
+        const items = buildFreightSelectionItems(enriched);
         const statusLabel = input.status ? ` (${FREIGHT_STATUS_SHORT[input.status] || input.status})` : '';
         return this.sessionManager.storePendingSelection(session.id, items, { headerText: `${filtered.length} flete${filtered.length !== 1 ? 's' : ''}${statusLabel}.\nSeleccione uno:`, listButtonLabel: 'Ver fletes', sectionTitle: 'FLETES' }, 'freight_selection');
       }

@@ -31,7 +31,7 @@ export class ContextBuilderService {
     if (lastMsgTime && aiMessagesCount > 0) {
       const minutesGap = (Date.now() - lastMsgTime) / 60000;
       if (minutesGap > STALE_SESSION_MIN) {
-        messageToSend = `[Sistema: pasaron ${Math.round(minutesGap)} min desde el ultimo mensaje. El usuario puede estar retomando o cambiando de tema.]\n\n${cleanedMessage}`;
+        messageToSend = `[CTX_SESSION_GAP minutes=${Math.round(minutesGap)}]\n\n${cleanedMessage}`;
       }
     }
 
@@ -40,13 +40,13 @@ export class ContextBuilderService {
       const doc = state.pendingDocument;
       const safeName = (doc.name || '').replace(/[^\w\s.\-()aeiounAEIOUN]/g, '').slice(0, 60);
       const activeCode = state.activeContext?.lastFreightCode;
-      messageToSend = `[ARCHIVO: "${safeName}" (${doc.type}, URL: ${doc.url}).${activeCode ? ` Flete activo: ${sanitizeForPrompt(activeCode)}.` : ''} Adjuntar con attach_document(code) o attach_truck_document(plate,linkTo,linkId).]\n\n${messageToSend}`;
+      messageToSend = `[CTX_DOCUMENT name="${safeName}" type="${sanitizeForPrompt(doc.type || '')}" url="${sanitizeForPrompt(doc.url || '')}"${activeCode ? ` activeFreight="${sanitizeForPrompt(activeCode)}"` : ''}]\n\n${messageToSend}`;
     }
 
     // Inject lastLocation
     if (state.lastLocation) {
       const loc = state.lastLocation;
-      messageToSend = `[UBICACION: lat=${loc.lat}, lng=${loc.lng}${loc.name ? `, "${sanitizeForPrompt(loc.name)}"` : ''}. Usar en prepare_freight customDest/customOrigin.]\n\n${messageToSend}`;
+      messageToSend = `[CTX_LOCATION lat=${loc.lat} lng=${loc.lng}${loc.name ? ` name="${sanitizeForPrompt(loc.name)}"` : ''}]\n\n${messageToSend}`;
     }
 
     // Inject active context
@@ -54,15 +54,15 @@ export class ContextBuilderService {
       const ac = state.activeContext;
       if (ac.lastFreightCode) {
         if (!newFreightRequest) {
-          messageToSend = `[FLETE ACTIVO: ${sanitizeForPrompt(ac.lastFreightCode)}. Resumen: ${sanitizeForPrompt(ac.lastFreightSummary || '')}. Ultima accion: ${sanitizeForPrompt(ac.lastAction || 'ninguna')}.]\n\n${messageToSend}`;
+          messageToSend = `[CTX_ACTIVE_FREIGHT code="${sanitizeForPrompt(ac.lastFreightCode)}" summary="${sanitizeForPrompt(ac.lastFreightSummary || '')}" lastAction="${sanitizeForPrompt(ac.lastAction || 'ninguna')}"]\n\n${messageToSend}`;
         } else {
-          messageToSend = `[Sistema: el usuario inicio un NUEVO pedido de flete. No arrastrar filtros ni acciones previas, y priorizar prepare_freight.]\n\n${messageToSend}`;
+          messageToSend = `[CTX_NEW_FREIGHT_REQUEST]\n\n${messageToSend}`;
         }
       } else if (ac.lastSearchFilter) {
         if (!newFreightRequest) {
-          messageToSend = `[Contexto: filtro=${sanitizeForPrompt(ac.lastSearchFilter)}]\n\n${messageToSend}`;
+          messageToSend = `[CTX_LAST_FILTER value="${sanitizeForPrompt(ac.lastSearchFilter)}"]\n\n${messageToSend}`;
         } else {
-          messageToSend = `[Sistema: ignorar filtro previo de busqueda (${sanitizeForPrompt(ac.lastSearchFilter)}) porque el usuario inicio un NUEVO pedido de flete.]\n\n${messageToSend}`;
+          messageToSend = `[CTX_CLEAR_FILTER previous="${sanitizeForPrompt(ac.lastSearchFilter)}"]\n\n${messageToSend}`;
         }
       }
     }
@@ -75,14 +75,14 @@ export class ContextBuilderService {
       if (rc.lastAction) parts.push(`ultima accion: ${sanitizeForPrompt(rc.lastAction)}`);
       if (rc.lastSearchFilter) parts.push(`ultimo filtro: ${sanitizeForPrompt(rc.lastSearchFilter)}`);
       if (parts.length > 0) {
-        messageToSend = `[Sistema: la sesion anterior expiro. Contexto recuperado: ${parts.join('. ')}. Informar brevemente al usuario que su sesion anterior expiro y ofrecerse a retomar.]\n\n${messageToSend}`;
+        messageToSend = `[CTX_RECOVERED_SESSION ${parts.join('. ')}]\n\n${messageToSend}`;
       }
     }
 
     // Inject pending action context (skip when creating freight to avoid stale-action interference)
     if (state.pendingAction && !state.pendingFreight && !newFreightRequest) {
       const pa = state.pendingAction;
-      messageToSend = `[Sistema: hay una accion pendiente de confirmacion: ${sanitizeForPrompt(pa.summary || pa.tool || '')}. Si el usuario confirma -> confirm_action. Si cancela o cambia de tema -> ignorar la accion pendiente.]\n\n${messageToSend}`;
+      messageToSend = `[CTX_PENDING_ACTION summary="${sanitizeForPrompt(pa.summary || pa.tool || '')}"]\n\n${messageToSend}`;
     }
 
     return messageToSend;

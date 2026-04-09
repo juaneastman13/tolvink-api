@@ -57,3 +57,27 @@ export function sanitizeConfirmError(err: Error): string {
   }
   return 'No se pudo ejecutar la accion. Intente nuevamente.';
 }
+
+/** Redact sensitive fragments before logging external/provider errors. */
+export function sanitizeErrorForLog(input: unknown): string {
+  let msg = String(input ?? '');
+  // Google API key pattern + explicit api_key fields.
+  msg = msg.replace(/AIza[0-9A-Za-z\-_]{20,}/g, '[REDACTED_API_KEY]');
+  msg = msg.replace(/(api[_-]?key['"\s:=]+)([^\s'",}]+)/gi, '$1[REDACTED]');
+  // Common auth/token leaks.
+  msg = msg.replace(/(Bearer\s+)[A-Za-z0-9\-._~+/=]+/gi, '$1[REDACTED]');
+  msg = msg.replace(/("?(?:access|refresh|id)?_?token"?\s*[:=]\s*"?)([^"\s,}]+)/gi, '$1[REDACTED]');
+  msg = msg.replace(/(authorization["'\s:=]+)([^\s'",}]+)/gi, '$1[REDACTED]');
+  return msg;
+}
+
+/** Coarse error categorization for logs/observability and user fallback paths. */
+export function classifyAiError(errLike: unknown): 'provider_suspended' | 'provider_unavailable' | 'rate_limited' | 'forbidden' | 'timeout' | 'unknown' {
+  const msg = String((errLike as any)?.message || errLike || '').toLowerCase();
+  if (msg.includes('consumer_suspended') || msg.includes('has been suspended')) return 'provider_suspended';
+  if (msg.includes('unavailable') || msg.includes('high demand') || msg.includes('503')) return 'provider_unavailable';
+  if (msg.includes('rate limit') || msg.includes('429') || msg.includes('quota')) return 'rate_limited';
+  if (msg.includes('permission_denied') || msg.includes('forbidden') || msg.includes('403')) return 'forbidden';
+  if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
+  return 'unknown';
+}

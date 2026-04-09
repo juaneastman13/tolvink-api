@@ -123,6 +123,7 @@ export class PromptBuilderService {
 
     // Assemble prompt
     let prompt = [identity, userContext, freightRules, assignmentRules, fleetRules, whatsappFormat, safetyRules].filter(Boolean).join('\n\n');
+    prompt += `\n\n<rule_precedence>\nPRIORIDAD DE REGLAS (si hay conflicto):\n1) safety-rules\n2) identity (rol y permisos)\n3) user-context\n4) reglas de dominio (freight/assignment/fleet)\n5) whatsapp-format\nSi dos reglas se contradicen y no alcanza para decidir, pedir UNA sola aclaracion breve.\n</rule_precedence>`;
     if (proactiveLines.length > 0) {
       prompt += `\n\n<proactive_data>\nDATOS DEL USUARIO (pre-cargados, NO repetir al usuario salvo que pregunte):\n${proactiveLines.join('\n')}\nAUTO-SELECCION: Si hay una sola opcion (1 campo, 1 lote, 1 planta, 1 camion), seleccionarla automaticamente.\n</proactive_data>`;
     }

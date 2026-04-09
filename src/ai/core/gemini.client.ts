@@ -7,6 +7,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GoogleGenAI, Type as GeminiType } from '@google/genai';
 import { AI_MODEL, MODEL_TEMPERATURE } from './constants';
 import { RunTree } from 'langsmith/run_trees';
+import { sanitizeErrorForLog } from '../utils/error-handler';
 
 export interface GeminiMessage {
   role: 'user' | 'model';
@@ -143,7 +144,7 @@ export class GeminiClient implements OnModuleInit {
         });
         await llmTrace.postRun();
       } catch (e: any) {
-        this.logger.warn(`LangSmith llm trace init failed: ${e.message}`);
+        this.logger.warn(`LangSmith llm trace init failed: ${sanitizeErrorForLog(e?.message)}`);
         llmTrace = null;
       }
     }

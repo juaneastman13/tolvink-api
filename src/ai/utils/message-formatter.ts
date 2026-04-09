@@ -1,12 +1,12 @@
-// =====================================================================
-// TOLVINK — Message pre/post-processing
+﻿// =====================================================================
+// TOLVINK - Message pre/post-processing
 // =====================================================================
 
 import { MAX_RESPONSE_CHARS, WEB_MAX_RESPONSE_CHARS, AUDIO_FILLERS } from '../core/constants';
 
 /** Clean audio transcription: strip filler words, normalize whitespace. */
 export function preprocessMessage(text: string): string {
-  let clean = text
+  const clean = text
     .replace(AUDIO_FILLERS, ' ')
     .replace(/\bv\s+corta\b/gi, 'v')
     .replace(/\bb\s+larga\b/gi, 'b')
@@ -49,17 +49,17 @@ export function validateResponse(text: string, isWeb = false): string {
 interface Button { id: string; title: string; }
 
 const CONFIRMATION_PATTERNS: Array<{ pattern: RegExp; buttons: Button[] }> = [
-  { pattern: /crear?\s*(el\s*)?flete/i, buttons: [{ id: 'confirm', title: '✅ Crear flete' }, { id: 'edit', title: '✏️ Cambiar' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /cancelar?\s*(el\s*)?flete/i, buttons: [{ id: 'confirm', title: '✅ Cancelar flete' }, { id: 'cancel', title: '❌ No cancelar' }] },
-  { pattern: /asignar?/i, buttons: [{ id: 'confirm', title: '✅ Asignar' }, { id: 'edit', title: '✏️ Cambiar' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /aceptar?\s*(el\s*)?flete/i, buttons: [{ id: 'confirm', title: '✅ Aceptar' }, { id: 'cancel', title: '❌ Rechazar' }] },
-  { pattern: /iniciar?\s*(el\s*)?viaje/i, buttons: [{ id: 'confirm', title: '✅ Iniciar' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /confirmar?\s*(la\s*)?carga/i, buttons: [{ id: 'confirm', title: '✅ Confirmar' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /confirmar?\s*(la\s*)?entrega/i, buttons: [{ id: 'confirm', title: '✅ Confirmar' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /crear?\s*(el\s*)?campo/i, buttons: [{ id: 'confirm', title: '✅ Crear campo' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /crear?\s*(el\s*)?lote/i, buttons: [{ id: 'confirm', title: '✅ Crear lote' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /crear?\s*(el\s*)?usuario/i, buttons: [{ id: 'confirm', title: '✅ Crear usuario' }, { id: 'cancel', title: '❌ Cancelar' }] },
-  { pattern: /registrar?/i, buttons: [{ id: 'confirm', title: '✅ Registrar' }, { id: 'cancel', title: '❌ Cancelar' }] },
+  { pattern: /crear?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_edit', title: 'CAMBIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /cancelar?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'NO CANCELAR' }] },
+  { pattern: /asignar?/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_edit', title: 'CAMBIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /aceptar?\s*(el\s*)?flete/i, buttons: [{ id: 'ai_confirm', title: 'ACEPTAR' }, { id: 'ai_cancel', title: 'RECHAZAR' }] },
+  { pattern: /iniciar?\s*(el\s*)?viaje/i, buttons: [{ id: 'ai_confirm', title: 'INICIAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /confirmar?\s*(la\s*)?carga/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /confirmar?\s*(la\s*)?entrega/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /crear?\s*(el\s*)?campo/i, buttons: [{ id: 'ai_confirm', title: 'CREAR CAMPO' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /crear?\s*(el\s*)?lote/i, buttons: [{ id: 'ai_confirm', title: 'CREAR LOTE' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /crear?\s*(el\s*)?usuario/i, buttons: [{ id: 'ai_confirm', title: 'CREAR USUARIO' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
+  { pattern: /registrar?/i, buttons: [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }] },
 ];
 
 /** Ensure confirmation buttons are present when the response text implies a confirmation action. */

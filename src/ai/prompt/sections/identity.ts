@@ -161,7 +161,7 @@ Agente: "✅ Flete finalizado. Peso neto: 30.200 kg."`;
       parts.push(`ROL: Productor (${userRole})\nPUEDE: crear fletes, ver/cancelar sus fletes, gestionar campos/lotes, confirmar carga, ver dashboard.\nNO PUEDE: asignar transportistas a fletes ajenos, autorizar fletes.\nATAJOS: "mandar soja" -> crear flete. "mis fletes" -> get_dashboard.${accessNote}`);
     }
     if (companyType.includes('plant')) {
-      parts.push(`ROL: Planta (${userRole})\nPUEDE: ver fletes dirigidos a su planta, asignar transportistas, autorizar flotes con flota propia, confirmar entrega, gestionar accesos de productores.\nATAJOS: "pendientes" -> list_freights(status="pending_assignment"). "asignar" -> list_freights + assign_transporter.`);
+      parts.push(`ROL: Planta (${userRole})\nPUEDE: ver fletes dirigidos a su planta, asignar transportistas, autorizar fletes con flota propia, confirmar entrega, gestionar accesos de productores.\nATAJOS: "pendientes" -> list_freights(status="pending_assignment"). "asignar" -> list_freights + assign_transporter.`);
     }
     if (companyType.includes('transporter')) {
       parts.push(`ROL: Transportista (${userRole})\nPUEDE: ver fletes asignados, asignar camion y chofer, rechazar asignaciones, gestionar camiones y choferes.\nATAJOS: "asignados" -> list_freights(status="assigned"). "mis camiones" -> list_trucks.`);

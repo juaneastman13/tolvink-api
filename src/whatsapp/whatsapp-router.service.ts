@@ -13,6 +13,8 @@ import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
 import * as crypto from 'crypto';
+import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
+import { classifyAiError, sanitizeErrorForLog } from '../ai/utils/error-handler';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',
@@ -121,9 +123,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const lock = new Promise<void>(r => unlock = r);
     this.phoneLocks.set(phone, lock);
     await prev;
+    const distLockKey = `wa_phone:${phone}`;
+    const hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 2500, 120);
+    if (!hasDistLock) {
+      this.logger.warn(`Distributed lock busy for phone=${phone.slice(-4)}; dropping duplicate/parallel message`);
+      return;
+    }
     try {
       return await this._handleMessage(phone, type, payload, waMessageId);
     } finally {
+      await releasePgLock(this.prisma as any, distLockKey);
       unlock!();
       if (this.phoneLocks.get(phone) === lock) this.phoneLocks.delete(phone);
     }
@@ -150,6 +159,20 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     if (this.messageRate.size > 5000) {
       const first = this.messageRate.keys().next().value;
       if (first) this.messageRate.delete(first);
+    }
+    // Cross-instance guard: persistent count in whatsapp_message_logs.
+    const dbCount = await this.prisma.whatsAppMessageLog.count({
+      where: {
+        phone,
+        direction: 'inbound',
+        createdAt: { gt: new Date(now - 60_000) },
+      },
+    });
+    if (dbCount > 45) {
+      this.wa.sendText(phone, 'Estas enviando muchos mensajes seguidos. Espera un minuto y seguimos.')
+        .catch((err) => this.logger.warn(`[rateLimit-db] feedback send failed: ${sanitizeErrorForLog(err?.message)}`));
+      this.logger.warn(`Persistent rate limit exceeded phone=${phone.slice(-4)} count=${dbCount}/60s`);
+      return;
     }
 
     try {
@@ -554,10 +577,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         await this.wa.sendText(phone, reply);
       }
     } catch (e) {
-      this.logger.error(`AI chat error: ${e.message}`, e.stack?.slice(0, 300));
-      await this.wa.sendText(phone,
-        'Se produjo un inconveniente técnico. Por favor, utilice las opciones del menú.',
-      );
+      const errCode = classifyAiError(e);
+      this.logger.error(`AI chat error [code=${errCode}]: ${sanitizeErrorForLog((e as any)?.message)}`, (e as any)?.stack?.slice(0, 300));
+      const userMsg = errCode === 'provider_suspended'
+        ? 'El servicio de inteligencia esta temporalmente no disponible. Mientras tanto, usa el menu para seguir operando.'
+        : errCode === 'provider_unavailable'
+          ? 'El asistente esta con alta demanda. Intenta nuevamente en unos segundos o usa el menu.'
+          : 'Se produjo un inconveniente tecnico. Por favor, utilice las opciones del menu.';
+      await this.wa.sendText(phone, userMsg);
       const sessCoId = ((cachedSession?.flowState as any) || {}).selectedCompanyId;
       await this.showMainMenu(phone, user, sessCoId);
     }
@@ -956,8 +983,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           break;
         }
         case 'cancel': {
-          // Start cancel flow (needs reason)
-          await this.flow.startFlow('cancel_freight', phone, user, { freightId: entityId });
+          // "cancel:{freightId}" = cancel freight flow. Plain "cancel" = generic AI cancellation.
+          if (entityId) {
+            await this.flow.startFlow('cancel_freight', phone, user, { freightId: entityId });
+          } else {
+            await this.handleAiChat(phone, user, 'No, cancelar.');
+          }
           break;
         }
         case 'reassign': {
@@ -1029,15 +1060,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           break;
         }
         case 'ai_confirm':
-        case 'confirm': {
-          // Generic confirmation for any staged AI action (fleet tools use 'confirm', freight tools use 'ai_confirm')
+        case 'confirm': { // backward compatibility
+          // Generic confirmation for any staged AI action
           await this.handleAiChat(phone, user, 'Confirmar.');
           break;
         }
-        case 'ai_cancel':
-        case 'cancel': {
+        case 'ai_cancel': {
           // Generic cancellation for any staged AI action
           await this.handleAiChat(phone, user, 'No, cancelar.');
+          break;
+        }
+        case 'ai_edit':
+        case 'edit': { // backward compatibility
+          await this.wa.sendText(phone, 'Perfecto. Decime que dato queres cambiar y lo actualizo.');
           break;
         }
         default: {
@@ -1045,7 +1080,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
       }
     } catch (e) {
-      this.logger.error(`Button action "${action}" failed: ${e.message}`, e.stack);
+      this.logger.error(`Button action "${action}" failed: ${sanitizeErrorForLog((e as any)?.message)}`, (e as any)?.stack);
       // H2: Sanitize error messages — only pass safe business errors
       const raw = String(e.message || '');
       const isSafe400 = (e.status === 400 || e.response?.statusCode === 400)

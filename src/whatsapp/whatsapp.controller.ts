@@ -13,6 +13,8 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
 import { verifySignedToken } from '../common/signed-token';
+import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
+import { sanitizeErrorForLog } from '../ai/utils/error-handler';
 
 @Controller('whatsapp')
 export class WhatsAppController implements OnModuleDestroy {
@@ -124,12 +126,48 @@ export class WhatsAppController implements OnModuleDestroy {
       const maskedPhone = phone.length > 4 ? '*'.repeat(phone.length - 4) + phone.slice(-4) : phone;
       this.logger.log(`Message from ${maskedPhone}, type: ${message.type}`);
 
+      const { type, payload } = this.parseMessage(message);
+      const maskedPayload = type === 'location' ? { type: 'location' }
+        : type === 'image' || type === 'document' || type === 'audio' ? { type, mime: payload?.mime_type }
+        : type === 'text' ? { type: 'text', length: payload?.body?.length || 0 }
+        : { type };
+
       // Deduplication — Meta can send the same webhook multiple times
       if (waMessageId && this.processedMessages.has(waMessageId)) {
         this.logger.log(`Duplicate message ${waMessageId}, skipping`);
         return;
       }
       if (waMessageId) {
+        // Cross-instance dedup: lock message ID, then check persistent log.
+        const msgLockKey = `wa_msg:${waMessageId}`;
+        const hasMsgLock = await acquirePgLockWithWait(this.prisma as any, msgLockKey, 2000, 100);
+        if (!hasMsgLock) {
+          this.logger.log(`Duplicate/parallel message lock busy: ${waMessageId}`);
+          return;
+        }
+        try {
+          const existing = await this.prisma.whatsAppMessageLog.findFirst({
+            where: { waMessageId, direction: 'inbound' },
+            select: { id: true },
+          });
+          if (existing) {
+            this.logger.log(`Duplicate message in DB ${waMessageId}, skipping`);
+            return;
+          }
+          await this.prisma.whatsAppMessageLog.create({
+            data: {
+              waMessageId,
+              phone,
+              direction: 'inbound',
+              type,
+              content: maskedPayload,
+              status: 'received',
+            },
+          });
+        } finally {
+          await releasePgLock(this.prisma as any, msgLockKey);
+        }
+
         this.processedMessages.set(waMessageId, Date.now());
         // Cleanup expired entries; evict oldest if still over cap (LRU, never full clear)
         if (this.processedMessages.size > 100) {
@@ -158,6 +196,11 @@ export class WhatsAppController implements OnModuleDestroy {
       if (phoneRate && now < phoneRate.resetAt) {
         if (phoneRate.count >= this.PHONE_RATE_LIMIT) {
           this.logger.warn(`Per-phone rate limit exceeded for ${maskedPhone} (${phoneRate.count}/${this.PHONE_RATE_LIMIT} in 60s)`);
+          if (phoneRate.count === this.PHONE_RATE_LIMIT) {
+            this.wa.sendText(phone, 'Estas enviando muchos mensajes seguidos. Espera un momento y volvemos a intentar.')
+              .catch((err) => this.logger.warn(`Rate-limit feedback failed: ${sanitizeErrorForLog(err?.message)}`));
+          }
+          phoneRate.count++;
           return; // Already responded 200 to Meta above
         }
         phoneRate.count++;
@@ -171,31 +214,14 @@ export class WhatsAppController implements OnModuleDestroy {
         }
       }
 
-      // Parse message type and payload
-      const { type, payload } = this.parseMessage(message);
-
-      // Log inbound message (mask sensitive payload fields)
-      const maskedPayload = type === 'location' ? { type: 'location' }
-        : type === 'image' || type === 'document' || type === 'audio' ? { type, mime: payload?.mime_type }
-        : type === 'text' ? { type: 'text', length: payload?.body?.length || 0 }
-        : { type };
-      this.prisma.whatsAppMessageLog.create({
-        data: {
-          waMessageId,
-          phone,
-          direction: 'inbound',
-          type,
-          content: maskedPayload,
-          status: 'received',
-        },
-      }).catch(e => this.logger.error(`WA inbound log failed: ${e.message}`));
+      // Parse and log already done above (with cross-instance dedup guard)
 
       // Route the message
       this.logger.log(`Routing message type=${type} to handler`);
       await this.router.handleMessage(phone, type, payload, waMessageId);
       this.logger.log('Handler completed successfully');
     } catch (e) {
-      this.logger.error(`Webhook processing error: ${e.message}`, e.stack);
+      this.logger.error(`Webhook processing error: ${sanitizeErrorForLog((e as any)?.message)}`, (e as any)?.stack);
     }
   }
 

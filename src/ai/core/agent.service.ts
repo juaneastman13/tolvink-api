@@ -17,7 +17,9 @@ import { resolveActiveRole } from '../utils/ai-utils';
 import { selectThinkingLevel } from './thinking-router';
 import { checkRateLimit, cleanupRateLimits } from '../utils/rate-limiter';
 import { preprocessMessage, validateResponse, normalizeSpokenNumbers, ensureConfirmationButtons } from '../utils/message-formatter';
+import { classifyAiError, sanitizeErrorForLog } from '../utils/error-handler';
 import { RunTree } from 'langsmith/run_trees';
+import { acquirePgLockWithWait, releasePgLock } from '../../common/distributed-lock';
 import {
   MAX_TOOL_ITERATIONS, TOOL_TIMEOUT_MS, SESSION_TIMEOUT_MS,
   MAX_HISTORY_MESSAGES, PROMPT_CACHE_TTL_MS, APP_URL,
@@ -126,6 +128,11 @@ export class AgentService implements OnModuleDestroy {
         return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
       }
     }
+    const distLockKey = `ai_chat:${lockKey}`;
+    const hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, this.LOCK_WAIT_MS, this.LOCK_WAIT_STEP_MS);
+    if (!hasDistLock) {
+      return { text: 'Estoy procesando su mensaje anterior, aguarde un momento.' };
+    }
     this._chatLocks.add(lockKey);
     let chatTrace: RunTree | null = null;
     if (this.langsmithEnabled) {
@@ -147,7 +154,7 @@ export class AgentService implements OnModuleDestroy {
         });
         await chatTrace.postRun();
       } catch (e: any) {
-        this.logger.warn(`LangSmith chat trace init failed: ${e.message}`);
+        this.logger.warn(`LangSmith chat trace init failed: ${sanitizeErrorForLog(e?.message)}`);
         chatTrace = null;
       }
     }
@@ -384,15 +391,23 @@ export class AgentService implements OnModuleDestroy {
       return { text: finalText, buttons: resolvedButtons.length > 0 ? resolvedButtons : undefined, navigate: _navigate };
     } catch (e: any) {
       this.sessionManager.deleteSideEffects(session.id);
-      this.logger.error(`Chat error [session=${session.id} user=${user.id}]: ${e.message}`, e.stack?.slice(0, 500));
+      const errCode = classifyAiError(e);
+      this.logger.error(`Chat error [code=${errCode} session=${session.id} user=${user.id}]: ${sanitizeErrorForLog(e?.message)}`, e.stack?.slice(0, 500));
       if (chatTrace) {
         try {
-          await chatTrace.end({ status: 'error' }, String(e?.message || 'chat_error'));
+          await chatTrace.end({ status: 'error', errorCode: errCode }, sanitizeErrorForLog(String(e?.message || 'chat_error')));
           await chatTrace.patchRun();
         } catch {}
       }
+      if (errCode === 'provider_suspended') {
+        return { text: 'El servicio de inteligencia esta temporalmente no disponible. Usa el menu y volvemos a intentar en unos minutos.' };
+      }
+      if (errCode === 'provider_unavailable' || errCode === 'rate_limited') {
+        return { text: 'El asistente esta con alta demanda. Intenta nuevamente en unos segundos.' };
+      }
       return { text: 'Se produjo un inconveniente tecnico. Por favor, intente nuevamente.' };
     } finally {
+      await releasePgLock(this.prisma as any, distLockKey);
       this._chatLocks.delete(lockKey);
     }
   }
