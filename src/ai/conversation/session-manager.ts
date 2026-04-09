@@ -32,12 +32,12 @@ export class SessionManagerService {
   cleanStaleSideEffects(): void {
     const now = Date.now();
     for (const [k, v] of this._chatSideEffects) {
-      if (v._ts && now - v._ts > 10 * 60 * 1000) this._chatSideEffects.delete(k);
+      if (v._ts && now - v._ts > 3 * 60 * 1000) this._chatSideEffects.delete(k);
       else if (!v._ts) this._chatSideEffects.delete(k);
     }
-    if (this._chatSideEffects.size > 5_000) {
+    if (this._chatSideEffects.size > 1_000) {
       const iter = this._chatSideEffects.keys();
-      while (this._chatSideEffects.size > 4_000) {
+      while (this._chatSideEffects.size > 500) {
         const k = iter.next().value;
         if (k) this._chatSideEffects.delete(k); else break;
       }

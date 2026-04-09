@@ -124,10 +124,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     this.phoneLocks.set(phone, lock);
     await prev;
     const distLockKey = `wa_phone:${phone}`;
-    let hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 2500, 120);
-    // Avoid dropping valid button/text interactions under transient cross-instance contention.
+    let hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 2000, 200);
+    // Short retry for transient contention (button presses arriving during processing).
     if (!hasDistLock) {
-      hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 12000, 150);
+      hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 4000, 250);
     }
     if (!hasDistLock) {
       // Degrade gracefully: keep processing with in-process phone lock to avoid dropping user interactions.

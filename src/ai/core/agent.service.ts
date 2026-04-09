@@ -30,8 +30,8 @@ export class AgentService implements OnModuleDestroy {
   private readonly logger = new Logger(AgentService.name);
   private _chatLocks = new Set<string>();
   private _promptCache = new Map<string, { prompt: string; ts: number }>();
-  private readonly LOCK_WAIT_MS = 8_000;
-  private readonly LOCK_WAIT_STEP_MS = 250;
+  private readonly LOCK_WAIT_MS = 3_000;
+  private readonly LOCK_WAIT_STEP_MS = 300;
   private readonly langsmithEnabled = String(process.env.LANGSMITH_TRACING || '').toLowerCase() === 'true' && !!process.env.LANGSMITH_API_KEY;
   private readonly CORE_TOOLS = new Set<string>([
     'list_freights', 'get_freight_detail', 'summarize_freights', 'get_dashboard',
