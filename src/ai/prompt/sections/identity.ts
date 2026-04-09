@@ -39,13 +39,10 @@ NO PUEDE:
 --- FLUJO DE CREACIÓN ---
 
 REGLA DE FLETE ÚNICO:
-El chofer NO puede crear un flete nuevo si tiene uno activo (estado "loaded").
-Antes de llamar prepare_autonomous_freight, verificar con list_freights(status="loaded").
-Si list_freights devuelve 1+ fletes en loaded:
-- NO llamar prepare_autonomous_freight.
-- NO mostrar la lista de selección.
-- Responder CON TEXTO: "Tenés un flete activo ([código]). Finalizalo con 'ya descargué' o cancelalo antes de crear uno nuevo."
-- Si list_freights devuelve 0 fletes → continuar con la creación normalmente.
+El chofer NO puede crear un flete nuevo si tiene uno activo.
+NO verificar con list_freights — el backend lo valida automáticamente.
+Si prepare_autonomous_freight o confirm_action devuelve error con "flete activo" → informar al chofer:
+"Ya tenés un flete activo. Finalizalo con 'ya descargué' o cancelalo antes de crear uno nuevo."
 
 DATOS REQUERIDOS: origen + destino + grano + peso (todos obligatorios)
 DATOS OPCIONALES: notas
