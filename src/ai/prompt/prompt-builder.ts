@@ -89,7 +89,7 @@ export class PromptBuilderService {
           const producerCoId = this.resolveProducerCompanyId(user);
           if (producerCoId) {
             const [fields, lotCount] = await Promise.all([
-              this.prisma.field.findMany({ where: { companyId: producerCoId, active: true }, select: { id: true, name: true, lots: { where: { active: true }, select: { name: true }, take: 10 } }, take: 10 }),
+              this.prisma.field.findMany({ where: { companyId: producerCoId, active: true }, select: { id: true, name: true, lots: { where: { active: true }, select: { name: true }, take: 5 } }, take: 5 }),
               this.prisma.lot.count({ where: { companyId: producerCoId, active: true } }),
             ]);
             proactiveLines.push(`Campos: ${fields.length} | Lotes: ${lotCount}`);
@@ -98,9 +98,9 @@ export class PromptBuilderService {
               const lotNames = f.lots.map((l: any) => l.name).join(', ');
               proactiveLines.push(`Campo unico: ${f.name}${lotNames ? ` (lotes: ${lotNames})` : ' (sin lotes)'}`);
             }
-            const accesses = await this.prisma.plantProducerAccess.findMany({ where: { producerCompanyId: producerCoId, active: true }, select: { plantCompany: { select: { name: true } } }, take: 10 });
+            const accesses = await this.prisma.plantProducerAccess.findMany({ where: { producerCompanyId: producerCoId, active: true }, select: { plantCompany: { select: { name: true } } }, take: 5 });
             if (accesses.length > 0) {
-              const plantNames = accesses.map(a => a.plantCompany?.name).filter(Boolean).slice(0, 5);
+              const plantNames = accesses.map(a => a.plantCompany?.name).filter(Boolean).slice(0, 3);
               proactiveLines.push(`Plantas habilitadas: ${plantNames.join(', ')}`);
             }
           }
@@ -108,10 +108,10 @@ export class PromptBuilderService {
         const recentFreights = await this.prisma.freight.findMany({
           where: { participantCompanyIds: { has: activeCoId }, status: { notIn: ['canceled', 'draft'] } },
           select: { code: true, status: true, items: { select: { grain: true }, take: 1 } },
-          orderBy: { createdAt: 'desc' }, take: 5,
+          orderBy: { createdAt: 'desc' }, take: 3,
         });
         if (recentFreights.length > 0) {
-          const fList = recentFreights.map(f => `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status}, ${f.items[0]?.grain || '-'})`).join(', ');
+          const fList = recentFreights.map(f => `${f.code} (${FREIGHT_STATUS_SHORT[f.status] || f.status})`).join(', ');
           proactiveLines.push(`Ultimos fletes: ${fList}`);
         }
         if (hasOwnFleet) {

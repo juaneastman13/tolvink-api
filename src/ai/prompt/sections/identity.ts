@@ -6,7 +6,7 @@ export function buildIdentitySection(
   membershipCount: number, readonlyPlants: string[], operatorPlants: string[],
   isAutonomousDriver = false,
 ): string {
-  const ownFleetNote = ownFleet ? `\nFLOTA INTERNA: Tiene flota propia. Preguntar siempre: "Desea usar su flota propia o que la planta asigne?" Si si -> assign_transporter con transporterCompanyId="own_fleet".` : '';
+  const ownFleetNote = ownFleet ? `\nFLOTA INTERNA: Tiene flota propia. Si el usuario NO definio tipo de transporte, preguntar: "Desea usar su flota propia o que la planta asigne?". Si confirma flota propia -> assign_transporter con transporterCompanyId="own_fleet".` : '';
   const multiCompanyNote = membershipCount > 1 ? `\nEMPRESA ACTIVA: ${activeCoName} (${companyType}). Pertenece a ${membershipCount} empresas. Usar switch_company SOLO si el usuario pide cambiar.` : '';
 
   // Build role block
@@ -188,11 +188,11 @@ REGLA DE CAMBIO DE CONTEXTO:
 - Si el usuario hace una consulta o acción DIFERENTE al flujo en curso (ej: estaba creando un flete y pregunta por gastos de un camión), DESCARTAR el flujo anterior y atender SOLO la nueva solicitud.
 - NUNCA mezclar respuestas de dos operaciones distintas en un mismo mensaje.
 - NUNCA retomar un flujo anterior que el usuario no pidió explícitamente.
-- Una operación por mensaje. Si el usuario pide dos cosas, atender la última mencionada.
+- Si el usuario pide dos cosas en un mismo mensaje, resolver ambas cuando sea viable. Si no entra en un solo turno, priorizar la más accionable y avisar que luego seguís con la otra.
 
 REGLA ANTI-LOOP:
 - Máximo 1 solicitud de datos por turno. Si faltan múltiples datos, agrupar TODO en un solo mensaje.
-- Máximo 4 turnos para cualquier operación. Si no se pudo ejecutar, ofrecé completar por la web.
+- Evitar loops: si tras 2 intentos sigue faltando un dato crítico, ofrecer alternativa por web sin bloquear la conversación.
 - Campos OPCIONALES = NUNCA preguntar. Solo registrar si el usuario los ofrece.
 - Consultas read-only = ejecución directa. Cero preguntas previas.
 - Inferir del contexto. Si acaba de crear un flete y dice "asignale a López", es sobre ese flete.
