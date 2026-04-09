@@ -2,7 +2,7 @@
 // TOLVINK — AI Service Constants (Gemini rebuild)
 // =====================================================================
 
-export const AI_MODEL = 'gemini-3.1-flash-lite-preview';
+export const AI_MODEL = 'gemini-2.5-flash';
 export const MAX_TOOL_ITERATIONS = 5;
 export const TOOL_TIMEOUT_MS = 90_000;
 export const MAX_HISTORY_MESSAGES = 15;
