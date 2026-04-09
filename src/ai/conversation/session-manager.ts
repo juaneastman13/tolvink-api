@@ -5,6 +5,7 @@
 
 import { Injectable } from '@nestjs/common';
 import { MAX_HISTORY_MESSAGES } from '../core/constants';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class SessionManagerService {
@@ -90,10 +91,11 @@ export class SessionManagerService {
   ): string {
     const effects = this._chatSideEffects.get(sessionId) || {};
     const stagedCompanyId = user?.activeCompanyId || user?.companyId || params?.actionSynUser?.companyId || null;
-    effects.pendingAction = { tool, params, summary, createdAt: Date.now(), stagedCompanyId };
+    const actionId = randomUUID().slice(0, 8);
+    effects.pendingAction = { actionId, tool, params, summary, createdAt: Date.now(), stagedCompanyId };
     effects._pendingButtons = [
-      { id: 'ai_confirm', title: customButtons?.confirm || 'CONFIRMAR' },
-      { id: 'ai_cancel', title: customButtons?.cancel || 'CANCELAR' },
+      { id: `ai_confirm:${actionId}`, title: customButtons?.confirm || 'CONFIRMAR' },
+      { id: `ai_cancel:${actionId}`, title: customButtons?.cancel || 'CANCELAR' },
     ];
     effects._ts = effects._ts || Date.now();
     this._chatSideEffects.set(sessionId, effects);

@@ -560,8 +560,12 @@ export class ToolExecutorService {
         return this.sessionManager.stageAction(session.id, 'confirm_finished', { freightId: r.freight.id, code: r.freight.code }, `Confirmar entrega ${r.freight.code}`);
       }
       case 'cancel_freight': {
+        if (!input.code || String(input.code).trim().length < 3) {
+          return JSON.stringify({ error: 'Para cancelar necesito el codigo exacto del flete (ej: F26-ABC.1234).' });
+        }
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
+        this.logger.log(`[resolve] tool=cancel_freight user=${user.id || user.sub} requestedCode=${String(input.code).toUpperCase()} resolvedCode=${r.freight.code}`);
         return this.sessionManager.stageAction(session.id, 'cancel_freight', { freightId: r.freight.id, code: r.freight.code, reason: input.reason }, `Cancelar flete ${r.freight.code}`);
       }
       case 'authorize_freight': {
@@ -571,10 +575,10 @@ export class ToolExecutorService {
       }
 
       case 'confirm_action':
-        return await this.executeConfirmAction(user, synUser, session);
+        return await this.executeConfirmAction(user, synUser, session, input);
 
       case 'confirm_create_freight':
-        return await this.executeConfirmCreateFreight(user, synUser, session);
+        return await this.executeConfirmCreateFreight(user, synUser, session, input);
 
       case 'prepare_freight':
         return await this.executePrepareFreight(input, user, session);
@@ -638,10 +642,14 @@ export class ToolExecutorService {
         return JSON.stringify({ error: 'Use la plataforma web para editar campos y lotes.' });
 
       case 'attach_document': {
+        if (!input.code || String(input.code).trim().length < 3) {
+          return JSON.stringify({ error: 'Para adjuntar necesito el codigo exacto del flete.' });
+        }
         const r = await this.resolveFreightWithAccess(input.code, user);
         if (r.error) return JSON.stringify({ error: r.error });
         const pendingDoc = this.sessionManager.getSideEffects(session.id)?.pendingDocument || (session.flowState as any)?.pendingDocument;
         if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay archivo pendiente.' });
+        this.logger.log(`[resolve] tool=attach_document user=${user.id || user.sub} requestedCode=${String(input.code).toUpperCase()} resolvedCode=${r.freight.code}`);
         return this.sessionManager.stageAction(session.id, 'attach_document', { freightId: r.freight.id, code: r.freight.code, document: pendingDoc, step: input.step }, `Adjuntar "${pendingDoc.name}" a ${r.freight.code}`);
       }
 
@@ -741,8 +749,9 @@ export class ToolExecutorService {
 
     const effects = this.sessionManager.getSideEffects(session.id);
     const prepareCompanyId = user.activeCompanyId || user.companyId;
-    effects.pendingFreight = { ...input, truckCount: Number(input.truckCount), _sessionCompanyId: prepareCompanyId };
-    effects._pendingButtons = [{ id: 'ai_confirm_freight', title: 'CONFIRMAR' }, { id: 'ai_cancel_freight', title: 'CANCELAR' }];
+    const freightActionId = crypto.randomUUID().slice(0, 8);
+    effects.pendingFreight = { ...input, truckCount: Number(input.truckCount), _sessionCompanyId: prepareCompanyId, actionId: freightActionId };
+    effects._pendingButtons = [{ id: `ai_confirm_freight:${freightActionId}`, title: 'CONFIRMAR' }, { id: `ai_cancel_freight:${freightActionId}`, title: 'CANCELAR' }];
     effects._ts = effects._ts || Date.now();
     this.sessionManager.setSideEffects(session.id, effects);
 
@@ -981,14 +990,17 @@ export class ToolExecutorService {
   }
 
   // ---- confirm_create_freight ----
-  private async executeConfirmCreateFreight(user: any, synUser: any, session: any): Promise<string> {
+  private async executeConfirmCreateFreight(user: any, synUser: any, session: any, input?: any): Promise<string> {
     const rows = await this.prisma.$queryRaw<any[]>`
       WITH old AS (SELECT "id", "flow_state" FROM "whatsapp_sessions" WHERE "id" = ${session.id} AND "flow_state" ? 'pendingFreight' FOR UPDATE)
-      UPDATE "whatsapp_sessions" s SET "flow_state" = s."flow_state" #- '{pendingFreight}' FROM old WHERE s."id" = old."id" RETURNING old."flow_state" AS "old_state"
+      UPDATE "whatsapp_sessions" s SET "flow_state" = s."flow_state" #- '{pendingFreight}' #- '{_pendingButtons}' #- '{pendingDocument}' FROM old WHERE s."id" = old."id" RETURNING old."flow_state" AS "old_state"
     `;
     if (!rows.length) return JSON.stringify({ error: 'No hay un flete pendiente. Usa prepare_freight primero.' });
     const pending = rows[0].old_state?.pendingFreight;
     if (!pending) return JSON.stringify({ error: 'No hay un flete pendiente.' });
+    if (input?.actionId && pending.actionId && String(input.actionId) !== String(pending.actionId)) {
+      return JSON.stringify({ error: 'La confirmacion no coincide con la accion pendiente.' });
+    }
     pending._lastUserText = this.extractLastUserText(rows[0].old_state?.aiMessages);
 
     const targetCompanyId = pending._sessionCompanyId || user.activeCompanyId;
@@ -1296,23 +1308,28 @@ export class ToolExecutorService {
   }
 
   // ---- confirm_action (generic) ----
-  private async executeConfirmAction(user: any, synUser: any, session: any): Promise<string> {
+  private async executeConfirmAction(user: any, synUser: any, session: any, input?: any): Promise<string> {
     const rows = await this.prisma.$queryRaw<any[]>`
       WITH old AS (SELECT "id", "flow_state" FROM "whatsapp_sessions" WHERE "id" = ${session.id} AND "flow_state" ? 'pendingAction' FOR UPDATE)
-      UPDATE "whatsapp_sessions" s SET "flow_state" = s."flow_state" #- '{pendingAction}' #- '{_pendingButtons}' FROM old WHERE s."id" = old."id" RETURNING old."flow_state" AS "old_state"
+      UPDATE "whatsapp_sessions" s SET "flow_state" = s."flow_state" #- '{pendingAction}' #- '{_pendingButtons}' #- '{pendingDocument}' FROM old WHERE s."id" = old."id" RETURNING old."flow_state" AS "old_state"
     `;
     if (!rows.length) return JSON.stringify({ error: 'No hay accion pendiente.' });
     const pending = rows[0].old_state?.pendingAction;
     if (!pending) return JSON.stringify({ error: 'No hay accion pendiente.' });
     if (pending.createdAt && Date.now() - pending.createdAt > 5 * 60_000) return JSON.stringify({ error: 'La accion expiro.' });
+    if (input?.actionId && pending.actionId && String(input.actionId) !== String(pending.actionId)) {
+      return JSON.stringify({ error: 'La confirmacion no coincide con la accion pendiente.' });
+    }
 
     const preExecState = { ...rows[0].old_state };
     delete preExecState.pendingAction;
     delete preExecState._pendingButtons;
+    delete preExecState.pendingDocument;
     const { tool, params } = pending;
 
     try {
       let result: string;
+      this.logger.log(`[confirm_action] user=${user.id || user.sub} actionId=${pending.actionId || 'none'} tool=${tool} code=${params?.code || 'n/a'}`);
       switch (tool) {
         case 'accept_freight': await this.freights.respond(params.freightId, { action: 'accepted' } as any, synUser); result = JSON.stringify({ status: 'accepted', code: params.code }); break;
         case 'reject_freight': await this.freights.respond(params.freightId, { action: 'rejected', reason: params.reason } as any, synUser); result = JSON.stringify({ status: 'rejected', code: params.code }); break;
@@ -1468,7 +1485,8 @@ export class ToolExecutorService {
       }
       return result;
     } catch (e) {
-      await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { flowState: { ...preExecState, pendingAction: pending } } }).catch(() => {});
+      // Avoid restoring stale pending actions/documents after a failed terminal confirmation.
+      await this.prisma.whatsAppSession.update({ where: { id: session.id }, data: { flowState: { ...preExecState } } }).catch(() => {});
       return JSON.stringify({ error: sanitizeConfirmError(e) });
     }
   }

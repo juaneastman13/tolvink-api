@@ -96,7 +96,8 @@ REGLA GENERAL:
 - NUNCA guardar datos OCR sin confirmación del chofer.
 
 SI HAY FLETE ACTIVO (loaded):
-- Adjuntar directamente al flete activo con attach_document. No preguntar a cuál.
+- Adjuntar al flete activo SOLO si es candidato unico y sin ambiguedad de codigo.
+- Si hay mas de un candidato o contexto mezclado, pedir codigo de flete en una sola pregunta.
 - Si parece remito → analizar con visión, extraer número/peso/fecha, mostrar datos, pedir confirmación. Si confirma → attach_document + save_ocr_data.
 - Si parece ticket de balanza (foto + "ya descargué") → analizar, extraer peso neto, confirmar, finish_autonomous_freight con destinationWeightKg.
 - Si no se lee bien → adjuntar igual y avisar.

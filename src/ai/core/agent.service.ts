@@ -176,7 +176,8 @@ export class AgentService implements OnModuleDestroy {
     const cleanedMessage = normalizeSpokenNumbers(preprocessMessage(cappedMessage));
 
     // Load conversation history
-    const state = (session?.flowState as any) || {};
+    const rawState = (session?.flowState as any) || {};
+    const state = await this.validateActiveContext(rawState, user, session?.id);
     const storedMessages: any[] = state.aiMessages || [];
 
     // Fast-path for button confirmations/cancellations to avoid LLM loops.
@@ -516,6 +517,16 @@ export class AgentService implements OnModuleDestroy {
     }
   }
 
+  private extractActionIdToken(text: string): string | null {
+    const m = /\[ACTION_ID:([a-z0-9-]{4,40})\]/i.exec(text || '');
+    return m?.[1] || null;
+  }
+
+  private extractFreightActionIdToken(text: string): string | null {
+    const m = /\[FREIGHT_ACTION_ID:([a-z0-9-]{4,40})\]/i.exec(text || '');
+    return m?.[1] || null;
+  }
+
   /** Terminal actions that should clear conversation history after completion. */
   private static TERMINAL_ACTIONS = new Set([
     'create_autonomous_freight', 'finish_autonomous_freight',
@@ -525,11 +536,34 @@ export class AgentService implements OnModuleDestroy {
   private async clearPendingState(sessionId: string): Promise<void> {
     const s = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
     const fs: any = (s?.flowState as any) || {};
-    const { pendingFreight: _pf, pendingAction: _pa, _pendingButtons: _pb, ...rest } = fs;
+    const {
+      pendingFreight: _pf,
+      pendingAction: _pa,
+      _pendingButtons: _pb,
+      pendingDocument: _pd,
+      _pendingAction: _routerPendingAction,
+      _pendingMessage: _routerPendingMessage,
+      ...rest
+    } = fs;
     await this.prisma.whatsAppSession.update({
       where: { id: sessionId },
       data: { flowState: rest },
     });
+  }
+
+  private async validateActiveContext(state: any, user: any, sessionId?: string): Promise<any> {
+    const fs: any = { ...(state || {}) };
+    const ctx = fs.activeContext;
+    const code = String(ctx?.lastFreightCode || '').trim();
+    if (!code) return fs;
+    const access = await this.toolExecutor.resolveFreightWithAccess(code, user).catch(() => ({ error: 'resolve_failed' } as any));
+    if (access?.error || !access?.freight || ['finished', 'canceled'].includes(String(access.freight.status || '').toLowerCase())) {
+      delete fs.activeContext;
+      if (sessionId) {
+        await this.prisma.whatsAppSession.update({ where: { id: sessionId }, data: { flowState: fs } }).catch(() => {});
+      }
+    }
+    return fs;
   }
 
   /** Clear history after a terminal action so next message starts fresh. */
@@ -552,6 +586,8 @@ export class AgentService implements OnModuleDestroy {
     session: any,
     plantAccessMap: Map<string, string>,
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }>; navigate?: { screen: string; freightId?: string } } | null> {
+    const actionIdFromText = this.extractActionIdToken(cleanedMessage);
+    const freightActionIdFromText = this.extractFreightActionIdToken(cleanedMessage);
     const wantsConfirm = this.isConfirmIntent(cleanedMessage);
     const wantsCancel = this.isCancelIntent(cleanedMessage);
     const hasPendingFreight = !!state?.pendingFreight;
@@ -566,14 +602,20 @@ export class AgentService implements OnModuleDestroy {
 
     // Confirm intent: prioritize freight creation when both are present.
     if (hasPendingFreight) {
-      const res = await this.toolExecutor.executeTool('confirm_create_freight', {}, user, synUser, session, plantAccessMap);
+      if (freightActionIdFromText && state.pendingFreight?.actionId && freightActionIdFromText !== state.pendingFreight.actionId) {
+        return { text: 'La confirmacion no coincide con el flete pendiente. Reintentá con el botón más reciente.' };
+      }
+      const res = await this.toolExecutor.executeTool('confirm_create_freight', { actionId: freightActionIdFromText || state.pendingFreight?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
       await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
       return { text: parsed.text };
     }
     if (hasPendingAction) {
       const actionName = state.pendingAction?.tool || '';
-      const res = await this.toolExecutor.executeTool('confirm_action', {}, user, synUser, session, plantAccessMap);
+      if (actionIdFromText && state.pendingAction?.actionId && actionIdFromText !== state.pendingAction.actionId) {
+        return { text: 'La confirmacion no coincide con la accion pendiente. Reintentá con el botón más reciente.' };
+      }
+      const res = await this.toolExecutor.executeTool('confirm_action', { actionId: actionIdFromText || state.pendingAction?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, accion confirmada.');
       await this.clearHistoryAfterTerminalAction(session.id, actionName);
       return { text: parsed.text };

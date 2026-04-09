@@ -17,6 +17,11 @@ export class ContextBuilderService {
     return hasCreateVerb && hasFreightHints;
   }
 
+  private isDestructiveFreightIntent(message: string): boolean {
+    const m = (message || '').toLowerCase();
+    return /\b(cancela|cancelar|cancelalo|cancelalo|anula|anular|elimina|borrar|adjunta|adjuntar|archivo|documento|foto|finaliza|finalizar|termina|terminar)\b/i.test(m);
+  }
+
   /** Enrich user message with session context injections. */
   buildContextualMessage(
     cleanedMessage: string,
@@ -25,6 +30,7 @@ export class ContextBuilderService {
   ): string {
     let messageToSend = cleanedMessage;
     const newFreightRequest = this.isNewFreightRequest(cleanedMessage);
+    const destructiveIntent = this.isDestructiveFreightIntent(cleanedMessage);
 
     // Stale session detection
     const lastMsgTime = state.lastMessageAt ? new Date(state.lastMessageAt).getTime() : 0;
@@ -54,7 +60,11 @@ export class ContextBuilderService {
       const ac = state.activeContext;
       if (ac.lastFreightCode) {
         if (!newFreightRequest) {
-          messageToSend = `[CTX_ACTIVE_FREIGHT code="${sanitizeForPrompt(ac.lastFreightCode)}" summary="${sanitizeForPrompt(ac.lastFreightSummary || '')}" lastAction="${sanitizeForPrompt(ac.lastAction || 'ninguna')}"]\n\n${messageToSend}`;
+          if (!destructiveIntent) {
+            messageToSend = `[CTX_ACTIVE_FREIGHT code="${sanitizeForPrompt(ac.lastFreightCode)}" summary="${sanitizeForPrompt(ac.lastFreightSummary || '')}" lastAction="${sanitizeForPrompt(ac.lastAction || 'ninguna')}"]\n\n${messageToSend}`;
+          } else {
+            messageToSend = `[CTX_REQUIRE_EXPLICIT_FREIGHT codeHint="${sanitizeForPrompt(ac.lastFreightCode)}"]\n\n${messageToSend}`;
+          }
         } else {
           messageToSend = `[CTX_NEW_FREIGHT_REQUEST]\n\n${messageToSend}`;
         }
@@ -82,7 +92,7 @@ export class ContextBuilderService {
     // Inject pending action context (skip when creating freight to avoid stale-action interference)
     if (state.pendingAction && !state.pendingFreight && !newFreightRequest) {
       const pa = state.pendingAction;
-      messageToSend = `[CTX_PENDING_ACTION summary="${sanitizeForPrompt(pa.summary || pa.tool || '')}"]\n\n${messageToSend}`;
+      messageToSend = `[CTX_PENDING_ACTION id="${sanitizeForPrompt(pa.actionId || '')}" summary="${sanitizeForPrompt(pa.summary || pa.tool || '')}"]\n\n${messageToSend}`;
     }
 
     return messageToSend;

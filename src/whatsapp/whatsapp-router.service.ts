@@ -1047,23 +1047,27 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
         case 'ai_confirm_freight': {
           // User pressed "CONFIRMAR" on freight summary → forward to AI as confirmation
-          await this.handleAiChat(phone, user, 'Confirmar.');
+          const token = entityId ? ` [FREIGHT_ACTION_ID:${entityId}]` : '';
+          await this.handleAiChat(phone, user, `Confirmar.${token}`);
           break;
         }
         case 'ai_cancel_freight': {
           // User pressed "CANCELAR" on freight summary → forward to AI
-          await this.handleAiChat(phone, user, 'No, cancelar.');
+          const token = entityId ? ` [FREIGHT_ACTION_ID:${entityId}]` : '';
+          await this.handleAiChat(phone, user, `No, cancelar.${token}`);
           break;
         }
         case 'ai_confirm':
         case 'confirm': { // backward compatibility
           // Generic confirmation for any staged AI action
-          await this.handleAiChat(phone, user, 'Confirmar.');
+          const token = entityId ? ` [ACTION_ID:${entityId}]` : '';
+          await this.handleAiChat(phone, user, `Confirmar.${token}`);
           break;
         }
         case 'ai_cancel': {
           // Generic cancellation for any staged AI action
-          await this.handleAiChat(phone, user, 'No, cancelar.');
+          const token = entityId ? ` [ACTION_ID:${entityId}]` : '';
+          await this.handleAiChat(phone, user, `No, cancelar.${token}`);
           break;
         }
         case 'ai_edit':
