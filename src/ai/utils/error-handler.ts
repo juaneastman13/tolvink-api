@@ -27,6 +27,12 @@ const CONFIRM_SAFE_ERRORS: [RegExp, string][] = [
   [/ya ten[eé]s un flete activo/i, ''],  // pass through — message is already user-friendly
   [/flete activo/i, ''],  // pass through
   [/finalizalo o cancelalo/i, ''],  // pass through
+  [/solo se puede/i, ''],  // pass through state validation errors
+  [/estado actual/i, ''],  // pass through
+  [/no es autonomo/i, 'Este flete no es autonomo.'],
+  [/no sos el chofer/i, 'No sos el chofer de este flete.'],
+  [/ya se registr/i, ''],  // pass through (e.g. "ya se registró la llegada")
+  [/Los choferes no pueden/i, ''],  // pass through
 ];
 
 /** Determine if an error message is safe to show to the user. */
