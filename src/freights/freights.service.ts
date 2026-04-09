@@ -531,6 +531,18 @@ export class FreightsService {
       throw new ForbiddenException('Tu empresa no tiene habilitada la función de chofer autónomo');
     }
 
+    // Check: no active autonomous freight allowed
+    const activeAutonomous = await this.prisma.freight.findFirst({
+      where: { requestedById: user.sub, isAutonomous: true, status: FreightStatus.loaded },
+      select: { code: true, destName: true, items: { select: { grain: true }, take: 1 } },
+    });
+    if (activeAutonomous) {
+      const grain = activeAutonomous.items?.[0]?.grain || 'producto';
+      throw new BadRequestException(
+        `Ya tenés un flete activo (${activeAutonomous.code}, ${grain} hacia ${activeAutonomous.destName}). Finalizalo o cancelalo antes de crear uno nuevo.`,
+      );
+    }
+
     const companyId = membership.companyId;
 
     // Resolve origin: try to match Field/Lot or use free text
