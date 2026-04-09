@@ -380,9 +380,12 @@ export class AgentService implements OnModuleDestroy {
     return m?.[1] || null;
   }
 
+  // Only clear history for actions that truly end a complete workflow.
+  // finish_autonomous_freight and cancel_freight removed — the user may be
+  // finishing/canceling an old freight as a step before creating a new one,
+  // and clearing history would lose the data they already provided.
   private static TERMINAL_ACTIONS = new Set([
-    'create_autonomous_freight', 'finish_autonomous_freight',
-    'cancel_freight', 'confirm_create_freight', 'confirm_finished',
+    'confirm_create_freight',
   ]);
 
   private async clearPendingState(sessionId: string): Promise<void> {
