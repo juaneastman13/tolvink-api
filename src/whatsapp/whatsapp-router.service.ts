@@ -124,9 +124,15 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     this.phoneLocks.set(phone, lock);
     await prev;
     const distLockKey = `wa_phone:${phone}`;
-    const hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 2500, 120);
+    let hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 2500, 120);
+    // Avoid dropping valid button/text interactions under transient cross-instance contention.
     if (!hasDistLock) {
-      this.logger.warn(`Distributed lock busy for phone=${phone.slice(-4)}; dropping duplicate/parallel message`);
+      hasDistLock = await acquirePgLockWithWait(this.prisma as any, distLockKey, 12000, 150);
+    }
+    if (!hasDistLock) {
+      this.logger.warn(`Distributed lock busy for phone=${phone.slice(-4)} after extended wait; request skipped to avoid race`);
+      this.wa.sendText(phone, 'Estoy terminando de procesar tu mensaje anterior. Reintenta en unos segundos.')
+        .catch((err) => this.logger.warn(`[dist-lock] feedback send failed: ${sanitizeErrorForLog(err?.message)}`));
       return;
     }
     try {
