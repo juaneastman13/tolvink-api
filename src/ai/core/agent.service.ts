@@ -439,6 +439,15 @@ export class AgentService implements OnModuleDestroy {
 
     if (hasPendingAction) {
       const actionName = state.pendingAction?.tool || '';
+
+      // Let Claude handle finish/cancel confirmations so it can resume
+      // interrupted creation flows in the same turn (e.g. user said
+      // "salgo de X para Y" → active freight detected → finalize → resume creation).
+      const LET_CLAUDE_HANDLE = new Set([
+        'finish_autonomous_freight', 'cancel_freight', 'confirm_finished',
+      ]);
+      if (LET_CLAUDE_HANDLE.has(actionName)) return null;
+
       if (actionIdFromText && state.pendingAction?.actionId && actionIdFromText !== state.pendingAction.actionId) {
         return { text: 'La confirmacion no coincide con la accion pendiente. Reintenta con el boton mas reciente.' };
       }
