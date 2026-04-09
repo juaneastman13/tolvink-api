@@ -191,6 +191,7 @@ export class AgentService implements OnModuleDestroy {
           await chatTrace.patchRun();
         } catch {}
       }
+      await releasePgLock(this.prisma as any, distLockKey);
       this._chatLocks.delete(lockKey);
       return quickResolved;
     }
