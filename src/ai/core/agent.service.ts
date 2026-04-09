@@ -433,7 +433,29 @@ export class AgentService implements OnModuleDestroy {
       }
       const res = await this.toolExecutor.executeTool('confirm_create_freight', { actionId: freightActionIdFromText || state.pendingFreight?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
-      await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
+      // Update activeContext to the newly created freight so photos attach to it
+      try {
+        const obj = JSON.parse(res);
+        if (obj?.code) {
+          await this.prisma.whatsAppSession.update({
+            where: { id: session.id },
+            data: {
+              flowState: {
+                ...(((await this.prisma.whatsAppSession.findUnique({ where: { id: session.id } }))?.flowState as any) || {}),
+                activeContext: { lastFreightCode: obj.code, lastAction: 'confirm_create_freight', updatedAt: new Date().toISOString() },
+                aiMessages: [],
+                pendingAction: null,
+                pendingFreight: null,
+                _pendingButtons: null,
+              },
+            },
+          });
+        } else {
+          await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
+        }
+      } catch {
+        await this.clearHistoryAfterTerminalAction(session.id, 'confirm_create_freight');
+      }
       return { text: parsed.text };
     }
 
