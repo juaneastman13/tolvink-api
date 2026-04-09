@@ -1,8 +1,15 @@
 // =====================================================================
-// TOLVINK — AI Service Constants (Gemini rebuild)
+// TOLVINK — AI Service Constants
 // =====================================================================
 
+// Provider selection: 'openai' | 'gemini'
+export const AI_PROVIDER = (process.env.AI_PROVIDER || 'openai').toLowerCase();
+
+// Gemini
 export const AI_MODEL = 'gemini-2.5-pro';
+
+// OpenAI
+export const AI_MODEL_OPENAI = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 export const MAX_TOOL_ITERATIONS = 5;
 export const TOOL_TIMEOUT_MS = 90_000;
 export const MAX_HISTORY_MESSAGES = 15;

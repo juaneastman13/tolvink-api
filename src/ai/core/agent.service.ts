@@ -1,11 +1,12 @@
 // =====================================================================
-// TOLVINK — Main AI Agent Service (Gemini 2.5 Flash)
-// Replaces the old AiService — same chat() contract
+// TOLVINK — Main AI Agent Service
+// Supports OpenAI and Gemini via AI_PROVIDER env var
 // =====================================================================
 
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
-import { GeminiClient, GeminiMessage } from './gemini.client';
+import { GeminiClient, GeminiMessage, GeminiCallResult } from './gemini.client';
+import { OpenAIClient } from './openai.client';
 import { PromptBuilderService } from '../prompt/prompt-builder';
 import { SessionManagerService } from '../conversation/session-manager';
 import { HistoryManagerService } from '../conversation/history-manager';
@@ -21,7 +22,7 @@ import { classifyAiError, sanitizeErrorForLog } from '../utils/error-handler';
 import { RunTree } from 'langsmith/run_trees';
 import { acquirePgLockWithWait, releasePgLock } from '../../common/distributed-lock';
 import {
-  MAX_TOOL_ITERATIONS, TOOL_TIMEOUT_MS, SESSION_TIMEOUT_MS,
+  AI_PROVIDER, MAX_TOOL_ITERATIONS, TOOL_TIMEOUT_MS, SESSION_TIMEOUT_MS,
   MAX_HISTORY_MESSAGES, PROMPT_CACHE_TTL_MS, APP_URL,
 } from './constants';
 
@@ -62,23 +63,30 @@ export class AgentService implements OnModuleDestroy {
     }
   }, 5 * 60 * 1000);
 
+  /** Active AI provider interface — both GeminiClient and OpenAIClient expose the same methods. */
+  private activeClient: { generateContent: (...args: any[]) => Promise<GeminiCallResult>; convertToolDeclarations: (tools: any[]) => any[]; isEnabled: () => boolean };
+
   constructor(
     private prisma: PrismaService,
     private gemini: GeminiClient,
+    private openai: OpenAIClient,
     private promptBuilder: PromptBuilderService,
     private sessionManager: SessionManagerService,
     private historyManager: HistoryManagerService,
     private contextBuilder: ContextBuilderService,
     private toolExecutor: ToolExecutorService,
     private toolRegistry: ToolRegistryService,
-  ) {}
+  ) {
+    this.activeClient = AI_PROVIDER === 'gemini' ? this.gemini : this.openai;
+    this.logger.log(`AI provider: ${AI_PROVIDER}`);
+  }
 
   onModuleDestroy() {
     clearInterval(this.cleanupTimer);
   }
 
   isEnabled(): boolean {
-    return this.gemini.isEnabled();
+    return this.activeClient.isEnabled();
   }
 
   async chat(
@@ -88,7 +96,7 @@ export class AgentService implements OnModuleDestroy {
     session: any,
     onDelta?: (chunk: string, start?: boolean) => void,
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }>; navigate?: { screen: string; freightId?: string } }> {
-    if (!this.gemini.isEnabled()) {
+    if (!this.activeClient.isEnabled()) {
       return { text: 'El asistente IA no esta disponible en este momento.' };
     }
 
@@ -213,7 +221,7 @@ export class AgentService implements OnModuleDestroy {
     const isAutonomousDriver = _isChofer && !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
     const selectedToolDefs = this.selectToolsForTurn(filteredToolDefs, cleanedMessage, state, isAutonomousDriver);
     this.logger.debug(`[tools] filtered=${filteredToolDefs.length} selected=${selectedToolDefs.length} autonomous=${isAutonomousDriver}`);
-    let functionDeclarations = this.gemini.convertToolDeclarations(selectedToolDefs);
+    let functionDeclarations = this.activeClient.convertToolDeclarations(selectedToolDefs);
     const hasToolPrefilter = selectedToolDefs.length < filteredToolDefs.length;
 
     // Select thinking level
@@ -240,9 +248,9 @@ export class AgentService implements OnModuleDestroy {
           break;
         }
 
-        this.logger.log(`Sending to Gemini (loop ${loopCount}), messages: ${geminiMessages.length}, tools: ${functionDeclarations.length}`);
+        this.logger.log(`Sending to ${AI_PROVIDER} (loop ${loopCount}), messages: ${geminiMessages.length}, tools: ${functionDeclarations.length}`);
 
-        const result = await this.gemini.generateContent(
+        const result = await this.activeClient.generateContent(
           systemPrompt,
           geminiMessages,
           functionDeclarations,
@@ -276,12 +284,12 @@ export class AgentService implements OnModuleDestroy {
             const settled = await Promise.allSettled(result.functionCalls.map(async (fc) => {
               this.logger.log(`AI tool call (parallel): ${fc.name}`);
               const res = await this.toolExecutor.executeTool(fc.name, fc.args, user, synUser, session, plantAccessMap);
-              return { name: fc.name, response: { result: res } };
+              return { name: fc.name, response: { result: res }, _toolCallId: fc.raw?.id || fc.name };
             }));
             toolResponses = settled.map((s, i) =>
               s.status === 'fulfilled'
                 ? { functionResponse: s.value }
-                : { functionResponse: { name: result.functionCalls![i].name, response: { result: 'Error: ' + (s.reason?.message || 'Unknown') } } },
+                : { functionResponse: { name: result.functionCalls![i].name, response: { result: 'Error: ' + (s.reason?.message || 'Unknown') }, _toolCallId: result.functionCalls![i].raw?.id || result.functionCalls![i].name } },
             );
           } else {
             // Sequential execution
@@ -290,7 +298,7 @@ export class AgentService implements OnModuleDestroy {
               this.logger.log(`AI tool call: ${fc.name}`);
               const res = await this.toolExecutor.executeTool(fc.name, fc.args, user, synUser, session, plantAccessMap);
               toolResponses.push({
-                functionResponse: { name: fc.name, response: { result: res } },
+                functionResponse: { name: fc.name, response: { result: res }, _toolCallId: fc.raw?.id || fc.name },
               });
             }
           }
@@ -301,7 +309,7 @@ export class AgentService implements OnModuleDestroy {
           // Fallback safety: if filtered tool set was too narrow for this turn, retry once with full role-allowed tools.
           if (loopCount === 1 && hasToolPrefilter && this.shouldExpandTools(cleanedMessage, result.text)) {
             this.logger.warn(`Tool prefilter fallback: expanding ${functionDeclarations.length} -> ${filteredToolDefs.length} tools`);
-            functionDeclarations = this.gemini.convertToolDeclarations(filteredToolDefs);
+            functionDeclarations = this.activeClient.convertToolDeclarations(filteredToolDefs);
             continue;
           }
           // No function calls — model is done

@@ -14,6 +14,7 @@ import { AdminService } from '../admin/admin.controller';
 // Core
 import { AgentService } from './core/agent.service';
 import { GeminiClient } from './core/gemini.client';
+import { OpenAIClient } from './core/openai.client';
 
 // Prompt
 import { PromptBuilderService } from './prompt/prompt-builder';
@@ -38,6 +39,7 @@ import { ToolExecutorService } from './tools/tool-executor';
     AgentService,
     { provide: 'AiService', useExisting: AgentService },
     GeminiClient,
+    OpenAIClient,
     PromptBuilderService,
     SessionManagerService,
     HistoryManagerService,
