@@ -912,6 +912,22 @@ export class ToolExecutorService {
 
   // ---- prepare_autonomous_freight ----
   private async executePrepareAutonomousFreight(input: any, user: any, session: any): Promise<string> {
+    // Check for active autonomous freight BEFORE validation — auto-stage finalization
+    const activeFreight = await this.prisma.freight.findFirst({
+      where: { requestedById: user.sub || user.id, isAutonomous: true, status: { notIn: ['finished', 'canceled'] } },
+      select: { id: true, code: true, destName: true, originFreeText: true, items: { select: { grain: true, tons: true }, take: 1 } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (activeFreight) {
+      const grain = activeFreight.items?.[0]?.grain || 'producto';
+      const tons = activeFreight.items?.[0]?.tons ? `${activeFreight.items[0].tons} tn` : '';
+      const dest = activeFreight.destName || activeFreight.originFreeText || '';
+      // Stage finish action so CONFIRMAR/CANCELAR buttons appear
+      return this.sessionManager.stageAction(session.id, 'finish_autonomous_freight', {
+        freightId: activeFreight.id, code: activeFreight.code,
+      }, `Ya tenés un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons}` : ''}\n🏭 ${dest}\n\n¿Querés finalizarlo para crear uno nuevo?`);
+    }
+
     if (!input.origin) return JSON.stringify({ error: 'Origen obligatorio. Preguntar al chofer de dónde sale.' });
     if (!input.destination) return JSON.stringify({ error: 'Destino obligatorio.' });
     if (!input.grain) return JSON.stringify({ error: 'Grano obligatorio.' });
