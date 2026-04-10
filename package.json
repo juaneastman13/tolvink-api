@@ -22,6 +22,8 @@
   },
   "dependencies": {
     "@google/genai": "^1.48.0",
+    "@langchain/core": "^1.1.39",
+    "@langchain/openai": "^1.4.3",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.2.0",
     "@nestjs/core": "^10.3.0",
@@ -39,6 +41,7 @@
     "cookie-parser": "^1.4.7",
     "exceljs": "^4.4.0",
     "helmet": "^7.1.0",
+    "langchain": "^1.3.1",
     "nanoid": "^3.3.11",
     "openai": "^6.22.0",
     "prisma": "^5.8.0",

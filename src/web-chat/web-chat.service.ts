@@ -6,7 +6,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
-import { AgentService } from '../ai/agent.stub';
+import { AgentService } from '../ai/agent.service';
 import { SseService } from '../sse/sse.service';
 import OpenAI from 'openai';
 import { OcrService } from '../ocr/ocr.service';

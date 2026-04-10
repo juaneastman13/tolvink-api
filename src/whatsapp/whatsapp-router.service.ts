@@ -8,7 +8,7 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
-import { AgentService } from '../ai/agent.stub';
+import { AgentService } from '../ai/agent.service';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
@@ -70,7 +70,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     private freights: FreightsService,
     private ai: AgentService,
   ) {
-    this.logger.log('AI provider: claude (AgentService)');
+    this.logger.log('AI provider: gemini-router + openai-agent');
 
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
