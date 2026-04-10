@@ -6,8 +6,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
-import { FieldsService } from '../../fields/fields.service';
-import { TrucksService } from '../../trucks/trucks.controller';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
@@ -35,8 +33,6 @@ export class ToolExecutorService {
   constructor(
     private prisma: PrismaService,
     private freights: FreightsService,
-    private fields: FieldsService,
-    private trucks: TrucksService,
   ) {}
 
   /** Clean up stale pending actions (older than 5 minutes) */
@@ -199,8 +195,12 @@ export class ToolExecutorService {
   }
 
   private async handleSearchFields(input: any, user: any): Promise<string> {
-    const synUser = this.buildSyntheticUser(user);
-    const allFields = await this.fields.getFields(synUser);
+    const companyIds = this.resolveAllCompanyIds(user);
+    const allFields = await this.prisma.field.findMany({
+      where: { companyId: { in: companyIds }, active: true },
+      select: { id: true, name: true, lots: { where: { active: true }, select: { id: true, name: true } } },
+      take: 50,
+    });
     const results = fuzzySearch(input.query, allFields, (f: any) => f.name, { threshold: 0.5, maxResults: 5 });
     if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro campo "${input.query}".` });
     return JSON.stringify({
@@ -215,14 +215,15 @@ export class ToolExecutorService {
   }
 
   private async handleSearchLots(input: any, user: any): Promise<string> {
-    const synUser = this.buildSyntheticUser(user);
-    let lots: any[] = [];
-    if (input.fieldId) {
-      lots = await this.fields.getLots(synUser, input.fieldId);
-    } else {
-      const allFields = await this.fields.getFields(synUser);
-      lots = allFields.flatMap((f: any) => (f.lots || []).map((l: any) => ({ ...l, fieldName: f.name, fieldId: f.id })));
-    }
+    const companyIds = this.resolveAllCompanyIds(user);
+    const where: any = { companyId: { in: companyIds }, active: true };
+    if (input.fieldId) where.fieldId = input.fieldId;
+    const allLots = await this.prisma.lot.findMany({
+      where,
+      select: { id: true, name: true, fieldId: true, field: { select: { name: true } } },
+      take: 50,
+    });
+    const lots = allLots.map((l: any) => ({ ...l, fieldName: l.field?.name || null }));
     const results = fuzzySearch(input.query, lots, (l: any) => l.name, { threshold: 0.5, maxResults: 5 });
     if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro lote "${input.query}".` });
     return JSON.stringify({
