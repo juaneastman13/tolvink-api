@@ -1,31 +1,21 @@
-import { Module } from '@nestjs/common';
+// =====================================================================
+// TOLVINK — AI Module
+// =====================================================================
+
+import { Module, forwardRef } from '@nestjs/common';
 import { FreightsModule } from '../freights/freights.module';
 import { AgentService } from './agent.service';
-import { AgentMemoryService } from './memory/agent-memory.service';
-import { GeminiRouterService } from './router/gemini-router.service';
-import { ToolFilterService } from './filtering/tool-filter.service';
-import { ToolCatalogService } from './tools/tool-catalog.service';
-import { OpenAiAgentService } from './openai/openai-agent.service';
-import { ConversationOrchestratorService } from './orchestration/conversation-orchestrator.service';
-import { FreightReferenceService } from './resolution/freight-reference.service';
-import { LogisticsEntityReferenceService } from './resolution/logistics-entity-reference.service';
-import { ClarificationService } from './clarification/clarification.service';
-import { PendingActionService } from './pending/pending-action.service';
+import { ToolExecutorService } from './tools/tool-executor';
+import { FieldsService } from '../fields/fields.service';
+import { TrucksService } from '../trucks/trucks.controller';
 
 @Module({
-  imports: [FreightsModule],
+  imports: [forwardRef(() => FreightsModule)],
   providers: [
     AgentService,
-    AgentMemoryService,
-    GeminiRouterService,
-    ToolFilterService,
-    ToolCatalogService,
-    OpenAiAgentService,
-    ConversationOrchestratorService,
-    FreightReferenceService,
-    LogisticsEntityReferenceService,
-    ClarificationService,
-    PendingActionService,
+    ToolExecutorService,
+    FieldsService,
+    TrucksService,
   ],
   exports: [AgentService],
 })
