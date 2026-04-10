@@ -234,19 +234,47 @@ export class AgentService implements OnModuleDestroy {
   }
 
   private trimHistory(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
-    if (messages.length <= MAX_HISTORY_MESSAGES) return messages;
-    const trimmed = messages.slice(-MAX_HISTORY_MESSAGES);
-    // Ensure first message is from user
-    while (trimmed.length > 0 && trimmed[0].role !== 'user') {
-      trimmed.shift();
+    // Filter out any messages from old agent formats (Gemini/OpenAI) that aren't valid Anthropic
+    let cleaned = messages.filter((m: any) => {
+      // Must have role
+      if (!m || !m.role) return false;
+      // Skip messages with Gemini-style parts (functionCall, functionResponse)
+      if (Array.isArray(m.parts)) return false;
+      // Validate content
+      const content = m.content;
+      if (typeof content === 'string') return true;
+      if (Array.isArray(content)) {
+        // Filter out blocks with unknown types
+        const validTypes = new Set(['text', 'tool_use', 'tool_result', 'image']);
+        return content.length > 0 && content.every((b: any) => b && validTypes.has(b.type));
+      }
+      return false;
+    });
+
+    // Trim to max
+    if (cleaned.length > MAX_HISTORY_MESSAGES) {
+      cleaned = cleaned.slice(-MAX_HISTORY_MESSAGES);
     }
-    // Don't start with orphaned tool_result
-    if (trimmed.length > 0 && trimmed[0].role === 'user') {
-      const content = trimmed[0].content;
+
+    // Remove leading assistant messages (Anthropic requires first message to be user)
+    while (cleaned.length > 0 && cleaned[0].role !== 'user') {
+      cleaned.shift();
+    }
+
+    // Remove orphaned tool_results at start (no matching tool_use in previous assistant message)
+    while (cleaned.length > 0 && cleaned[0].role === 'user') {
+      const content = cleaned[0].content;
       if (Array.isArray(content) && content.length > 0 && content[0]?.type === 'tool_result') {
-        trimmed.shift();
+        cleaned.shift();
+        // Also remove leading assistant messages that may follow
+        while (cleaned.length > 0 && cleaned[0].role !== 'user') {
+          cleaned.shift();
+        }
+      } else {
+        break;
       }
     }
-    return trimmed;
+
+    return cleaned;
   }
 }
