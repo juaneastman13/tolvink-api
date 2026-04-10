@@ -422,6 +422,7 @@ export class AgentService implements OnModuleDestroy {
 
     if (wantsCancel) {
       await this.clearPendingState(session.id);
+      await this.persistFastPathResult(session.id, cleanedMessage, 'Perfecto, cancelado. No se realizaron cambios.');
       return { text: 'Perfecto, cancelado. No se realizaron cambios.' };
     }
 
@@ -431,6 +432,9 @@ export class AgentService implements OnModuleDestroy {
       }
       const res = await this.toolExecutor.executeTool('confirm_create_freight', { actionId: freightActionIdFromText || state.pendingFreight?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, creamos el flete.');
+      // Persist the creation result in history so the next turn (e.g. photo)
+      // knows which freight was just created
+      await this.persistFastPathResult(session.id, cleanedMessage, parsed.text);
       return { text: parsed.text };
     }
 
@@ -450,10 +454,37 @@ export class AgentService implements OnModuleDestroy {
       }
       const res = await this.toolExecutor.executeTool('confirm_action', { actionId: actionIdFromText || state.pendingAction?.actionId }, user, synUser, session, plantAccessMap);
       const parsed = this.parseToolResultText(res, 'Listo, accion confirmada.');
-      await this.clearHistoryAfterTerminalAction(session.id, actionName);
+      await this.persistFastPathResult(session.id, cleanedMessage, parsed.text);
       return { text: parsed.text };
     }
 
     return null;
+  }
+
+  /**
+   * Persist fast-path user message + assistant response in session history
+   * so the next turn has full context (e.g. knows which freight was just created).
+   */
+  private async persistFastPathResult(sessionId: string, userText: string, assistantText: string): Promise<void> {
+    try {
+      const s = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+      const fs: any = (s?.flowState as any) || {};
+      const messages: any[] = fs.aiMessages || [];
+      messages.push({ role: 'user', content: userText });
+      messages.push({ role: 'assistant', content: assistantText });
+      // Trim if needed
+      const trimmed = messages.length > MAX_HISTORY_MESSAGES
+        ? messages.slice(-MAX_HISTORY_MESSAGES)
+        : messages;
+      await this.prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: {
+          flowState: { ...fs, aiMessages: trimmed, lastMessageAt: new Date().toISOString() },
+          expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS),
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`persistFastPathResult failed: ${e.message}`);
+    }
   }
 }
