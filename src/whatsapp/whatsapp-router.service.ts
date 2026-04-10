@@ -8,13 +8,13 @@ import { PrismaService } from '../database/prisma.service';
 import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
-import { AgentService } from '../ai/core/agent.service';
+import { AgentService } from '../ai/agent.stub';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
 import * as crypto from 'crypto';
 import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
-import { classifyAiError, sanitizeErrorForLog } from '../ai/utils/error-handler';
+import { classifyAiError, sanitizeErrorForLog } from '../common/error-utils';
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Borrador',

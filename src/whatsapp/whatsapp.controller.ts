@@ -14,7 +14,7 @@ import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
 import { verifySignedToken } from '../common/signed-token';
 import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
-import { sanitizeErrorForLog } from '../ai/utils/error-handler';
+import { sanitizeErrorForLog } from '../common/error-utils';
 
 @Controller('whatsapp')
 export class WhatsAppController implements OnModuleDestroy {

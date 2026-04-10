@@ -6,7 +6,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
-import { AgentService } from '../ai/core/agent.service';
+import { AgentService } from '../ai/agent.stub';
 import { SseService } from '../sse/sse.service';
 import OpenAI from 'openai';
 import { OcrService } from '../ocr/ocr.service';
@@ -123,7 +123,7 @@ export class WebChatService {
     this.sse.emitToUser(dbUser.id, 'ai:response', {
       text: result.text,
       buttons: result.buttons || [],
-      navigate: result.navigate || undefined,
+      navigate: (result as any).navigate || undefined,
     });
   }
 

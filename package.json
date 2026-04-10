@@ -21,7 +21,6 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.87.0",
     "@google/genai": "^1.48.0",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.2.0",
@@ -40,7 +39,6 @@
     "cookie-parser": "^1.4.7",
     "exceljs": "^4.4.0",
     "helmet": "^7.1.0",
-    "langsmith": "^0.5.16",
     "nanoid": "^3.3.11",
     "openai": "^6.22.0",
     "prisma": "^5.8.0",
