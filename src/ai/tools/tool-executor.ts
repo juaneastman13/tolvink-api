@@ -370,11 +370,13 @@ export class ToolExecutorService {
     }
 
     const weightKg = input.destinationWeightKg ? Number(input.destinationWeightKg) : undefined;
+    const item = await this.prisma.freightItem.findFirst({ where: { freightId: freight.id }, select: { grain: true, tons: true } });
+    const grainInfo = item ? `${item.grain}${item.tons ? ` · ${item.tons} tn` : ''}` : '';
     return this.stageAction(session.id, 'finish_autonomous_freight', {
       freightId: freight.id,
       code: freight.code,
       destinationWeightKg: weightKg,
-    }, `Finalizar flete ${freight.code}${weightKg ? ` (${weightKg} kg)` : ''}`);
+    }, `Finalizar flete ${freight.code}${grainInfo ? ` (${grainInfo})` : ''}${weightKg ? ` — Peso destino: ${weightKg} kg` : ''}`);
   }
 
   private async handleRegisterPlantArrival(input: any, user: any, synUser: any, session: any): Promise<string> {

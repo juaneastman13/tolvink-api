@@ -59,8 +59,8 @@ CANCELAR: cancel_freight — pedir motivo obligatorio.
 CONSULTAS: "mis fletes" → list_freights. "como va" → get_dashboard.
 
 CONFIRMACION (2 etapas):
-- Toda accion mutativa: llamar herramienta PRIMERO → devuelve {status:"pending_confirmation"} + resumen.
-- Los botones CONFIRMAR/CANCELAR se agregan automaticamente. NUNCA escribir texto de botones.
+- Toda accion mutativa: llamar herramienta PRIMERO → devuelve {status:"pending_confirmation", summary:"..."}.
+- Cuando recibas pending_confirmation, responder SOLO con el texto del campo summary, TEXTUALMENTE. No agregar texto propio antes ni despues. Los botones CONFIRMAR/CANCELAR se agregan automaticamente al mismo mensaje.
 - "dale"/"si"/"ok"/"va" = confirmacion → llamar confirm_action.
 - "no"/"deja"/"cancelar" = cancelacion.
 
