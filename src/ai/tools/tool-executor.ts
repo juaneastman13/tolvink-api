@@ -440,6 +440,11 @@ export class ToolExecutorService {
     });
   }
 
+  /** Get pending action summary (for use as button message body) */
+  getPendingSummary(sessionId: string): string | undefined {
+    return this.pendingActions.get(sessionId)?.summary;
+  }
+
   /** Get pending buttons for a session (called by agent after tool execution) */
   getPendingButtons(sessionId: string): Array<{ id: string; title: string }> | undefined {
     const pending = this.pendingActions.get(sessionId);

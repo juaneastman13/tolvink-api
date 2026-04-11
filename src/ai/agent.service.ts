@@ -203,6 +203,16 @@ export class AgentService implements OnModuleDestroy {
       // Get pending buttons from tool executor
       const pendingButtons = this.toolExecutor.getPendingButtons(session?.id);
 
+      // When there are pending buttons, use the staging summary as the message
+      // body so text + buttons go in ONE WhatsApp interactive message.
+      // Claude's text goes in the history but the user only sees the summary + buttons.
+      if (pendingButtons) {
+        const summary = this.toolExecutor.getPendingSummary(session?.id);
+        if (summary) {
+          finalText = summary;
+        }
+      }
+
       // Save history to session
       const trimmedMessages = messages.slice(-MAX_HISTORY_MESSAGES);
       await this.prisma.whatsAppSession.update({

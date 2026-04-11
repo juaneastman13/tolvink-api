@@ -371,36 +371,15 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   // Max 3 buttons, each with max 20 char title
 
   async sendButtons(phone: string, bodyText: string, buttons: WAButton[]): Promise<string | null> {
-    // WhatsApp interactive message body limit is 1024 chars.
-    // If text is longer, send the full text first, then buttons with truncated body.
-    const MAX_INTERACTIVE_BODY = 1024;
-    if (bodyText.length > MAX_INTERACTIVE_BODY) {
-      await this.sendText(phone, bodyText);
-      // Use last portion of text as button body (context for the buttons)
-      const truncated = bodyText.slice(-MAX_INTERACTIVE_BODY + 50).replace(/^[^\n]*\n/, '').trim() || bodyText.slice(-200);
-      return this.send(phone, {
-        messaging_product: 'whatsapp',
-        to: this.normalizePhone(phone),
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: { text: truncated.slice(0, MAX_INTERACTIVE_BODY) },
-          action: {
-            buttons: buttons.slice(0, 3).map(b => ({
-              type: 'reply',
-              reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
-            })),
-          },
-        },
-      });
-    }
+    // WhatsApp interactive body limit: 1024 chars. Truncate if needed.
+    const body = bodyText.length > 1024 ? bodyText.slice(0, 1021) + '...' : bodyText;
     return this.send(phone, {
       messaging_product: 'whatsapp',
       to: this.normalizePhone(phone),
       type: 'interactive',
       interactive: {
         type: 'button',
-        body: { text: bodyText },
+        body: { text: body },
         action: {
           buttons: buttons.slice(0, 3).map(b => ({
             type: 'reply',
