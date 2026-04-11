@@ -255,10 +255,12 @@ export class ToolExecutorService {
     if (activeFreight) {
       const grain = activeFreight.items?.[0]?.grain || '';
       const tons = activeFreight.items?.[0]?.tons;
-      return JSON.stringify({
-        error: `Ya tenes un flete activo: ${activeFreight.code} (${grain}${tons ? ` · ${tons} tn` : ''} → ${activeFreight.destName || ''}). Finalizalo o cancelalo primero.`,
-        activeFreightCode: activeFreight.code,
-      });
+      const info = `${activeFreight.code} (${grain}${tons ? ` · ${tons} tn` : ''}${activeFreight.destName ? ` → ${activeFreight.destName}` : ''})`;
+      // Stage finalization directly so user gets buttons
+      return this.stageAction(session.id, 'finish_autonomous_freight', {
+        freightId: activeFreight.id,
+        code: activeFreight.code,
+      }, `Tenes un flete activo: ${info}\nFinalizarlo para crear uno nuevo?`);
     }
 
     // Validate required fields
