@@ -169,6 +169,13 @@ export class AgentService implements OnModuleDestroy {
         }
 
         messages.push({ role: 'user' as const, content: toolResults });
+
+        // If a tool staged an action with buttons, exit loop immediately.
+        // Don't let Claude generate more text — the staging summary IS the response.
+        if (this.toolExecutor.hasPendingAction(session?.id)) {
+          this.logger.log('Pending action staged — exiting tool loop');
+          break;
+        }
       }
 
       // Extract final text
@@ -178,9 +185,6 @@ export class AgentService implements OnModuleDestroy {
           .filter((b): b is Anthropic.TextBlock => b.type === 'text')
           .map(b => b.text)
           .join('\n');
-      }
-      if (!finalText) {
-        finalText = 'No se pudo procesar el mensaje.';
       }
 
       // Truncate response
@@ -205,12 +209,15 @@ export class AgentService implements OnModuleDestroy {
 
       // When there are pending buttons, use the staging summary as the message
       // body so text + buttons go in ONE WhatsApp interactive message.
-      // Claude's text goes in the history but the user only sees the summary + buttons.
       if (pendingButtons) {
         const summary = this.toolExecutor.getPendingSummary(session?.id);
         if (summary) {
           finalText = summary;
         }
+      }
+
+      if (!finalText) {
+        finalText = 'No se pudo procesar el mensaje.';
       }
 
       // Save history to session
