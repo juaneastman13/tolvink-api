@@ -182,42 +182,40 @@ export class AgentService implements OnModuleDestroy {
         }
       }
 
-      // Extract final text
-      let finalText = '';
-      if (lastResponse) {
-        finalText = lastResponse.content
-          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-          .map(b => b.text)
-          .join('\n');
-      }
-
-      // Truncate response
-      const maxChars = isWeb ? WEB_MAX_RESPONSE_CHARS : MAX_RESPONSE_CHARS;
-      if (finalText.length > maxChars) {
-        const breakPoint = finalText.lastIndexOf('\n', maxChars);
-        finalText = breakPoint > maxChars * 0.5 ? finalText.slice(0, breakPoint) : finalText.slice(0, maxChars);
-      }
-
-      // Strip UUIDs from response
-      finalText = finalText.replace(
-        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-        (match, offset) => {
-          const before = finalText.slice(Math.max(0, offset - 80), offset);
-          if (/https?:\/\/\S*$/i.test(before)) return match;
-          return '';
-        },
-      );
-
       // Get pending buttons from tool executor
       const pendingButtons = this.toolExecutor.getPendingButtons(session?.id);
 
-      // When there are pending buttons, use the staging summary as the message
-      // body so text + buttons go in ONE WhatsApp interactive message.
+      // When there are pending buttons, use ONLY the staging summary.
+      // Claude's text is ignored — the summary IS the entire message body.
+      let finalText: string;
       if (pendingButtons) {
-        const summary = this.toolExecutor.getPendingSummary(session?.id);
-        if (summary) {
-          finalText = summary;
+        finalText = this.toolExecutor.getPendingSummary(session?.id) || '';
+      } else {
+        // No staging — use Claude's text response
+        finalText = '';
+        if (lastResponse) {
+          finalText = lastResponse.content
+            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+            .map(b => b.text)
+            .join('\n');
         }
+
+        // Truncate response
+        const maxChars = isWeb ? WEB_MAX_RESPONSE_CHARS : MAX_RESPONSE_CHARS;
+        if (finalText.length > maxChars) {
+          const breakPoint = finalText.lastIndexOf('\n', maxChars);
+          finalText = breakPoint > maxChars * 0.5 ? finalText.slice(0, breakPoint) : finalText.slice(0, maxChars);
+        }
+
+        // Strip UUIDs from non-staging responses
+        finalText = finalText.replace(
+          /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+          (match, offset) => {
+            const before = finalText.slice(Math.max(0, offset - 80), offset);
+            if (/https?:\/\/\S*$/i.test(before)) return match;
+            return '';
+          },
+        );
       }
 
       if (!finalText) {
