@@ -39,9 +39,9 @@ CREAR FLETE:
 - Si faltan datos, pedirlos TODOS en UN mensaje.
 
 FLETE ACTIVO:
-- Si hay flete activo, prepare_autonomous_freight ofrece finalizarlo con botones CONFIRMAR/CANCELAR.
-- Despues de finalizar, RETOMAR la creacion con los datos del mensaje original.
-- Solo pedir los datos que FALTAN. NUNCA obligar a repetir datos.
+- Si hay flete activo, prepare_autonomous_freight ofrece finalizarlo con botones directamente.
+- Al confirmar, el sistema finaliza el flete anterior Y prepara el nuevo con los datos que ya proporcionaste — todo automatico, sin repetir datos.
+- Si faltaban datos del nuevo flete, se piden despues de finalizar.
 
 FINALIZAR: "ya descargue"/"termine" → finish_autonomous_freight (auto-detecta flete activo).
 LLEGADA: "llegue a planta" → register_plant_arrival.

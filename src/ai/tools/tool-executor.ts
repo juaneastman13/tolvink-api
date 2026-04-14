@@ -287,10 +287,24 @@ export class ToolExecutorService {
       const tons = activeFreight.items?.[0]?.tons;
       const origin = activeFreight.originName || activeFreight.originFreeText || '';
       const dest = activeFreight.destName || '';
-      // Stage finalization directly — user gets summary + buttons in ONE message
-      return this.stageAction(session.id, 'finish_autonomous_freight', {
+      // Stage finalization with new freight data preserved — after confirming,
+      // handleConfirmAction will finalize the old freight AND stage the new one
+      return this.stageAction(session.id, 'finish_and_create', {
+        // Data to finalize old freight
         freightId: activeFreight.id,
         code: activeFreight.code,
+        // Data for new freight (preserved from input)
+        newFreight: {
+          origin: input.origin,
+          destination: input.destination,
+          grain: input.grain,
+          weightKg: input.weightKg,
+          notes: input.notes,
+          fieldId: input.fieldId,
+          originLotId: input.originLotId,
+          destPlantId: input.destPlantId,
+          branchId: input.branchId,
+        },
       }, `Tenes un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons} tn` : ''}\n📍 ${origin} → ${dest}\n\nFinalizarlo para crear uno nuevo?`);
     }
 
@@ -374,6 +388,59 @@ export class ToolExecutorService {
       case 'finish_autonomous_freight': {
         const freight = await this.freights.finishAutonomousFreight(params.freightId, synUser, params.destinationWeightKg, params.notes);
         return JSON.stringify({ status: 'finished', code: (freight as any).code });
+      }
+      case 'finish_and_create': {
+        // Step 1: Finalize old freight
+        const finished = await this.freights.finishAutonomousFreight(params.freightId, synUser);
+        this.logger.log(`Finalized ${(finished as any).code}, now staging new freight creation`);
+
+        // Step 2: Stage new freight creation with preserved data
+        const nf = params.newFreight || {};
+        if (!nf.origin || !nf.destination || !nf.grain || !nf.weightKg) {
+          // Missing data — return finished result, let Claude ask for missing data
+          return JSON.stringify({
+            status: 'finished',
+            code: (finished as any).code,
+            message: `Flete ${(finished as any).code} finalizado. Ahora necesito los datos del nuevo flete.`,
+          });
+        }
+
+        // Auto-detect truck for new freight
+        const companyId = user.activeCompanyId || user.companyId;
+        let truckId = null;
+        let truckPlate = '';
+        const trucks = await this.prisma.truck.findMany({
+          where: { companyId, active: true, assignedUserId: user.sub || user.id },
+          select: { id: true, plate: true },
+          take: 2,
+        });
+        if (trucks.length >= 1) {
+          truckId = trucks[0].id;
+          truckPlate = trucks[0].plate;
+        } else {
+          const anyTruck = await this.prisma.truck.findFirst({
+            where: { companyId, active: true },
+            select: { id: true, plate: true },
+          });
+          if (anyTruck) { truckId = anyTruck.id; truckPlate = anyTruck.plate; }
+        }
+
+        const weightKg = Number(nf.weightKg);
+        const weightDisplay = weightKg >= 1000 ? `${Math.round(weightKg / 100) / 10} tn` : `${weightKg} kg`;
+        const summary = `Flete ${(finished as any).code} finalizado.\n\n📋 Nuevo flete:\n🚛 Camion: ${truckPlate || 'auto'}\n📍 Origen: ${nf.origin}\n🏭 Destino: ${nf.destination}\n🌾 Grano: ${nf.grain}\n⚖️ Peso: ${weightDisplay}`;
+
+        return this.stageAction(session.id, 'prepare_autonomous_freight', {
+          origin: nf.origin,
+          destination: nf.destination,
+          grain: nf.grain,
+          weightKg,
+          notes: nf.notes,
+          truckId,
+          fieldId: nf.fieldId,
+          originLotId: nf.originLotId,
+          destPlantId: nf.destPlantId,
+          branchId: nf.branchId,
+        }, summary);
       }
       case 'cancel_freight': {
         const freight = await this.freights.cancel(params.freightId, { reason: params.reason }, synUser);
