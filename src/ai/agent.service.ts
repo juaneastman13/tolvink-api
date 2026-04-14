@@ -1,11 +1,10 @@
 // =====================================================================
-// TOLVINK — Agent Service (Claude Sonnet + native tool use)
+// TOLVINK — Agent Service (Gemini Flash Lite + native function calling)
 // =====================================================================
 
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import Anthropic from '@anthropic-ai/sdk';
 import { PrismaService } from '../database/prisma.service';
-import { ClaudeClient } from './core/claude.client';
+import { GeminiClient, GeminiMessage } from './core/gemini.client';
 import { buildSystemPrompt } from './core/prompt-builder';
 import { ToolExecutorService, READ_ONLY_TOOLS } from './tools/tool-executor';
 import { ALL_TOOL_DEFINITIONS } from './tools/tool-definitions';
@@ -34,7 +33,7 @@ export class AgentService implements OnModuleDestroy {
 
   constructor(
     private prisma: PrismaService,
-    private claude: ClaudeClient,
+    private gemini: GeminiClient,
     private toolExecutor: ToolExecutorService,
   ) {}
 
@@ -43,7 +42,7 @@ export class AgentService implements OnModuleDestroy {
   }
 
   isEnabled(): boolean {
-    return this.claude.isEnabled();
+    return this.gemini.isEnabled();
   }
 
   async chat(
@@ -53,7 +52,7 @@ export class AgentService implements OnModuleDestroy {
     session: any,
     _onDelta?: (chunk: string, start?: boolean) => void,
   ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
-    if (!this.claude.isEnabled()) {
+    if (!this.gemini.isEnabled()) {
       return { text: 'El asistente IA no esta disponible en este momento.' };
     }
 
@@ -89,31 +88,30 @@ export class AgentService implements OnModuleDestroy {
         this._promptCache.set(cacheKey, { prompt: systemPrompt, ts: Date.now() });
       }
 
-      // Load history from session
+      // Load history from session — stored in Anthropic format, convert to Gemini
       const state = (session?.flowState as any) || {};
-      const storedMessages: Anthropic.MessageParam[] = state.aiMessages || [];
+      const storedMessages: any[] = state.aiMessages || [];
 
-      // Build messages: trimmed history + new user message
       // Add document indicator if there's a pending photo/file
       const pendingDoc = state.pendingDocument;
       const docIndicator = pendingDoc?.url ? `\n[ARCHIVO PENDIENTE: "${pendingDoc.name}" listo para adjuntar con attach_document]` : '';
-      let messages: Anthropic.MessageParam[] = [
-        ...this.trimHistory(storedMessages),
-        { role: 'user' as const, content: userMessage.slice(0, 5000) + docIndicator },
+      const userText = userMessage.slice(0, 5000) + docIndicator;
+
+      // Convert stored history to Gemini format + add new user message
+      const trimmedHistory = this.trimHistory(storedMessages);
+      let geminiMessages: GeminiMessage[] = [
+        ...this.gemini.convertHistory(trimmedHistory),
+        { role: 'user', parts: [{ text: userText }] },
       ];
 
-      // Filter and convert tool definitions based on user role
+      // Filter and convert tool definitions
       const filteredDefs = this.toolExecutor.filterTools(ALL_TOOL_DEFINITIONS, user);
-      const tools: Anthropic.Tool[] = filteredDefs.map(t => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.input_schema as Anthropic.Tool.InputSchema,
-      }));
+      const geminiTools = this.gemini.convertTools(filteredDefs);
 
       // Tool loop
       const loopDeadline = Date.now() + TOOL_TIMEOUT_MS;
       let loopCount = 0;
-      let lastResponse: Anthropic.Message | null = null;
+      let lastText = '';
 
       while (loopCount < MAX_TOOL_ITERATIONS) {
         loopCount++;
@@ -122,60 +120,62 @@ export class AgentService implements OnModuleDestroy {
           break;
         }
 
-        this.logger.log(`Claude call #${loopCount}, messages: ${messages.length}, tools: ${tools.length}`);
+        this.logger.log(`Gemini call #${loopCount}, messages: ${geminiMessages.length}, tools: ${geminiTools.length}`);
 
-        const response = await this.claude.sendMessage({ system: systemPrompt, messages, tools });
-        lastResponse = response;
+        const response = await this.gemini.sendMessage({
+          system: systemPrompt,
+          messages: geminiMessages,
+          tools: geminiTools,
+        });
 
-        // Log cost
-        const u = response.usage;
-        this.logger.log(
-          `[cost] in=${u.input_tokens} out=${u.output_tokens}` +
-          ((u as any).cache_read_input_tokens ? ` cache_read=${(u as any).cache_read_input_tokens}` : ''),
-        );
+        lastText = response.text;
 
-        // Add assistant response to messages
-        messages.push({ role: 'assistant' as const, content: response.content });
+        // Add model response to messages
+        const modelParts: any[] = [];
+        if (response.text) modelParts.push({ text: response.text });
+        for (const fc of response.functionCalls) {
+          modelParts.push({ functionCall: { name: fc.name, args: fc.args } });
+        }
+        if (modelParts.length > 0) {
+          geminiMessages.push({ role: 'model', parts: modelParts });
+        }
 
-        // Check for tool use
-        const toolUseBlocks = response.content.filter(
-          (b): b is Anthropic.ContentBlock & { type: 'tool_use' } => b.type === 'tool_use',
-        );
-
-        if (toolUseBlocks.length === 0 || response.stop_reason === 'end_turn') {
+        // No function calls — model is done
+        if (response.functionCalls.length === 0) {
           break;
         }
 
         // Execute tools
-        const allReadOnly = toolUseBlocks.every(b => READ_ONLY_TOOLS.has(b.name));
-        let toolResults: Anthropic.ToolResultBlockParam[];
+        const allReadOnly = response.functionCalls.every(fc => READ_ONLY_TOOLS.has(fc.name));
+        const toolResponses: any[] = [];
 
-        if (allReadOnly && toolUseBlocks.length > 1) {
+        if (allReadOnly && response.functionCalls.length > 1) {
           // Parallel for read-only
-          const settled = await Promise.allSettled(toolUseBlocks.map(async (block) => {
-            this.logger.log(`Tool (parallel): ${block.name}`);
-            const result = await this.toolExecutor.executeTool(block.name, block.input, user, session);
-            return { type: 'tool_result' as const, tool_use_id: block.id, content: result };
+          const settled = await Promise.allSettled(response.functionCalls.map(async (fc) => {
+            this.logger.log(`Tool (parallel): ${fc.name}`);
+            const result = await this.toolExecutor.executeTool(fc.name, fc.args, user, session);
+            return { functionResponse: { name: fc.name, response: { result } } };
           }));
-          toolResults = settled.map((s, i) =>
-            s.status === 'fulfilled'
-              ? s.value
-              : { type: 'tool_result' as const, tool_use_id: toolUseBlocks[i].id, content: `Error: ${(s as any).reason?.message || 'Unknown'}`, is_error: true },
-          );
+          for (let i = 0; i < settled.length; i++) {
+            const s = settled[i];
+            toolResponses.push(
+              s.status === 'fulfilled'
+                ? s.value
+                : { functionResponse: { name: response.functionCalls[i].name, response: { result: `Error: ${(s as any).reason?.message || 'Unknown'}` } } },
+            );
+          }
         } else {
           // Sequential
-          toolResults = [];
-          for (const block of toolUseBlocks) {
-            this.logger.log(`Tool: ${block.name}`);
-            const result = await this.toolExecutor.executeTool(block.name, block.input, user, session);
-            toolResults.push({ type: 'tool_result' as const, tool_use_id: block.id, content: result });
+          for (const fc of response.functionCalls) {
+            this.logger.log(`Tool: ${fc.name}`);
+            const result = await this.toolExecutor.executeTool(fc.name, fc.args, user, session);
+            toolResponses.push({ functionResponse: { name: fc.name, response: { result } } });
           }
         }
 
-        messages.push({ role: 'user' as const, content: toolResults });
+        geminiMessages.push({ role: 'user', parts: toolResponses });
 
-        // If a tool staged an action with buttons, exit loop immediately.
-        // Don't let Claude generate more text — the staging summary IS the response.
+        // If a tool staged an action with buttons, exit loop immediately
         if (this.toolExecutor.hasPendingAction(session?.id)) {
           this.logger.log('Pending action staged — exiting tool loop');
           break;
@@ -185,20 +185,12 @@ export class AgentService implements OnModuleDestroy {
       // Get pending buttons from tool executor
       const pendingButtons = this.toolExecutor.getPendingButtons(session?.id);
 
-      // When there are pending buttons, use ONLY the staging summary.
-      // Claude's text is ignored — the summary IS the entire message body.
+      // When there are pending buttons, use ONLY the staging summary
       let finalText: string;
       if (pendingButtons) {
         finalText = this.toolExecutor.getPendingSummary(session?.id) || '';
       } else {
-        // No staging — use Claude's text response
-        finalText = '';
-        if (lastResponse) {
-          finalText = lastResponse.content
-            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-            .map(b => b.text)
-            .join('\n');
-        }
+        finalText = lastText;
 
         // Truncate response
         const maxChars = isWeb ? WEB_MAX_RESPONSE_CHARS : MAX_RESPONSE_CHARS;
@@ -222,14 +214,39 @@ export class AgentService implements OnModuleDestroy {
         finalText = 'No se pudo procesar el mensaje.';
       }
 
-      // Save history to session
-      const trimmedMessages = messages.slice(-MAX_HISTORY_MESSAGES);
+      // Save history to session — convert Gemini messages back to storable format
+      // Store in a neutral format that can be converted to either Gemini or Anthropic
+      const allMessages = [...trimmedHistory];
+      // Add user message
+      allMessages.push({ role: 'user', content: userText });
+      // Add model responses and tool results from gemini messages (skip the ones already in trimmedHistory + new user)
+      const newGeminiMessages = geminiMessages.slice(trimmedHistory.length + 1); // skip converted history + user message
+      for (const gMsg of newGeminiMessages) {
+        if (gMsg.role === 'model') {
+          const content: any[] = [];
+          for (const part of gMsg.parts) {
+            if (part.text) content.push({ type: 'text', text: part.text });
+            if (part.functionCall) content.push({ type: 'tool_use', id: `call_${Date.now()}`, name: part.functionCall.name, input: part.functionCall.args || {} });
+          }
+          allMessages.push({ role: 'assistant', content });
+        } else if (gMsg.role === 'user') {
+          const content: any[] = [];
+          for (const part of gMsg.parts) {
+            if (part.text) content.push({ type: 'text', text: part.text });
+            if (part.functionResponse) content.push({ type: 'tool_result', tool_use_id: part.functionResponse.name, content: typeof part.functionResponse.response?.result === 'string' ? part.functionResponse.response.result : JSON.stringify(part.functionResponse.response?.result || '') });
+          }
+          allMessages.push({ role: 'user', content });
+        }
+      }
+
+      const trimmedToStore = allMessages.slice(-MAX_HISTORY_MESSAGES);
+
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: {
           flowState: {
             ...state,
-            aiMessages: trimmedMessages,
+            aiMessages: trimmedToStore,
             lastMessageAt: new Date().toISOString(),
           },
           expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS),
@@ -252,13 +269,12 @@ export class AgentService implements OnModuleDestroy {
     }
   }
 
-  private trimHistory(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  /** Trim and sanitize stored history messages */
+  private trimHistory(messages: any[]): any[] {
     const validTypes = new Set(['text', 'tool_use', 'tool_result', 'image']);
 
-    // Filter out invalid/old format messages
     let cleaned = messages.filter((m: any) => {
       if (!m || !m.role) return false;
-      if (Array.isArray(m.parts)) return false; // Gemini format
       const content = m.content;
       if (typeof content === 'string') return true;
       if (Array.isArray(content)) {
@@ -267,23 +283,19 @@ export class AgentService implements OnModuleDestroy {
       return false;
     });
 
-    // Trim to max, preserving tool_use/tool_result pairs
     if (cleaned.length > MAX_HISTORY_MESSAGES) {
       cleaned = cleaned.slice(-MAX_HISTORY_MESSAGES);
     }
 
-    // Remove leading messages until we have a valid start
-    // Must start with user role, and that user message must NOT be orphaned tool_results
+    // Ensure valid start: must begin with user role, no orphaned tool_results
     let changed = true;
     while (changed && cleaned.length > 0) {
       changed = false;
-      // Remove leading assistant messages
       if (cleaned[0]?.role !== 'user') {
         cleaned.shift();
         changed = true;
         continue;
       }
-      // Remove orphaned tool_results (no preceding assistant with tool_use)
       const content = cleaned[0].content;
       if (Array.isArray(content) && content.length > 0 && content[0]?.type === 'tool_result') {
         cleaned.shift();

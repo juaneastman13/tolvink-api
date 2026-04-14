@@ -5,14 +5,14 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { FreightsModule } from '../freights/freights.module';
 import { AgentService } from './agent.service';
-import { ClaudeClient } from './core/claude.client';
+import { GeminiClient } from './core/gemini.client';
 import { ToolExecutorService } from './tools/tool-executor';
 
 @Module({
   imports: [forwardRef(() => FreightsModule)],
   providers: [
     AgentService,
-    ClaudeClient,
+    GeminiClient,
     ToolExecutorService,
   ],
   exports: [AgentService],
