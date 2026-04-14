@@ -7,12 +7,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
-import { fuzzySearch, classifyFuzzyResult, ENTITY_ALIASES } from '../../common/fuzzy-match';
+import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
 import { randomUUID } from 'crypto';
 
 /** Read-only tools safe for parallel execution */
 export const READ_ONLY_TOOLS = new Set([
+  'list_freights', 'get_freight_detail', 'get_dashboard',
+  'search_plants', 'search_fields', 'search_lots',
+]);
+
+/** Tools that only require read access — exposed to all users */
+export const QUERY_ONLY_TOOLS = new Set([
   'list_freights', 'get_freight_detail', 'get_dashboard',
   'search_plants', 'search_fields', 'search_lots',
 ]);
@@ -59,6 +65,24 @@ export class ToolExecutorService {
     return 'unknown';
   }
 
+  /** Check if user is autonomous driver */
+  isAutonomousDriver(user: any): boolean {
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = (user.memberships || []).find((m: any) => m.companyId === activeCoId);
+    const isChofer = activeMem?.role === 'chofer' || user.role === 'chofer';
+    const autoEnabled = !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
+    return isChofer && autoEnabled;
+  }
+
+  /** Filter tool definitions based on user context */
+  filterTools(allTools: any[], user: any): any[] {
+    if (this.isAutonomousDriver(user)) {
+      return allTools; // Autonomous driver gets all 12 tools
+    }
+    // Non-autonomous users only get query tools
+    return allTools.filter(t => QUERY_ONLY_TOOLS.has(t.name));
+  }
+
   async executeTool(
     name: string,
     input: any,
@@ -66,6 +90,12 @@ export class ToolExecutorService {
     session: any,
   ): Promise<string> {
     const synUser = this.buildSyntheticUser(user);
+
+    // Block mutation tools for non-autonomous users
+    if (!QUERY_ONLY_TOOLS.has(name) && !this.isAutonomousDriver(user)) {
+      return JSON.stringify({ error: 'Esta operacion esta disponible desde la web: ' + APP_URL });
+    }
+
     try {
       switch (name) {
         // ---- Queries ----
@@ -89,16 +119,19 @@ export class ToolExecutorService {
         case 'attach_document': return await this.handleAttachDocument(input, user, synUser, session);
 
         default:
-          return JSON.stringify({ error: `Herramienta desconocida: ${name}` });
+          return JSON.stringify({ error: 'Esa funcion no esta disponible. Usa la web: ' + APP_URL });
       }
     } catch (e: any) {
       this.logger.error(`Tool ${name} error: ${e.message}`, e.stack?.slice(0, 300));
       const msg = e.message || '';
-      // Pass through business errors
-      if (/no encontr|no tiene|no puede|no pertenec|ya existe|estado.*no permite|obligatori/i.test(msg)) {
-        return JSON.stringify({ error: msg });
-      }
-      return JSON.stringify({ error: 'Error al procesar la solicitud.' });
+      // Pass through descriptive business errors
+      if (/no encontr/i.test(msg)) return JSON.stringify({ error: 'No se encontro el flete. Verifica el codigo e intenta de nuevo.' });
+      if (/no tiene acceso|no pertenec|forbidden/i.test(msg)) return JSON.stringify({ error: 'No tenes acceso a ese flete.' });
+      if (/ya existe|estado.*no permite/i.test(msg)) return JSON.stringify({ error: msg });
+      if (/obligatori/i.test(msg)) return JSON.stringify({ error: msg });
+      if (/autonomousDriverEnabled|no es.*chofer/i.test(msg)) return JSON.stringify({ error: 'Tu empresa no tiene habilitado el modo chofer autonomo. Contacta al administrador.' });
+      if (/flete activo/i.test(msg)) return JSON.stringify({ error: msg });
+      return JSON.stringify({ error: 'Hubo un problema. Intenta de nuevo en unos segundos.' });
     }
   }
 
@@ -112,7 +145,7 @@ export class ToolExecutorService {
       dateTo: input.dateTo,
       limit: 10,
     });
-    if (!result.data?.length) return JSON.stringify({ total: 0, message: 'No se encontraron fletes con esos filtros.' });
+    if (!result.data?.length) return JSON.stringify({ total: 0, message: 'No tenes fletes con esos filtros.' });
     const items = result.data.map((f: any) => ({
       code: f.code,
       status: FREIGHT_STATUS_SHORT[f.status] || f.status,
@@ -126,7 +159,7 @@ export class ToolExecutorService {
 
   private async handleGetFreightDetail(input: any, user: any): Promise<string> {
     const freight = await this.resolveFreightByCode(input.code, user);
-    if (!freight) return JSON.stringify({ error: `No se encontro flete ${input.code}` });
+    if (!freight) return JSON.stringify({ error: `No se encontro flete con codigo "${input.code}". Verifica el codigo.` });
     const item = freight.items?.[0];
     const assignment = freight.assignments?.[0];
     return JSON.stringify({
@@ -164,25 +197,22 @@ export class ToolExecutorService {
 
   private async handleSearchPlants(input: any, user: any): Promise<string> {
     const companyIds = this.resolveAllCompanyIds(user);
-    // Find plant companies via PlantProducerAccess
     const accesses = await this.prisma.plantProducerAccess.findMany({
       where: { producerCompanyId: { in: companyIds }, active: true },
       select: { plantCompany: { select: { id: true, name: true, plants: { where: { active: true }, select: { id: true, name: true } } } } },
     });
     const companies = accesses.map(a => a.plantCompany).filter(Boolean);
-    // Also include companies of type plant in user's network
     const plantCompanies = await this.prisma.company.findMany({
       where: { types: { array_contains: ['plant'] }, active: true },
       select: { id: true, name: true, plants: { where: { active: true }, select: { id: true, name: true } } },
       take: 50,
     });
-    // Merge unique
     const allPlants = new Map<string, any>();
     for (const c of [...companies, ...plantCompanies]) {
       if (c && !allPlants.has(c.id)) allPlants.set(c.id, c);
     }
     const results = fuzzySearch(input.query, Array.from(allPlants.values()), (c: any) => c.name, { threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES });
-    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro planta "${input.query}".` });
+    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro planta con nombre "${input.query}". Podes escribir el nombre completo o usar texto libre.` });
     return JSON.stringify({
       total: results.length,
       plants: results.map(r => ({
@@ -202,7 +232,7 @@ export class ToolExecutorService {
       take: 50,
     });
     const results = fuzzySearch(input.query, allFields, (f: any) => f.name, { threshold: 0.5, maxResults: 5 });
-    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro campo "${input.query}".` });
+    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro campo con nombre "${input.query}". Podes escribir el nombre completo o usar texto libre.` });
     return JSON.stringify({
       total: results.length,
       fields: results.map(r => ({
@@ -225,7 +255,7 @@ export class ToolExecutorService {
     });
     const lots = allLots.map((l: any) => ({ ...l, fieldName: l.field?.name || null }));
     const results = fuzzySearch(input.query, lots, (l: any) => l.name, { threshold: 0.5, maxResults: 5 });
-    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro lote "${input.query}".` });
+    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro lote con nombre "${input.query}".` });
     return JSON.stringify({
       total: results.length,
       lots: results.map(r => ({
@@ -249,26 +279,27 @@ export class ToolExecutorService {
         status: { notIn: ['finished', 'canceled'] },
         transporterFinishedConfirmedAt: null,
       },
-      select: { id: true, code: true, destName: true, items: { select: { grain: true, tons: true }, take: 1 } },
+      select: { id: true, code: true, destName: true, originName: true, originFreeText: true, items: { select: { grain: true, tons: true }, take: 1 } },
       orderBy: { createdAt: 'desc' },
     });
     if (activeFreight) {
       const grain = activeFreight.items?.[0]?.grain || '';
       const tons = activeFreight.items?.[0]?.tons;
-      const info = `${activeFreight.code} (${grain}${tons ? ` · ${tons} tn` : ''}${activeFreight.destName ? ` → ${activeFreight.destName}` : ''})`;
-      // Stage finalization directly so user gets buttons
+      const origin = activeFreight.originName || activeFreight.originFreeText || '';
+      const dest = activeFreight.destName || '';
+      // Stage finalization directly — user gets summary + buttons in ONE message
       return this.stageAction(session.id, 'finish_autonomous_freight', {
         freightId: activeFreight.id,
         code: activeFreight.code,
-      }, `Tenes un flete activo: ${info}\nFinalizarlo para crear uno nuevo?`);
+      }, `Tenes un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons} tn` : ''}\n📍 ${origin} → ${dest}\n\nFinalizarlo para crear uno nuevo?`);
     }
 
     // Validate required fields
-    if (!input.origin) return JSON.stringify({ error: 'Origen obligatorio.' });
-    if (!input.destination) return JSON.stringify({ error: 'Destino obligatorio.' });
-    if (!input.grain) return JSON.stringify({ error: 'Grano obligatorio.' });
+    if (!input.origin) return JSON.stringify({ error: 'Falta el origen. Preguntale al chofer de donde sale.' });
+    if (!input.destination) return JSON.stringify({ error: 'Falta el destino. Preguntale al chofer a donde va.' });
+    if (!input.grain) return JSON.stringify({ error: 'Falta el grano. Preguntale al chofer que lleva.' });
     if (!input.weightKg || isNaN(Number(input.weightKg)) || Number(input.weightKg) <= 0) {
-      return JSON.stringify({ error: 'Peso obligatorio (en kg).' });
+      return JSON.stringify({ error: 'Falta el peso. Preguntale al chofer cuantos kilos o toneladas lleva.' });
     }
 
     // Auto-detect truck
@@ -289,12 +320,20 @@ export class ToolExecutorService {
         select: { id: true, plate: true },
       });
       if (anyTruck) { truckId = anyTruck.id; truckPlate = anyTruck.plate; }
+    } else {
+      // Multiple trucks — use first one, show plate
+      truckId = trucks[0].id;
+      truckPlate = trucks[0].plate;
     }
 
     const weightKg = Number(input.weightKg);
-    const summary = `📋 Flete autonomo:\n🚛 Camion: ${truckPlate || 'auto-detectar'}\n📍 Origen: ${input.origin}\n🏭 Destino: ${input.destination}\n🌾 Grano: ${input.grain}\n⚖️ Peso: ${weightKg} kg`;
+    const weightDisplay = weightKg >= 1000 ? `${Math.round(weightKg / 100) / 10} tn` : `${weightKg} kg`;
+    const originDisplay = input.fieldId ? `${input.origin} (verificado)` : input.origin;
+    const destDisplay = input.destPlantId ? `${input.destination} (verificado)` : input.destination;
 
-    return this.stageAction(session.id, 'create_autonomous_freight', {
+    const summary = `📋 Flete autonomo:\n🚛 Camion: ${truckPlate || 'auto'}\n📍 Origen: ${originDisplay}\n🏭 Destino: ${destDisplay}\n🌾 Grano: ${input.grain}\n⚖️ Peso: ${weightDisplay}`;
+
+    return this.stageAction(session.id, 'prepare_autonomous_freight', {
       origin: input.origin,
       destination: input.destination,
       grain: input.grain,
@@ -310,13 +349,13 @@ export class ToolExecutorService {
 
   private async handleConfirmAction(user: any, synUser: any, session: any): Promise<string> {
     const pending = this.pendingActions.get(session.id);
-    if (!pending) return JSON.stringify({ error: 'No hay accion pendiente.' });
+    if (!pending) return JSON.stringify({ error: 'No hay accion pendiente para confirmar. Intenta de nuevo.' });
     this.pendingActions.delete(session.id);
 
     const { tool, params } = pending;
 
     switch (tool) {
-      case 'create_autonomous_freight': {
+      case 'prepare_autonomous_freight': {
         const dto = {
           origin: params.origin,
           destination: params.destination,
@@ -353,7 +392,7 @@ export class ToolExecutorService {
         return JSON.stringify({ status: 'attached', code: params.code, documentName: doc.name });
       }
       default:
-        return JSON.stringify({ error: `Accion desconocida: ${tool}` });
+        return JSON.stringify({ error: 'Accion no reconocida. Intenta de nuevo.' });
     }
   }
 
@@ -361,73 +400,76 @@ export class ToolExecutorService {
     let freight: any;
     if (input.code) {
       freight = await this.resolveFreightByCode(input.code, user);
-      if (!freight) return JSON.stringify({ error: `No se encontro flete ${input.code}` });
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
     } else {
       freight = await this.prisma.freight.findFirst({
         where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
         select: { id: true, code: true },
         orderBy: { createdAt: 'desc' },
       });
-      if (!freight) return JSON.stringify({ error: 'No tenes fletes autonomos activos para finalizar.' });
+      if (!freight) return JSON.stringify({ error: 'No tenes fletes activos para finalizar. Podes crear uno nuevo.' });
     }
 
     const weightKg = input.destinationWeightKg ? Number(input.destinationWeightKg) : undefined;
     const item = await this.prisma.freightItem.findFirst({ where: { freightId: freight.id }, select: { grain: true, tons: true } });
     const grainInfo = item ? `${item.grain}${item.tons ? ` · ${item.tons} tn` : ''}` : '';
+    const weightInfo = weightKg ? `\n⚖️ Peso destino: ${weightKg >= 1000 ? `${Math.round(weightKg / 100) / 10} tn` : `${weightKg} kg`}` : '';
+
     return this.stageAction(session.id, 'finish_autonomous_freight', {
       freightId: freight.id,
       code: freight.code,
       destinationWeightKg: weightKg,
-    }, `Finalizar flete ${freight.code}${grainInfo ? ` (${grainInfo})` : ''}${weightKg ? ` — Peso destino: ${weightKg} kg` : ''}`);
+    }, `Finalizar flete ${freight.code}${grainInfo ? ` (${grainInfo})` : ''}${weightInfo}`);
   }
 
   private async handleRegisterPlantArrival(input: any, user: any, synUser: any, session: any): Promise<string> {
     let freight: any;
     if (input.code) {
       freight = await this.resolveFreightByCode(input.code, user);
-      if (!freight) return JSON.stringify({ error: `No se encontro flete ${input.code}` });
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
     } else {
       freight = await this.prisma.freight.findFirst({
         where: { requestedById: user.sub || user.id, isAutonomous: true, status: 'loaded' },
-        select: { id: true, code: true },
+        select: { id: true, code: true, destName: true },
         orderBy: { createdAt: 'desc' },
       });
-      if (!freight) return JSON.stringify({ error: 'No tenes fletes autonomos activos.' });
+      if (!freight) return JSON.stringify({ error: 'No tenes fletes activos. Crea uno nuevo para registrar llegada.' });
     }
 
+    const destInfo = freight.destName ? ` en ${freight.destName}` : '';
     return this.stageAction(session.id, 'register_plant_arrival', {
       freightId: freight.id,
       code: freight.code,
-    }, `Registrar llegada a planta del flete ${freight.code}`);
+    }, `Registrar llegada${destInfo}\n📋 Flete: ${freight.code}`);
   }
 
   private async handleCancelFreight(input: any, user: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreightByCode(input.code, user);
-    if (!freight) return JSON.stringify({ error: `No se encontro flete ${input.code}` });
-    if (!input.reason) return JSON.stringify({ error: 'Motivo de cancelacion obligatorio.' });
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
+    if (!input.reason) return JSON.stringify({ error: 'Para cancelar necesito el motivo. Decime por que queres cancelar.' });
 
     return this.stageAction(session.id, 'cancel_freight', {
       freightId: freight.id,
       code: freight.code,
       reason: input.reason,
-    }, `Cancelar flete ${freight.code}`);
+    }, `Cancelar flete ${freight.code}\n📝 Motivo: ${input.reason}`);
   }
 
   // ======================== DOCUMENTS ========================
 
   private async handleAttachDocument(input: any, user: any, synUser: any, session: any): Promise<string> {
     const freight = await this.resolveFreightByCode(input.code, user);
-    if (!freight) return JSON.stringify({ error: `No se encontro flete ${input.code}` });
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
 
     const state = (session?.flowState as any) || {};
     const pendingDoc = state.pendingDocument;
-    if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay archivo pendiente para adjuntar.' });
+    if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay foto o archivo pendiente. Envia primero la foto y despues indica a que flete adjuntarla.' });
 
     return this.stageAction(session.id, 'attach_document', {
       freightId: freight.id,
       code: freight.code,
       document: pendingDoc,
-    }, `Adjuntar "${pendingDoc.name}" a ${freight.code}`);
+    }, `Adjuntar "${pendingDoc.name}" al flete ${freight.code}`);
   }
 
   // ======================== HELPERS ========================
@@ -462,11 +504,23 @@ export class ToolExecutorService {
     return this.pendingActions.has(sessionId);
   }
 
+  // ======================== MULTITENANT ACCESS CONTROL ========================
+
   private async resolveFreightByCode(code: string, user: any): Promise<any> {
     if (!code) return null;
     const clean = code.toUpperCase().trim();
+    const companyIds = this.resolveAllCompanyIds(user);
+    const userId = user.sub || user.id;
+
     const freight = await this.prisma.freight.findFirst({
-      where: { code: { equals: clean, mode: 'insensitive' } },
+      where: {
+        code: { equals: clean, mode: 'insensitive' },
+        OR: [
+          { participantCompanyIds: { hasSome: companyIds } },
+          { requestedById: userId },
+          { assignments: { some: { driverId: userId } } },
+        ],
+      },
       include: {
         items: { select: { grain: true, tons: true }, take: 1 },
         assignments: { where: { status: { in: ['active', 'accepted'] } }, select: { plate: true, driverName: true }, take: 1 },

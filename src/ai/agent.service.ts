@@ -94,13 +94,17 @@ export class AgentService implements OnModuleDestroy {
       const storedMessages: Anthropic.MessageParam[] = state.aiMessages || [];
 
       // Build messages: trimmed history + new user message
+      // Add document indicator if there's a pending photo/file
+      const pendingDoc = state.pendingDocument;
+      const docIndicator = pendingDoc?.url ? `\n[ARCHIVO PENDIENTE: "${pendingDoc.name}" listo para adjuntar con attach_document]` : '';
       let messages: Anthropic.MessageParam[] = [
         ...this.trimHistory(storedMessages),
-        { role: 'user' as const, content: userMessage.slice(0, 5000) },
+        { role: 'user' as const, content: userMessage.slice(0, 5000) + docIndicator },
       ];
 
-      // Convert tool definitions to Anthropic format
-      const tools: Anthropic.Tool[] = ALL_TOOL_DEFINITIONS.map(t => ({
+      // Filter and convert tool definitions based on user role
+      const filteredDefs = this.toolExecutor.filterTools(ALL_TOOL_DEFINITIONS, user);
+      const tools: Anthropic.Tool[] = filteredDefs.map(t => ({
         name: t.name,
         description: t.description,
         input_schema: t.input_schema as Anthropic.Tool.InputSchema,
@@ -251,44 +255,41 @@ export class AgentService implements OnModuleDestroy {
   }
 
   private trimHistory(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
-    // Filter out any messages from old agent formats (Gemini/OpenAI) that aren't valid Anthropic
+    const validTypes = new Set(['text', 'tool_use', 'tool_result', 'image']);
+
+    // Filter out invalid/old format messages
     let cleaned = messages.filter((m: any) => {
-      // Must have role
       if (!m || !m.role) return false;
-      // Skip messages with Gemini-style parts (functionCall, functionResponse)
-      if (Array.isArray(m.parts)) return false;
-      // Validate content
+      if (Array.isArray(m.parts)) return false; // Gemini format
       const content = m.content;
       if (typeof content === 'string') return true;
       if (Array.isArray(content)) {
-        // Filter out blocks with unknown types
-        const validTypes = new Set(['text', 'tool_use', 'tool_result', 'image']);
         return content.length > 0 && content.every((b: any) => b && validTypes.has(b.type));
       }
       return false;
     });
 
-    // Trim to max
+    // Trim to max, preserving tool_use/tool_result pairs
     if (cleaned.length > MAX_HISTORY_MESSAGES) {
       cleaned = cleaned.slice(-MAX_HISTORY_MESSAGES);
     }
 
-    // Remove leading assistant messages (Anthropic requires first message to be user)
-    while (cleaned.length > 0 && cleaned[0].role !== 'user') {
-      cleaned.shift();
-    }
-
-    // Remove orphaned tool_results at start (no matching tool_use in previous assistant message)
-    while (cleaned.length > 0 && cleaned[0].role === 'user') {
+    // Remove leading messages until we have a valid start
+    // Must start with user role, and that user message must NOT be orphaned tool_results
+    let changed = true;
+    while (changed && cleaned.length > 0) {
+      changed = false;
+      // Remove leading assistant messages
+      if (cleaned[0]?.role !== 'user') {
+        cleaned.shift();
+        changed = true;
+        continue;
+      }
+      // Remove orphaned tool_results (no preceding assistant with tool_use)
       const content = cleaned[0].content;
       if (Array.isArray(content) && content.length > 0 && content[0]?.type === 'tool_result') {
         cleaned.shift();
-        // Also remove leading assistant messages that may follow
-        while (cleaned.length > 0 && cleaned[0].role !== 'user') {
-          cleaned.shift();
-        }
-      } else {
-        break;
+        changed = true;
       }
     }
 
