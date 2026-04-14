@@ -6,7 +6,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import type { AiToolDefinition } from '../tools/tool-definitions';
 
-const AI_MODEL = 'gemini-2.0-flash-lite';
+const AI_MODEL = 'gemini-3.1-flash-lite-preview';
 const MAX_OUTPUT_TOKENS = 2048;
 const TEMPERATURE = 0.3;
 
