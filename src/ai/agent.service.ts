@@ -88,19 +88,18 @@ export class AgentService implements OnModuleDestroy {
         this._promptCache.set(cacheKey, { prompt: systemPrompt, ts: Date.now() });
       }
 
-      // Load history from session — stored in Anthropic format, convert to Gemini
+      // Load history from session — stored in Gemini native format
       const state = (session?.flowState as any) || {};
-      const storedMessages: any[] = state.aiMessages || [];
+      const storedMessages: GeminiMessage[] = this.sanitizeHistory(state.aiMessages || []);
 
       // Add document indicator if there's a pending photo/file
       const pendingDoc = state.pendingDocument;
       const docIndicator = pendingDoc?.url ? `\n[ARCHIVO PENDIENTE: "${pendingDoc.name}" listo para adjuntar con attach_document]` : '';
       const userText = userMessage.slice(0, 5000) + docIndicator;
 
-      // Convert stored history to Gemini format + add new user message
-      const trimmedHistory = this.trimHistory(storedMessages);
+      // Build messages: sanitized history + new user message
       let geminiMessages: GeminiMessage[] = [
-        ...this.gemini.convertHistory(trimmedHistory),
+        ...storedMessages,
         { role: 'user', parts: [{ text: userText }] },
       ];
 
@@ -130,14 +129,9 @@ export class AgentService implements OnModuleDestroy {
 
         lastText = response.text;
 
-        // Add model response to messages
-        const modelParts: any[] = [];
-        if (response.text) modelParts.push({ text: response.text });
-        for (const fc of response.functionCalls) {
-          modelParts.push({ functionCall: { name: fc.name, args: fc.args } });
-        }
-        if (modelParts.length > 0) {
-          geminiMessages.push({ role: 'model', parts: modelParts });
+        // Add model response to messages — use rawParts to preserve thought_signature
+        if (response.rawParts.length > 0) {
+          geminiMessages.push({ role: 'model', parts: response.rawParts });
         }
 
         // No function calls — model is done
@@ -214,32 +208,8 @@ export class AgentService implements OnModuleDestroy {
         finalText = 'No se pudo procesar el mensaje.';
       }
 
-      // Save history to session — convert Gemini messages back to storable format
-      // Store in a neutral format that can be converted to either Gemini or Anthropic
-      const allMessages = [...trimmedHistory];
-      // Add user message
-      allMessages.push({ role: 'user', content: userText });
-      // Add model responses and tool results from gemini messages (skip the ones already in trimmedHistory + new user)
-      const newGeminiMessages = geminiMessages.slice(trimmedHistory.length + 1); // skip converted history + user message
-      for (const gMsg of newGeminiMessages) {
-        if (gMsg.role === 'model') {
-          const content: any[] = [];
-          for (const part of gMsg.parts) {
-            if (part.text) content.push({ type: 'text', text: part.text });
-            if (part.functionCall) content.push({ type: 'tool_use', id: `call_${Date.now()}`, name: part.functionCall.name, input: part.functionCall.args || {} });
-          }
-          allMessages.push({ role: 'assistant', content });
-        } else if (gMsg.role === 'user') {
-          const content: any[] = [];
-          for (const part of gMsg.parts) {
-            if (part.text) content.push({ type: 'text', text: part.text });
-            if (part.functionResponse) content.push({ type: 'tool_result', tool_use_id: part.functionResponse.name, content: typeof part.functionResponse.response?.result === 'string' ? part.functionResponse.response.result : JSON.stringify(part.functionResponse.response?.result || '') });
-          }
-          allMessages.push({ role: 'user', content });
-        }
-      }
-
-      const trimmedToStore = allMessages.slice(-MAX_HISTORY_MESSAGES);
+      // Save history in Gemini native format (preserves thought_signature)
+      const trimmedToStore = geminiMessages.slice(-MAX_HISTORY_MESSAGES);
 
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
@@ -269,37 +239,38 @@ export class AgentService implements OnModuleDestroy {
     }
   }
 
-  /** Trim and sanitize stored history messages */
-  private trimHistory(messages: any[]): any[] {
-    const validTypes = new Set(['text', 'tool_use', 'tool_result', 'image']);
-
-    let cleaned = messages.filter((m: any) => {
-      if (!m || !m.role) return false;
-      const content = m.content;
-      if (typeof content === 'string') return true;
-      if (Array.isArray(content)) {
-        return content.length > 0 && content.every((b: any) => b && validTypes.has(b.type));
-      }
-      return false;
+  /** Sanitize stored Gemini-format history messages */
+  private sanitizeHistory(messages: any[]): GeminiMessage[] {
+    // Filter valid Gemini messages
+    let cleaned: GeminiMessage[] = messages.filter((m: any) => {
+      if (!m || !m.role || !Array.isArray(m.parts) || m.parts.length === 0) return false;
+      // Must be user or model role
+      return m.role === 'user' || m.role === 'model';
     });
+
+    // Also accept old Anthropic-format messages and convert them
+    const oldFormat = messages.filter((m: any) => m?.role && !Array.isArray(m.parts) && (m.content || typeof m.content === 'string'));
+    if (oldFormat.length > 0 && cleaned.length === 0) {
+      cleaned = this.gemini.convertHistory(oldFormat);
+    }
 
     if (cleaned.length > MAX_HISTORY_MESSAGES) {
       cleaned = cleaned.slice(-MAX_HISTORY_MESSAGES);
     }
 
-    // Ensure valid start: must begin with user role, no orphaned tool_results
-    let changed = true;
-    while (changed && cleaned.length > 0) {
-      changed = false;
-      if (cleaned[0]?.role !== 'user') {
+    // Ensure valid start: must begin with user role
+    while (cleaned.length > 0 && cleaned[0].role !== 'user') {
+      cleaned.shift();
+    }
+
+    // Remove orphaned functionResponse at start (no preceding model with functionCall)
+    while (cleaned.length > 0 && cleaned[0].role === 'user') {
+      const hasFuncResponse = cleaned[0].parts?.some((p: any) => p.functionResponse);
+      if (hasFuncResponse) {
         cleaned.shift();
-        changed = true;
-        continue;
-      }
-      const content = cleaned[0].content;
-      if (Array.isArray(content) && content.length > 0 && content[0]?.type === 'tool_result') {
-        cleaned.shift();
-        changed = true;
+        while (cleaned.length > 0 && cleaned[0].role !== 'user') cleaned.shift();
+      } else {
+        break;
       }
     }
 

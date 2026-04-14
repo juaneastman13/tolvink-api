@@ -20,6 +20,7 @@ export interface GeminiMessage {
 export interface GeminiResponse {
   text: string;
   functionCalls: Array<{ name: string; args: any }>;
+  rawParts: any[];  // Original parts from Gemini (preserves thought_signature)
   usageMetadata?: any;
 }
 
@@ -144,6 +145,7 @@ export class GeminiClient implements OnModuleInit {
     return {
       text: textParts.join('\n'),
       functionCalls,
+      rawParts: parts,
       usageMetadata: usage,
     };
   }
