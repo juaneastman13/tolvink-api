@@ -525,12 +525,29 @@ export class ToolExecutorService {
   // ======================== DOCUMENTS ========================
 
   private async handleAttachDocument(input: any, user: any, synUser: any, session: any): Promise<string> {
-    const freight = await this.resolveFreightByCode(input.code, user);
-    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
-
     const state = (session?.flowState as any) || {};
     const pendingDoc = state.pendingDocument;
     if (!pendingDoc?.url) return JSON.stringify({ error: 'No hay foto o archivo pendiente. Envia primero la foto y despues indica a que flete adjuntarla.' });
+
+    let freight: any;
+
+    if (input.code) {
+      // Explicit code provided
+      freight = await this.resolveFreightByCode(input.code, user);
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}". Verifica el codigo.` });
+    } else {
+      // Auto-detect active autonomous freight
+      freight = await this.prisma.freight.findFirst({
+        where: {
+          requestedById: user.sub || user.id,
+          isAutonomous: true,
+          status: { notIn: ['finished', 'canceled'] },
+        },
+        select: { id: true, code: true, destName: true, originName: true, originFreeText: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!freight) return JSON.stringify({ error: 'No tenes fletes activos. Indica el codigo del flete para adjuntar el archivo.' });
+    }
 
     return this.stageAction(session.id, 'attach_document', {
       freightId: freight.id,

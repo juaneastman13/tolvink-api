@@ -157,13 +157,13 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
 
   {
     name: 'attach_document',
-    description: 'Adjunta un documento o foto pendiente a un flete.',
+    description: 'Adjunta un documento o foto pendiente a un flete. Si no se indica codigo, auto-detecta el flete activo del chofer.',
     input_schema: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'Codigo del flete' },
+        code: { type: 'string', description: 'Codigo del flete (opcional, auto-detecta flete activo si no se indica)' },
       },
-      required: ['code'],
+      required: [],
     },
   },
 ];
