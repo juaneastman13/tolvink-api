@@ -1029,6 +1029,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           await this.wa.sendText(phone, 'Listo.\nLlegada a planta confirmada.');
           break;
         }
+        case 'finish_autonomous': {
+          const targetFreightId = entityId || await this.findActiveAutonomousFreightId(user);
+          if (!targetFreightId) {
+            await this.wa.sendText(phone, 'No tenes un flete activo para finalizar.');
+            break;
+          }
+          const finished = await this.freights.finishAutonomousFreight(targetFreightId, this.buildSyntheticUser(user));
+          await this.wa.sendText(phone, `Listo.\n📋 ${finished.code}\nFlete finalizado.`);
+          break;
+        }
         case 'show_help': {
           await this.showHelp(phone, user);
           break;
@@ -1468,10 +1478,13 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         (roleLabel ? `👤 Rol: ${roleLabel}.\n\n` : '\n');
 
       if (activeFreight) {
+        const activeAction = activeFreight.arrivedAtPlantAt
+          ? { id: `finish_autonomous:${activeFreight.id}`, title: 'FINALIZAR FLETE' }
+          : { id: `register_arrival:${activeFreight.id}`, title: 'CONFIRMAR LLEGADA' };
         await this.wa.sendButtons(
           phone,
           header + `Tenes un flete activo`,
-          [{ id: `register_arrival:${activeFreight.id}`, title: 'CONFIRMAR LLEGADA' }],
+          [activeAction],
         );
       } else {
         await this.wa.sendButtons(
@@ -1657,7 +1670,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     return isChofer && autoEnabled;
   }
 
-  private async findActiveAutonomousFreight(user: any): Promise<{ id: string } | null> {
+  private async findActiveAutonomousFreight(user: any): Promise<{ id: string; arrivedAtPlantAt: Date | null } | null> {
     const userId = user.sub || user.id;
     if (!userId) return null;
     return this.prisma.freight.findFirst({
@@ -1667,7 +1680,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         status: { notIn: ['finished', 'canceled'] },
         transporterFinishedConfirmedAt: null,
       },
-      select: { id: true },
+      select: { id: true, arrivedAtPlantAt: true },
       orderBy: { createdAt: 'desc' },
     });
   }

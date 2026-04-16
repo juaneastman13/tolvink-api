@@ -221,7 +221,7 @@ export class ToolExecutorService {
       select: { id: true, name: true, altName: true, department: true, lat: true, lng: true },
       take: 100,
     });
-    const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => p.name, {
+    const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => [p.name, p.altName, p.department].filter(Boolean).join(' '), {
       threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES,
     });
     if (masterResults.length === 0) {
@@ -740,6 +740,7 @@ export class ToolExecutorService {
     const pending = this.pendingActions.get(sessionId);
     if (!pending) return undefined;
     if (pending.tool === 'prepare_autonomous_freight') {
+      if (pending.summary) return pending.summary;
       const params = pending.params || {};
       return ['Solicitud de flete', '', `🚛 Camion: ${params.truckPlate || 'auto'}`, `📍 Origen: ${params.origin || ''}`, `🏭 Destino: ${params.destination || ''}`, `🌾 Grano: ${params.grain || ''}`, `⚖️ Peso: ${this.formatWeightKg(params.weightKg || 0)}`].join('\n');
     }
