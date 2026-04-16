@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AgentService } from '../ai/agent.service';
+import { AiProfile, resolveAiProfile } from '../ai/core/ai-profile';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
 import OpenAI from 'openai';
@@ -1214,7 +1215,6 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       description: ((TYPE_LABELS[m.company?.type] || m.company?.type || '') +
         (m.companyId === activeId ? ' (actual)' : '')).slice(0, 72),
     }));
-
     const selConfig = {
       headerText: 'Tiene acceso a varias empresas.\nSeleccione con cuál desea operar:',
       listButtonLabel: 'Ver empresas',
@@ -1455,11 +1455,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     if (sessionCompanyId) user = { ...user, activeCompanyId: sessionCompanyId };
     const role = this.getUserRole(user);
     const isAutonomousDriver = this.isAutonomousDriver(user, activeCoId);
+    const profile = this.getAiProfile(user);
     const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
     const companyName = activeMem?.company?.name || user.company?.name || '';
-    const roleLabel = isAutonomousDriver
-      ? 'Chofer'
-      : role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
+    const roleLabel = this.getProfileRoleLabel(profile, role, isAutonomousDriver);
 
     if (isAutonomousDriver) {
       const activeFreight = await this.findActiveAutonomousFreight(user);
@@ -1546,19 +1545,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             this.getReadonlyFeatures();
         } else {
           // All OPERATOR — show normal role features
-          features = this.getRoleFeatureSummary(role);
+          features = this.getRoleFeatureSummaryClean(role, profile);
         }
       } else {
-        features = this.getRoleFeatureSummary(role);
+        features = this.getRoleFeatureSummaryClean(role, profile);
       }
     } catch {
-      features = this.getRoleFeatureSummary(role);
+      features = this.getRoleFeatureSummaryClean(role, profile);
     }
 
     await this.wa.sendButtons(phone,
       header + statsBlock + features +
       `\n¿Qué querés hacer?`,
-      this.getRoleMenuButtons(role),
+      this.getRoleMenuButtonsClean(role, profile),
     );
   }
 
@@ -1589,7 +1588,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         `👤 Tu perfil\n`
       );
     }
-    return this.getRoleFeatureSummary(role).replace('\n📌 Acciones principales:\n', '');
+    return this.getRoleFeatureSummaryClean(role, 'plant_operator').replace('\nAcciones principales:\n', '');
   }
 
   private getReadonlyFeatures(): string {
@@ -1605,22 +1604,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   private async showHelp(phone: string, user: any) {
     const role = this.getUserRole(user);
+    const profile = this.getAiProfile(user);
 
-    const header = `GUÍA DE USO\n\n`;
+    const header = `GUIA DE USO\n\n`;
 
     const body =
       `Enviando un mensaje de texto o audio puede realizar las gestiones que tenga habilitadas. ` +
-      `Comience la conversación y Tolvink lo ayudará.\n\n`;
+      `Comience la conversacion y Tolvink lo ayudara.\n\n`;
 
-    const roleSection = this.getRoleHelpSection(role);
+    const roleSection = this.getRoleHelpSectionClean(role, profile);
 
     const footer = `Plataforma web:\n${APP_URL}`;
 
     await this.wa.sendText(phone, header + body + roleSection + footer);
 
     await this.wa.sendButtons(phone,
-      'Seleccione una opción:',
-      this.getRoleMenuButtons(role),
+      'Seleccione una opcion:',
+      this.getRoleMenuButtonsClean(role, profile),
     );
   }
 
@@ -1677,7 +1677,62 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     return freight?.id || null;
   }
 
-  private getRoleFeatureSummary(role: string): string {
+  private getAiProfile(user: any): AiProfile {
+    return resolveAiProfile(user);
+  }
+
+  private getProfileRoleLabel(profile: AiProfile, role: string, isAutonomousDriver: boolean): string {
+    if (isAutonomousDriver) return 'Chofer';
+    if (profile.endsWith('_manager')) return 'Gerente';
+    if (profile.endsWith('_operator')) return 'Operario';
+    if (profile.endsWith('_driver')) return 'Chofer';
+    return role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
+  }
+
+  private getRoleFeatureSummary(role: string, profile: AiProfile): string {
+    if (
+      profile === 'producer_driver'
+      || profile === 'transporter_driver'
+      || profile === 'plant_driver'
+      || profile === 'autonomous_driver'
+    ) {
+      return (
+        `\n📌 Acciones principales:\n` +
+        `📋 Ver mi viaje activo\n` +
+        `🚛 Iniciar viaje\n` +
+        `🌾 Confirmar carga\n` +
+        `🏁 Finalizar flete\n` +
+        `📎 Adjuntar evidencia\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `\n📌 Acciones principales:\n` +
+        `🚛 Solicitar flete\n` +
+        `📋 Ver estado de fletes\n` +
+        `🌾 Buscar campos y lotes\n` +
+        `🏭 Buscar plantas\n` +
+        `📎 Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `\n📌 Acciones principales:\n` +
+        `📋 Ver asignaciones\n` +
+        `🚛 Asignar camión y chofer\n` +
+        `❌ Rechazar asignaciones\n` +
+        `📎 Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `\n📌 Acciones principales:\n` +
+        `📋 Ver pendientes\n` +
+        `✅ Aprobar fletes\n` +
+        `🚛 Asignar transportista\n` +
+        `📎 Adjuntar documentos\n`
+      );
+    }
     if (role === 'producer') {
       return (
         `\n📌 Acciones principales:\n` +
@@ -1717,7 +1772,32 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private getRoleMenuButtons(role: string): Array<{ id: string; title: string }> {
+  private getRoleMenuButtons(role: string, profile: AiProfile): Array<{ id: string; title: string }> {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return [
+        { id: 'active_freights', title: 'MI VIAJE' },
+        { id: 'show_help', title: 'GUÃA DE USO' },
+      ];
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return [
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'create_freight', title: 'SOLICITAR FLETE' },
+        { id: 'show_help', title: 'GUÃA DE USO' },
+      ];
+    }
+    if (profile === 'transporter_manager') {
+      return [
+        { id: 'active_freights', title: 'ASIGNACIONES' },
+        { id: 'show_help', title: 'GUÃA DE USO' },
+      ];
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return [
+        { id: 'active_freights', title: 'PENDIENTES' },
+        { id: 'show_help', title: 'GUÃA DE USO' },
+      ];
+    }
     if (role === 'producer') {
       return [
         { id: 'active_freights', title: 'MIS FLETES' },
@@ -1744,7 +1824,44 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     ];
   }
 
-  private getRoleHelpSection(role: string): string {
+  private getRoleHelpSection(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `Chofer operativo\n\n` +
+        `  â–¸ Consultar el viaje activo\n` +
+        `  â–¸ Iniciar viaje\n` +
+        `  â–¸ Confirmar carga\n` +
+        `  â–¸ Finalizar viaje\n` +
+        `  â–¸ Adjuntar fotos o documentos\n\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `Productor\n\n` +
+        `  â–¸ Solicitar fletes nuevos\n` +
+        `  â–¸ Consultar estado y detalle\n` +
+        `  â–¸ Cancelar si el flujo lo permite\n` +
+        `  â–¸ Buscar campos, lotes y plantas\n\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `Transportista gerente\n\n` +
+        `  â–¸ Ver asignaciones pendientes\n` +
+        `  â–¸ Asignar camiÃ³n y chofer\n` +
+        `  â–¸ Rechazar con motivo\n` +
+        `  â–¸ Consultar detalle operativo\n\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `Planta\n\n` +
+        `  â–¸ Ver fletes pendientes\n` +
+        `  â–¸ Aprobar fletes de productor\n` +
+        `  â–¸ Asignar empresa transportista\n` +
+        `  â–¸ Consultar estado de ejecuciÃ³n\n\n`
+      );
+    }
     if (role === 'producer') {
       return (
         `Productor\n\n` +
@@ -1790,42 +1907,268 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private getRoleFeatureSummaryClean(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver mi viaje activo\n` +
+        `- Iniciar viaje\n` +
+        `- Confirmar carga\n` +
+        `- Finalizar flete\n` +
+        `- Adjuntar evidencia\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Solicitar flete\n` +
+        `- Ver estado de fletes\n` +
+        `- Buscar campos y lotes\n` +
+        `- Buscar plantas\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver asignaciones\n` +
+        `- Asignar camion y chofer\n` +
+        `- Rechazar asignaciones\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver pendientes\n` +
+        `- Aprobar fletes\n` +
+        `- Asignar transportista\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (role === 'producer') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Crear flete\n` +
+        `- Ver fletes del dia\n` +
+        `- Gestionar campos y lotes\n` +
+        `- Equipo\n` +
+        `- Informes\n`
+      );
+    }
+    if (role === 'plant') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Fletes pendientes de asignacion\n` +
+        `- Asignar transportistas\n` +
+        `- Ver fletes del dia\n` +
+        `- Equipo\n` +
+        `- Informes\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Mis asignaciones\n` +
+        `- Aceptar o rechazar viajes\n` +
+        `- Ver fletes del dia\n` +
+        `- Choferes y camiones\n` +
+        `- Informes\n`
+      );
+    }
+    return (
+      `\nAcciones principales:\n` +
+      `- Crear y gestionar fletes\n` +
+      `- Ver fletes del dia\n` +
+      `- Equipo\n` +
+      `- Informes\n`
+    );
+  }
+
+  private getRoleMenuButtonsClean(role: string, profile: AiProfile): Array<{ id: string; title: string }> {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return [
+        { id: 'active_freights', title: 'MI VIAJE' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return [
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'create_freight', title: 'SOLICITAR FLETE' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (profile === 'transporter_manager') {
+      return [
+        { id: 'active_freights', title: 'ASIGNACIONES' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return [
+        { id: 'active_freights', title: 'PENDIENTES' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (role === 'producer') {
+      return [
+        { id: 'active_freights', title: 'MIS FLETES' },
+        { id: 'create_freight', title: 'SOLICITAR FLETE' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (role === 'plant') {
+      return [
+        { id: 'active_freights', title: 'FLETES PENDIENTES' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    if (role === 'transporter') {
+      return [
+        { id: 'active_freights', title: 'MIS ASIGNACIONES' },
+        { id: 'show_help', title: 'GUIA DE USO' },
+      ];
+    }
+    return [
+      { id: 'active_freights', title: 'MIS FLETES' },
+      { id: 'create_freight', title: 'SOLICITAR FLETE' },
+      { id: 'show_help', title: 'GUIA DE USO' },
+    ];
+  }
+
+  private getRoleHelpSectionClean(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `Chofer operativo\n\n` +
+        `  - Consultar el viaje activo\n` +
+        `  - Iniciar viaje\n` +
+        `  - Confirmar carga\n` +
+        `  - Finalizar viaje\n` +
+        `  - Adjuntar fotos o documentos\n\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `Productor\n\n` +
+        `  - Solicitar fletes nuevos\n` +
+        `  - Consultar estado y detalle\n` +
+        `  - Cancelar si el flujo lo permite\n` +
+        `  - Buscar campos, lotes y plantas\n\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `Transportista gerente\n\n` +
+        `  - Ver asignaciones pendientes\n` +
+        `  - Asignar camion y chofer\n` +
+        `  - Rechazar con motivo\n` +
+        `  - Consultar detalle operativo\n\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `Planta\n\n` +
+        `  - Ver fletes pendientes\n` +
+        `  - Aprobar fletes de productor\n` +
+        `  - Asignar empresa transportista\n` +
+        `  - Consultar estado de ejecucion\n\n`
+      );
+    }
+    if (role === 'producer') {
+      return (
+        `Productor\n\n` +
+        `  - Crear fletes indicando grano, toneladas, planta y fecha\n` +
+        `  - Administrar campos y lotes\n` +
+        `  - Gestionar flota propia y asignar camiones\n` +
+        `  - Confirmar cargas de flota propia\n` +
+        `  - Solicitar informes PDF\n` +
+        `  - Seguimiento en vivo de unidades\n` +
+        `  - Gestionar equipo y choferes\n\n`
+      );
+    }
+    if (role === 'plant') {
+      return (
+        `Planta\n\n` +
+        `  - Consultar fletes pendientes de asignacion\n` +
+        `  - Asignar transportistas a fletes\n` +
+        `  - Confirmar recepcion y entrega de cargas\n` +
+        `  - Solicitar informes PDF\n` +
+        `  - Seguimiento en vivo de unidades\n` +
+        `  - Gestionar equipo\n\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `Transportista\n\n` +
+        `  - Consultar asignaciones y fletes\n` +
+        `  - Aceptar o rechazar asignaciones\n` +
+        `  - Iniciar viajes\n` +
+        `  - Confirmar carga con toneladas reales\n` +
+        `  - Confirmar entrega en destino\n` +
+        `  - Solicitar informes PDF\n` +
+        `  - Gestionar choferes y camiones\n\n`
+      );
+    }
+    return (
+      `Funciones habilitadas\n\n` +
+      `  - Crear y gestionar fletes\n` +
+      `  - Consultar estado de fletes\n` +
+      `  - Confirmar cargas y entregas\n` +
+      `  - Informes PDF\n` +
+      `  - Seguimiento en vivo\n\n`
+    );
+  }
+
   // ======================== SHOW ACTIVE FREIGHTS ========================
 
   async showActiveFreights(phone: string, user: any) {
     // Resolve the user's active company — only show freights for that company
     const activeCompanyId = user.activeCompanyId || user.companyId;
+    const profile = this.getAiProfile(user);
 
     if (!activeCompanyId) {
       await this.wa.sendText(phone, 'No se encontró una empresa activa asociada a su cuenta.');
       return;
     }
 
-    // Query freights where the active company participates
+    const where: any = { status: { notIn: ['finished', 'canceled'] } };
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      where.OR = [
+        {
+          assignments: {
+            some: {
+              driverId: user.id,
+              status: { in: ['active', 'accepted'] },
+            },
+          },
+        },
+        { requestedById: user.id, isAutonomous: true },
+      ];
+    } else {
+      where.OR = [
+        { originCompanyId: activeCompanyId },
+        { destCompanyId: activeCompanyId },
+        {
+          assignments: {
+            some: {
+              transportCompanyId: activeCompanyId,
+              status: { in: ['active', 'accepted'] },
+            },
+          },
+        },
+        {
+          assignments: {
+            some: {
+              driverId: user.id,
+              status: { in: ['active', 'accepted'] },
+            },
+          },
+        },
+      ];
+    }
     const activeFreights = await this.prisma.freight.findMany({
-      where: {
-        status: { notIn: ['finished', 'canceled'] },
-        OR: [
-          { originCompanyId: activeCompanyId },
-          { destCompanyId: activeCompanyId },
-          {
-            assignments: {
-              some: {
-                transportCompanyId: activeCompanyId,
-                status: { in: ['active', 'accepted'] },
-              },
-            },
-          },
-          {
-            assignments: {
-              some: {
-                driverId: user.id,
-                status: { in: ['active', 'accepted'] },
-              },
-            },
-          },
-        ],
-      },
+      where,
       orderBy: { createdAt: 'desc' },
       take: 30,
       include: {
@@ -1840,7 +2183,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (activeFreights.length === 0) {
-      await this.wa.sendText(phone, 'No se registran fletes activos en este momento.');
+      await this.wa.sendText(phone, profile.endsWith('_driver') ? 'No tenes viajes activos en este momento.' : 'No se registran fletes activos en este momento.');
       return;
     }
 
@@ -1858,10 +2201,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       };
     });
 
+    const noun = profile.endsWith('_driver') ? 'viaje' : 'flete';
     const selConfig = {
-      headerText: `🚛 ${activeFreights.length} flete${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}.\n\nSeleccione uno para ver el detalle.`,
-      listButtonLabel: 'VER FLETES',
-      sectionTitle: 'FLETES ACTIVOS',
+      headerText: `🚛 ${activeFreights.length} ${noun}${activeFreights.length > 1 ? 's' : ''} activo${activeFreights.length > 1 ? 's' : ''}.\n\nSeleccione uno para ver el detalle.`,
+      listButtonLabel: profile.endsWith('_driver') ? 'VER VIAJES' : 'VER FLETES',
+      sectionTitle: profile.endsWith('_driver') ? 'VIAJES ACTIVOS' : 'FLETES ACTIVOS',
     };
     const result = await this.wa.sendSelection(phone, items, selConfig);
 

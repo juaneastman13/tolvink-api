@@ -85,6 +85,148 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
     },
   },
 
+  {
+    name: 'create_freight_request',
+    description: 'Uso principal para productor gerente u operario. Prepara una solicitud de flete del flujo normal y pide confirmacion antes de crearla.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        origin: { type: 'string', description: 'Nombre del origen o texto libre si no hay lote/campo exacto' },
+        fieldId: { type: 'string', description: 'UUID del campo de origen si ya fue resuelto' },
+        lotId: { type: 'string', description: 'UUID del lote de origen si ya fue resuelto' },
+        destination: { type: 'string', description: 'Nombre del destino o texto libre' },
+        destPlantId: { type: 'string', description: 'UUID de planta registrada destino' },
+        tolvinkPlantId: { type: 'string', description: 'UUID de planta Tolvink del directorio maestro' },
+        grain: { type: 'string', description: 'Tipo de grano o cultivo' },
+        weightKg: { type: 'number', description: 'Peso en kg. 30 toneladas = 30000' },
+        loadDate: { type: 'string', description: 'Fecha de carga (YYYY-MM-DD). Opcional: si falta, se usa hoy.' },
+        loadTime: { type: 'string', description: 'Hora de carga (HH:MM). Opcional: si falta, se usa la hora actual redondeada.' },
+        notes: { type: 'string', description: 'Notas adicionales' },
+      },
+      required: ['grain', 'weightKg'],
+    },
+  },
+
+  {
+    name: 'approve_freight_request',
+    description: 'Uso solo para planta gerente u operario. Aprueba un flete de productor que requiere aprobacion de planta.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete a aprobar' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'assign_transport_company',
+    description: 'Uso solo para planta gerente u operario. Asigna la empresa transportista a un flete. Puede recibir UUID o nombre de la empresa.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        transportCompanyId: { type: 'string', description: 'UUID de la empresa transportista o nombre si aun no se conoce el UUID' },
+        transportCompanyName: { type: 'string', description: 'Nombre de la empresa transportista para resolverla por texto' },
+        notes: { type: 'string', description: 'Notas internas opcionales' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'accept_freight_assignment',
+    description: 'Uso principal para transportista gerente. Intenta aceptar una asignacion; si faltan camion o chofer, pedira o resolvera esos datos.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'reject_freight_assignment',
+    description: 'Uso principal para transportista gerente. Rechaza una asignacion con motivo obligatorio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        reason: { type: 'string', description: 'Motivo del rechazo' },
+        tripNumber: { type: 'number', description: 'Numero de viaje si el flete es multi-camion' },
+      },
+      required: ['code', 'reason'],
+    },
+  },
+
+  {
+    name: 'assign_driver_and_truck',
+    description: 'Uso principal para transportista gerente. Completa la asignacion aceptando operativamente el viaje con chofer y camion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        driverId: { type: 'string', description: 'UUID del chofer, si ya se conoce' },
+        driverName: { type: 'string', description: 'Nombre del chofer o "yo" si es el propio usuario' },
+        truckId: { type: 'string', description: 'UUID del camion, si ya se conoce' },
+        plate: { type: 'string', description: 'Matricula del camion para resolverlo por texto' },
+        tripNumber: { type: 'number', description: 'Numero de viaje si el flete es multi-camion' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'start_freight_trip',
+    description: 'Uso principal para chofer operativo. Inicia su viaje activo o el flete indicado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+      },
+      required: [],
+    },
+  },
+
+  {
+    name: 'confirm_freight_loaded',
+    description: 'Uso principal para chofer operativo. Confirma que la carga ya esta hecha.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+        weightKg: { type: 'number', description: 'Peso cargado en kg, opcional' },
+      },
+      required: [],
+    },
+  },
+
+  {
+    name: 'confirm_freight_arrival',
+    description: 'Uso principal para chofer. Registra llegada si el flujo lo soporta; para otros casos puede orientar al siguiente paso.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+      },
+      required: [],
+    },
+  },
+
+  {
+    name: 'finish_freight',
+    description: 'Uso principal para chofer operativo. Finaliza el viaje activo o el flete indicado.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+        destinationWeightKg: { type: 'number', description: 'Peso neto en destino en kg, opcional' },
+      },
+      required: [],
+    },
+  },
+
   // ======================== CREACION AUTONOMA ========================
 
   {

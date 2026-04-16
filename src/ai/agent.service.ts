@@ -8,6 +8,7 @@ import { GeminiClient, GeminiMessage } from './core/gemini.client';
 import { buildSystemPrompt } from './core/prompt-builder';
 import { ToolExecutorService, READ_ONLY_TOOLS } from './tools/tool-executor';
 import { ALL_TOOL_DEFINITIONS } from './tools/tool-definitions';
+import { resolveAiProfile } from './core/ai-profile';
 import { checkRateLimit, cleanupRateLimits } from './utils/rate-limiter';
 import { classifyAiError, sanitizeErrorForLog } from '../common/error-utils';
 import {
@@ -95,16 +96,22 @@ export class AgentService implements OnModuleDestroy {
     this._chatLocks.add(lockKey);
 
     const isWeb = phone === 'web';
+    const profile = resolveAiProfile(user);
 
     try {
+      const layer0 = await this.tryDeterministicIntent(userMessage, user, session, profile);
+      if (layer0) {
+        return layer0;
+      }
+
       // Build system prompt (cached)
-      const cacheKey = `${session?.id}:${isWeb}`;
+      const cacheKey = `${session?.id}:${isWeb}:${profile}`;
       const cached = this._promptCache.get(cacheKey);
       let systemPrompt: string;
       if (cached && Date.now() - cached.ts < PROMPT_CACHE_TTL_MS) {
         systemPrompt = cached.prompt;
       } else {
-        systemPrompt = buildSystemPrompt(user, isWeb);
+        systemPrompt = buildSystemPrompt(user, isWeb, profile);
         this._promptCache.set(cacheKey, { prompt: systemPrompt, ts: Date.now() });
       }
 
@@ -295,5 +302,116 @@ export class AgentService implements OnModuleDestroy {
     }
 
     return cleaned;
+  }
+
+  private async tryDeterministicIntent(
+    rawMessage: string,
+    user: any,
+    session: any,
+    profile: string,
+  ): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> } | null> {
+    const message = (rawMessage || '').trim();
+    const normalized = message.toLowerCase();
+
+    const confirmLike = /^(si|sí|ok|dale|va|confirmar|confirmo|confirmá|confirma)\b/i.test(message);
+    const cancelLike = /^(no|cancelar|deja|anular|cancelá|cancela)\b/i.test(message);
+
+    if (confirmLike && this.toolExecutor.hasPendingAction(session?.id)) {
+      const result = await this.toolExecutor.confirmPendingAction(session, user);
+      const parsed = JSON.parse(result || '{}');
+      const buttons = this.toolExecutor.getPendingButtons(session?.id);
+      const text = buttons?.length
+        ? (this.toolExecutor.getPendingSummary(session?.id) || parsed.summary || 'Confirma la siguiente accion.')
+        : (parsed.error || parsed.message || this.renderActionResult(parsed));
+      return { text, buttons };
+    }
+
+    if (cancelLike && this.toolExecutor.hasPendingAction(session?.id)) {
+      this.toolExecutor.cancelPendingAction(session?.id);
+      return { text: 'Listo, accion cancelada.' };
+    }
+
+    if (/^(menu|hola|buenas|ayuda)$/i.test(normalized)) {
+      return { text: this.buildProfileMenu(user, profile) };
+    }
+
+    if (/^(mis fletes|fletes|flete activo)$/i.test(normalized)) {
+      const result = await this.toolExecutor.executeTool('list_freights', {}, user, session);
+      return { text: this.renderToolJson(result) };
+    }
+
+    const codeMatch = message.match(/\bF\d{2}-[A-Z0-9.\-]+\b/i);
+    if (codeMatch && /(detalle|estado|como va|cómo va|ver)/i.test(normalized)) {
+      const result = await this.toolExecutor.executeTool('get_freight_detail', { code: codeMatch[0] }, user, session);
+      return { text: this.renderToolJson(result) };
+    }
+
+    if (/empresa activa/i.test(normalized)) {
+      const activeCoId = user.activeCompanyId || user.companyId;
+      const activeMem = (user.memberships || []).find((m: any) => m.companyId === activeCoId);
+      const companyName = activeMem?.company?.name || user.company?.name || 'Sin empresa activa';
+      return { text: `Empresa activa: ${companyName}` };
+    }
+
+    if (/^(llegue|llegué) /i.test(normalized) || /^(llegue|llegué)$/i.test(normalized)) {
+      const toolName = profile === 'autonomous_driver' ? 'register_plant_arrival' : 'confirm_freight_arrival';
+      const result = await this.toolExecutor.executeTool(toolName, {}, user, session);
+      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+    }
+
+    if (profile !== 'autonomous_driver' && /^(cargue|cargué|ya cargue|ya cargué)$/i.test(normalized)) {
+      const result = await this.toolExecutor.executeTool('confirm_freight_loaded', {}, user, session);
+      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+    }
+
+    if (/^(termine|terminé|descargue|descargué)$/i.test(normalized)) {
+      const toolName = profile === 'autonomous_driver' ? 'finish_autonomous_freight' : 'finish_freight';
+      const result = await this.toolExecutor.executeTool(toolName, {}, user, session);
+      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+    }
+
+    return null;
+  }
+
+  private buildProfileMenu(user: any, profile: string): string {
+    const activeCoId = user.activeCompanyId || user.companyId;
+    const activeMem = (user.memberships || []).find((m: any) => m.companyId === activeCoId);
+    const companyName = activeMem?.company?.name || user.company?.name || 'Sin empresa';
+    if (profile === 'autonomous_driver') {
+      return `Tolvink\n\n🏢 Empresa activa: ${companyName}.\n👤 Rol: Chofer.\n\nPodes consultar tus fletes, crear uno nuevo, registrar llegada, finalizar y adjuntar documentos.`;
+    }
+    return `Tolvink\n\n🏢 Empresa activa: ${companyName}.\n👤 Perfil IA: ${profile}.\n\nPodes consultar fletes y operar solo las acciones permitidas para tu rol en esta empresa.`;
+  }
+
+  private renderToolJson(result: string): string {
+    try {
+      const parsed = JSON.parse(result || '{}');
+      return parsed.error || parsed.message || this.renderActionResult(parsed);
+    } catch {
+      return result || 'No se pudo procesar el mensaje.';
+    }
+  }
+
+  private renderActionResult(parsed: any): string {
+    if (!parsed) return 'Listo.';
+    if (parsed.status === 'pending_confirmation') return parsed.summary || 'Confirma la siguiente accion.';
+    if (parsed.status === 'created' && parsed.code) return `Listo.\n📋 ${parsed.code}\nFlete creado correctamente.`;
+    if (parsed.status === 'approved' && parsed.code) return `Listo.\n📋 ${parsed.code}\nFlete aprobado.`;
+    if (parsed.status === 'assigned' && parsed.code) return `Listo.\n📋 ${parsed.code}\nTransportista asignado.`;
+    if (parsed.status === 'accepted' && parsed.code) return `Listo.\n📋 ${parsed.code}\nChofer y camion asignados.`;
+    if (parsed.status === 'rejected' && parsed.code) return `Listo.\n📋 ${parsed.code}\nAsignacion rechazada.`;
+    if (parsed.status === 'started' && parsed.code) return `Listo.\n📋 ${parsed.code}\nViaje iniciado.`;
+    if (parsed.status === 'loaded' && parsed.code) return `Listo.\n📋 ${parsed.code}\nCarga confirmada.`;
+    if (parsed.status === 'finished' && parsed.code) return `Listo.\n📋 ${parsed.code}\nFlete finalizado.`;
+    if (parsed.status === 'canceled' && parsed.code) return `Listo.\n📋 ${parsed.code}\nFlete cancelado.`;
+    if (parsed.status === 'arrival_registered' && parsed.code) return `Listo.\n📋 ${parsed.code}\nLlegada registrada.`;
+    if (parsed.status === 'attached' && parsed.documentName) return `Documento adjuntado: ${parsed.documentName}`;
+    if (parsed.status === 'already_accepted' && parsed.message) return parsed.message;
+    if (Array.isArray(parsed.freights)) {
+      const lines = parsed.freights.slice(0, 5).map((f: any) => `📋 ${f.code} · ${f.status} · ${f.origin} → ${f.dest}`);
+      return lines.length ? lines.join('\n') : 'No tenes fletes para mostrar.';
+    }
+    if (parsed.code) return `Listo.\n📋 ${parsed.code}`;
+    return parsed.message || 'Listo.';
   }
 }
