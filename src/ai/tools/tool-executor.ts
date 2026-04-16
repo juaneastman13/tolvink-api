@@ -212,13 +212,45 @@ export class ToolExecutorService {
       if (c && !allPlants.has(c.id)) allPlants.set(c.id, c);
     }
     const results = fuzzySearch(input.query, Array.from(allPlants.values()), (c: any) => c.name, { threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES });
-    if (results.length === 0) return JSON.stringify({ total: 0, message: `No se encontro planta con nombre "${input.query}". Podes escribir el nombre completo o usar texto libre.` });
+    if (results.length > 0) {
+      return JSON.stringify({
+        total: results.length,
+        source: 'company',
+        plants: results.map(r => ({
+          companyId: r.item.id,
+          name: r.item.name,
+          branches: (r.item.plants || []).map((p: any) => ({ id: p.id, name: p.name })),
+          score: r.score,
+        })),
+      });
+    }
+
+    const masterPlants = await this.prisma.tolvinkPlant.findMany({
+      where: { active: true },
+      select: { id: true, name: true, altName: true, department: true, lat: true, lng: true },
+      take: 100,
+    });
+    const masterResults = fuzzySearch(
+      input.query,
+      masterPlants,
+      (p: any) => p.name,
+      { threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES },
+    );
+    if (masterResults.length === 0) {
+      return JSON.stringify({ total: 0, message: `No se encontro planta con nombre "${input.query}". Podes escribir el nombre completo o usar texto libre.` });
+    }
     return JSON.stringify({
-      total: results.length,
-      plants: results.map(r => ({
-        companyId: r.item.id,
+      total: masterResults.length,
+      source: 'tolvink_directory',
+      plants: masterResults.map(r => ({
+        tolvinkPlantId: r.item.id,
+        companyId: null,
         name: r.item.name,
-        branches: (r.item.plants || []).map((p: any) => ({ id: p.id, name: p.name })),
+        altName: r.item.altName || null,
+        department: r.item.department || null,
+        lat: r.item.lat != null ? Number(r.item.lat) : null,
+        lng: r.item.lng != null ? Number(r.item.lng) : null,
+        branches: [],
         score: r.score,
       })),
     });
@@ -303,6 +335,7 @@ export class ToolExecutorService {
           fieldId: input.fieldId,
           originLotId: input.originLotId,
           destPlantId: input.destPlantId,
+          tolvinkPlantId: input.tolvinkPlantId,
           branchId: input.branchId,
         },
       }, `Tenes un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons} tn` : ''}\n📍 ${origin} → ${dest}\n\nFinalizarlo para crear uno nuevo?`);
@@ -343,7 +376,7 @@ export class ToolExecutorService {
     const weightKg = Number(input.weightKg);
     const weightDisplay = weightKg >= 1000 ? `${Math.round(weightKg / 100) / 10} tn` : `${weightKg} kg`;
     const originDisplay = input.fieldId ? `${input.origin} (verificado)` : input.origin;
-    const destDisplay = input.destPlantId ? `${input.destination} (verificado)` : input.destination;
+    const destDisplay = (input.destPlantId || input.tolvinkPlantId) ? `${input.destination} (verificado)` : input.destination;
 
     const summary = `📋 Flete autonomo:\n🚛 Camion: ${truckPlate || 'auto'}\n📍 Origen: ${originDisplay}\n🏭 Destino: ${destDisplay}\n🌾 Grano: ${input.grain}\n⚖️ Peso: ${weightDisplay}`;
 
@@ -357,6 +390,7 @@ export class ToolExecutorService {
       fieldId: input.fieldId,
       originLotId: input.originLotId,
       destPlantId: input.destPlantId,
+      tolvinkPlantId: input.tolvinkPlantId,
       branchId: input.branchId,
     }, summary);
   }
@@ -380,6 +414,7 @@ export class ToolExecutorService {
           fieldId: params.fieldId,
           originLotId: params.originLotId,
           destPlantId: params.destPlantId,
+          tolvinkPlantId: params.tolvinkPlantId,
           branchId: params.branchId,
         };
         const freight = await this.freights.createAutonomousFreight(dto, synUser);
@@ -439,6 +474,7 @@ export class ToolExecutorService {
           fieldId: nf.fieldId,
           originLotId: nf.originLotId,
           destPlantId: nf.destPlantId,
+          tolvinkPlantId: nf.tolvinkPlantId,
           branchId: nf.branchId,
         }, summary);
       }

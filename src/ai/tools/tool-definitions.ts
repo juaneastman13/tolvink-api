@@ -52,7 +52,7 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
 
   {
     name: 'search_plants',
-    description: 'Busca plantas/acopios por nombre. Devuelve nombre, ID y sucursales. Usar ANTES de crear flete para resolver destino.',
+    description: 'Busca plantas/acopios por nombre. Prioriza plantas/empresas relacionadas del usuario; si no hay coincidencias, busca en el directorio maestro Tolvink. Devuelve nombre, IDs y sucursales cuando existan. Usar ANTES de crear flete para resolver destino.',
     input_schema: {
       type: 'object',
       properties: {
@@ -99,7 +99,8 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
         weightKg: { type: 'number', description: 'Peso en kilogramos (30 toneladas = 30000)' },
         fieldId: { type: 'string', description: 'UUID del campo de origen (de search_fields)' },
         originLotId: { type: 'string', description: 'UUID del lote de origen (de search_lots)' },
-        destPlantId: { type: 'string', description: 'UUID de planta destino (de search_plants)' },
+        destPlantId: { type: 'string', description: 'UUID de planta/empresa registrada destino (de search_plants)' },
+        tolvinkPlantId: { type: 'string', description: 'UUID de planta del directorio maestro Tolvink (de search_plants)' },
         branchId: { type: 'string', description: 'UUID de sucursal destino' },
         notes: { type: 'string', description: 'Notas adicionales' },
       },

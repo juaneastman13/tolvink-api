@@ -385,6 +385,26 @@ model Plant {
   @@map("plants")
 }
 
+model TolvinkPlant {
+  id            String   @id @default(uuid())
+  sourceRowId   Int?     @unique @map("source_row_id")
+  sourcePlantId Int?     @unique @map("source_plant_id")
+  name          String   @db.VarChar(255)
+  altName       String?  @map("alt_name") @db.VarChar(255)
+  department    String?  @db.VarChar(100)
+  lat           Decimal? @db.Decimal(10, 6)
+  lng           Decimal? @db.Decimal(10, 6)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  freights Freight[] @relation("FreightTolvinkPlant")
+
+  @@index([name])
+  @@index([department])
+  @@map("tolvink_plants")
+}
+
 // ======================== TRUCKS =====================================
 
 model Truck {
@@ -684,11 +704,12 @@ model Freight {
   originLng       Decimal? @db.Decimal(10, 6)
 
   // Destination
-  destCompanyId String?  @map("dest_company_id")
-  destPlantId   String?  @map("dest_plant_id")
-  destName      String   @db.VarChar(255)
-  destLat       Decimal? @db.Decimal(10, 6)
-  destLng       Decimal? @db.Decimal(10, 6)
+  destCompanyId   String?  @map("dest_company_id")
+  destPlantId     String?  @map("dest_plant_id")
+  tolvinkPlantId  String?  @map("tolvink_plant_id")
+  destName        String   @db.VarChar(255)
+  destLat         Decimal? @db.Decimal(10, 6)
+  destLng         Decimal? @db.Decimal(10, 6)
 
   // Schedule
   loadDate    DateTime  @map("load_date") @db.Date
@@ -752,10 +773,11 @@ model Freight {
   originCompany   Company  @relation("FreightOriginCompany", fields: [originCompanyId], references: [id], onDelete: Restrict)
   destCompany     Company? @relation("FreightDestCompany", fields: [destCompanyId], references: [id], onDelete: SetNull)
   producerCompany Company? @relation("producerFreights", fields: [producerCompanyId], references: [id], onDelete: SetNull)
-  originLot     Lot?     @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
-  destPlant     Plant?   @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
-  field         Field?   @relation(fields: [fieldId], references: [id], onDelete: SetNull)
-  requestedBy   User     @relation("FreightRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  originLot       Lot?          @relation("FreightOriginLot", fields: [originLotId], references: [id], onDelete: SetNull)
+  destPlant       Plant?        @relation("FreightDestPlant", fields: [destPlantId], references: [id], onDelete: SetNull)
+  tolvinkPlant    TolvinkPlant? @relation("FreightTolvinkPlant", fields: [tolvinkPlantId], references: [id], onDelete: SetNull)
+  field           Field?        @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  requestedBy     User          @relation("FreightRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
 
   items          FreightItem[]
   assignments    FreightAssignment[]
@@ -776,6 +798,8 @@ model Freight {
   @@index([requestedById])
   @@index([originCompanyId])
   @@index([destCompanyId])
+  @@index([destPlantId])
+  @@index([tolvinkPlantId])
   @@index([status, originCompanyId])
   @@index([status, destCompanyId])
   @@index([status, destCompanyId, createdAt])

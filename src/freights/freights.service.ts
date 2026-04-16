@@ -206,7 +206,7 @@ export class FreightsService {
   async create(dto: CreateFreightDto, user: any) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden crear fletes');
 
-    if (!dto.destPlantId && !dto.customDestName) {
+    if (!dto.destPlantId && !dto.tolvinkPlantId && !dto.customDestName) {
       throw new BadRequestException('Debe indicar planta destino o destino personalizado');
     }
 
@@ -262,11 +262,23 @@ export class FreightsService {
 
     let destCompanyId: string | null = null;
     let destPlantId: string | null = null;
+    let tolvinkPlantId: string | null = null;
     let destName: string;
     let destLat: any;
     let destLng: any;
 
-    if (dto.destPlantId) {
+    if (dto.tolvinkPlantId) {
+      const tolvinkPlant = await this.prisma.tolvinkPlant.findFirst({
+        where: { id: dto.tolvinkPlantId, active: true },
+      });
+      if (!tolvinkPlant) throw new BadRequestException('Planta Tolvink no encontrada');
+      destCompanyId = null;
+      destPlantId = null;
+      tolvinkPlantId = tolvinkPlant.id;
+      destName = dto.customDestName || tolvinkPlant.name;
+      destLat = dto.customDestLat ?? dto.overrideDestLat ?? tolvinkPlant.lat;
+      destLng = dto.customDestLng ?? dto.overrideDestLng ?? tolvinkPlant.lng;
+    } else if (dto.destPlantId) {
       const plant = await this.prisma.plant.findFirst({
         where: { id: dto.destPlantId, active: true },
         include: { company: true },
@@ -389,6 +401,7 @@ export class FreightsService {
           originLng,
           destCompanyId,
           destPlantId,
+          tolvinkPlantId,
           destName,
           destLat,
           destLng,
@@ -583,13 +596,25 @@ export class FreightsService {
 
     // Resolve destination: try to match Plant or use free text
     let destPlantId: string | null = null;
+    let tolvinkPlantId: string | null = null;
     let destCompanyId: string | null = null;
     let destName = dto.destination;
     let destLat: any = null;
     let destLng: any = null;
     let destinationFreeText: string | null = null;
 
-    if (dto.destPlantId) {
+    if (dto.tolvinkPlantId) {
+      const tolvinkPlant = await this.prisma.tolvinkPlant.findFirst({
+        where: { id: dto.tolvinkPlantId, active: true },
+      });
+      if (tolvinkPlant) {
+        tolvinkPlantId = tolvinkPlant.id;
+        destCompanyId = null;
+        destName = dto.destination || tolvinkPlant.name;
+        destLat = tolvinkPlant.lat || null;
+        destLng = tolvinkPlant.lng || null;
+      }
+    } else if (dto.destPlantId) {
       const plant = await this.prisma.plant.findFirst({
         where: { id: dto.destPlantId, active: true },
         include: { company: true },
@@ -602,7 +627,7 @@ export class FreightsService {
         destLng = plant.lng || null;
       }
     }
-    if (!destPlantId) {
+    if (!destPlantId && !tolvinkPlantId) {
       // Free text destination
       destinationFreeText = dto.destination;
     }
@@ -678,6 +703,7 @@ export class FreightsService {
           originFreeText,
           destCompanyId,
           destPlantId,
+          tolvinkPlantId,
           destName,
           destLat,
           destLng,
@@ -2438,7 +2464,7 @@ export class FreightsService {
 
   async updateFreight(
     freightId: string,
-    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; truckId?: string; driverId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number; truckCount?: number },
+    dto: { loadDate?: string; loadTime?: string; notes?: string; useOwnFleet?: boolean; destPlantId?: string; tolvinkPlantId?: string; truckId?: string; driverId?: string; customDestName?: string; customDestLat?: number; customDestLng?: number; truckCount?: number },
     user: any,
   ) {
     if (user.role === 'chofer') throw new ForbiddenException('Los choferes no pueden editar fletes');
@@ -2608,22 +2634,41 @@ export class FreightsService {
         }
       }
 
-      // --- destPlantId (may be a Plant ID or Company ID from catalog) ---
-      if (dto.destPlantId && dto.destPlantId !== freight.destPlantId && dto.destPlantId !== freight.destCompanyId) {
-        // Try Plant table first, then Company table (producers select companies as destinations)
-        let resolvedDest: { plantId: string | null; companyId: string; name: string; lat: any; lng: any };
-        const plant = await tx.plant.findFirst({
-          where: { id: dto.destPlantId, active: true, company: { active: true } },
-          include: { company: { select: { id: true, name: true } } },
-        });
-        if (plant) {
-          resolvedDest = { plantId: plant.id, companyId: plant.companyId, name: plant.name, lat: plant.lat, lng: plant.lng };
-        } else {
-          const company = await tx.company.findFirst({
-            where: { id: dto.destPlantId, active: true },
+      // --- destination update: registered Plant/Company or Tolvink directory ---
+      const wantsDestPlantUpdate = !!dto.destPlantId
+        && dto.destPlantId !== freight.destPlantId
+        && dto.destPlantId !== freight.destCompanyId;
+      const wantsTolvinkPlantUpdate = !!dto.tolvinkPlantId
+        && dto.tolvinkPlantId !== freight.tolvinkPlantId;
+      if (wantsDestPlantUpdate || wantsTolvinkPlantUpdate) {
+        let resolvedDest: { plantId: string | null; companyId: string | null; tolvinkPlantId: string | null; name: string; lat: any; lng: any };
+        if (dto.tolvinkPlantId) {
+          const tolvinkPlant = await tx.tolvinkPlant.findFirst({
+            where: { id: dto.tolvinkPlantId, active: true },
           });
-          if (!company) throw new BadRequestException('Planta destino no encontrada');
-          resolvedDest = { plantId: null, companyId: company.id, name: company.name, lat: company.lat, lng: company.lng };
+          if (!tolvinkPlant) throw new BadRequestException('Planta Tolvink no encontrada');
+          resolvedDest = {
+            plantId: null,
+            companyId: null,
+            tolvinkPlantId: tolvinkPlant.id,
+            name: tolvinkPlant.name,
+            lat: tolvinkPlant.lat,
+            lng: tolvinkPlant.lng,
+          };
+        } else {
+          const plant = await tx.plant.findFirst({
+            where: { id: dto.destPlantId, active: true, company: { active: true } },
+            include: { company: { select: { id: true, name: true } } },
+          });
+          if (plant) {
+            resolvedDest = { plantId: plant.id, companyId: plant.companyId, tolvinkPlantId: null, name: plant.name, lat: plant.lat, lng: plant.lng };
+          } else {
+            const company = await tx.company.findFirst({
+              where: { id: dto.destPlantId, active: true },
+            });
+            if (!company) throw new BadRequestException('Planta destino no encontrada');
+            resolvedDest = { plantId: null, companyId: company.id, tolvinkPlantId: null, name: company.name, lat: company.lat, lng: company.lng };
+          }
         }
 
         const hasActiveAssignments = freight.assignments.length > 0;
@@ -2639,6 +2684,7 @@ export class FreightsService {
           // Direct update
           data.destPlantId = resolvedDest.plantId;
           data.destCompanyId = resolvedDest.companyId;
+          data.tolvinkPlantId = resolvedDest.tolvinkPlantId;
           data.destName = finalName;
           data.destLat = finalLat;
           data.destLng = finalLng;
@@ -2658,8 +2704,8 @@ export class FreightsService {
             data: {
               freightId,
               changeType: 'destPlant',
-              fromValue: { destPlantId: freight.destPlantId, destCompanyId: freight.destCompanyId, destName: freight.destName },
-              toValue: { destPlantId: resolvedDest.plantId, destCompanyId: resolvedDest.companyId, destName: finalName, destLat: finalLat ? Number(finalLat) : null, destLng: finalLng ? Number(finalLng) : null },
+              fromValue: { destPlantId: freight.destPlantId, tolvinkPlantId: freight.tolvinkPlantId, destCompanyId: freight.destCompanyId, destName: freight.destName },
+              toValue: { destPlantId: resolvedDest.plantId, tolvinkPlantId: resolvedDest.tolvinkPlantId, destCompanyId: resolvedDest.companyId, destName: finalName, destLat: finalLat ? Number(finalLat) : null, destLng: finalLng ? Number(finalLng) : null },
               requestedById: user.sub,
               approverCompanyId,
             },
@@ -2743,6 +2789,7 @@ export class FreightsService {
         }
       } else if (change.changeType === 'destPlant') {
         data.destPlantId = toValue.destPlantId;
+        data.tolvinkPlantId = toValue.tolvinkPlantId ?? null;
         data.destCompanyId = toValue.destCompanyId;
         data.destName = toValue.destName;
         if (toValue.destLat != null) data.destLat = toValue.destLat;

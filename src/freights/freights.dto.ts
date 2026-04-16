@@ -69,6 +69,11 @@ export class CreateFreightDto {
   @IsUUID()
   destPlantId?: string;
 
+  @ApiProperty({ required: false, description: 'ID de planta Tolvink del directorio maestro' })
+  @IsOptional()
+  @IsUUID()
+  tolvinkPlantId?: string;
+
   @ApiProperty({ required: false, description: 'ID de empresa destino (para destinos custom vinculados)' })
   @IsOptional()
   @IsUUID()
@@ -287,6 +292,11 @@ export class CreateAutonomousFreightDto {
   @IsOptional()
   @IsUUID()
   destPlantId?: string;
+
+  @ApiProperty({ required: false, description: 'ID de planta Tolvink del directorio maestro (si se resolvio)' })
+  @IsOptional()
+  @IsUUID()
+  tolvinkPlantId?: string;
 
   @ApiProperty({ required: false, description: 'ID de sucursal destino' })
   @IsOptional()
