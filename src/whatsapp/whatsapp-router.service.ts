@@ -1026,6 +1026,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             break;
           }
           const finished = await this.freights.finishAutonomousFreight(targetFreightId, this.buildSyntheticUser(user));
+          await this.clearAiOperationalContext(user.id);
           await this.wa.sendText(phone, `Listo.\n📋 ${finished.code}\nFlete finalizado.`);
           break;
         }
@@ -1036,6 +1037,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             break;
           }
           const finished = await this.freights.finishAutonomousFreight(targetFreightId, this.buildSyntheticUser(user));
+          await this.clearAiOperationalContext(user.id);
           await this.wa.sendText(phone, `Listo.\n📋 ${finished.code}\nFlete finalizado.`);
           break;
         }
@@ -1688,6 +1690,30 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async findActiveAutonomousFreightId(user: any): Promise<string | null> {
     const freight = await this.findActiveAutonomousFreight(user);
     return freight?.id || null;
+  }
+
+  private async clearAiOperationalContext(userId: string): Promise<void> {
+    const session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!session) return;
+
+    const state = (session.flowState as any) || {};
+    const {
+      aiMessages,
+      activeContext,
+      selectionContext,
+      _pendingSelection,
+      _pendingMessage,
+      _pendingAction,
+      ...cleanState
+    } = state;
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { flowState: cleanState },
+    });
   }
 
   private getAiProfile(user: any): AiProfile {
