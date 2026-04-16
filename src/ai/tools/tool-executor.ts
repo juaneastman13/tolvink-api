@@ -33,6 +33,7 @@ export class ToolExecutorService {
     tool: string;
     params: Record<string, any>;
     summary: string;
+    buttons?: Array<{ id: string; title: string }>;
     createdAt: number;
   }>();
 
@@ -325,6 +326,10 @@ export class ToolExecutorService {
         // Data to finalize old freight
         freightId: activeFreight.id,
         code: activeFreight.code,
+        currentGrain: grain,
+        currentTons: tons,
+        currentOrigin: origin,
+        currentDest: dest,
         // Data for new freight (preserved from input)
         newFreight: {
           origin: input.origin,
@@ -385,6 +390,7 @@ export class ToolExecutorService {
       destination: input.destination,
       grain: input.grain,
       weightKg,
+      truckPlate,
       notes: input.notes,
       truckId,
       fieldId: input.fieldId,
@@ -469,6 +475,7 @@ export class ToolExecutorService {
           destination: nf.destination,
           grain: nf.grain,
           weightKg,
+          truckPlate,
           notes: nf.notes,
           truckId,
           fieldId: nf.fieldId,
@@ -594,9 +601,22 @@ export class ToolExecutorService {
 
   // ======================== HELPERS ========================
 
-  private stageAction(sessionId: string, tool: string, params: Record<string, any>, summary: string): string {
+  private stageAction(
+    sessionId: string,
+    tool: string,
+    params: Record<string, any>,
+    summary: string,
+    buttons?: Array<{ id: string; title: string }>,
+  ): string {
     const actionId = randomUUID().slice(0, 8);
-    this.pendingActions.set(sessionId, { actionId, tool, params, summary, createdAt: Date.now() });
+    const resolvedButtons = (buttons || [
+      { id: 'ai_confirm', title: 'CONFIRMAR' },
+      { id: 'ai_cancel', title: 'CANCELAR' },
+    ]).map((button) => ({
+      ...button,
+      id: button.id.includes(':') ? button.id : `${button.id}:${actionId}`,
+    }));
+    this.pendingActions.set(sessionId, { actionId, tool, params, summary, buttons: resolvedButtons, createdAt: Date.now() });
     return JSON.stringify({
       status: 'pending_confirmation',
       summary,
@@ -606,17 +626,53 @@ export class ToolExecutorService {
 
   /** Get pending action summary (for use as button message body) */
   getPendingSummary(sessionId: string): string | undefined {
-    return this.pendingActions.get(sessionId)?.summary;
+    const pending = this.pendingActions.get(sessionId);
+    if (!pending) return undefined;
+
+    if (pending.tool === 'prepare_autonomous_freight') {
+      const params = pending.params || {};
+      const weightKg = Number(params.weightKg || 0);
+      const weightDisplay = weightKg >= 1000 ? `${Math.round(weightKg / 100) / 10} tn` : `${weightKg} kg`;
+      return [
+        'Solicitud de flete',
+        '',
+        `🚛 Camion: ${params.truckPlate || 'auto'}`,
+        `📍 Origen: ${params.origin || ''}`,
+        `🏭 Destino: ${params.destination || ''}`,
+        `🌾 Grano: ${params.grain || ''}`,
+        `⚖️ Peso: ${weightDisplay}`,
+      ].join('\n');
+    }
+
+    if (pending.tool === 'finish_and_create') {
+      const newFreight = pending.params?.newFreight || {};
+      const currentCode = pending.params?.code || '';
+      const currentGrain = pending.params?.currentGrain || '';
+      const currentTons = pending.params?.currentTons;
+      const currentOrigin = pending.params?.currentOrigin || '';
+      const currentDest = pending.params?.currentDest || '';
+      return [
+        'Tenes un flete activo:',
+        '',
+        `📋 ${currentCode}`,
+        `🌾 ${currentGrain}${currentTons ? ` · ${currentTons} tn` : ''}`,
+        `📍 ${currentOrigin} → ${currentDest}`,
+        '',
+        'Finalizalo para crear uno nuevo',
+      ].join('\n');
+    }
+
+    return pending.summary;
   }
 
   /** Get pending buttons for a session (called by agent after tool execution) */
   getPendingButtons(sessionId: string): Array<{ id: string; title: string }> | undefined {
     const pending = this.pendingActions.get(sessionId);
     if (!pending) return undefined;
-    return [
-      { id: `ai_confirm:${pending.actionId}`, title: 'CONFIRMAR' },
-      { id: `ai_cancel:${pending.actionId}`, title: 'CANCELAR' },
-    ];
+    if (pending.tool === 'finish_and_create') {
+      return [{ id: `ai_confirm:${pending.actionId}`, title: 'FINALIZAR' }];
+    }
+    return pending.buttons;
   }
 
   getPendingActionId(sessionId: string): string | undefined {

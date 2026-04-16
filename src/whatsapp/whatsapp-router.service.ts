@@ -1018,6 +1018,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           await this.handleAiChat(phone, user, 'Quiero crear un flete');
           break;
         }
+        case 'register_arrival': {
+          const targetFreightId = entityId || await this.findActiveAutonomousFreightId(user);
+          if (!targetFreightId) {
+            await this.wa.sendText(phone, 'No tenes un flete activo para registrar llegada.');
+            break;
+          }
+          await this.freights.registerPlantArrival(targetFreightId, this.buildSyntheticUser(user));
+          await this.wa.sendText(phone, 'Listo.\nLlegada a planta confirmada.');
+          break;
+        }
         case 'show_help': {
           await this.showHelp(phone, user);
           break;
@@ -1444,9 +1454,35 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     // Temporarily override user for role resolution
     if (sessionCompanyId) user = { ...user, activeCompanyId: sessionCompanyId };
     const role = this.getUserRole(user);
+    const isAutonomousDriver = this.isAutonomousDriver(user, activeCoId);
     const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
     const companyName = activeMem?.company?.name || user.company?.name || '';
-    const roleLabel = role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
+    const roleLabel = isAutonomousDriver
+      ? 'Chofer'
+      : role === 'producer' ? 'Productor' : role === 'plant' ? 'Planta' : role === 'transporter' ? 'Transportista' : '';
+
+    if (isAutonomousDriver) {
+      const activeFreight = await this.findActiveAutonomousFreight(user);
+      const header =
+        `*Tolvink*\n\n` +
+        (companyName ? `🏢 Empresa activa: ${companyName}.\n` : '') +
+        (roleLabel ? `👤 Rol: ${roleLabel}.\n\n` : '\n');
+
+      if (activeFreight) {
+        await this.wa.sendButtons(
+          phone,
+          header + `Tenes un flete activo`,
+          [{ id: `register_arrival:${activeFreight.id}`, title: 'CONFIRMAR LLEGADA' }],
+        );
+      } else {
+        await this.wa.sendButtons(
+          phone,
+          header + `No tenes fletes activos`,
+          [{ id: 'create_freight', title: 'SOLICITAR FLETE' }],
+        );
+      }
+      return;
+    }
 
     // Freight counts for active company (cached 60s)
     let statsBlock = '';
@@ -1611,6 +1647,34 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       return types[0] || 'unknown';
     }
     return 'unknown';
+  }
+
+  private isAutonomousDriver(user: any, activeCoId?: string): boolean {
+    const targetCompanyId = activeCoId || user.activeCompanyId || user.companyId;
+    const activeMem = (user.memberships || []).find((m: any) => m.companyId === targetCompanyId && m.active);
+    const isChofer = activeMem?.role === 'chofer' || user.role === 'chofer';
+    const autoEnabled = !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
+    return isChofer && autoEnabled;
+  }
+
+  private async findActiveAutonomousFreight(user: any): Promise<{ id: string } | null> {
+    const userId = user.sub || user.id;
+    if (!userId) return null;
+    return this.prisma.freight.findFirst({
+      where: {
+        requestedById: userId,
+        isAutonomous: true,
+        status: { notIn: ['finished', 'canceled'] },
+        transporterFinishedConfirmedAt: null,
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  private async findActiveAutonomousFreightId(user: any): Promise<string | null> {
+    const freight = await this.findActiveAutonomousFreight(user);
+    return freight?.id || null;
   }
 
   private getRoleFeatureSummary(role: string): string {
