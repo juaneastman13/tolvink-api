@@ -27,7 +27,7 @@ export const TOOLS_BY_PROFILE: Record<AiProfile, Set<string>> = {
   plant_manager: new Set(['list_freights', 'get_freight_detail', 'approve_freight_request', 'assign_transport_company', 'cancel_freight', 'confirm_action', 'attach_document']),
   plant_operator: new Set(['list_freights', 'get_freight_detail', 'approve_freight_request', 'assign_transport_company', 'confirm_action', 'attach_document']),
   plant_driver: new Set(['list_freights', 'get_freight_detail', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'attach_document', 'confirm_action']),
-  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'register_plant_arrival', 'cancel_freight', 'attach_document']),
+  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'cancel_freight', 'attach_document']),
 };
 
 type PendingActionRecord = {

@@ -1025,8 +1025,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             await this.wa.sendText(phone, 'No tenes un flete activo para registrar llegada.');
             break;
           }
-          await this.freights.registerPlantArrival(targetFreightId, this.buildSyntheticUser(user));
-          await this.wa.sendText(phone, 'Listo.\nLlegada a planta confirmada.');
+          const finished = await this.freights.finishAutonomousFreight(targetFreightId, this.buildSyntheticUser(user));
+          await this.wa.sendText(phone, `Listo.\n📋 ${finished.code}\nFlete finalizado.`);
           break;
         }
         case 'finish_autonomous': {

@@ -354,7 +354,7 @@ export class AgentService implements OnModuleDestroy {
     }
 
     if (/^(llegue|llegué) /i.test(normalized) || /^(llegue|llegué)$/i.test(normalized)) {
-      const toolName = profile === 'autonomous_driver' ? 'register_plant_arrival' : 'confirm_freight_arrival';
+      const toolName = profile === 'autonomous_driver' ? 'finish_autonomous_freight' : 'confirm_freight_arrival';
       const result = await this.toolExecutor.executeTool(toolName, {}, user, session);
       return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
     }

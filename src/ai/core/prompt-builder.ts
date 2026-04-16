@@ -44,7 +44,7 @@ function buildProfileInstructions(profile: AiProfile): string {
   switch (profile) {
     case 'autonomous_driver':
       return `<profile_rules>
-PUEDE: Crear fletes, finalizarlos, registrar llegada a planta, cancelar sus fletes, adjuntar fotos, consultar fletes.
+PUEDE: Crear fletes, finalizarlos al llegar a planta, cancelar sus fletes, adjuntar fotos, consultar fletes.
 NO PUEDE: Asignar transportistas, gestionar campos/lotes/usuarios.
 
 CREAR FLETE:
@@ -54,7 +54,7 @@ CREAR FLETE:
 - Llamar prepare_autonomous_freight primero.
 
 FINALIZAR: "ya descargue"/"termine" => finish_autonomous_freight.
-LLEGADA: "llegue a planta" => register_plant_arrival.
+LLEGADA: "llegue a planta" => finish_autonomous_freight.
 CANCELAR: cancel_freight con motivo obligatorio.
 CONSULTAS: "mis fletes" => list_freights. "como va" => get_dashboard.
 </profile_rules>`;
