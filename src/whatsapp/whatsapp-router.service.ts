@@ -1059,15 +1059,60 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
         case 'ai_confirm':
         case 'confirm': { // backward compatibility
-          // Generic confirmation for any staged AI action
-          const token = entityId ? ` [ACTION_ID:${entityId}]` : '';
-          await this.handleAiChat(phone, user, `Confirmar.${token}`);
+          // Confirm pending autonomous AI action directly, without another LLM turn.
+          const session = await this.prisma.whatsAppSession.findFirst({
+            where: { userId: user.id, expiresAt: { gt: new Date() } },
+            orderBy: { updatedAt: 'desc' },
+          });
+          if (!session) {
+            await this.wa.sendText(phone, 'No hay una accion pendiente para confirmar.');
+            break;
+          }
+          const pendingActionId = this.ai.getPendingActionId(session.id);
+          if (!pendingActionId || (entityId && entityId !== pendingActionId)) {
+            await this.wa.sendText(phone, 'Esa confirmacion ya vencio o ya fue procesada.');
+            break;
+          }
+          const result = await this.ai.confirmPendingAction(session, user);
+          const parsed = JSON.parse(result || '{}');
+          if (parsed?.error) {
+            await this.wa.sendText(phone, parsed.error);
+          } else if (parsed?.status === 'pending_confirmation') {
+            const summary = this.ai.getPendingSummary(session.id) || parsed.summary || 'Confirma la siguiente accion.';
+            const buttons = this.ai.getPendingButtons(session.id);
+            if (buttons?.length) {
+              await this.wa.sendButtons(phone, summary, buttons);
+            } else {
+              await this.wa.sendText(phone, summary);
+            }
+          } else if (parsed?.status === 'created' && parsed?.code) {
+            await this.wa.sendText(phone, `Listo.\n📋 ${parsed.code}\nFlete creado correctamente.`);
+          } else if (parsed?.status === 'finished' && parsed?.code) {
+            await this.wa.sendText(phone, `Listo.\n📋 ${parsed.code}\nFlete finalizado.`);
+          } else if (parsed?.status === 'arrival_registered' && parsed?.code) {
+            await this.wa.sendText(phone, `Listo.\n📋 ${parsed.code}\nLlegada a planta registrada.`);
+          } else if (parsed?.status === 'attached' && parsed?.documentName) {
+            await this.wa.sendText(phone, `Documento adjuntado: ${parsed.documentName}`);
+          } else {
+            await this.wa.sendText(phone, 'Accion confirmada.');
+          }
           break;
         }
         case 'ai_cancel': {
-          // Generic cancellation for any staged AI action
-          const token = entityId ? ` [ACTION_ID:${entityId}]` : '';
-          await this.handleAiChat(phone, user, `No, cancelar.${token}`);
+          // Cancel pending autonomous AI action directly, without another LLM turn.
+          const session = await this.prisma.whatsAppSession.findFirst({
+            where: { userId: user.id, expiresAt: { gt: new Date() } },
+            orderBy: { updatedAt: 'desc' },
+          });
+          if (!session) {
+            await this.wa.sendText(phone, 'No hay una accion pendiente para cancelar.');
+            break;
+          }
+          const canceled = this.ai.cancelPendingAction(session.id, entityId || undefined);
+          await this.wa.sendText(
+            phone,
+            canceled ? 'Listo, accion cancelada.' : 'Esa accion ya no estaba pendiente.',
+          );
           break;
         }
         case 'ai_edit':

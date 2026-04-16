@@ -619,6 +619,23 @@ export class ToolExecutorService {
     ];
   }
 
+  getPendingActionId(sessionId: string): string | undefined {
+    return this.pendingActions.get(sessionId)?.actionId;
+  }
+
+  async confirmPendingAction(session: any, user: any): Promise<string> {
+    const synUser = this.buildSyntheticUser(user);
+    return this.handleConfirmAction(user, synUser, session);
+  }
+
+  cancelPendingAction(sessionId: string, actionId?: string): boolean {
+    const pending = this.pendingActions.get(sessionId);
+    if (!pending) return false;
+    if (actionId && pending.actionId !== actionId) return false;
+    this.pendingActions.delete(sessionId);
+    return true;
+  }
+
   /** Check if there's a pending action for this session */
   hasPendingAction(sessionId: string): boolean {
     return this.pendingActions.has(sessionId);

@@ -41,6 +41,26 @@ export class AgentService implements OnModuleDestroy {
     clearInterval(this.cleanupTimer);
   }
 
+  getPendingActionId(sessionId: string): string | undefined {
+    return this.toolExecutor.getPendingActionId(sessionId);
+  }
+
+  getPendingSummary(sessionId: string): string | undefined {
+    return this.toolExecutor.getPendingSummary(sessionId);
+  }
+
+  getPendingButtons(sessionId: string): Array<{ id: string; title: string }> | undefined {
+    return this.toolExecutor.getPendingButtons(sessionId);
+  }
+
+  async confirmPendingAction(session: any, user: any): Promise<string> {
+    return this.toolExecutor.confirmPendingAction(session, user);
+  }
+
+  cancelPendingAction(sessionId: string, actionId?: string): boolean {
+    return this.toolExecutor.cancelPendingAction(sessionId, actionId);
+  }
+
   isEnabled(): boolean {
     return this.gemini.isEnabled();
   }
