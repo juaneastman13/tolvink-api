@@ -290,13 +290,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       if (session?.flowType) {
         // Handle cancel/menu command inside any flow
         const cmd = type === 'text' ? payload.body?.trim().toLowerCase() : '';
+        const GREETING_RE_IN_FLOW = /^(hola|hi|hey|buenas?|buen\s*d[ií]a|buenos?\s*d[ií]as?|buenas?\s*tardes?|buenas?\s*noches?|qu[eé]\s*tal|c[oó]mo\s*(est[aá]s?|and[aá]s?|va)|saludos?|menu|inicio)[\s?!.,]*$/i;
         if (/^(cancelar|salir|exit|cancel)$/.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.wa.sendText(phone, '❌ Operación cancelada.');
           await this.showMainMenu(phone, user, sessionCoId);
           return;
         }
-        if (/^(menu|inicio|hola)$/.test(cmd)) {
+        if (GREETING_RE_IN_FLOW.test(cmd)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.showMainMenu(phone, user, sessionCoId);
           return;
