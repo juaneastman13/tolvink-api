@@ -42,6 +42,7 @@ type PendingActionRecord = {
 @Injectable()
 export class ToolExecutorService {
   private readonly logger = new Logger(ToolExecutorService.name);
+  private static readonly PENDING_ACTION_TTL_MS = 5 * 60 * 1000;
   private pendingActions = new Map<string, PendingActionRecord>();
 
   constructor(
@@ -52,30 +53,35 @@ export class ToolExecutorService {
   cleanupPendingActions(): void {
     const now = Date.now();
     for (const [k, v] of this.pendingActions) {
-      if (now - v.createdAt > 5 * 60 * 1000) this.pendingActions.delete(k);
+      if (now - v.createdAt > ToolExecutorService.PENDING_ACTION_TTL_MS) this.pendingActions.delete(k);
     }
   }
 
-  buildSyntheticUser(user: any): any {
-    return buildSyntheticUser(user);
+  scopeUserToSessionCompany(user: any, session?: any): any {
+    return this.applySessionCompanyScope(user, session);
   }
 
-  getAiProfile(user: any): AiProfile {
-    return resolveAiProfile(user);
+  buildSyntheticUser(user: any, session?: any): any {
+    return buildSyntheticUser(this.applySessionCompanyScope(user, session));
   }
 
-  isAutonomousDriver(user: any): boolean {
-    return this.getAiProfile(user) === 'autonomous_driver';
+  getAiProfile(user: any, session?: any): AiProfile {
+    return resolveAiProfile(this.applySessionCompanyScope(user, session));
   }
 
-  filterTools(allTools: any[], user: any): any[] {
-    const allowed = TOOLS_BY_PROFILE[this.getAiProfile(user)] || QUERY_ONLY_TOOLS;
+  isAutonomousDriver(user: any, session?: any): boolean {
+    return this.getAiProfile(user, session) === 'autonomous_driver';
+  }
+
+  filterTools(allTools: any[], user: any, session?: any): any[] {
+    const allowed = TOOLS_BY_PROFILE[this.getAiProfile(user, session)] || QUERY_ONLY_TOOLS;
     return allTools.filter((t) => allowed.has(t.name));
   }
 
   async executeTool(name: string, input: any, user: any, session: any): Promise<string> {
-    const synUser = this.buildSyntheticUser(user);
-    const profile = this.getAiProfile(user);
+    const scopedUser = this.applySessionCompanyScope(user, session);
+    const synUser = this.buildSyntheticUser(scopedUser, session);
+    const profile = this.getAiProfile(scopedUser, session);
     const allowed = TOOLS_BY_PROFILE[profile] || QUERY_ONLY_TOOLS;
 
     if (!allowed.has(name)) {
@@ -85,27 +91,27 @@ export class ToolExecutorService {
     try {
       switch (name) {
         case 'list_freights': return await this.handleListFreights(input, synUser);
-        case 'get_freight_detail': return await this.handleGetFreightDetail(input, user);
+        case 'get_freight_detail': return await this.handleGetFreightDetail(input, scopedUser);
         case 'get_dashboard': return await this.handleGetDashboard(synUser);
-        case 'search_plants': return await this.handleSearchPlants(input, user);
-        case 'search_fields': return await this.handleSearchFields(input, user);
-        case 'search_lots': return await this.handleSearchLots(input, user);
-        case 'create_freight_request': return await this.handleCreateFreightRequest(input, user, session);
-        case 'approve_freight_request': return await this.handleApproveFreightRequest(input, user, session);
-        case 'assign_transport_company': return await this.handleAssignTransportCompany(input, user, session);
-        case 'accept_freight_assignment': return await this.handleAcceptFreightAssignment(input, user, session);
-        case 'reject_freight_assignment': return await this.handleRejectFreightAssignment(input, user, session);
-        case 'assign_driver_and_truck': return await this.handleAssignDriverAndTruck(input, user, session);
-        case 'start_freight_trip': return await this.handleStartFreightTrip(input, user, session);
-        case 'confirm_freight_loaded': return await this.handleConfirmFreightLoaded(input, user, session);
-        case 'confirm_freight_arrival': return await this.handleConfirmFreightArrival(input, user, session);
-        case 'finish_freight': return await this.handleFinishFreight(input, user, session);
-        case 'prepare_autonomous_freight': return await this.handlePrepareAutonomousFreight(input, user, session);
-        case 'confirm_action': return await this.handleConfirmAction(user, synUser, session);
-        case 'finish_autonomous_freight': return await this.handleFinishAutonomousFreight(input, user, session);
-        case 'register_plant_arrival': return await this.handleRegisterPlantArrival(input, user, session);
-        case 'cancel_freight': return await this.handleCancelFreight(input, user, session);
-        case 'attach_document': return await this.handleAttachDocument(input, user, session);
+        case 'search_plants': return await this.handleSearchPlants(input, scopedUser);
+        case 'search_fields': return await this.handleSearchFields(input, scopedUser);
+        case 'search_lots': return await this.handleSearchLots(input, scopedUser);
+        case 'create_freight_request': return await this.handleCreateFreightRequest(input, scopedUser, session);
+        case 'approve_freight_request': return await this.handleApproveFreightRequest(input, scopedUser, session);
+        case 'assign_transport_company': return await this.handleAssignTransportCompany(input, scopedUser, session);
+        case 'accept_freight_assignment': return await this.handleAcceptFreightAssignment(input, scopedUser, session);
+        case 'reject_freight_assignment': return await this.handleRejectFreightAssignment(input, scopedUser, session);
+        case 'assign_driver_and_truck': return await this.handleAssignDriverAndTruck(input, scopedUser, session);
+        case 'start_freight_trip': return await this.handleStartFreightTrip(input, scopedUser, session);
+        case 'confirm_freight_loaded': return await this.handleConfirmFreightLoaded(input, scopedUser, session);
+        case 'confirm_freight_arrival': return await this.handleConfirmFreightArrival(input, scopedUser, session);
+        case 'finish_freight': return await this.handleFinishFreight(input, scopedUser, session);
+        case 'prepare_autonomous_freight': return await this.handlePrepareAutonomousFreight(input, scopedUser, session);
+        case 'confirm_action': return await this.handleConfirmAction(scopedUser, synUser, session);
+        case 'finish_autonomous_freight': return await this.handleFinishAutonomousFreight(input, scopedUser, session);
+        case 'register_plant_arrival': return await this.handleRegisterPlantArrival(input, scopedUser, session);
+        case 'cancel_freight': return await this.handleCancelFreight(input, scopedUser, session);
+        case 'attach_document': return await this.handleAttachDocument(input, scopedUser, session);
         default:
           return JSON.stringify({ error: 'Esa funcion no esta disponible.' });
       }
@@ -591,9 +597,10 @@ export class ToolExecutorService {
   // ======================== PENDING ACTIONS ========================
 
   private async handleConfirmAction(user: any, synUser: any, session: any): Promise<string> {
-    const pending = this.pendingActions.get(session.id);
+    const pending = await this.getPendingActionRecord(session.id);
     if (!pending) return JSON.stringify({ error: 'No hay accion pendiente para confirmar.' });
     this.pendingActions.delete(session.id);
+    await this.clearPersistedPendingAction(session.id);
     const { tool, params } = pending;
 
     switch (tool) {
@@ -719,6 +726,14 @@ export class ToolExecutorService {
           url: params.document.url,
           type: params.document.type || 'photo',
         }, synUser);
+        const state = (session?.flowState as any) || {};
+        const { pendingDocument, ...cleanState } = state;
+        if (session?.id) {
+          await this.prisma.whatsAppSession.update({
+            where: { id: session.id },
+            data: { flowState: cleanState },
+          });
+        }
         return JSON.stringify({ status: 'attached', code: params.code, documentName: doc.name });
       }
       default:
@@ -732,12 +747,14 @@ export class ToolExecutorService {
       ...button,
       id: button.id.includes(':') ? button.id : `${button.id}:${actionId}`,
     }));
-    this.pendingActions.set(sessionId, { actionId, tool, params, summary, buttons: resolvedButtons, createdAt: Date.now() });
+    const record = { actionId, tool, params, summary, buttons: resolvedButtons, createdAt: Date.now() };
+    this.pendingActions.set(sessionId, record);
+    void this.persistPendingAction(sessionId, record);
     return JSON.stringify({ status: 'pending_confirmation', summary, actionId });
   }
 
-  getPendingSummary(sessionId: string): string | undefined {
-    const pending = this.pendingActions.get(sessionId);
+  async getPendingSummary(sessionId: string): Promise<string | undefined> {
+    const pending = await this.getPendingActionRecord(sessionId);
     if (!pending) return undefined;
     if (pending.tool === 'prepare_autonomous_freight') {
       if (pending.summary) return pending.summary;
@@ -751,35 +768,107 @@ export class ToolExecutorService {
     return pending.summary;
   }
 
-  getPendingButtons(sessionId: string): Array<{ id: string; title: string }> | undefined {
-    const pending = this.pendingActions.get(sessionId);
+  async getPendingButtons(sessionId: string): Promise<Array<{ id: string; title: string }> | undefined> {
+    const pending = await this.getPendingActionRecord(sessionId);
     if (!pending) return undefined;
     if (pending.tool === 'finish_and_create') return [{ id: `ai_confirm:${pending.actionId}`, title: 'FINALIZAR' }];
     return pending.buttons;
   }
 
-  getPendingActionId(sessionId: string): string | undefined {
-    return this.pendingActions.get(sessionId)?.actionId;
+  async getPendingActionId(sessionId: string): Promise<string | undefined> {
+    return (await this.getPendingActionRecord(sessionId))?.actionId;
   }
 
   async confirmPendingAction(session: any, user: any): Promise<string> {
-    const synUser = this.buildSyntheticUser(user);
-    return this.handleConfirmAction(user, synUser, session);
+    const scopedUser = this.applySessionCompanyScope(user, session);
+    const synUser = this.buildSyntheticUser(scopedUser, session);
+    return this.handleConfirmAction(scopedUser, synUser, session);
   }
 
-  cancelPendingAction(sessionId: string, actionId?: string): boolean {
-    const pending = this.pendingActions.get(sessionId);
+  async cancelPendingAction(sessionId: string, actionId?: string): Promise<boolean> {
+    const pending = await this.getPendingActionRecord(sessionId);
     if (!pending) return false;
     if (actionId && pending.actionId !== actionId) return false;
     this.pendingActions.delete(sessionId);
+    void this.clearPersistedPendingAction(sessionId);
     return true;
   }
 
-  hasPendingAction(sessionId: string): boolean {
-    return this.pendingActions.has(sessionId);
+  async hasPendingAction(sessionId: string): Promise<boolean> {
+    return !!(await this.getPendingActionRecord(sessionId));
   }
 
   // ======================== LOW-LEVEL HELPERS ========================
+
+  private applySessionCompanyScope(user: any, session?: any): any {
+    if (!user) return user;
+    const selectedCompanyId = (session?.flowState as any)?.selectedCompanyId;
+    if (!selectedCompanyId) return user;
+    const membership = Array.isArray(user.memberships)
+      ? user.memberships.find((m: any) => m.companyId === selectedCompanyId && m.active !== false)
+      : null;
+    if (!membership) return user;
+    return {
+      ...user,
+      activeCompanyId: selectedCompanyId,
+      companyId: selectedCompanyId,
+      company: membership.company || user.company,
+    };
+  }
+
+  private async persistPendingAction(sessionId: string, record: PendingActionRecord): Promise<void> {
+    const session = await this.prisma.whatsAppSession.findUnique({
+      where: { id: sessionId },
+      select: { flowState: true },
+    });
+    if (!session) return;
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: {
+        flowState: {
+          ...state,
+          pendingAiAction: record,
+        },
+      },
+    });
+  }
+
+  private async getPendingActionRecord(sessionId: string): Promise<PendingActionRecord | undefined> {
+    this.cleanupPendingActions();
+    const cached = this.pendingActions.get(sessionId);
+    if (cached) return cached;
+
+    const session = await this.prisma.whatsAppSession.findUnique({
+      where: { id: sessionId },
+      select: { flowState: true },
+    });
+    const stored = ((session?.flowState as any) || {}).pendingAiAction as PendingActionRecord | undefined;
+    if (!stored) return undefined;
+
+    if (!stored.createdAt || Date.now() - stored.createdAt > ToolExecutorService.PENDING_ACTION_TTL_MS) {
+      await this.clearPersistedPendingAction(sessionId);
+      return undefined;
+    }
+
+    this.pendingActions.set(sessionId, stored);
+    return stored;
+  }
+
+  private async clearPersistedPendingAction(sessionId: string): Promise<void> {
+    const session = await this.prisma.whatsAppSession.findUnique({
+      where: { id: sessionId },
+      select: { flowState: true },
+    });
+    if (!session) return;
+    const state = (session.flowState as any) || {};
+    if (!('pendingAiAction' in state)) return;
+    const { pendingAiAction, ...cleanState } = state;
+    await this.prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: { flowState: cleanState },
+    });
+  }
 
   private getDefaultSchedule(inputDate?: string, inputTime?: string): { loadDate: string; loadTime: string } {
     const now = new Date();
@@ -974,8 +1063,8 @@ export class ToolExecutorService {
 
   private resolveAllCompanyIds(user: any): string[] {
     const ids = new Set<string>();
-    if (user.activeCompanyId) ids.add(user.activeCompanyId);
-    if (user.companyId) ids.add(user.companyId);
+    if (user.activeCompanyId) return [user.activeCompanyId];
+    if (user.companyId) return [user.companyId];
     if (user.memberships) {
       for (const m of user.memberships) {
         if (m.companyId && m.active !== false) ids.add(m.companyId);

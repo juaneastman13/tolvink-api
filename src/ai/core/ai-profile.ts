@@ -44,7 +44,7 @@ export function resolveAiProfile(user: any): AiProfile {
     || user?.company?.autonomousDriverEnabled
   );
 
-  if (role === 'driver' && autonomousDriverEnabled) {
+  if (role === 'driver' && autonomousDriverEnabled && companyType === 'producer') {
     return 'autonomous_driver';
   }
 

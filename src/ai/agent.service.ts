@@ -42,15 +42,15 @@ export class AgentService implements OnModuleDestroy {
     clearInterval(this.cleanupTimer);
   }
 
-  getPendingActionId(sessionId: string): string | undefined {
+  async getPendingActionId(sessionId: string): Promise<string | undefined> {
     return this.toolExecutor.getPendingActionId(sessionId);
   }
 
-  getPendingSummary(sessionId: string): string | undefined {
+  async getPendingSummary(sessionId: string): Promise<string | undefined> {
     return this.toolExecutor.getPendingSummary(sessionId);
   }
 
-  getPendingButtons(sessionId: string): Array<{ id: string; title: string }> | undefined {
+  async getPendingButtons(sessionId: string): Promise<Array<{ id: string; title: string }> | undefined> {
     return this.toolExecutor.getPendingButtons(sessionId);
   }
 
@@ -58,7 +58,7 @@ export class AgentService implements OnModuleDestroy {
     return this.toolExecutor.confirmPendingAction(session, user);
   }
 
-  cancelPendingAction(sessionId: string, actionId?: string): boolean {
+  async cancelPendingAction(sessionId: string, actionId?: string): Promise<boolean> {
     return this.toolExecutor.cancelPendingAction(sessionId, actionId);
   }
 
@@ -96,22 +96,24 @@ export class AgentService implements OnModuleDestroy {
     this._chatLocks.add(lockKey);
 
     const isWeb = phone === 'web';
-    const profile = resolveAiProfile(user);
+    const scopedUser = this.toolExecutor.scopeUserToSessionCompany(user, session);
+    const profile = resolveAiProfile(scopedUser);
 
     try {
-      const layer0 = await this.tryDeterministicIntent(userMessage, user, session, profile);
+      const layer0 = await this.tryDeterministicIntent(userMessage, scopedUser, session, profile);
       if (layer0) {
         return layer0;
       }
 
       // Build system prompt (cached)
-      const cacheKey = `${session?.id}:${isWeb}:${profile}`;
+      const scopedCompanyId = scopedUser.activeCompanyId || scopedUser.companyId || 'no-company';
+      const cacheKey = `${session?.id}:${isWeb}:${profile}:${scopedCompanyId}`;
       const cached = this._promptCache.get(cacheKey);
       let systemPrompt: string;
       if (cached && Date.now() - cached.ts < PROMPT_CACHE_TTL_MS) {
         systemPrompt = cached.prompt;
       } else {
-        systemPrompt = buildSystemPrompt(user, isWeb, profile);
+        systemPrompt = buildSystemPrompt(scopedUser, isWeb, profile);
         this._promptCache.set(cacheKey, { prompt: systemPrompt, ts: Date.now() });
       }
 
@@ -131,7 +133,7 @@ export class AgentService implements OnModuleDestroy {
       ];
 
       // Filter and convert tool definitions
-      const filteredDefs = this.toolExecutor.filterTools(ALL_TOOL_DEFINITIONS, user);
+      const filteredDefs = this.toolExecutor.filterTools(ALL_TOOL_DEFINITIONS, scopedUser, session);
       const geminiTools = this.gemini.convertTools(filteredDefs);
 
       // Tool loop
@@ -174,7 +176,7 @@ export class AgentService implements OnModuleDestroy {
           // Parallel for read-only
           const settled = await Promise.allSettled(response.functionCalls.map(async (fc) => {
             this.logger.log(`Tool (parallel): ${fc.name}`);
-            const result = await this.toolExecutor.executeTool(fc.name, fc.args, user, session);
+            const result = await this.toolExecutor.executeTool(fc.name, fc.args, scopedUser, session);
             return { functionResponse: { name: fc.name, response: { result } } };
           }));
           for (let i = 0; i < settled.length; i++) {
@@ -189,7 +191,7 @@ export class AgentService implements OnModuleDestroy {
           // Sequential
           for (const fc of response.functionCalls) {
             this.logger.log(`Tool: ${fc.name}`);
-            const result = await this.toolExecutor.executeTool(fc.name, fc.args, user, session);
+            const result = await this.toolExecutor.executeTool(fc.name, fc.args, scopedUser, session);
             toolResponses.push({ functionResponse: { name: fc.name, response: { result } } });
           }
         }
@@ -197,19 +199,19 @@ export class AgentService implements OnModuleDestroy {
         geminiMessages.push({ role: 'user', parts: toolResponses });
 
         // If a tool staged an action with buttons, exit loop immediately
-        if (this.toolExecutor.hasPendingAction(session?.id)) {
+        if (session?.id && await this.toolExecutor.hasPendingAction(session.id)) {
           this.logger.log('Pending action staged — exiting tool loop');
           break;
         }
       }
 
       // Get pending buttons from tool executor
-      const pendingButtons = this.toolExecutor.getPendingButtons(session?.id);
+      const pendingButtons = session?.id ? await this.toolExecutor.getPendingButtons(session.id) : undefined;
 
       // When there are pending buttons, use ONLY the staging summary
       let finalText: string;
       if (pendingButtons) {
-        finalText = this.toolExecutor.getPendingSummary(session?.id) || '';
+        finalText = (session?.id ? await this.toolExecutor.getPendingSummary(session.id) : undefined) || '';
       } else {
         finalText = lastText;
 
@@ -316,18 +318,18 @@ export class AgentService implements OnModuleDestroy {
     const confirmLike = /^(si|sí|ok|dale|va|confirmar|confirmo|confirmá|confirma)\b/i.test(message);
     const cancelLike = /^(no|cancelar|deja|anular|cancelá|cancela)\b/i.test(message);
 
-    if (confirmLike && this.toolExecutor.hasPendingAction(session?.id)) {
+    if (session?.id && confirmLike && await this.toolExecutor.hasPendingAction(session.id)) {
       const result = await this.toolExecutor.confirmPendingAction(session, user);
       const parsed = JSON.parse(result || '{}');
-      const buttons = this.toolExecutor.getPendingButtons(session?.id);
+      const buttons = await this.toolExecutor.getPendingButtons(session.id);
       const text = buttons?.length
-        ? (this.toolExecutor.getPendingSummary(session?.id) || parsed.summary || 'Confirma la siguiente accion.')
+        ? ((await this.toolExecutor.getPendingSummary(session.id)) || parsed.summary || 'Confirma la siguiente accion.')
         : (parsed.error || parsed.message || this.renderActionResult(parsed));
       return { text, buttons };
     }
 
-    if (cancelLike && this.toolExecutor.hasPendingAction(session?.id)) {
-      this.toolExecutor.cancelPendingAction(session?.id);
+    if (session?.id && cancelLike && await this.toolExecutor.hasPendingAction(session.id)) {
+      await this.toolExecutor.cancelPendingAction(session.id);
       return { text: 'Listo, accion cancelada.' };
     }
 
@@ -356,18 +358,18 @@ export class AgentService implements OnModuleDestroy {
     if (/^(llegue|llegué) /i.test(normalized) || /^(llegue|llegué)$/i.test(normalized)) {
       const toolName = profile === 'autonomous_driver' ? 'finish_autonomous_freight' : 'confirm_freight_arrival';
       const result = await this.toolExecutor.executeTool(toolName, {}, user, session);
-      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+      return { text: this.renderToolJson(result), buttons: session?.id ? await this.toolExecutor.getPendingButtons(session.id) : undefined };
     }
 
     if (profile !== 'autonomous_driver' && /^(cargue|cargué|ya cargue|ya cargué)$/i.test(normalized)) {
       const result = await this.toolExecutor.executeTool('confirm_freight_loaded', {}, user, session);
-      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+      return { text: this.renderToolJson(result), buttons: session?.id ? await this.toolExecutor.getPendingButtons(session.id) : undefined };
     }
 
     if (/^(termine|terminé|descargue|descargué)$/i.test(normalized)) {
       const toolName = profile === 'autonomous_driver' ? 'finish_autonomous_freight' : 'finish_freight';
       const result = await this.toolExecutor.executeTool(toolName, {}, user, session);
-      return { text: this.renderToolJson(result), buttons: this.toolExecutor.getPendingButtons(session?.id) };
+      return { text: this.renderToolJson(result), buttons: session?.id ? await this.toolExecutor.getPendingButtons(session.id) : undefined };
     }
 
     return null;

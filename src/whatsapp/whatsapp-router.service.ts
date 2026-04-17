@@ -1092,7 +1092,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             await this.wa.sendText(phone, 'No hay una accion pendiente para confirmar.');
             break;
           }
-          const pendingActionId = this.ai.getPendingActionId(session.id);
+          const pendingActionId = await this.ai.getPendingActionId(session.id);
           if (!pendingActionId || (entityId && entityId !== pendingActionId)) {
             await this.wa.sendText(phone, 'Esa confirmacion ya vencio o ya fue procesada.');
             break;
@@ -1102,8 +1102,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           if (parsed?.error) {
             await this.wa.sendText(phone, parsed.error);
           } else if (parsed?.status === 'pending_confirmation') {
-            const summary = this.ai.getPendingSummary(session.id) || parsed.summary || 'Confirma la siguiente accion.';
-            const buttons = this.ai.getPendingButtons(session.id);
+            const summary = (await this.ai.getPendingSummary(session.id)) || parsed.summary || 'Confirma la siguiente accion.';
+            const buttons = await this.ai.getPendingButtons(session.id);
             if (buttons?.length) {
               await this.wa.sendButtons(phone, summary, buttons);
             } else {
@@ -1132,7 +1132,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
             await this.wa.sendText(phone, 'No hay una accion pendiente para cancelar.');
             break;
           }
-          const canceled = this.ai.cancelPendingAction(session.id, entityId || undefined);
+          const canceled = await this.ai.cancelPendingAction(session.id, entityId || undefined);
           await this.wa.sendText(
             phone,
             canceled ? 'Listo, accion cancelada.' : 'Esa accion ya no estaba pendiente.',
