@@ -37,26 +37,16 @@ export class StockService {
 
   async getSummary(user: any) {
     const { companyId } = await this.resolveStockContext(user);
-    const [balances, recentMovements] = await Promise.all([
-      this.prisma.stockBalance.findMany({
-        where: { companyId },
-        include: {
-          item: { select: { id: true, name: true, category: true, baseUnit: true } },
-          location: { select: { id: true, name: true, ownershipType: true, locationType: true } },
-        },
-      }),
-      this.prisma.stockMovement.findMany({
-        where: { companyId, revertedAt: null },
-        include: {
-          item: { select: { id: true, name: true, category: true, baseUnit: true } },
-          fromLocation: { select: { id: true, name: true } },
-          toLocation: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true } },
-        },
-        orderBy: { effectiveAt: 'desc' },
-        take: 10,
-      }),
-    ]);
+    let [balances, recentMovements] = await this.loadStockSnapshot(companyId);
+
+    // Older finished freights predate the stock module rollout, so lazily
+    // materialize their stock income the first time the company opens stock.
+    if (!balances.length && !recentMovements.length) {
+      const syncedCount = await this.backfillHistoricalFreightIncome(companyId);
+      if (syncedCount > 0) {
+        [balances, recentMovements] = await this.loadStockSnapshot(companyId);
+      }
+    }
 
     const itemsMap = new Map<string, any>();
     const categoryMap = new Map<string, any>();
@@ -124,6 +114,75 @@ export class StockService {
         sourceType: movement.sourceType,
       })),
     };
+  }
+
+  private loadStockSnapshot(companyId: string) {
+    return Promise.all([
+      this.prisma.stockBalance.findMany({
+        where: { companyId },
+        include: {
+          item: { select: { id: true, name: true, category: true, baseUnit: true } },
+          location: { select: { id: true, name: true, ownershipType: true, locationType: true } },
+        },
+      }),
+      this.prisma.stockMovement.findMany({
+        where: { companyId, revertedAt: null },
+        include: {
+          item: { select: { id: true, name: true, category: true, baseUnit: true } },
+          fromLocation: { select: { id: true, name: true } },
+          toLocation: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
+        },
+        orderBy: { effectiveAt: 'desc' },
+        take: 10,
+      }),
+    ]);
+  }
+
+  private async backfillHistoricalFreightIncome(companyId: string) {
+    const finishedFreights = await this.prisma.freight.findMany({
+      where: {
+        status: 'finished',
+        OR: [
+          { producerCompanyId: companyId },
+          { producerCompanyId: null, originCompanyId: companyId },
+        ],
+      },
+      select: {
+        id: true,
+        code: true,
+        isMultiTruck: true,
+        assignments: {
+          where: { tripStatus: 'finished' },
+          select: { id: true },
+          orderBy: [{ tripNumber: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+      orderBy: [{ finishedAt: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    if (!finishedFreights.length) return 0;
+
+    let syncedCount = 0;
+
+    for (const freight of finishedFreights) {
+      if (freight.isMultiTruck && freight.assignments.length) {
+        for (const assignment of freight.assignments) {
+          const movement = await this.recordFreightIncome(freight.id, assignment.id);
+          if (movement) syncedCount += 1;
+        }
+        continue;
+      }
+
+      const movement = await this.recordFreightIncome(freight.id);
+      if (movement) syncedCount += 1;
+    }
+
+    if (syncedCount > 0) {
+      this.logger.log(`Backfilled ${syncedCount} stock movement(s) for company ${companyId}`);
+    }
+
+    return syncedCount;
   }
 
   async listItems(user: any, query: ListStockItemsQueryDto) {
