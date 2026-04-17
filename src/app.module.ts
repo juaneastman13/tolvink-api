@@ -27,6 +27,7 @@ import { ModulesController, ModulesService } from './modules/modules.controller'
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
+import { StockModule } from './stock/stock.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { MechanicDashboardController, MechanicDashboardService } from './mechani
     WeighTicketsModule,
     WebChatModule,
     SharedLinksModule,
+    StockModule,
   ],
   controllers: [
     CatalogController,

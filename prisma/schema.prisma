@@ -99,6 +99,62 @@ enum AccessLevel {
   OPERATOR
 }
 
+enum StockItemCategory {
+  grain
+  fertilizer
+  seed
+  agrochemical
+  fuel
+  other
+}
+
+enum StockUnit {
+  kg
+  tn
+  lt
+  unit
+  bag
+}
+
+enum StockLocationType {
+  field
+  lot
+  plant
+  warehouse
+  silo
+  silo_bag
+  shed
+  tank
+  other
+}
+
+enum StockOwnershipType {
+  own
+  third_party
+}
+
+enum StockMovementType {
+  freight_in_internal
+  freight_in_third_party
+  manual_in
+  purchase_in
+  adjustment_in
+  sale_out
+  reexpedition_out
+  consumption_out
+  manual_out
+  adjustment_out
+  transfer
+}
+
+enum StockSourceType {
+  freight
+  manual
+  adjustment
+  migration
+  system
+}
+
 // ======================== COMPANIES ==================================
 
 model Company {
@@ -146,6 +202,10 @@ model Company {
   truckIncomes           TruckIncome[]         @relation("TruckIncCompany")
   truckMovements         TruckMovement[]       @relation("TruckMovCompany")
   machines               Machine[]
+  stockItems             StockItem[]
+  stockLocations         StockLocation[]
+  stockMovements         StockMovement[]
+  stockBalances          StockBalance[]
 
   @@map("companies")
 }
@@ -206,6 +266,8 @@ model User {
   truckIncomesCreated        TruckIncome[]             @relation("TruckIncCreator")
   truckMovementsCreated      TruckMovement[]           @relation("TruckMovCreator")
   truckMovementsAsDrv        TruckMovement[]           @relation("TruckMovDriver")
+  stockMovementsCreated      StockMovement[]           @relation("StockMovementCreatedBy")
+  stockMovementsReverted     StockMovement[]           @relation("StockMovementRevertedBy")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -257,6 +319,7 @@ model Field {
   shares       SharedField[]
   movementsAsOrigin TruckMovement[] @relation("movementOriginField")
   movementsAsDest   TruckMovement[] @relation("movementDestField")
+  stockLocations    StockLocation[]
 
   @@index([companyId])
   @@index([companyId, ownerCompanyId])
@@ -302,6 +365,7 @@ model Lot {
   shares   SharedLot[]
   movementsAsOrigin TruckMovement[] @relation("movementOriginLot")
   movementsAsDest   TruckMovement[] @relation("movementDestLot")
+  stockLocations    StockLocation[]
 
   @@index([companyId])
   @@index([fieldId])
@@ -380,6 +444,7 @@ model Plant {
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   freights Freight[] @relation("FreightDestPlant")
+  stockLocations StockLocation[]
 
   @@index([companyId])
   @@map("plants")
@@ -792,6 +857,7 @@ model Freight {
   truckExpenses  TruckExpense[]
   truckIncomes   TruckIncome[]    @relation("TruckIncFreight")
   truckDocs      TruckDocument[]  @relation("TruckDocFreight")
+  stockMovements StockMovement[]
 
   @@index([loadDate])
   @@index([fieldId])
@@ -888,6 +954,7 @@ model FreightAssignment {
   driver           User?   @relation("AssignmentDriver", fields: [driverId], references: [id], onDelete: SetNull)
   truck            Truck?  @relation(fields: [truckId], references: [id], onDelete: SetNull)
   weighTickets     WeighTicket[]
+  stockMovements   StockMovement[]
 
   @@index([freightId])
   @@index([freightId, tripStatus])
@@ -1081,6 +1148,124 @@ model AuditLog {
   @@index([freightId])
   @@index([freightId, createdAt])
   @@map("audit_logs")
+}
+
+// ======================== STOCK / STORAGE ============================
+
+model StockItem {
+  id        String            @id @default(uuid())
+  companyId String            @map("company_id")
+  category  StockItemCategory
+  name      String            @db.VarChar(255)
+  code      String?           @db.VarChar(80)
+  baseUnit  StockUnit         @map("base_unit")
+  active    Boolean           @default(true)
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movements StockMovement[]
+  balances  StockBalance[]
+
+  @@unique([companyId, category, name])
+  @@index([companyId, category, active])
+  @@map("stock_items")
+}
+
+model StockLocation {
+  id            String             @id @default(uuid())
+  companyId     String             @map("company_id")
+  locationType  StockLocationType  @map("location_type")
+  ownershipType StockOwnershipType @map("ownership_type")
+  name          String             @db.VarChar(255)
+  referenceKey  String?            @map("reference_key") @db.VarChar(120)
+  fieldId       String?            @map("field_id")
+  lotId         String?            @map("lot_id")
+  plantId       String?            @map("plant_id")
+  address       String?            @db.VarChar(500)
+  notes         String?            @db.Text
+  active        Boolean            @default(true)
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  company       Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  field         Field?           @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  lot           Lot?             @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  plant         Plant?           @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  incomingMoves StockMovement[]  @relation("StockMovementToLocation")
+  outgoingMoves StockMovement[]  @relation("StockMovementFromLocation")
+  balances      StockBalance[]
+
+  @@unique([companyId, referenceKey])
+  @@index([companyId, ownershipType, active])
+  @@index([companyId, locationType, active])
+  @@index([fieldId])
+  @@index([lotId])
+  @@index([plantId])
+  @@map("stock_locations")
+}
+
+model StockMovement {
+  id                String            @id @default(uuid())
+  companyId         String            @map("company_id")
+  itemId            String            @map("item_id")
+  movementType      StockMovementType @map("movement_type")
+  quantity          Decimal           @db.Decimal(14, 3)
+  unit              StockUnit
+  baseQuantity      Decimal           @map("base_quantity") @db.Decimal(14, 3)
+  baseUnit          StockUnit         @map("base_unit")
+  fromLocationId    String?           @map("from_location_id")
+  toLocationId      String?           @map("to_location_id")
+  effectiveAt       DateTime          @map("effective_at")
+  notes             String?           @db.Text
+  sourceType        StockSourceType   @default(manual) @map("source_type")
+  sourceId          String?           @map("source_id") @db.VarChar(120)
+  freightId         String?           @map("freight_id")
+  assignmentId      String?           @map("assignment_id")
+  isSystemGenerated Boolean           @default(false) @map("is_system_generated")
+  metadata          Json?
+  createdByUserId   String            @map("created_by_user_id")
+  revertedAt        DateTime?         @map("reverted_at")
+  revertedByUserId  String?           @map("reverted_by_user_id")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  company      Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item         StockItem          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  fromLocation StockLocation?     @relation("StockMovementFromLocation", fields: [fromLocationId], references: [id], onDelete: SetNull)
+  toLocation   StockLocation?     @relation("StockMovementToLocation", fields: [toLocationId], references: [id], onDelete: SetNull)
+  freight      Freight?           @relation(fields: [freightId], references: [id], onDelete: SetNull)
+  assignment   FreightAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  createdBy    User               @relation("StockMovementCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  revertedBy   User?              @relation("StockMovementRevertedBy", fields: [revertedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, effectiveAt])
+  @@index([companyId, movementType, effectiveAt])
+  @@index([itemId, effectiveAt])
+  @@index([fromLocationId])
+  @@index([toLocationId])
+  @@index([sourceType, sourceId])
+  @@index([freightId])
+  @@index([assignmentId])
+  @@map("stock_movements")
+}
+
+model StockBalance {
+  id              String    @id @default(uuid())
+  companyId       String    @map("company_id")
+  itemId          String    @map("item_id")
+  locationId      String    @map("location_id")
+  currentQuantity Decimal   @map("current_quantity") @db.Decimal(14, 3)
+  baseUnit        StockUnit @map("base_unit")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item     StockItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location StockLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, itemId, locationId])
+  @@index([companyId, updatedAt])
+  @@map("stock_balances")
 }
 
 // ======================== NOTIFICATIONS ===============================

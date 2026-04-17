@@ -9,6 +9,7 @@ import { CreateFreightDto, CreateAutonomousFreightDto, AssignFreightDto, Respond
 import { normalizeGrain } from './grain-normalizer';
 import { Prisma, FreightStatus, AssignmentStatus, NotificationType, DocumentStep } from '@prisma/client';
 import { randomInt } from 'crypto';
+import { StockService } from '../stock/stock.service';
 
 @Injectable()
 export class FreightsService {
@@ -70,6 +71,15 @@ export class FreightsService {
     return statusCounts;
   }
 
+  private triggerStockIncomeSync(freightId: string, assignmentId?: string | null) {
+    this.stock.recordFreightIncome(freightId, assignmentId || null).catch((e) => {
+      this.logger.error(
+        `Stock sync failed for freight ${freightId}${assignmentId ? ` assignment ${assignmentId}` : ''}: ${e.message}`,
+        e.stack?.slice(0, 300),
+      );
+    });
+  }
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
@@ -77,6 +87,7 @@ export class FreightsService {
     private notifications: NotificationService,
     private sse: SseService,
     private config: ConfigService,
+    private stock: StockService,
   ) {}
 
   /** Generate a unique freight code: F + year(2) + "-" + letters(3) + "." + digits(4) → e.g. F26-LCP.1822 */
@@ -887,6 +898,7 @@ export class FreightsService {
     });
 
     this.broadcastAndInvalidate(freightId, { id: freightId, code: freight.code, status: 'finished' }, user.sub);
+    this.triggerStockIncomeSync(freightId);
 
     return updated;
   }
@@ -2132,6 +2144,9 @@ export class FreightsService {
 
       // SSE
       this.broadcastAndInvalidate(freightId, { id: freightId, code: tFinishResult.freight.code, status: tFinishResult.plantAlsoConfirmed ? 'finished' : 'loaded' }, user.sub);
+      if (tFinishResult.updated.status === FreightStatus.finished) {
+        this.triggerStockIncomeSync(freightId);
+      }
 
       return tFinishResult.updated;
     }
@@ -2211,6 +2226,9 @@ export class FreightsService {
 
       // SSE
       this.broadcastAndInvalidate(freightId, { id: freightId, code: pFinishResult.freight.code, status: pFinishResult.transporterAlsoConfirmed ? 'finished' : 'loaded' }, user.sub);
+      if (pFinishResult.updated.status === FreightStatus.finished) {
+        this.triggerStockIncomeSync(freightId);
+      }
 
       return pFinishResult.updated;
     }
@@ -4487,6 +4505,9 @@ export class FreightsService {
       tripTitle, tripBody, user.sub, tripActionIds,
     );
     this.broadcastAndInvalidate(freightId, { id: freightId, code: (result as any).code, status: (result as any).status }, user.sub);
+    if (bothConfirmed) {
+      this.triggerStockIncomeSync(freightId, assignmentId);
+    }
     return result;
   }
 
