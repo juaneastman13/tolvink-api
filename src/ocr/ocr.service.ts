@@ -293,7 +293,9 @@ export class OcrService {
       if (parsed.protocol !== 'https:') {
         throw new BadRequestException('Solo se aceptan URLs HTTPS');
       }
-      if (!parsed.pathname.startsWith('/storage/v1/object/')) {
+      const isObjectPath = parsed.pathname.startsWith('/storage/v1/object/');
+      const isRenderPath = parsed.pathname.startsWith('/storage/v1/render/image/');
+      if (!isObjectPath && !isRenderPath) {
         throw new BadRequestException('URL no permitida — solo se aceptan archivos de storage');
       }
     } catch (e) {
