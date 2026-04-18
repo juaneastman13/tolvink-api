@@ -1714,8 +1714,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async showPendingDocumentDestinationOptions(phone: string, user: any, session: any, displayName: string) {
     const defaultTarget = await this.findDefaultPendingDocumentTarget(user, session);
     const buttons: Array<{ id: string; title: string }> = [];
-    if (defaultTarget) buttons.push({ id: 'doc_attach_active', title: 'AL ACTIVO' });
-    buttons.push({ id: 'doc_attach_other', title: 'OTRO FLETE' });
+    if (defaultTarget) buttons.push({ id: 'doc_attach_active', title: 'AL FLETE ACTIVO' });
+    buttons.push({ id: 'doc_attach_other', title: 'A OTRO FLETE' });
     buttons.push({ id: 'doc_attach_cancel', title: 'CANCELAR' });
 
     await this.wa.sendButtons(
