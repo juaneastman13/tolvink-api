@@ -905,6 +905,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
+      await this.showPendingDocumentDestinationOptions(phone, user, session, displayName);
+      return;
+
       // 5. Forward to AI with context (sanitize caption to prevent prompt injection)
       const safeCaption = caption.replace(/[\[\]\x00-\x1f]/g, '').slice(0, 500);
       const ocrHint = type === 'image' ? ' Podés usar la herramienta ocr_analyze con esta URL para extraer datos del documento si el usuario lo pide.' : '';
@@ -1046,6 +1049,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           await this.showHelp(phone, user);
           break;
         }
+        case 'doc_attach_active': {
+          await this.attachPendingDocumentToDefaultTarget(phone, user);
+          break;
+        }
+        case 'doc_attach_other': {
+          await this.showPendingDocumentFreightSelection(phone, user);
+          break;
+        }
+        case 'doc_attach_cancel': {
+          await this.clearPendingDocumentContext(user.id);
+          await this.wa.sendText(phone, 'Listo, no adjunte el archivo.');
+          break;
+        }
         case 'location_done': {
           // User pressed "UBICACION LISTA" → forward to AI so it picks up the saved location
           await this.handleAiChat(phone, user, 'Ubicación confirmada.');
@@ -1185,6 +1201,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.handleCompanySelection(phone, user, id);
     } else if (type === 'freight') {
       await this.showFreightDetail(phone, user, id);
+    } else if (type === 'attachdoc') {
+      await this.attachPendingDocumentToFreight(phone, user, id);
     } else if (type === 'action') {
       // Freight action selected from get_freight_detail actions list
       const ACTION_MESSAGES: Record<string, string> = {
@@ -1691,6 +1709,298 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private async findActiveAutonomousFreightId(user: any): Promise<string | null> {
     const freight = await this.findActiveAutonomousFreight(user);
     return freight?.id || null;
+  }
+
+  private async showPendingDocumentDestinationOptions(phone: string, user: any, session: any, displayName: string) {
+    const defaultTarget = await this.findDefaultPendingDocumentTarget(user, session);
+    const buttons: Array<{ id: string; title: string }> = [];
+    if (defaultTarget) buttons.push({ id: 'doc_attach_active', title: 'AL ACTIVO' });
+    buttons.push({ id: 'doc_attach_other', title: 'OTRO FLETE' });
+    buttons.push({ id: 'doc_attach_cancel', title: 'CANCELAR' });
+
+    await this.wa.sendButtons(
+      phone,
+      `Recibi "${displayName}".\n\nDonde queres adjuntarlo?`,
+      buttons,
+    );
+  }
+
+  private async attachPendingDocumentToDefaultTarget(phone: string, user: any) {
+    const session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const state = (session?.flowState as any) || {};
+    if (!session || !state.pendingDocument) {
+      await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
+      return;
+    }
+
+    const target = await this.findDefaultPendingDocumentTarget(user, session);
+    if (!target?.code) {
+      await this.wa.sendText(phone, 'No encontre un flete activo para adjuntar el archivo.');
+      return;
+    }
+
+    await this.clearSelectionContext(session.id);
+    await this.handleAiChat(phone, user, `Adjuntar el archivo pendiente al flete ${target.code}`, session);
+  }
+
+  private async showPendingDocumentFreightSelection(phone: string, user: any) {
+    const session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const state = (session?.flowState as any) || {};
+    if (!session || !state.pendingDocument) {
+      await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
+      return;
+    }
+
+    const defaultTarget = await this.findDefaultPendingDocumentTarget(user, session);
+    const items = await this.buildPendingDocumentSelectionItems(user, session, defaultTarget?.id || null);
+    if (items.length === 0) {
+      await this.wa.sendText(phone, 'No encontre fletes recientes para elegir.');
+      return;
+    }
+
+    const config = {
+      headerText: 'Seleccione el flete al que quiere adjuntar el archivo.',
+      listButtonLabel: 'VER FLETES',
+      sectionTitle: 'FLETES RECIENTES',
+    };
+    const result = await this.wa.sendSelection(phone, items, config);
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          selectionContext: {
+            items,
+            shownItems: result.shownItems,
+            page: result.page,
+            totalPages: result.totalPages,
+            pageSize: 20,
+            purpose: 'attach_document_freight',
+            config,
+          },
+        },
+      },
+    });
+  }
+
+  private async attachPendingDocumentToFreight(phone: string, user: any, freightId: string) {
+    const session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const state = (session?.flowState as any) || {};
+    if (!session || !state.pendingDocument) {
+      await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
+      return;
+    }
+
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { id: true, code: true },
+    });
+    if (!freight?.code) {
+      await this.wa.sendText(phone, 'Flete no encontrado.');
+      return;
+    }
+
+    await this.clearSelectionContext(session.id);
+    await this.handleAiChat(phone, user, `Adjuntar el archivo pendiente al flete ${freight.code}`, session);
+  }
+
+  private async buildPendingDocumentSelectionItems(user: any, session: any, excludeFreightId?: string | null): Promise<SelectionItem[]> {
+    const freights = await this.findRecentFreightsForPendingDocument(user, session, excludeFreightId);
+    return freights.map((f: any) => ({
+      id: `attachdoc:${f.id}`,
+      title: f.code,
+      description: this.buildPendingDocumentFreightDescription(f),
+    }));
+  }
+
+  private buildPendingDocumentFreightDescription(freight: any): string {
+    const origin = freight.originName || freight.originFreeText || 'Origen';
+    const destination = freight.destName || freight.destinationFreeText || 'Destino';
+    const grain = freight.items?.[0]?.grain || 'Carga';
+    const tons = freight.items?.[0]?.tons != null ? ` ${freight.items[0].tons}tn` : '';
+    return `${origin} > ${destination} / ${grain}${tons}`.slice(0, 72);
+  }
+
+  private async findRecentFreightsForPendingDocument(user: any, session: any, excludeFreightId?: string | null): Promise<any[]> {
+    const scopedUser = this.scopeUserToSessionCompany(user, session);
+    const profile = this.getAiProfile(scopedUser);
+    const userId = scopedUser.sub || scopedUser.id;
+
+    if (profile === 'autonomous_driver') {
+      const autonomousFreights = await this.prisma.freight.findMany({
+        where: {
+          requestedById: userId,
+          isAutonomous: true,
+          status: { in: ['finished', 'canceled'] },
+        },
+        select: {
+          id: true,
+          code: true,
+          status: true,
+          originName: true,
+          originFreeText: true,
+          destName: true,
+          destinationFreeText: true,
+          updatedAt: true,
+          items: { select: { grain: true, tons: true }, take: 1 },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+      });
+      return autonomousFreights
+        .filter((f: any) => !excludeFreightId || f.id !== excludeFreightId)
+        .sort((a: any, b: any) => {
+          const pa = a.status === 'finished' ? 0 : 1;
+          const pb = b.status === 'finished' ? 0 : 1;
+          if (pa !== pb) return pa - pb;
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        });
+    }
+
+    const activeCompanyId = scopedUser.activeCompanyId || scopedUser.companyId;
+    const where: any = {
+      ...(excludeFreightId ? { id: { not: excludeFreightId } } : {}),
+    };
+
+    if (scopedUser.role !== 'platform_admin') {
+      const companyIds = activeCompanyId ? [activeCompanyId] : [];
+      where.OR = [
+        ...(companyIds.length > 0 ? [{ participantCompanyIds: { hasSome: companyIds } }] : []),
+        { assignments: { some: { driverId: userId } } },
+        { requestedById: userId, isAutonomous: true },
+      ];
+    }
+
+    const freights = await this.prisma.freight.findMany({
+      where,
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        originName: true,
+        originFreeText: true,
+        destName: true,
+        destinationFreeText: true,
+        updatedAt: true,
+        items: { select: { grain: true, tons: true }, take: 1 },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 25,
+    });
+
+    const priority: Record<string, number> = {
+      pending_assignment: 0,
+      assigned: 1,
+      accepted: 2,
+      in_progress: 3,
+      loaded: 4,
+      draft: 5,
+      finished: 10,
+      canceled: 11,
+    };
+
+    return freights
+      .sort((a: any, b: any) => {
+        const pa = priority[a.status] ?? 99;
+        const pb = priority[b.status] ?? 99;
+        if (pa !== pb) return pa - pb;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      })
+      .slice(0, 10);
+  }
+
+  private async findDefaultPendingDocumentTarget(user: any, session?: any): Promise<{ id: string; code: string } | null> {
+    const scopedUser = this.scopeUserToSessionCompany(user, session);
+    const profile = this.getAiProfile(scopedUser);
+    const userId = scopedUser.sub || scopedUser.id;
+
+    if (profile === 'autonomous_driver') {
+      const activeFreight = await this.prisma.freight.findFirst({
+        where: {
+          requestedById: userId,
+          isAutonomous: true,
+          status: { notIn: ['finished', 'canceled'] },
+          transporterFinishedConfirmedAt: null,
+        },
+        select: { id: true, code: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      return activeFreight || null;
+    }
+
+    const assignments = await this.prisma.freightAssignment.findMany({
+      where: {
+        driverId: userId,
+        status: { in: ['active', 'accepted'] },
+        freight: { status: { notIn: ['finished', 'canceled'] } },
+      },
+      select: {
+        freight: {
+          select: { id: true, code: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 2,
+    });
+
+    if (assignments.length !== 1) return null;
+    return assignments[0].freight || null;
+  }
+
+  private scopeUserToSessionCompany(user: any, session?: any): any {
+    const selectedCompanyId = (session?.flowState as any)?.selectedCompanyId;
+    if (!user || !selectedCompanyId) return user;
+    const membership = Array.isArray(user.memberships)
+      ? user.memberships.find((m: any) => m.companyId === selectedCompanyId && m.active !== false)
+      : null;
+    if (!membership) return user;
+    return {
+      ...user,
+      activeCompanyId: selectedCompanyId,
+      companyId: selectedCompanyId,
+      company: membership.company || user.company,
+    };
+  }
+
+  private async clearPendingDocumentContext(userId: string) {
+    const session = await this.prisma.whatsAppSession.findFirst({
+      where: { userId, flowType: null, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!session) return;
+
+    const state = (session.flowState as any) || {};
+    const nextState = { ...state };
+    delete nextState.pendingDocument;
+    if (nextState.selectionContext?.purpose === 'attach_document_freight') {
+      delete nextState.selectionContext;
+    }
+
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { flowState: nextState },
+    });
+  }
+
+  private async clearSelectionContext(sessionId: string) {
+    const session = await this.prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+    if (!session) return;
+    const state = (session.flowState as any) || {};
+    if (!state.selectionContext) return;
+    const { selectionContext, ...nextState } = state;
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: { flowState: nextState },
+    });
   }
 
   private async clearAiOperationalContext(userId: string): Promise<void> {
