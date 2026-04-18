@@ -337,7 +337,7 @@ export class ToolExecutorService {
     return this.stageAction(session.id, 'approve_freight_request', {
       freightId: freight.id,
       code: freight.code,
-    }, `Aprobar flete ${freight.code}`);
+    }, this.buildFreightActionSummary('Aprobar flete', freight));
   }
 
   private async handleAssignTransportCompany(input: any, user: any, session: any): Promise<string> {
@@ -765,7 +765,7 @@ export class ToolExecutorService {
       const p = pending.params || {};
       return ['Tenes un flete activo:', '', `📋 ${p.code || ''}`, `🌾 ${p.currentGrain || ''}${p.currentTons ? ` · ${p.currentTons} tn` : ''}`, `📍 ${p.currentOrigin || ''} → ${p.currentDest || ''}`, '', 'Finalizalo para crear uno nuevo'].join('\n');
     }
-    return pending.summary;
+    return this.enrichPendingSummaryWithFreight(pending.summary, pending.params);
   }
 
   async getPendingButtons(sessionId: string): Promise<Array<{ id: string; title: string }> | undefined> {
@@ -890,6 +890,50 @@ export class ToolExecutorService {
   private formatWeightKg(weightKg: number): string {
     const num = Number(weightKg || 0);
     return num >= 1000 ? `${Math.round(num / 100) / 10} tn` : `${num} kg`;
+  }
+
+  private async enrichPendingSummaryWithFreight(summary?: string, params?: Record<string, any>): Promise<string | undefined> {
+    if (!summary || !params?.freightId) return summary;
+    const freight = await this.fetchFreightSummary(params.freightId);
+    if (!freight) return summary;
+    const detail = this.buildFreightDetailLine(freight);
+    if (!detail || summary.includes(detail)) return summary;
+    return `${summary}\n${detail}`;
+  }
+
+  private async fetchFreightSummary(freightId: string): Promise<any | null> {
+    return this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: {
+        id: true,
+        code: true,
+        originName: true,
+        originFreeText: true,
+        destName: true,
+        destinationFreeText: true,
+        items: {
+          select: {
+            grain: true,
+            tons: true,
+          },
+          take: 1,
+        },
+      },
+    });
+  }
+
+  private buildFreightDetailLine(freight: any): string {
+    const origin = freight?.originName || freight?.originFreeText || 'Origen no definido';
+    const destination = freight?.destName || freight?.destinationFreeText || 'Destino no definido';
+    const item = freight?.items?.[0];
+    const cargoParts = [item?.grain, item?.tons != null ? `${item.tons} tn` : null].filter(Boolean);
+    const cargo = cargoParts.length > 0 ? cargoParts.join(' ') : 'Carga no definida';
+    return `${origin} > ${destination} / ${cargo}`;
+  }
+
+  private buildFreightActionSummary(title: string, freight: any): string {
+    const code = freight?.code ? ` ${freight.code}` : '';
+    return `${title}${code}\n${this.buildFreightDetailLine(freight)}`;
   }
 
   private async autoDetectTruck(user: any): Promise<{ truckId: string | null; truckPlate: string }> {
