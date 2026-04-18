@@ -136,7 +136,7 @@ export class OcrService {
     } else {
       this.logger.warn('GEMINI_API_KEY not set — OCR disabled');
     }
-    this.supabaseUrl = config.get<string>('SUPABASE_URL') || '';
+    this.supabaseUrl = (config.get<string>('SUPABASE_URL') || '').trim();
   }
 
   /** Analyze image buffer — uses two-phase extraction when no docType specified */
@@ -245,9 +245,10 @@ export class OcrService {
 
   /** Analyze from a public Supabase URL */
   async analyzeFromUrl(url: string, docType?: DocType): Promise<OcrResult> {
-    this.validateUrl(url);
+    const normalizedUrl = this.normalizeUrl(url);
+    this.validateUrl(normalizedUrl);
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
+    const res = await fetch(normalizedUrl, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
     if (!res.ok) throw new BadRequestException(`No se pudo descargar la imagen (HTTP ${res.status})`);
 
     // Check Content-Length before buffering to prevent memory exhaustion
@@ -284,7 +285,7 @@ export class OcrService {
   private validateUrl(url: string): void {
     if (!this.supabaseUrl) throw new BadRequestException('Configuración de storage incompleta');
     try {
-      const parsed = new URL(url);
+      const parsed = new URL(this.normalizeUrl(url));
       const expected = new URL(this.supabaseUrl);
       // Compare full origin (protocol + hostname + port) — not just hostname
       if (parsed.origin !== expected.origin) {
@@ -305,6 +306,10 @@ export class OcrService {
   }
 
   /** Flatten nested objects in datos: { origen: { localidad: "X" } } → { origenLocalidad: "X" } */
+  private normalizeUrl(url: string): string {
+    return typeof url === 'string' ? url.replace(/[\r\n\t]+/g, '').trim() : '';
+  }
+
   private flattenDatos(datos: Record<string, any>, prefix = '', depth = 0): Record<string, any> {
     if (depth > 3 || Object.keys(datos).length > 100) return datos;
     const result: Record<string, any> = {};

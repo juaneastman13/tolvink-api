@@ -1,11 +1,13 @@
 import { IsNotEmpty, IsOptional, IsIn, IsUrl, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export const DOC_TYPES = ['carta_porte', 'remito', 'pesaje', 'general'] as const;
 export type DocType = (typeof DOC_TYPES)[number];
 
 export class AnalyzeDocumentDto {
   @ApiProperty({ description: 'URL pública de la imagen (Supabase Storage)' })
+  @Transform(({ value }) => typeof value === 'string' ? value.replace(/[\r\n\t]+/g, '').trim() : value)
   @IsNotEmpty()
   @IsUrl({ protocols: ['https'], require_protocol: true })
   @MaxLength(500)

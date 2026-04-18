@@ -648,8 +648,8 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
   // ======================== UPLOAD TO SUPABASE STORAGE =====================
 
   async uploadToStorage(buffer: Buffer, path: string, mimeType: string): Promise<string> {
-    const supabaseUrl = this.config.get<string>('SUPABASE_URL');
-    const supabaseKey = this.config.get<string>('SUPABASE_SERVICE_KEY');
+    const supabaseUrl = (this.config.get<string>('SUPABASE_URL') || '').trim();
+    const supabaseKey = (this.config.get<string>('SUPABASE_SERVICE_KEY') || '').trim();
 
     if (!supabaseUrl || !supabaseKey) {
       throw new InternalServerErrorException('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY)');
