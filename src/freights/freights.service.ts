@@ -281,6 +281,7 @@ export class FreightsService {
     if (dto.tolvinkPlantId) {
       const tolvinkPlant = await this.prisma.tolvinkPlant.findFirst({
         where: { id: dto.tolvinkPlantId, active: true },
+        select: { id: true, name: true, lat: true, lng: true },
       });
       if (!tolvinkPlant) throw new BadRequestException('Planta Tolvink no encontrada');
       destCompanyId = null;
@@ -636,6 +637,7 @@ export class FreightsService {
     if (dto.tolvinkPlantId) {
       const tolvinkPlant = await this.prisma.tolvinkPlant.findFirst({
         where: { id: dto.tolvinkPlantId, active: true },
+        select: { id: true, name: true, lat: true, lng: true },
       });
       if (tolvinkPlant) {
         tolvinkPlantId = tolvinkPlant.id;
@@ -2682,6 +2684,7 @@ export class FreightsService {
         if (dto.tolvinkPlantId) {
           const tolvinkPlant = await tx.tolvinkPlant.findFirst({
             where: { id: dto.tolvinkPlantId, active: true },
+            select: { id: true, name: true, lat: true, lng: true },
           });
           if (!tolvinkPlant) throw new BadRequestException('Planta Tolvink no encontrada');
           resolvedDest = {

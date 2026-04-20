@@ -22,12 +22,23 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     await this.connectWithRetry();
     await this.ensurePoisTable();
+    await this.ensureTolvinkPlantsLocalityColumn();
     await this.ensureTruckTables();
     await this.ensureTruckEconomicTables();
     await this.ensureFreightItemTonsNullable();
   }
 
   /** Create pois table if it doesn't exist — fallback for when prisma migrate deploy doesn't run */
+  private async ensureTolvinkPlantsLocalityColumn(): Promise<void> {
+    try {
+      await this.$executeRawUnsafe(`ALTER TABLE "tolvink_plants" ADD COLUMN IF NOT EXISTS "locality" VARCHAR(150)`);
+      await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "tolvink_plants_locality_idx" ON "tolvink_plants"("locality")`);
+      this.logger.log('ensureTolvinkPlantsLocalityColumn: locality column ready');
+    } catch (err) {
+      this.logger.warn('ensureTolvinkPlantsLocalityColumn failed: ' + err.message);
+    }
+  }
+
   private async ensurePoisTable(): Promise<void> {
     try {
       await this.$executeRawUnsafe(`
