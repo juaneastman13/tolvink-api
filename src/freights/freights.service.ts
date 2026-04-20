@@ -289,6 +289,25 @@ export class FreightsService {
       destName = dto.customDestName || tolvinkPlant.name;
       destLat = dto.customDestLat ?? dto.overrideDestLat ?? tolvinkPlant.lat;
       destLng = dto.customDestLng ?? dto.overrideDestLng ?? tolvinkPlant.lng;
+      if (dto.destCompanyId) {
+        const callerIds = await this.resolveAllCompanyIds(user);
+        if (callerIds.includes(dto.destCompanyId)) {
+          destCompanyId = dto.destCompanyId;
+        } else {
+          const hasAccess = await this.prisma.companyAccess.findFirst({
+            where: {
+              OR: [
+                { grantorCompanyId: { in: callerIds }, granteeCompanyId: dto.destCompanyId },
+                { grantorCompanyId: dto.destCompanyId, granteeCompanyId: { in: callerIds } },
+              ],
+              isActive: true,
+            },
+          });
+          if (hasAccess) {
+            destCompanyId = dto.destCompanyId;
+          }
+        }
+      }
     } else if (dto.destPlantId) {
       const plant = await this.prisma.plant.findFirst({
         where: { id: dto.destPlantId, active: true },
