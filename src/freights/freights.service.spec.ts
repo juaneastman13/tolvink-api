@@ -7,6 +7,7 @@ import { FreightStateMachine } from './freight-state-machine.service';
 import { NotificationService } from '../notifications/notification.service';
 import { ConfigService } from '@nestjs/config';
 import { SseService } from '../sse/sse.service';
+import { StockService } from '../stock/stock.service';
 
 // Mock @prisma/client enums + PrismaClient base class
 jest.mock('@prisma/client', () => ({
@@ -130,6 +131,7 @@ describe('FreightsService', () => {
         { provide: NotificationService, useValue: mockNotifications },
         { provide: SseService, useValue: { broadcastFreightUpdate: jest.fn().mockResolvedValue(undefined), invalidateParticipantsCache: jest.fn() } },
         { provide: ConfigService, useValue: { get: jest.fn() } },
+        { provide: StockService, useValue: { recordFreightIncome: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 
@@ -188,6 +190,29 @@ describe('FreightsService', () => {
             originCompanyId: 'comp-prod',
             destCompanyId: 'comp-plant',
             destPlantId: 'plant-1',
+          }),
+        }),
+      );
+    });
+
+    it('creates freight when destination is resolved as a plant company id', async () => {
+      mockPrisma.plant.findFirst.mockResolvedValue(null);
+      mockPrisma.company.findFirst.mockResolvedValue({
+        id: 'comp-plant',
+        name: 'Cradeco',
+        type: 'plant',
+        lat: -34.8,
+        lng: -56.0,
+      });
+
+      await service.create({ ...createDto, destPlantId: 'comp-plant' } as any, user);
+
+      expect(mockPrisma.freight.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            destCompanyId: 'comp-plant',
+            destPlantId: null,
+            destName: 'Cradeco',
           }),
         }),
       );

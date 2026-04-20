@@ -14,7 +14,7 @@ let _cacheRef: Map<string, { data: any; ts: number }> | null = null;
 export function clearTransportCache() {
   if (!_cacheRef) return;
   for (const key of _cacheRef.keys()) {
-    if (key.startsWith('transport:') || key.startsWith('lots:') || key.startsWith('plants:') || key.startsWith('branches:') || key.startsWith('all:')) {
+    if (key.startsWith('transport:') || key.startsWith('lots:') || key.startsWith('plants:') || key.startsWith('tolvink-plants:') || key.startsWith('branches:') || key.startsWith('all:')) {
       _cacheRef.delete(key);
     }
   }
@@ -398,19 +398,47 @@ export class CatalogController implements OnModuleDestroy {
     });
   }
 
+  @Get('tolvink-plants')
+  @ApiOperation({ summary: 'Listar plantas del directorio Tolvink (Uruguay)' })
+  @ApiQuery({ name: 'take', required: false })
+  @ApiQuery({ name: 'skip', required: false })
+  async tolvinkPlants(@CurrentUser() user: any, @Query('take') take?: string, @Query('skip') skip?: string) {
+    const t = Math.min(MAX_CATALOG, parseInt(take || String(MAX_CATALOG), 10) || MAX_CATALOG);
+    const s = parseInt(skip || '0', 10) || 0;
+    const key = `tolvink-plants:${user.sub}:${s}:${t}`;
+
+    return this.cached(key, async () => {
+      return this.prisma.tolvinkPlant.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          name: true,
+          altName: true,
+          department: true,
+          lat: true,
+          lng: true,
+        },
+        orderBy: { name: 'asc' },
+        take: t,
+        skip: s,
+      });
+    });
+  }
+
   @Get('all')
   @ApiOperation({ summary: 'Catálogo consolidado — plants, branches, lots, transport-companies en un solo request' })
   async all(@CurrentUser() user: any) {
     const key = `all:${user.sub}:${user.companyId}:${user.role}`;
 
     return this.cached(key, async () => {
-      const [plants, branches, lots, transportCompanies] = await Promise.all([
+      const [plants, tolvinkPlants, branches, lots, transportCompanies] = await Promise.all([
         this.plants(user),
+        this.tolvinkPlants(user),
         this.branches(user),
         this.lots(user),
         this.transportCompanies(user),
       ]);
-      return { plants, branches, lots, transportCompanies };
+      return { plants, tolvinkPlants, branches, lots, transportCompanies };
     });
   }
 }
