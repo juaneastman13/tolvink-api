@@ -29,6 +29,48 @@ export class CatalogController implements OnModuleDestroy {
   private cache = new Map<string, { data: any; ts: number }>();
   private cleanupTimer: ReturnType<typeof setInterval>;
 
+  private isMissingTolvinkLocalityColumn(error: any) {
+    const message = String(error?.message || '');
+    return error?.code === 'P2022' || (message.includes('locality') && message.includes('tolvink'));
+  }
+
+  private async findTolvinkPlantsSafe(take: number, skip: number) {
+    try {
+      return await this.prisma.tolvinkPlant.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          name: true,
+          altName: true,
+          department: true,
+          locality: true,
+          lat: true,
+          lng: true,
+        },
+        orderBy: { name: 'asc' },
+        take,
+        skip,
+      });
+    } catch (error) {
+      if (!this.isMissingTolvinkLocalityColumn(error)) throw error;
+      const rows = await this.prisma.tolvinkPlant.findMany({
+        where: { active: true },
+        select: {
+          id: true,
+          name: true,
+          altName: true,
+          department: true,
+          lat: true,
+          lng: true,
+        },
+        orderBy: { name: 'asc' },
+        take,
+        skip,
+      });
+      return rows.map((row) => ({ ...row, locality: null }));
+    }
+  }
+
   constructor(
     private prisma: PrismaService,
     private companyRes: CompanyResolutionService,
@@ -408,21 +450,7 @@ export class CatalogController implements OnModuleDestroy {
     const key = `tolvink-plants:${user.sub}:${s}:${t}`;
 
     return this.cached(key, async () => {
-      return this.prisma.tolvinkPlant.findMany({
-        where: { active: true },
-        select: {
-          id: true,
-          name: true,
-          altName: true,
-          department: true,
-          locality: true,
-          lat: true,
-          lng: true,
-        },
-        orderBy: { name: 'asc' },
-        take: t,
-        skip: s,
-      });
+      return this.findTolvinkPlantsSafe(t, s);
     });
   }
 

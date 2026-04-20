@@ -45,6 +45,11 @@ export class ToolExecutorService {
   private static readonly PENDING_ACTION_TTL_MS = 5 * 60 * 1000;
   private pendingActions = new Map<string, PendingActionRecord>();
 
+  private isMissingTolvinkLocalityColumn(error: any) {
+    const message = String(error?.message || '');
+    return error?.code === 'P2022' || (message.includes('locality') && message.includes('tolvink'));
+  }
+
   constructor(
     private prisma: PrismaService,
     private freights: FreightsService,
@@ -222,11 +227,22 @@ export class ToolExecutorService {
       });
     }
 
-    const masterPlants = await this.prisma.tolvinkPlant.findMany({
-      where: { active: true },
-      select: { id: true, name: true, altName: true, department: true, locality: true, lat: true, lng: true },
-      take: 100,
-    });
+    let masterPlants: Array<{ id: string; name: string; altName: string | null; department: string | null; locality: string | null; lat: any; lng: any }>;
+    try {
+      masterPlants = await this.prisma.tolvinkPlant.findMany({
+        where: { active: true },
+        select: { id: true, name: true, altName: true, department: true, locality: true, lat: true, lng: true },
+        take: 100,
+      });
+    } catch (error) {
+      if (!this.isMissingTolvinkLocalityColumn(error)) throw error;
+      const fallbackPlants = await this.prisma.tolvinkPlant.findMany({
+        where: { active: true },
+        select: { id: true, name: true, altName: true, department: true, lat: true, lng: true },
+        take: 100,
+      });
+      masterPlants = fallbackPlants.map((plant) => ({ ...plant, locality: null }));
+    }
     const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => [p.name, p.altName, p.department, p.locality].filter(Boolean).join(' '), {
       threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES,
     });
