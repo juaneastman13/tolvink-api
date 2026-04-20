@@ -3,6 +3,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger'
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { CurrentUser } from './common/decorators/current-user.decorator';
 import { CompanyResolutionService } from './common/services/company-resolution.service';
+import { hydrateTolvinkPlantLocality } from './common/tolvink-plant-locality';
 import { PrismaService } from './database/prisma.service';
 
 const MAX_CATALOG = 500;
@@ -36,10 +37,12 @@ export class CatalogController implements OnModuleDestroy {
 
   private async findTolvinkPlantsSafe(take: number, skip: number) {
     try {
-      return await this.prisma.tolvinkPlant.findMany({
+      const rows = await this.prisma.tolvinkPlant.findMany({
         where: { active: true },
         select: {
           id: true,
+          sourceRowId: true,
+          sourcePlantId: true,
           name: true,
           altName: true,
           department: true,
@@ -51,12 +54,15 @@ export class CatalogController implements OnModuleDestroy {
         take,
         skip,
       });
+      return hydrateTolvinkPlantLocality(rows).map(({ sourceRowId, sourcePlantId, ...row }) => row);
     } catch (error) {
       if (!this.isMissingTolvinkLocalityColumn(error)) throw error;
       const rows = await this.prisma.tolvinkPlant.findMany({
         where: { active: true },
         select: {
           id: true,
+          sourceRowId: true,
+          sourcePlantId: true,
           name: true,
           altName: true,
           department: true,
@@ -67,7 +73,7 @@ export class CatalogController implements OnModuleDestroy {
         take,
         skip,
       });
-      return rows.map((row) => ({ ...row, locality: null }));
+      return hydrateTolvinkPlantLocality(rows).map(({ sourceRowId, sourcePlantId, ...row }) => row);
     }
   }
 

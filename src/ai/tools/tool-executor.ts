@@ -8,6 +8,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
+import { hydrateTolvinkPlantLocality } from '../../common/tolvink-plant-locality';
 import { APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
 import { AiProfile, resolveAiProfile } from '../core/ai-profile';
 
@@ -229,19 +230,20 @@ export class ToolExecutorService {
 
     let masterPlants: Array<{ id: string; name: string; altName: string | null; department: string | null; locality: string | null; lat: any; lng: any }>;
     try {
-      masterPlants = await this.prisma.tolvinkPlant.findMany({
+      const rows = await this.prisma.tolvinkPlant.findMany({
         where: { active: true },
-        select: { id: true, name: true, altName: true, department: true, locality: true, lat: true, lng: true },
+        select: { id: true, sourceRowId: true, sourcePlantId: true, name: true, altName: true, department: true, locality: true, lat: true, lng: true },
         take: 100,
       });
+      masterPlants = hydrateTolvinkPlantLocality(rows).map(({ sourceRowId, sourcePlantId, ...plant }) => plant);
     } catch (error) {
       if (!this.isMissingTolvinkLocalityColumn(error)) throw error;
       const fallbackPlants = await this.prisma.tolvinkPlant.findMany({
         where: { active: true },
-        select: { id: true, name: true, altName: true, department: true, lat: true, lng: true },
+        select: { id: true, sourceRowId: true, sourcePlantId: true, name: true, altName: true, department: true, lat: true, lng: true },
         take: 100,
       });
-      masterPlants = fallbackPlants.map((plant) => ({ ...plant, locality: null }));
+      masterPlants = hydrateTolvinkPlantLocality(fallbackPlants).map(({ sourceRowId, sourcePlantId, ...plant }) => plant);
     }
     const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => [p.name, p.altName, p.department, p.locality].filter(Boolean).join(' '), {
       threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES,
