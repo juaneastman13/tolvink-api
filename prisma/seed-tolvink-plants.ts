@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 
 const DEFAULT_CSV_PATH =
   process.env.TOLVINK_PLANTS_CSV_PATH ||
-  'C:\\Users\\Usuario\\Downloads\\INSTALACIONES_ACOPIO_GRANOS_2017 (3).csv';
+  path.resolve(__dirname, '../tolvink-plants-with-locality-fixed.csv');
 
 type CsvRow = {
   objectId: number | null;
@@ -14,6 +14,7 @@ type CsvRow = {
   name: string;
   altName: string | null;
   department: string | null;
+  locality: string | null;
   lat: string | null;
   lng: string | null;
 };
@@ -57,6 +58,7 @@ function parseCsv(csvPath: string): CsvRow[] {
       name,
       altName: normalizeText(columns[3]),
       department: normalizeText(columns[4]),
+      locality: normalizeText(columns[7]),
       lat: normalizeCoordinate(columns[5]),
       lng: normalizeCoordinate(columns[6]),
     };
@@ -97,6 +99,7 @@ async function main() {
         name: row.name,
         altName: row.altName,
         department: row.department,
+        locality: row.locality,
         lat: row.lat,
         lng: row.lng,
         active: true,
@@ -107,6 +110,7 @@ async function main() {
         name: row.name,
         altName: row.altName,
         department: row.department,
+        locality: row.locality,
         lat: row.lat,
         lng: row.lng,
         active: true,

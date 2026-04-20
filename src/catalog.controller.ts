@@ -415,6 +415,7 @@ export class CatalogController implements OnModuleDestroy {
           name: true,
           altName: true,
           department: true,
+          locality: true,
           lat: true,
           lng: true,
         },

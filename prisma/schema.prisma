@@ -457,6 +457,7 @@ model TolvinkPlant {
   name          String   @db.VarChar(255)
   altName       String?  @map("alt_name") @db.VarChar(255)
   department    String?  @db.VarChar(100)
+  locality      String?  @db.VarChar(150)
   lat           Decimal? @db.Decimal(10, 6)
   lng           Decimal? @db.Decimal(10, 6)
   active        Boolean  @default(true)
@@ -467,6 +468,7 @@ model TolvinkPlant {
 
   @@index([name])
   @@index([department])
+  @@index([locality])
   @@map("tolvink_plants")
 }
 

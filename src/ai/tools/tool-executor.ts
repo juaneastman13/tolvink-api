@@ -224,10 +224,10 @@ export class ToolExecutorService {
 
     const masterPlants = await this.prisma.tolvinkPlant.findMany({
       where: { active: true },
-      select: { id: true, name: true, altName: true, department: true, lat: true, lng: true },
+      select: { id: true, name: true, altName: true, department: true, locality: true, lat: true, lng: true },
       take: 100,
     });
-    const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => [p.name, p.altName, p.department].filter(Boolean).join(' '), {
+    const masterResults = fuzzySearch(input.query, masterPlants, (p: any) => [p.name, p.altName, p.department, p.locality].filter(Boolean).join(' '), {
       threshold: 0.5, maxResults: 5, aliases: ENTITY_ALIASES,
     });
     if (masterResults.length === 0) {
@@ -242,6 +242,7 @@ export class ToolExecutorService {
         name: r.item.name,
         altName: r.item.altName || null,
         department: r.item.department || null,
+        locality: r.item.locality || null,
         lat: r.item.lat != null ? Number(r.item.lat) : null,
         lng: r.item.lng != null ? Number(r.item.lng) : null,
         branches: [],

@@ -12,6 +12,7 @@
     "db:migrate:dev": "npx prisma migrate dev",
     "db:seed": "npx prisma db seed",
     "db:studio": "npx prisma studio",
+    "tolvink:plants:locality": "npx ts-node scripts/enrich-tolvink-plants-locality.ts",
     "postinstall": "npx prisma generate",
     "test": "jest",
     "test:watch": "jest --watch",
