@@ -2,8 +2,8 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenAI } from '@google/genai';
 import { DocType, OcrResult } from './ocr.dto';
+import { DEFAULT_GEMINI_MODEL } from '../ai/core/llm-provider';
 
-const MODEL_ID = 'gemini-3.1-flash-lite-preview';
 const MAX_TOKENS = 2000;
 const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -127,12 +127,14 @@ export class OcrService {
   private readonly logger = new Logger(OcrService.name);
   private client: GoogleGenAI | null = null;
   private supabaseUrl: string;
+  private readonly model: string;
 
   constructor(private config: ConfigService) {
+    this.model = (config.get<string>('GEMINI_MODEL') || DEFAULT_GEMINI_MODEL).trim();
     const apiKey = config.get<string>('GEMINI_API_KEY');
     if (apiKey) {
       this.client = new GoogleGenAI({ apiKey });
-      this.logger.log('OCR service enabled (Gemini Vision)');
+      this.logger.log(`OCR service enabled (Gemini Vision, model: ${this.model})`);
     } else {
       this.logger.warn('GEMINI_API_KEY not set — OCR disabled');
     }
@@ -153,16 +155,16 @@ export class OcrService {
       // If a specific docType is provided, use legacy prompts directly
       if (docType && DOC_PROMPTS[docType]) {
         this.logger.log(`OCR analyze (legacy): type=${docType}, size=${buffer.length}`);
-        const raw = await this.callClaude(base64, mimeType, DOC_PROMPTS[docType]);
+        const raw = await this.callGeminiVision(base64, mimeType, DOC_PROMPTS[docType]);
         const result = this.parseResponse(raw, docType);
         result.datos._processedAt = new Date().toISOString();
-        result.datos._model = MODEL_ID;
+        result.datos._model = this.model;
         return result;
       }
 
       // Phase 1: Structured extraction
       this.logger.log(`OCR analyze (structured phase 1): size=${buffer.length}, mime=${mimeType}`);
-      const raw1 = await this.callClaude(base64, mimeType, STRUCTURED_PROMPT);
+      const raw1 = await this.callGeminiVision(base64, mimeType, STRUCTURED_PROMPT);
       const parsed1 = this.parseStructuredResponse(raw1);
 
       // Count non-null structured fields
@@ -184,13 +186,13 @@ export class OcrService {
           structured: true,
           ...(fillRate < 0.15 ? { lowConfidence: true } : {}),
           processedAt: new Date().toISOString(),
-          model: MODEL_ID,
+          model: this.model,
         } as any;
       }
 
       // Phase 2: Free extraction (fallback)
       this.logger.log(`OCR analyze (free phase 2): structured yielded <20% fields, retrying with free extraction`);
-      const raw2 = await this.callClaude(base64, mimeType, FREE_PROMPT);
+      const raw2 = await this.callGeminiVision(base64, mimeType, FREE_PROMPT);
       const parsed2 = this.parseFreeResponse(raw2);
 
       return {
@@ -201,7 +203,7 @@ export class OcrService {
         structured: false,
         lowConfidence: true, // Phase 2 fallback always flags low confidence
         processedAt: new Date().toISOString(),
-        model: MODEL_ID,
+        model: this.model,
       } as any;
     } catch (err) {
       this.logger.error(`OCR analyze failed: ${err.message}`);
@@ -210,9 +212,9 @@ export class OcrService {
   }
 
   /** Call Gemini Vision API with timeout */
-  private async callClaude(base64: string, mimeType: string, prompt: string): Promise<string> {
+  private async callGeminiVision(base64: string, mimeType: string, prompt: string): Promise<string> {
     const apiCall = this.client!.models.generateContent({
-      model: MODEL_ID,
+      model: this.model,
       contents: [{
         role: 'user',
         parts: [
@@ -405,7 +407,7 @@ export class OcrService {
     return 'general';
   }
 
-  /** Parse Claude response to structured OcrResult (legacy) */
+  /** Parse model response to structured OcrResult (legacy) */
   private parseResponse(raw: string, docType?: DocType): OcrResult {
     const cleaned = this.stripMarkdownFences(raw);
     try {

@@ -5,35 +5,38 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import type { AiToolDefinition } from '../tools/tool-definitions';
+import {
+  getConfiguredAiProvider,
+  getGeminiMaxOutputTokens,
+  getGeminiModel,
+  getGeminiTemperature,
+  LlmMessage,
+  LlmResponse,
+  ToolCallingLlmProvider,
+} from './llm-provider';
 
-const AI_MODEL = 'gemini-3.1-flash-lite-preview';
-const MAX_OUTPUT_TOKENS = 2048;
-const TEMPERATURE = 0.3;
-
-/** Gemini message format */
-export interface GeminiMessage {
-  role: 'user' | 'model';
-  parts: any[];
-}
-
-/** Parsed response from Gemini */
-export interface GeminiResponse {
-  text: string;
-  functionCalls: Array<{ name: string; args: any }>;
-  rawParts: any[];  // Original parts from Gemini (preserves thought_signature)
-  usageMetadata?: any;
-}
+export type GeminiMessage = LlmMessage;
+export type GeminiResponse = LlmResponse;
 
 @Injectable()
-export class GeminiClient implements OnModuleInit {
+export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
   private readonly logger = new Logger(GeminiClient.name);
   private client: GoogleGenAI | null = null;
+  private readonly provider = getConfiguredAiProvider();
+  private readonly model = getGeminiModel();
+  private readonly maxOutputTokens = getGeminiMaxOutputTokens();
+  private readonly temperature = getGeminiTemperature();
 
   onModuleInit() {
+    if (this.provider !== 'gemini') {
+      this.logger.warn(`Unsupported AI_PROVIDER=${this.provider} - AI disabled`);
+      return;
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
       this.client = new GoogleGenAI({ apiKey });
-      this.logger.log(`Gemini client initialized (model: ${AI_MODEL})`);
+      this.logger.log(`Gemini client initialized (model: ${this.model})`);
     } else {
       this.logger.warn('GEMINI_API_KEY not set — AI disabled');
     }
@@ -43,7 +46,7 @@ export class GeminiClient implements OnModuleInit {
     return !!this.client;
   }
 
-  /** Convert Anthropic-format tool definitions to Gemini function declarations */
+  /** Convert Tolvink tool definitions to Gemini function declarations */
   convertTools(tools: AiToolDefinition[]): any[] {
     return tools.map(t => ({
       name: t.name,
@@ -111,12 +114,12 @@ export class GeminiClient implements OnModuleInit {
     if (!this.client) throw new Error('Gemini client not initialized');
 
     const response = await this.client.models.generateContent({
-      model: AI_MODEL,
+      model: this.model,
       contents: params.messages,
       config: {
         systemInstruction: params.system,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: TEMPERATURE,
+        maxOutputTokens: this.maxOutputTokens,
+        temperature: this.temperature,
         tools: params.tools.length > 0 ? [{ functionDeclarations: params.tools }] : undefined,
       },
     });

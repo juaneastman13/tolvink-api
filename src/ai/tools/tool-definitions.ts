@@ -1,5 +1,5 @@
 // =====================================================================
-// TOLVINK — AI Tool Definitions (Anthropic input_schema format)
+// TOLVINK — AI Tool Definitions (provider-adapted internal schema)
 // Each tool maps to a real FreightsService / FieldsService / TrucksService method
 // =====================================================================
 

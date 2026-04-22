@@ -40,6 +40,9 @@ const STATUS_EMOJI: Record<string, string> = {
 };
 
 const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
+const MECHANIC_APP_ONLY_MESSAGE =
+  `El modulo mecanico por ahora esta disponible solo desde la app de Tolvink.\n\n` +
+  `Ingresa a ${APP_URL} y abri Mecanica para gestionar maquinas, mantenimientos y alertas.`;
 
 @Injectable()
 export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
@@ -422,6 +425,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    if (this.isMechanicAssistantIntent(t)) {
+      await this.sendMechanicAppOnlyMessage(phone);
+      return;
+    }
+
     // AI-powered handler for all other text (actual requests/queries)
     if (this.ai.isEnabled()) {
       await this.handleAiChat(phone, user, t, cachedSession);
@@ -453,6 +461,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   private async handleAiChat(phone: string, user: any, text: string, cachedSession?: any) {
     try {
+      if (this.isMechanicAssistantIntent(text)) {
+        await this.sendMechanicAppOnlyMessage(phone);
+        return;
+      }
+
       // Reuse cached session if it's a valid AI session (no flowType, not expired)
       let session = (cachedSession && !cachedSession.flowType && cachedSession.expiresAt > new Date())
         ? cachedSession
@@ -588,6 +601,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private isMechanicAssistantIntent(text: string): boolean {
+    const normalized = (text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    return /\b(mecanica|mecanico|mantenimiento|maquinaria|maquina|maquinas|tractor|tractores|cosechadora|cosechadoras|sembradora|pulverizadora|horometro|service|aceite|filtro|filtros|repuesto|repuestos|taller)\b/.test(normalized);
+  }
+
+  private async sendMechanicAppOnlyMessage(phone: string): Promise<void> {
+    await this.wa.sendText(phone, MECHANIC_APP_ONLY_MESSAGE);
+  }
+
   // ======================== LOCATION HANDLER ==============================
 
   private async handleLocation(phone: string, user: any, payload: any, cachedSession?: any) {
@@ -642,7 +668,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch((err2) => this.logger.warn(`[gps] error feedback send failed: ${err2.message}`));
     });
 
-    // Forward as text to AI so Claude knows the user shared a location (no raw coords — policy)
+    // Forward as text to AI so the agent knows the user shared a location (no raw coords — policy)
     const locationDesc = (name || address || 'ubicación').replace(/[\[\]]/g, '').slice(0, 100);
     const textForAi = `[Ubicación compartida: ${locationDesc}]`;
     await this.handleAiChat(phone, user, textForAi);

@@ -108,7 +108,7 @@ export class WebChatService {
 
   /** Core: call AI with pre-fetched session, handle _pendingSelection, emit response via SSE */
   private async processAndEmitWithSession(dbUser: any, text: string, session: any): Promise<void> {
-    // Stream text deltas to the frontend as Claude generates them
+    // Stream text deltas to the frontend as the AI provider generates them
     const onDelta = (chunk: string, start?: boolean) => {
       this.sse.emitToUser(dbUser.id, 'ai:chunk', { text: chunk, start: !!start });
     };
