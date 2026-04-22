@@ -15,6 +15,6 @@ import { ToolExecutorService } from './tools/tool-executor';
     GeminiClient,
     ToolExecutorService,
   ],
-  exports: [AgentService],
+  exports: [AgentService, GeminiClient],
 })
 export class AiModule {}

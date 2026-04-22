@@ -8,6 +8,7 @@ import {
   Post,
   Get,
   Body,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -49,7 +50,7 @@ export class WebChatController {
   @ApiOperation({ summary: 'Send text message to AI agent' })
   async sendMessage(
     @CurrentUser() user: any,
-    @Body() body: { text: string; idempotencyKey?: string },
+    @Body() body: { text: string; idempotencyKey?: string; module?: string },
   ) {
     // Dedup check
     if (body?.idempotencyKey) {
@@ -66,7 +67,7 @@ export class WebChatController {
     }
 
     // Fire-and-forget: respond immediately, result comes via SSE
-    this.service.handleTextMessage(user, text).catch((e) => {
+    this.service.handleTextMessage(user, text, body?.module).catch((e) => {
       this.logger.error(`handleTextMessage error: ${e.message}`);
     });
 
@@ -89,6 +90,7 @@ export class WebChatController {
   async sendAudio(
     @CurrentUser() user: any,
     @UploadedFile() file: Express.Multer.File,
+    @Query('module') module?: string,
   ) {
     if (!file || !file.buffer) throw new BadRequestException('Archivo de audio requerido');
 
@@ -99,7 +101,7 @@ export class WebChatController {
     }
 
     // Fire-and-forget: respond immediately, result comes via SSE
-    this.service.handleAudioMessage(user, file.buffer, file.mimetype).catch((e) => {
+    this.service.handleAudioMessage(user, file.buffer, file.mimetype, module).catch((e) => {
       this.logger.error(`handleAudioMessage error: ${e.message}`);
     });
 
@@ -111,7 +113,7 @@ export class WebChatController {
   @ApiOperation({ summary: 'Notify AI agent of a file upload (URL from Supabase)' })
   async sendFile(
     @CurrentUser() user: any,
-    @Body() body: { url: string; name: string; type: string },
+    @Body() body: { url: string; name: string; type: string; module?: string },
   ) {
     const url = body?.url?.trim();
     const name = body?.name?.trim();
@@ -119,7 +121,7 @@ export class WebChatController {
     if (!url || !name) throw new BadRequestException('URL y nombre requeridos');
     if (url.length > 500) throw new BadRequestException('URL demasiado larga');
 
-    this.service.handleFileMessage(user, { url, name, type }).catch((e) => {
+    this.service.handleFileMessage(user, { url, name, type }, body?.module).catch((e) => {
       this.logger.error(`handleFileMessage error: ${e.message}`);
     });
 
@@ -129,7 +131,7 @@ export class WebChatController {
   @Get('history')
   @Throttle({ default: { ttl: 60000, limit: 30 } })
   @ApiOperation({ summary: 'Get AI chat history for current session' })
-  async getHistory(@CurrentUser() user: any) {
-    return this.service.getHistory(user);
+  async getHistory(@CurrentUser() user: any, @Query('module') module?: string) {
+    return this.service.getHistory(user, module);
   }
 }
