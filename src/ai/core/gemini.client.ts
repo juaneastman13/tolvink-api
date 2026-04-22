@@ -28,13 +28,11 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
   private readonly temperature = getGeminiTemperature();
 
   onModuleInit() {
-    if (this.provider !== 'gemini') {
-      this.logger.warn(`Unsupported AI_PROVIDER=${this.provider} - AI disabled`);
-      return;
-    }
-
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
+      if (this.provider !== 'gemini') {
+        this.logger.warn(`Unsupported AI_PROVIDER=${this.provider}; falling back to Gemini because GEMINI_API_KEY is configured`);
+      }
       this.client = new GoogleGenAI({ apiKey });
       this.logger.log(`Gemini client initialized (model: ${this.model})`);
     } else {
