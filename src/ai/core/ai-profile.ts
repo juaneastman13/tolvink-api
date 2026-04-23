@@ -1,3 +1,5 @@
+import { getActiveMembership, getScopedCompany, getScopedRole } from '../../common/user-company-scope';
+
 export type AiProfile =
   | 'producer_manager'
   | 'producer_operator'
@@ -9,17 +11,11 @@ export type AiProfile =
   | 'plant_driver'
   | 'autonomous_driver';
 
-function getActiveMembership(user: any): any | null {
-  const activeCoId = user?.activeCompanyId || user?.companyId;
-  if (!activeCoId || !Array.isArray(user?.memberships)) return null;
-  return user.memberships.find((m: any) => m.companyId === activeCoId) || null;
-}
-
 function getCompanyType(user: any, membership: any): 'producer' | 'transporter' | 'plant' {
   const rawTypes = membership?.company?.types
-    || user?.company?.types
+    || getScopedCompany(user)?.types
     || (membership?.company?.type ? [membership.company.type] : null)
-    || (user?.company?.type ? [user.company.type] : null)
+    || (getScopedCompany(user)?.type ? [getScopedCompany(user).type] : null)
     || [];
 
   const types = Array.isArray(rawTypes) ? rawTypes : [rawTypes];
@@ -38,10 +34,10 @@ function normalizeRole(rawRole?: string | null): 'manager' | 'operator' | 'drive
 export function resolveAiProfile(user: any): AiProfile {
   const activeMem = getActiveMembership(user);
   const companyType = getCompanyType(user, activeMem);
-  const role = normalizeRole(activeMem?.role || user?.role);
+  const role = normalizeRole(getScopedRole(user));
   const autonomousDriverEnabled = !!(
     activeMem?.company?.autonomousDriverEnabled
-    || user?.company?.autonomousDriverEnabled
+    || getScopedCompany(user)?.autonomousDriverEnabled
   );
 
   if (role === 'driver' && autonomousDriverEnabled && companyType === 'producer') {

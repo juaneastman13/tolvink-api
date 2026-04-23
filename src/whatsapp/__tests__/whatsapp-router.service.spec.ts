@@ -41,6 +41,28 @@ describe('WhatsAppRouterService', () => {
     ],
   };
 
+  const multiCompanyUser = {
+    id: 'multi-1',
+    role: 'chofer',
+    companyId: 'producer-1',
+    activeCompanyId: 'producer-1',
+    company: { type: 'producer', types: ['producer'], autonomousDriverEnabled: false },
+    memberships: [
+      {
+        companyId: 'producer-1',
+        active: true,
+        role: 'gerente',
+        company: { type: 'producer', types: ['producer'], autonomousDriverEnabled: false, name: 'Prod Uno' },
+      },
+      {
+        companyId: 'producer-2',
+        active: true,
+        role: 'chofer',
+        company: { type: 'producer', types: ['producer'], autonomousDriverEnabled: true, name: 'Prod Dos' },
+      },
+    ],
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -82,6 +104,7 @@ describe('WhatsAppRouterService', () => {
     ai = {
       isEnabled: jest.fn().mockReturnValue(true),
       chat: jest.fn(),
+      cancelPendingAction: jest.fn().mockResolvedValue(true),
     };
 
     service = new WhatsAppRouterService(prisma, wa, flow, freights, ai);
@@ -213,6 +236,53 @@ describe('WhatsAppRouterService', () => {
         phone,
         expect.stringContaining('modulo mecanico'),
       );
+    });
+
+    it('should resolve autonomous driver mode from the scoped active company, not the global user role', () => {
+      expect(service['isAutonomousDriver'](multiCompanyUser, 'producer-1')).toBe(false);
+      expect(service['isAutonomousDriver'](multiCompanyUser, 'producer-2')).toBe(true);
+    });
+
+    it('should clear pending documents and pending AI actions from operational context resets', async () => {
+      prisma.whatsAppSession.findFirst.mockResolvedValue({
+        id: 'session-1',
+        flowState: {
+          selectedCompanyId: 'producer-1',
+          companyConfirmed: true,
+          aiMessages: ['hola'],
+          activeContext: { freightId: 'freight-1' },
+          selectionContext: { purpose: 'attach_document_freight' },
+          _pendingMessage: 'Adjuntar archivo',
+          _pendingAction: { id: 'action-1' },
+          pendingDocument: { url: 'https://doc', companyId: 'producer-1', createdAt: Date.now() },
+          pendingAiAction: { actionId: 'action-1', companyId: 'producer-1' },
+        },
+      });
+
+      await service['clearAiOperationalContext']('multi-1');
+
+      expect(ai.cancelPendingAction).toHaveBeenCalledWith('session-1');
+      expect(prisma.whatsAppSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: {
+          flowState: {
+            selectedCompanyId: 'producer-1',
+            companyConfirmed: true,
+          },
+        },
+      });
+    });
+
+    it('should expose safe help text and explicit state guidance for active profiles', () => {
+      const help = service['getRoleHelpSectionSafe']('producer', 'producer_manager');
+      const guide = service['getRoleStateGuideClean']('producer', 'producer_manager');
+      const features = service['getRoleFeatureSummarySafe']('producer', 'producer_manager');
+
+      expect(help).toContain('Solicitar fletes nuevos');
+      expect(help).not.toContain('informes PDF');
+      expect(help).not.toContain('flota propia');
+      expect(features).not.toContain('Equipo');
+      expect(guide).toContain('SIN ASIGNAR');
     });
   });
 });

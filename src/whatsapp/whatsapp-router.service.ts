@@ -12,6 +12,7 @@ import { AgentService } from '../ai/agent.service';
 import { AiProfile, resolveAiProfile } from '../ai/core/ai-profile';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
+import { getActiveMembership, getScopedCompany, getScopedRole, scopeUserToCompany, scopeUserToSessionCompany } from '../common/user-company-scope';
 import OpenAI from 'openai';
 import * as crypto from 'crypto';
 import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
@@ -47,6 +48,7 @@ const MECHANIC_APP_ONLY_MESSAGE =
 @Injectable()
 export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WhatsAppRouterService.name);
+  private static readonly PENDING_DOCUMENT_TTL_MS = 30 * 60 * 1000;
   private openai: OpenAI | null = null;
   /** Per-user GPS write cooldown — max 1 location save per 30s */
   private gpsWriteCooldowns = new Map<string, number>();
@@ -923,11 +925,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
+      await this.ai.cancelPendingAction(session.id).catch(() => false);
       const state = (session.flowState as any) || {};
+      const companyId = this.getSessionCompanyId(session, user);
+      const nextState = this.stripPendingInteractionState(state);
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
         data: {
-          flowState: { ...state, pendingDocument: { url: publicUrl, name: displayName, type: docType } },
+          flowState: {
+            ...nextState,
+            pendingDocument: {
+              url: publicUrl,
+              name: displayName,
+              type: docType,
+              companyId,
+              createdAt: Date.now(),
+            },
+          },
         },
       });
 
@@ -1340,11 +1354,22 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     if (oldCoId) this.freightCountsCache.delete(oldCoId);
     this.freightCountsCache.delete(companyId);
 
+    const currentState = ((session?.flowState as any) || {});
+    const previousCompanyId = currentState.selectedCompanyId || undefined;
+    const companyChanged = currentState.companyConfirmed === true
+      && !!previousCompanyId
+      && previousCompanyId !== companyId;
     const flowData = { companyConfirmed: true, selectedCompanyId: companyId };
+    const nextFlowState = companyChanged
+      ? { ...this.stripOperationalFlowState(currentState), ...flowData }
+      : { ...currentState, ...flowData };
     if (session) {
+      if (companyChanged) {
+        await this.ai.cancelPendingAction(session.id).catch(() => false);
+      }
       await this.prisma.whatsAppSession.update({
         where: { id: session.id },
-        data: { flowState: { ...((session.flowState as any) || {}), ...flowData } },
+        data: { flowState: nextFlowState },
       });
     } else {
       await this.prisma.whatsAppSession.create({
@@ -1360,6 +1385,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const updatedUser = await this.findUserByPhone(phone);
     const companyName = membership.company?.name || 'Empresa';
     await this.wa.sendText(phone, `🏢 Operando como: ${companyName}.`);
+
+    if (companyChanged) {
+      await this.wa.sendText(phone, 'Se limpiaron acciones, adjuntos y selecciones pendientes de la empresa anterior.');
+    }
 
     // Check for pending message/action saved before company selection
     const freshSess = await this.prisma.whatsAppSession.findFirst({
@@ -1508,13 +1537,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   async showMainMenu(phone: string, user: any, sessionCompanyId?: string) {
     // Use session-scoped company (WhatsApp selection) over DB activeCompanyId
     const activeCoId = sessionCompanyId || user.activeCompanyId || user.companyId;
-    // Temporarily override user for role resolution
-    if (sessionCompanyId) user = { ...user, activeCompanyId: sessionCompanyId };
+    user = scopeUserToCompany(user, activeCoId);
     const role = this.getUserRole(user);
     const isAutonomousDriver = this.isAutonomousDriver(user, activeCoId);
     const profile = this.getAiProfile(user);
-    const activeMem = user.memberships?.find((m: any) => m.companyId === activeCoId);
-    const companyName = activeMem?.company?.name || user.company?.name || '';
+    const activeMem = getActiveMembership(user);
+    const companyName = activeMem?.company?.name || getScopedCompany(user)?.name || '';
     const roleLabel = this.getProfileRoleLabel(profile, role, isAutonomousDriver);
 
     if (isAutonomousDriver) {
@@ -1595,23 +1623,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
           // Mixed: show per-group
           features =
             `\n📌 Con *${operatorPlants.join(', ')}* podés:\n` +
-            this.getOperatorFeatures(role) +
+            this.getOperatorFeaturesSafe(role) +
             `\n📌 Con *${readonlyPlants.join(', ')}* podés:\n` +
-            this.getReadonlyFeatures();
+            this.getReadonlyFeaturesSafe();
         } else if (readonlyPlants.length > 0 && operatorPlants.length === 0) {
           // All READONLY
           features =
             `\n📌 Podés hacer estas cosas desde acá:\n` +
-            this.getReadonlyFeatures();
+            this.getReadonlyFeaturesSafe();
         } else {
           // All OPERATOR — show normal role features
-          features = this.getRoleFeatureSummaryClean(role, profile);
+          features = this.getRoleFeatureSummarySafe(role, profile);
         }
       } else {
-        features = this.getRoleFeatureSummaryClean(role, profile);
+        features = this.getRoleFeatureSummarySafe(role, profile);
       }
     } catch {
-      features = this.getRoleFeatureSummaryClean(role, profile);
+      features = this.getRoleFeatureSummarySafe(role, profile);
     }
 
     await this.wa.sendButtons(phone,
@@ -1660,6 +1688,30 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private getOperatorFeaturesSafe(role: string): string {
+    if (role === 'producer') {
+      return (
+        `- Solicitar fletes de granos\n` +
+        `- Ver estado y detalle de fletes\n` +
+        `- Buscar campos, lotes y plantas\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `- Ver asignaciones\n` +
+        `- Aceptar o rechazar viajes\n` +
+        `- Asignar camion y chofer\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    return this.getRoleFeatureSummarySafe(role, 'plant_operator').replace('\nAcciones principales:\n', '');
+  }
+
+  private getReadonlyFeaturesSafe(): string {
+    return `- Ver el estado y detalle de fletes\n`;
+  }
+
   // ======================== SHOW HELP ==================================
 
   private async showHelp(phone: string, user: any) {
@@ -1672,11 +1724,12 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       `Enviando un mensaje de texto o audio puede realizar las gestiones que tenga habilitadas. ` +
       `Comience la conversacion y Tolvink lo ayudara.\n\n`;
 
-    const roleSection = this.getRoleHelpSectionClean(role, profile);
+    const roleSection = this.getRoleHelpSectionSafe(role, profile);
+    const statusGuide = this.getRoleStateGuideClean(role, profile);
 
     const footer = `Plataforma web:\n${APP_URL}`;
 
-    await this.wa.sendText(phone, header + body + roleSection + footer);
+    await this.wa.sendText(phone, header + body + roleSection + statusGuide + footer);
 
     await this.wa.sendButtons(phone,
       'Seleccione una opcion:',
@@ -1688,14 +1741,11 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   private getUserRole(user: any): string {
     // Prefer active company's type for multi-company users
-    const activeCoId = user.activeCompanyId || user.companyId;
-    if (activeCoId && user.memberships?.length > 0) {
-      const am = user.memberships.find((m: any) => m.companyId === activeCoId && m.active);
-      if (am?.company) {
-        const types = Array.isArray(am.company.types) && am.company.types.length > 0
-          ? am.company.types : [am.company.type];
-        if (types[0]) return types[0];
-      }
+    const am = getActiveMembership(user);
+    if (am?.company) {
+      const types = Array.isArray(am.company.types) && am.company.types.length > 0
+        ? am.company.types : [am.company.type];
+      if (types[0]) return types[0];
     }
     // Fallback
     const userTypes = Array.isArray(user.userTypes) ? user.userTypes : [];
@@ -1710,10 +1760,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   }
 
   private isAutonomousDriver(user: any, activeCoId?: string): boolean {
-    const targetCompanyId = activeCoId || user.activeCompanyId || user.companyId;
-    const activeMem = (user.memberships || []).find((m: any) => m.companyId === targetCompanyId && m.active);
-    const isChofer = activeMem?.role === 'chofer' || user.role === 'chofer';
-    const autoEnabled = !!(activeMem?.company?.autonomousDriverEnabled || user.company?.autonomousDriverEnabled);
+    const scopedUser = scopeUserToCompany(user, activeCoId || user.activeCompanyId || user.companyId);
+    const activeMem = getActiveMembership(scopedUser);
+    const isChofer = getScopedRole(scopedUser) === 'chofer';
+    const autoEnabled = !!(activeMem?.company?.autonomousDriverEnabled || getScopedCompany(scopedUser)?.autonomousDriverEnabled);
     return isChofer && autoEnabled;
   }
 
@@ -1756,8 +1806,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
       orderBy: { updatedAt: 'desc' },
     });
-    const state = (session?.flowState as any) || {};
-    if (!session || !state.pendingDocument) {
+    const pendingDocument = session ? await this.getValidPendingDocument(session, user) : null;
+    if (!session || !pendingDocument) {
       await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
       return;
     }
@@ -1778,7 +1828,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       orderBy: { updatedAt: 'desc' },
     });
     const state = (session?.flowState as any) || {};
-    if (!session || !state.pendingDocument) {
+    const pendingDocument = session ? await this.getValidPendingDocument(session, user) : null;
+    if (!session || !pendingDocument) {
       await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
       return;
     }
@@ -1820,8 +1871,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       where: { userId: user.id, flowType: null, expiresAt: { gt: new Date() } },
       orderBy: { updatedAt: 'desc' },
     });
-    const state = (session?.flowState as any) || {};
-    if (!session || !state.pendingDocument) {
+    const pendingDocument = session ? await this.getValidPendingDocument(session, user) : null;
+    if (!session || !pendingDocument) {
       await this.wa.sendText(phone, 'No hay ningun archivo pendiente para adjuntar.');
       return;
     }
@@ -1983,18 +2034,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
   }
 
   private scopeUserToSessionCompany(user: any, session?: any): any {
-    const selectedCompanyId = (session?.flowState as any)?.selectedCompanyId;
-    if (!user || !selectedCompanyId) return user;
-    const membership = Array.isArray(user.memberships)
-      ? user.memberships.find((m: any) => m.companyId === selectedCompanyId && m.active !== false)
-      : null;
-    if (!membership) return user;
-    return {
-      ...user,
-      activeCompanyId: selectedCompanyId,
-      companyId: selectedCompanyId,
-      company: membership.company || user.company,
-    };
+    return scopeUserToSessionCompany(user, session);
   }
 
   private async clearPendingDocumentContext(userId: string) {
@@ -2029,6 +2069,47 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  private stripPendingInteractionState(state: Record<string, any>): Record<string, any> {
+    const nextState = { ...(state || {}) };
+    delete nextState.selectionContext;
+    delete nextState._pendingSelection;
+    delete nextState._pendingMessage;
+    delete nextState._pendingAction;
+    delete nextState.pendingDocument;
+    delete nextState.pendingAiAction;
+    return nextState;
+  }
+
+  private stripOperationalFlowState(state: Record<string, any>): Record<string, any> {
+    const nextState = this.stripPendingInteractionState(state);
+    delete nextState.aiMessages;
+    delete nextState.activeContext;
+    return nextState;
+  }
+
+  private getSessionCompanyId(session: any, user?: any): string | undefined {
+    const state = (session?.flowState as any) || {};
+    return state.selectedCompanyId || user?.activeCompanyId || user?.companyId || undefined;
+  }
+
+  private async getValidPendingDocument(session: any, user: any): Promise<any | null> {
+    const state = (session?.flowState as any) || {};
+    const pendingDocument = state.pendingDocument;
+    if (!pendingDocument?.url) return null;
+
+    const selectedCompanyId = this.getSessionCompanyId(session, user);
+    const isExpired = pendingDocument.createdAt
+      && Date.now() - Number(pendingDocument.createdAt) > WhatsAppRouterService.PENDING_DOCUMENT_TTL_MS;
+    const hasCompanyMismatch = pendingDocument.companyId
+      && selectedCompanyId
+      && pendingDocument.companyId !== selectedCompanyId;
+
+    if (!isExpired && !hasCompanyMismatch) return pendingDocument;
+
+    await this.clearPendingDocumentContext(user.id);
+    return null;
+  }
+
   private async clearAiOperationalContext(userId: string): Promise<void> {
     const session = await this.prisma.whatsAppSession.findFirst({
       where: { userId, expiresAt: { gt: new Date() } },
@@ -2036,16 +2117,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     });
     if (!session) return;
 
-    const state = (session.flowState as any) || {};
-    const {
-      aiMessages,
-      activeContext,
-      selectionContext,
-      _pendingSelection,
-      _pendingMessage,
-      _pendingAction,
-      ...cleanState
-    } = state;
+    await this.ai.cancelPendingAction(session.id).catch(() => false);
+    const cleanState = this.stripOperationalFlowState((session.flowState as any) || {});
 
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
@@ -2494,6 +2567,183 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       `  - Informes PDF\n` +
       `  - Seguimiento en vivo\n\n`
     );
+  }
+
+  private getRoleFeatureSummarySafe(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver mi viaje activo\n` +
+        `- Iniciar viaje\n` +
+        `- Confirmar carga\n` +
+        `- Confirmar entrega\n` +
+        `- Adjuntar evidencia\n`
+      );
+    }
+    if (profile === 'autonomous_driver') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver mi flete activo\n` +
+        `- Solicitar un nuevo flete\n` +
+        `- Buscar plantas, campos y lotes\n` +
+        `- Finalizar el viaje\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Solicitar flete\n` +
+        `- Ver estado y detalle de fletes\n` +
+        `- Buscar campos, lotes y plantas\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver asignaciones\n` +
+        `- Aceptar o rechazar viajes\n` +
+        `- Asignar camion y chofer\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver fletes pendientes\n` +
+        `- Aprobar solicitudes\n` +
+        `- Asignar empresa transportista\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (role === 'producer') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Solicitar flete\n` +
+        `- Ver estado y detalle de fletes\n` +
+        `- Buscar campos, lotes y plantas\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (role === 'plant') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver fletes pendientes\n` +
+        `- Aprobar solicitudes\n` +
+        `- Asignar transportista\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    if (role === 'transporter') {
+      return (
+        `\nAcciones principales:\n` +
+        `- Ver asignaciones\n` +
+        `- Aceptar o rechazar viajes\n` +
+        `- Asignar camion y chofer\n` +
+        `- Adjuntar documentos\n`
+      );
+    }
+    return (
+      `\nAcciones principales:\n` +
+      `- Ver estado de fletes\n` +
+      `- Consultar detalle operativo\n`
+    );
+  }
+
+  private getRoleHelpSectionSafe(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `Chofer operativo\n\n` +
+        `  - Consultar el viaje activo\n` +
+        `  - Iniciar viaje cuando este aceptado\n` +
+        `  - Confirmar carga y entrega\n` +
+        `  - Adjuntar fotos o documentos\n\n`
+      );
+    }
+    if (profile === 'autonomous_driver') {
+      return (
+        `Chofer autonomo\n\n` +
+        `  - Solicitar un nuevo flete propio\n` +
+        `  - Buscar plantas, campos y lotes\n` +
+        `  - Registrar llegada y finalizar el viaje\n` +
+        `  - Adjuntar fotos o documentos\n\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator') {
+      return (
+        `Productor\n\n` +
+        `  - Solicitar fletes nuevos\n` +
+        `  - Consultar estado y detalle\n` +
+        `  - Buscar campos, lotes y plantas\n` +
+        `  - Adjuntar documentos al flete\n\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `Transportista gerente\n\n` +
+        `  - Ver asignaciones pendientes o activas\n` +
+        `  - Aceptar o rechazar viajes\n` +
+        `  - Asignar camion y chofer\n` +
+        `  - Adjuntar documentos al flete\n\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `Planta\n\n` +
+        `  - Ver fletes pendientes\n` +
+        `  - Aprobar solicitudes de productor\n` +
+        `  - Asignar empresa transportista\n` +
+        `  - Adjuntar documentos al flete\n\n`
+      );
+    }
+    return (
+      `${role || 'Usuario'}\n\n` +
+      `  - Consultar estado y detalle de fletes\n` +
+      `  - Ejecutar las acciones habilitadas para su empresa activa\n\n`
+    );
+  }
+
+  private getRoleStateGuideClean(role: string, profile: AiProfile): string {
+    if (profile === 'producer_driver' || profile === 'transporter_driver' || profile === 'plant_driver') {
+      return (
+        `Estados del viaje:\n` +
+        `  - ASIGNADO: aceptar o rechazar\n` +
+        `  - ACEPTADO: iniciar viaje\n` +
+        `  - A CAMPO: confirmar carga\n` +
+        `  - A PLANTA: confirmar entrega\n\n`
+      );
+    }
+    if (profile === 'autonomous_driver') {
+      return (
+        `Estados del viaje:\n` +
+        `  - A CAMPO: seguir el viaje activo\n` +
+        `  - A PLANTA: registrar llegada o finalizar\n\n`
+      );
+    }
+    if (profile === 'transporter_manager') {
+      return (
+        `Estados clave:\n` +
+        `  - ASIGNADO: aceptar o rechazar\n` +
+        `  - ACEPTADO: completar camion y chofer si falta\n\n`
+      );
+    }
+    if (profile === 'plant_manager' || profile === 'plant_operator') {
+      return (
+        `Estados clave:\n` +
+        `  - SIN ASIGNAR: aprobar y asignar transportista\n` +
+        `  - A PLANTA: confirmar recepcion si corresponde\n\n`
+      );
+    }
+    if (profile === 'producer_manager' || profile === 'producer_operator' || role === 'producer') {
+      return (
+        `Estados clave:\n` +
+        `  - SIN ASIGNAR: seguimiento de solicitud\n` +
+        `  - ASIGNADO / ACEPTADO: seguimiento operativo\n` +
+        `  - A PLANTA: controlar cierre del flete\n\n`
+      );
+    }
+    return '';
   }
 
   // ======================== SHOW ACTIVE FREIGHTS ========================

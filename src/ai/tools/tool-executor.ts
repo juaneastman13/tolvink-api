@@ -9,6 +9,7 @@ import { FreightsService } from '../../freights/freights.service';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { hydrateTolvinkPlantLocality } from '../../common/tolvink-plant-locality';
+import { getScopedRole, scopeUserToSessionCompany } from '../../common/user-company-scope';
 import { APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
 import { AiProfile, resolveAiProfile } from '../core/ai-profile';
 
@@ -38,6 +39,7 @@ type PendingActionRecord = {
   summary: string;
   buttons?: Array<{ id: string; title: string }>;
   createdAt: number;
+  companyId?: string;
 };
 
 @Injectable()
@@ -64,7 +66,7 @@ export class ToolExecutorService {
   }
 
   scopeUserToSessionCompany(user: any, session?: any): any {
-    return this.applySessionCompanyScope(user, session);
+    return scopeUserToSessionCompany(user, session);
   }
 
   buildSyntheticUser(user: any, session?: any): any {
@@ -347,7 +349,7 @@ export class ToolExecutorService {
       loadTime,
       notes: input.notes,
       tons,
-    }, summary);
+    }, summary, undefined, user.companyId);
   }
 
   private async handleApproveFreightRequest(input: any, user: any, session: any): Promise<string> {
@@ -356,7 +358,7 @@ export class ToolExecutorService {
     return this.stageAction(session.id, 'approve_freight_request', {
       freightId: freight.id,
       code: freight.code,
-    }, this.buildFreightActionSummary('Aprobar flete', freight));
+    }, this.buildFreightActionSummary('Aprobar flete', freight), undefined, user.companyId);
   }
 
   private async handleAssignTransportCompany(input: any, user: any, session: any): Promise<string> {
@@ -760,13 +762,20 @@ export class ToolExecutorService {
     }
   }
 
-  private stageAction(sessionId: string, tool: string, params: Record<string, any>, summary: string, buttons?: Array<{ id: string; title: string }>): string {
+  private stageAction(
+    sessionId: string,
+    tool: string,
+    params: Record<string, any>,
+    summary: string,
+    buttons?: Array<{ id: string; title: string }>,
+    companyId?: string,
+  ): string {
     const actionId = randomUUID().slice(0, 8);
     const resolvedButtons = (buttons || [{ id: 'ai_confirm', title: 'CONFIRMAR' }, { id: 'ai_cancel', title: 'CANCELAR' }]).map((button) => ({
       ...button,
       id: button.id.includes(':') ? button.id : `${button.id}:${actionId}`,
     }));
-    const record = { actionId, tool, params, summary, buttons: resolvedButtons, createdAt: Date.now() };
+    const record = { actionId, tool, params, summary, buttons: resolvedButtons, createdAt: Date.now(), companyId };
     this.pendingActions.set(sessionId, record);
     void this.persistPendingAction(sessionId, record);
     return JSON.stringify({ status: 'pending_confirmation', summary, actionId });
@@ -820,19 +829,7 @@ export class ToolExecutorService {
   // ======================== LOW-LEVEL HELPERS ========================
 
   private applySessionCompanyScope(user: any, session?: any): any {
-    if (!user) return user;
-    const selectedCompanyId = (session?.flowState as any)?.selectedCompanyId;
-    if (!selectedCompanyId) return user;
-    const membership = Array.isArray(user.memberships)
-      ? user.memberships.find((m: any) => m.companyId === selectedCompanyId && m.active !== false)
-      : null;
-    if (!membership) return user;
-    return {
-      ...user,
-      activeCompanyId: selectedCompanyId,
-      companyId: selectedCompanyId,
-      company: membership.company || user.company,
-    };
+    return scopeUserToSessionCompany(user, session);
   }
 
   private async persistPendingAction(sessionId: string, record: PendingActionRecord): Promise<void> {
@@ -842,12 +839,16 @@ export class ToolExecutorService {
     });
     if (!session) return;
     const state = (session.flowState as any) || {};
+    const recordToPersist = {
+      ...record,
+      companyId: record.companyId || state.selectedCompanyId || undefined,
+    };
     await this.prisma.whatsAppSession.update({
       where: { id: sessionId },
       data: {
         flowState: {
           ...state,
-          pendingAiAction: record,
+          pendingAiAction: recordToPersist,
         },
       },
     });
@@ -856,16 +857,25 @@ export class ToolExecutorService {
   private async getPendingActionRecord(sessionId: string): Promise<PendingActionRecord | undefined> {
     this.cleanupPendingActions();
     const cached = this.pendingActions.get(sessionId);
-    if (cached) return cached;
 
     const session = await this.prisma.whatsAppSession.findUnique({
       where: { id: sessionId },
       select: { flowState: true },
     });
-    const stored = ((session?.flowState as any) || {}).pendingAiAction as PendingActionRecord | undefined;
+    const state = (session?.flowState as any) || {};
+    const selectedCompanyId = state.selectedCompanyId || undefined;
+    const persisted = state.pendingAiAction as PendingActionRecord | undefined;
+    const stored = (persisted || cached) as PendingActionRecord | undefined;
     if (!stored) return undefined;
 
     if (!stored.createdAt || Date.now() - stored.createdAt > ToolExecutorService.PENDING_ACTION_TTL_MS) {
+      this.pendingActions.delete(sessionId);
+      await this.clearPersistedPendingAction(sessionId);
+      return undefined;
+    }
+
+    if (selectedCompanyId && (!stored.companyId || stored.companyId !== selectedCompanyId)) {
+      this.pendingActions.delete(sessionId);
       await this.clearPersistedPendingAction(sessionId);
       return undefined;
     }
@@ -1045,7 +1055,7 @@ export class ToolExecutorService {
   }
 
   private async getDefaultTruckAndDriver(companyId: string, user: any): Promise<any> {
-    const driver = await this.resolveDriver(companyId, user, undefined, user.role === 'chofer' ? 'yo' : undefined);
+    const driver = await this.resolveDriver(companyId, user, undefined, getScopedRole(user) === 'chofer' ? 'yo' : undefined);
     const truck = await this.resolveTruck(companyId);
     return {
       driverId: driver?.item?.id || null,
