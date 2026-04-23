@@ -2444,14 +2444,14 @@ export class FreightsService {
       throw new ForbiddenException('Solo la planta puede aprobar fletes de productores');
     }
 
-    const allIds = await this.resolveAllCompanyIds(user);
+    const activeCompanyId = user.companyId || (user as any).activeCompanyId || null;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const freight = await tx.freight.findUnique({ where: { id: freightId } });
       if (!freight) throw new NotFoundException('Flete no encontrado');
       if (!freight.needsPlantApproval) throw new BadRequestException('Este flete no requiere aprobación de planta');
       if (freight.plantApprovedAt) throw new BadRequestException('Este flete ya fue aprobado');
-      if (!freight.destCompanyId || !allIds.includes(freight.destCompanyId)) {
+      if (!freight.destCompanyId || freight.destCompanyId !== activeCompanyId) {
         throw new ForbiddenException('Solo la planta destino puede aprobar este flete');
       }
 
