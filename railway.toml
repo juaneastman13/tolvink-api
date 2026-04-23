@@ -1,2 +1,5 @@
 [build]
 noCache = true
+
+[deploy]
+preDeployCommand = "npx prisma migrate deploy"
