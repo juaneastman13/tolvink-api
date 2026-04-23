@@ -7,7 +7,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { AgentService } from '../ai/agent.service';
-import { GeminiClient, GeminiMessage } from '../ai/core/gemini.client';
+import { GeminiClient, GeminiMessage, GeminiResponse } from '../ai/core/gemini.client';
 import { SseService } from '../sse/sse.service';
 import OpenAI from 'openai';
 import { OcrService } from '../ocr/ocr.service';
@@ -387,7 +387,25 @@ export class WebChatService {
 
     const started = Date.now();
     this.logger.log(`Mechanic chat start: user=${dbUser.id} text="${text.slice(0, 50)}"`);
-    const response = await this.gemini.sendMessage({ system, messages, tools: [] });
+
+    let response: GeminiResponse;
+    try {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini timeout after 30s')), 30_000),
+      );
+      response = await Promise.race([
+        this.gemini.sendMessage({ system, messages, tools: [] }),
+        timeout,
+      ]);
+    } catch (err) {
+      this.logger.error(`Mechanic chat error: user=${dbUser.id} ${Date.now() - started}ms — ${err.message}`);
+      this.sse.emitToUser(dbUser.id, 'ai:response', {
+        text: 'No pude procesar la consulta. Intentá de nuevo en unos momentos.',
+        error: true,
+      });
+      return;
+    }
+
     this.logger.log(`Mechanic chat done: user=${dbUser.id} ${Date.now() - started}ms`);
 
     const modelMessage: GeminiMessage = {

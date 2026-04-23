@@ -34,9 +34,9 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
         this.logger.warn(`Unsupported AI_PROVIDER=${this.provider}; falling back to Gemini because GEMINI_API_KEY is configured`);
       }
       this.client = new GoogleGenAI({ apiKey });
-      this.logger.log(`Gemini client initialized (model: ${this.model})`);
+      this.logger.log(`Gemini client initialized (model: ${this.model}, key: ${apiKey.slice(0, 8)}...)`);
     } else {
-      this.logger.warn('GEMINI_API_KEY not set — AI disabled');
+      this.logger.error('GEMINI_API_KEY not set — Mechanic module will be unavailable');
     }
   }
 
