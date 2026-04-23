@@ -206,6 +206,7 @@ model Company {
   stockLocations         StockLocation[]
   stockMovements         StockMovement[]
   stockBalances          StockBalance[]
+  companyProducts        CompanyProduct[]
 
   @@map("companies")
 }
@@ -268,6 +269,7 @@ model User {
   truckMovementsAsDrv        TruckMovement[]           @relation("TruckMovDriver")
   stockMovementsCreated      StockMovement[]           @relation("StockMovementCreatedBy")
   stockMovementsReverted     StockMovement[]           @relation("StockMovementRevertedBy")
+  companyProductsCreated     CompanyProduct[]          @relation("ProductCreatedBy")
 
   @@index([companyId])
   @@index([activeCompanyId])
@@ -885,16 +887,20 @@ model Freight {
 // ======================== FREIGHT ITEMS ==============================
 
 model FreightItem {
-  id        String   @id @default(uuid())
-  freightId String   @map("freight_id")
-  grain     String   @db.VarChar(50)
-  tons      Decimal?  @db.Decimal(10, 2)
-  notes     String?
-  createdAt DateTime @default(now()) @map("created_at")
+  id               String   @id @default(uuid())
+  freightId        String   @map("freight_id")
+  // grain = product name snapshot — always preserved for display even if catalog product is renamed/deleted
+  grain            String   @db.VarChar(100)
+  companyProductId String?  @map("company_product_id") // nullable FK — set when product chosen from catalog
+  tons             Decimal? @db.Decimal(10, 2)
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  freight Freight @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  freight        Freight         @relation(fields: [freightId], references: [id], onDelete: Cascade)
+  companyProduct CompanyProduct? @relation(fields: [companyProductId], references: [id], onDelete: SetNull)
 
   @@index([freightId])
+  @@index([companyProductId])
   @@map("freight_items")
 }
 
@@ -1715,3 +1721,28 @@ model VerifiedPart {
   @@map("verified_parts")
 }
 
+
+// ======================== COMPANY PRODUCT CATALOG ====================
+// Each company maintains its own list of products (grains, commodities, etc.)
+// Used in freight creation. Products cannot be hard-deleted if referenced by freights.
+
+model CompanyProduct {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  name        String   @db.VarChar(100)
+  code        String?  @db.VarChar(20)
+  defaultUnit String?  @map("default_unit") @db.VarChar(20)
+  isActive    Boolean  @default(true) @map("is_active")
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy   User?         @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  freightItems FreightItem[]
+
+  @@index([companyId])
+  @@index([companyId, isActive])
+  @@map("company_products")
+}

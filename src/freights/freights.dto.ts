@@ -12,9 +12,18 @@ class MaxJsonSize50KB implements ValidatorConstraintInterface {
 }
 
 export class FreightItemDto {
-  @ApiProperty({ enum: ['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'] })
-  @IsEnum(['Soja', 'Maíz', 'Trigo', 'Girasol', 'Sorgo', 'Cebada', 'Otros'])
+  // Previously strict enum — now accepts any string from the company's product catalog.
+  // Backward compatible: old enum values (Soja, Maíz, etc.) remain valid strings.
+  @ApiProperty({ description: 'Nombre del producto (libre o del catálogo de la empresa)' })
+  @IsString()
+  @IsNotEmpty({ message: 'El producto es obligatorio' })
+  @MaxLength(100, { message: 'Nombre de producto máximo 100 caracteres' })
   grain: string;
+
+  @ApiProperty({ required: false, description: 'ID del producto del catálogo de la empresa (nullable)' })
+  @IsOptional()
+  @IsUUID()
+  companyProductId?: string;
 
   @ApiProperty({ example: 30, description: 'Cantidad (toneladas por defecto)', required: false })
   @IsOptional()

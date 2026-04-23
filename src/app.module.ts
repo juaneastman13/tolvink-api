@@ -28,6 +28,7 @@ import { MachinesController, MachineTemplatesController, MachinesService } from 
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 import { StockModule } from './stock/stock.module';
+import { CompanyProductsController, CompanyProductsService } from './company-products/company-products.controller';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { StockModule } from './stock/stock.module';
     MachinesController,
     MaintenanceController,
     MechanicDashboardController,
+    CompanyProductsController,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -77,6 +79,7 @@ import { StockModule } from './stock/stock.module';
     CompanyAccessService,
     ConversationsService,
     AdminService,
+    CompanyProductsService,
   ],
 })
 export class AppModule {}

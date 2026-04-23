@@ -448,7 +448,10 @@ export class FreightsService {
           isMultiTruck: Math.max(1, dto.truckCount || 1) > 1,
           items: {
             create: dto.items.map((i) => ({
+              // grain = snapshot: always stored for display, even if catalog product is later renamed/deleted
               grain: i.grain,
+              // companyProductId: nullable FK — set when product selected from catalog
+              companyProductId: i.companyProductId || null,
               tons: i.tons,
               notes: i.notes,
             })),
