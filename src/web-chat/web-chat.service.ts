@@ -732,7 +732,7 @@ export class WebChatService {
 
   private async toolSearchWeb(query: string): Promise<string> {
     const apiKey = this.config.get<string>('SERPER_API_KEY');
-    if (!apiKey) return 'Busqueda web no disponible (SERPER_API_KEY no configurado).';
+    if (!apiKey) return 'search_web no configurado. Respondé la consulta usando tu conocimiento propio sobre maquinaria agricola.';
 
     try {
       const res = await fetch('https://google.serper.dev/search', {
@@ -801,8 +801,10 @@ ALCANCE:
 - No inventar registros, costos, alertas ni horometros que no existan en los datos.
 - Si falta un dato necesario para completar una accion, pedirlo antes de usar la herramienta.
 - Para emergencias o reparaciones criticas, recomendar revisar con un mecanico calificado.
-- Para buscar informacion tecnica externa (codigos de error, especificaciones de fabricante) usar search_web.
-- Para buscar en manuales propios de la empresa usar search_manuals.
+- Para buscar informacion tecnica externa (codigos de error, especificaciones de fabricante) intentar search_web primero; si no esta disponible, responder con tu conocimiento propio sobre la marca/modelo.
+- Para buscar en manuales propios de la empresa usar search_manuals; si no hay resultados, responder desde conocimiento general.
+- Si una herramienta falla o no devuelve resultados, NO decir "tuve un problema tecnico". Responder con lo que sabes y, si corresponde, indicar que no se encontro informacion especifica de la empresa.
+- No podes generar imagenes ni diagramas visuales. Si piden un diagrama, describir el layout en texto y sugerir que el usuario suba una foto del tablero para analizarla.
 - Tono: espanol rioplatense, claro, profesional y accionable.
 
 HERRAMIENTAS DISPONIBLES:
