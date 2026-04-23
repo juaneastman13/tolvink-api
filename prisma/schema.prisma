@@ -1651,6 +1651,22 @@ model MaintenanceAlert {
   @@map("maintenance_alerts")
 }
 
+model MachineManual {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  machineId   String?  @map("machine_id")
+  title       String   @db.VarChar(200)
+  content     String   @db.Text
+  keywords    String?  @db.Text
+  fileUrl     String?  @map("file_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([companyId])
+  @@index([machineId])
+  @@map("machine_manuals")
+}
+
 model DiagnosticSession {
   id              String    @id @default(uuid())
   machineId       String    @map("machine_id")
