@@ -4,12 +4,13 @@
 
 import { Module, forwardRef } from '@nestjs/common';
 import { FreightsModule } from '../freights/freights.module';
+import { SharedLinksModule } from '../shared-links/shared-links.module';
 import { AgentService } from './agent.service';
 import { GeminiClient } from './core/gemini.client';
 import { ToolExecutorService } from './tools/tool-executor';
 
 @Module({
-  imports: [forwardRef(() => FreightsModule)],
+  imports: [forwardRef(() => FreightsModule), SharedLinksModule],
   providers: [
     AgentService,
     GeminiClient,

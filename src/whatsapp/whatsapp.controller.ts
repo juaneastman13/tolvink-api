@@ -413,8 +413,118 @@ export class WhatsAppController implements OnModuleDestroy {
     return {
       token,
       slug,
-      url: `${frontendUrl}/ubicacion/${slug}`,
+      url: `${frontendUrl}/api/whatsapp/ubicacion/${slug}`,
     };
+  }
+
+  @Get('ubicacion/:slug')
+  @SkipThrottle()
+  async locationPickerPage(@Param('slug') slug: string, @Res() res: Response) {
+    if (!slug || !/^[a-z0-9-]{3,30}$/.test(slug)) {
+      res.status(400).send('Enlace invalido');
+      return;
+    }
+    const apiBase = '/api/whatsapp';
+    res.setHeader('content-type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tolvink - Ubicacion</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; color: #17211b; background: #f6f7f4; }
+    main { max-width: 720px; margin: 0 auto; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header { padding: 18px 16px 10px; }
+    h1 { margin: 0; font-size: 22px; }
+    p { margin: 8px 0 0; color: #536057; }
+    #map { height: 52vh; min-height: 360px; background: #dfe6dd; border-top: 1px solid #cbd5c8; border-bottom: 1px solid #cbd5c8; }
+    form { padding: 14px 16px 18px; display: grid; gap: 10px; background: #fff; }
+    label { font-size: 13px; color: #536057; }
+    input { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #c9d2c7; border-radius: 6px; font-size: 16px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button { border: 0; border-radius: 6px; padding: 13px 14px; font-size: 16px; font-weight: 700; background: #246b45; color: #fff; }
+    button.secondary { background: #e7ece5; color: #17211b; }
+    #status { min-height: 22px; font-size: 14px; color: #536057; }
+    .leaflet-container { font-family: Arial, sans-serif; }
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Indicar ubicacion</h1>
+      <p>Mové el pin o usá tu ubicación actual. Después guardá y volvé a WhatsApp.</p>
+    </header>
+    <div id="map"></div>
+    <form id="form">
+      <div>
+        <label for="name">Nombre visible</label>
+        <input id="name" maxlength="255" placeholder="Ej: Campo Ruta 3 km 245" />
+      </div>
+      <div class="row">
+        <div>
+          <label for="lat">Latitud</label>
+          <input id="lat" inputmode="decimal" required />
+        </div>
+        <div>
+          <label for="lng">Longitud</label>
+          <input id="lng" inputmode="decimal" required />
+        </div>
+      </div>
+      <button type="button" class="secondary" id="gps">Usar mi ubicacion actual</button>
+      <button type="submit" id="save">Guardar ubicacion</button>
+      <div id="status"></div>
+    </form>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const slug = ${JSON.stringify(slug)};
+    const statusEl = document.getElementById('status');
+    const latEl = document.getElementById('lat');
+    const lngEl = document.getElementById('lng');
+    const nameEl = document.getElementById('name');
+    let lat = -32.5228, lng = -55.7658;
+    const map = L.map('map').setView([lat, lng], 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    const marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+    function setPoint(nextLat, nextLng, zoom) {
+      lat = Number(nextLat); lng = Number(nextLng);
+      latEl.value = lat.toFixed(6); lngEl.value = lng.toFixed(6);
+      marker.setLatLng([lat, lng]);
+      if (zoom) map.setView([lat, lng], zoom);
+    }
+    setPoint(lat, lng);
+    marker.on('dragend', () => { const p = marker.getLatLng(); setPoint(p.lat, p.lng); });
+    map.on('click', e => setPoint(e.latlng.lat, e.latlng.lng));
+    latEl.addEventListener('change', () => setPoint(latEl.value, lngEl.value));
+    lngEl.addEventListener('change', () => setPoint(latEl.value, lngEl.value));
+    document.getElementById('gps').addEventListener('click', () => {
+      if (!navigator.geolocation) { statusEl.textContent = 'Tu navegador no permite geolocalizacion.'; return; }
+      statusEl.textContent = 'Buscando ubicacion...';
+      navigator.geolocation.getCurrentPosition(
+        pos => { setPoint(pos.coords.latitude, pos.coords.longitude, 16); statusEl.textContent = 'Ubicacion actual cargada.'; },
+        () => { statusEl.textContent = 'No se pudo obtener tu ubicacion. Mové el pin manualmente.'; },
+        { enableHighAccuracy: true, timeout: 12000 }
+      );
+    });
+    document.getElementById('form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const payload = { slug, lat: Number(latEl.value), lng: Number(lngEl.value), name: nameEl.value.trim() };
+      if (!Number.isFinite(payload.lat) || !Number.isFinite(payload.lng)) { statusEl.textContent = 'Coordenadas invalidas.'; return; }
+      statusEl.textContent = 'Guardando...';
+      const resp = await fetch('${apiBase}/save-location-by-slug', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) { statusEl.textContent = 'No se pudo guardar. El enlace puede estar expirado.'; return; }
+      statusEl.textContent = 'Ubicacion guardada. Ya podés volver a WhatsApp.';
+      document.getElementById('save').disabled = true;
+    });
+  </script>
+</body>
+</html>`);
   }
 
   /**
@@ -461,10 +571,12 @@ export class WhatsAppController implements OnModuleDestroy {
 
     // Atomic: consume token + save location in one UPDATE.
     // The WHERE clause ensures only one concurrent request can succeed.
+    const locationPurpose = state.locationToken?.purpose || 'general';
     const updated = await this.prisma.$queryRaw<any[]>`
       UPDATE whatsapp_sessions
       SET flow_state = flow_state::jsonb || ${JSON.stringify({
-        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '' },
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: locationPurpose },
+        lastLocationPurpose: locationPurpose,
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()
@@ -530,10 +642,12 @@ export class WhatsAppController implements OnModuleDestroy {
     }
 
     // Atomic: consume slug + save location in one UPDATE.
+    const locationPurpose = state.locationToken?.purpose || 'general';
     const updated = await this.prisma.$queryRaw<any[]>`
       UPDATE whatsapp_sessions
       SET flow_state = flow_state::jsonb || ${JSON.stringify({
-        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '' },
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: locationPurpose },
+        lastLocationPurpose: locationPurpose,
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()

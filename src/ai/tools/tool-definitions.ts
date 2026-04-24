@@ -94,16 +94,228 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
         origin: { type: 'string', description: 'Nombre del origen o texto libre si no hay lote/campo exacto' },
         fieldId: { type: 'string', description: 'UUID del campo de origen si ya fue resuelto' },
         lotId: { type: 'string', description: 'UUID del lote de origen si ya fue resuelto' },
+        originLotId: { type: 'string', description: 'UUID del lote de origen si ya fue resuelto' },
+        customOriginName: { type: 'string', description: 'Nombre de origen personalizado' },
+        overrideOriginLat: { type: 'number', description: 'Latitud de origen marcada en mapa' },
+        overrideOriginLng: { type: 'number', description: 'Longitud de origen marcada en mapa' },
         destination: { type: 'string', description: 'Nombre del destino o texto libre' },
         destPlantId: { type: 'string', description: 'UUID de planta registrada destino' },
         tolvinkPlantId: { type: 'string', description: 'UUID de planta Tolvink del directorio maestro' },
+        destCompanyId: { type: 'string', description: 'UUID de empresa destino si ya fue resuelta' },
+        customDestName: { type: 'string', description: 'Nombre de destino personalizado' },
+        customDestLat: { type: 'number', description: 'Latitud de destino personalizado' },
+        customDestLng: { type: 'number', description: 'Longitud de destino personalizado' },
+        overrideDestLat: { type: 'number', description: 'Latitud de destino ajustada en mapa' },
+        overrideDestLng: { type: 'number', description: 'Longitud de destino ajustada en mapa' },
         grain: { type: 'string', description: 'Tipo de grano o cultivo' },
         weightKg: { type: 'number', description: 'Peso en kg. 30 toneladas = 30000' },
         loadDate: { type: 'string', description: 'Fecha de carga (YYYY-MM-DD). Opcional: si falta, se usa hoy.' },
         loadTime: { type: 'string', description: 'Hora de carga (HH:MM). Opcional: si falta, se usa la hora actual redondeada.' },
+        truckCount: { type: 'number', description: 'Cantidad total de camiones requeridos' },
+        useOwnFleet: { type: 'boolean', description: 'true=flota propia, false=delegar a planta/terceros' },
+        truckId: { type: 'string', description: 'UUID de camion propio si se asigna al crear' },
+        driverId: { type: 'string', description: 'UUID de chofer propio si se asigna al crear' },
+        producerCompanyId: { type: 'string', description: 'UUID de empresa productora cuando la planta crea en nombre de productor' },
+        originFromLastLocation: { type: 'boolean', description: 'Usar la ultima ubicacion compartida/guardada como origen' },
+        destinationFromLastLocation: { type: 'boolean', description: 'Usar la ultima ubicacion compartida/guardada como destino' },
         notes: { type: 'string', description: 'Notas adicionales' },
       },
       required: ['grain', 'weightKg'],
+    },
+  },
+
+  {
+    name: 'request_location_picker',
+    description: 'Genera un link a una pagina de mapa para que el usuario indique una ubicacion precisa. Usar siempre que el usuario quiera indicar o avisar una ubicacion y no haya compartido una ubicacion por WhatsApp previamente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        purpose: { type: 'string', enum: ['origin', 'destination', 'current', 'general'], description: 'Para que se usara la ubicacion: origen, destino o ubicacion actual/aviso' },
+      },
+      required: ['purpose'],
+    },
+  },
+
+  {
+    name: 'update_freight',
+    description: 'Edita datos operativos de un flete existente: fecha/hora, notas, cantidad de camiones, flota propia, destino y camion/chofer propio. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        loadDate: { type: 'string', description: 'Nueva fecha de carga (YYYY-MM-DD)' },
+        loadTime: { type: 'string', description: 'Nueva hora de carga (HH:MM)' },
+        notes: { type: 'string', description: 'Notas nuevas' },
+        truckCount: { type: 'number', description: 'Cantidad de camiones necesarios' },
+        useOwnFleet: { type: 'boolean', description: 'true=flota propia, false=delegar' },
+        destPlantId: { type: 'string', description: 'UUID de planta destino' },
+        destination: { type: 'string', description: 'Nombre destino personalizado' },
+        customDestName: { type: 'string', description: 'Nombre destino personalizado' },
+        customDestLat: { type: 'number', description: 'Latitud destino personalizado' },
+        customDestLng: { type: 'number', description: 'Longitud destino personalizado' },
+        destinationFromLastLocation: { type: 'boolean', description: 'Usar la ultima ubicacion compartida/guardada como destino' },
+        truckId: { type: 'string', description: 'UUID camion propio' },
+        driverId: { type: 'string', description: 'UUID chofer propio' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'generate_tracking_link',
+    description: 'Genera o reutiliza un link compartible publico de seguimiento/detalle para un flete.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        targetCompanyId: { type: 'string', description: 'Empresa destino del link. Opcional; por defecto usa la empresa activa.' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'list_freight_assignments',
+    description: 'Lista viajes/camiones de un flete multi-camion: assignmentId, numero de viaje, camion, chofer y estado.',
+    input_schema: {
+      type: 'object',
+      properties: { code: { type: 'string', description: 'Codigo del flete' } },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'assign_multi_trucks',
+    description: 'Asigna uno o varios camiones a un flete. Para multiples camiones usar trucks; para uno solo tambien sirven campos directos. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        trucks: { type: 'array', description: 'Lista de camiones con transportCompanyId, truckId, driverId, plate, tons, isExternal, externalCompanyName, externalDriverName' },
+        transportCompanyId: { type: 'string', description: 'UUID empresa transportista' },
+        truckId: { type: 'string', description: 'UUID camion' },
+        driverId: { type: 'string', description: 'UUID chofer' },
+        plate: { type: 'string', description: 'Matricula si camion externo o para referencia' },
+        weightKg: { type: 'number', description: 'Peso de este camion en kg' },
+        tons: { type: 'number', description: 'Toneladas de este camion' },
+        isExternal: { type: 'boolean', description: 'Camion externo no registrado' },
+        externalCompanyName: { type: 'string', description: 'Empresa externa' },
+        externalDriverName: { type: 'string', description: 'Chofer externo' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'add_truck_to_freight',
+    description: 'Agrega un camion/viaje adicional a un flete. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        transportCompanyId: { type: 'string', description: 'UUID empresa transportista' },
+        truckId: { type: 'string', description: 'UUID camion' },
+        driverId: { type: 'string', description: 'UUID chofer' },
+        plate: { type: 'string', description: 'Matricula camion externo' },
+        weightKg: { type: 'number', description: 'Peso en kg' },
+        tons: { type: 'number', description: 'Toneladas' },
+        isExternal: { type: 'boolean', description: 'Camion externo' },
+        externalCompanyName: { type: 'string', description: 'Empresa externa' },
+        externalDriverName: { type: 'string', description: 'Chofer externo' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'update_freight_assignment',
+    description: 'Edita un viaje/camion asignado por assignmentId o numero de viaje. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje' },
+        transportCompanyId: { type: 'string', description: 'UUID empresa transportista' },
+        truckId: { type: 'string', description: 'UUID camion' },
+        driverId: { type: 'string', description: 'UUID chofer' },
+        plate: { type: 'string', description: 'Matricula camion externo' },
+        weightKg: { type: 'number', description: 'Peso en kg' },
+        tons: { type: 'number', description: 'Toneladas' },
+        externalCompanyName: { type: 'string', description: 'Empresa externa' },
+        externalDriverName: { type: 'string', description: 'Chofer externo' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'cancel_freight_assignment',
+    description: 'Cancela un viaje/camion asignado por assignmentId o numero de viaje. Requiere motivo y confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje' },
+        reason: { type: 'string', description: 'Motivo de cancelacion' },
+      },
+      required: ['code', 'reason'],
+    },
+  },
+
+  {
+    name: 'respond_trip',
+    description: 'Acepta o rechaza un viaje especifico de un flete multi-camion. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje' },
+        action: { type: 'string', enum: ['accepted', 'rejected'], description: 'Accion sobre el viaje' },
+        reason: { type: 'string', description: 'Motivo si rechaza' },
+        truckId: { type: 'string', description: 'UUID camion si acepta' },
+        driverId: { type: 'string', description: 'UUID chofer si acepta' },
+      },
+      required: ['code', 'action'],
+    },
+  },
+
+  {
+    name: 'list_pending_freight_changes',
+    description: 'Lista cambios pendientes de aprobacion/rechazo para un flete.',
+    input_schema: {
+      type: 'object',
+      properties: { code: { type: 'string', description: 'Codigo del flete' } },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'approve_pending_freight_change',
+    description: 'Aprueba un cambio pendiente de un flete. Si hay un unico cambio pendiente, puede omitirse changeId. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        changeId: { type: 'string', description: 'UUID del cambio pendiente' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
+    name: 'reject_pending_freight_change',
+    description: 'Rechaza un cambio pendiente de un flete. Si hay un unico cambio pendiente, puede omitirse changeId. Pide confirmacion.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        changeId: { type: 'string', description: 'UUID del cambio pendiente' },
+        reason: { type: 'string', description: 'Motivo del rechazo' },
+      },
+      required: ['code'],
     },
   },
 
@@ -184,6 +396,8 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
       type: 'object',
       properties: {
         code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion si es multi-camion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje si es multi-camion' },
       },
       required: [],
     },
@@ -196,6 +410,8 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
       type: 'object',
       properties: {
         code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion si es multi-camion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje si es multi-camion' },
         weightKg: { type: 'number', description: 'Peso cargado en kg, opcional' },
       },
       required: [],
@@ -221,6 +437,8 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
       type: 'object',
       properties: {
         code: { type: 'string', description: 'Codigo del flete (opcional si solo hay uno elegible)' },
+        assignmentId: { type: 'string', description: 'UUID del viaje/asignacion si es multi-camion' },
+        tripNumber: { type: 'number', description: 'Numero de viaje si es multi-camion' },
         destinationWeightKg: { type: 'number', description: 'Peso neto en destino en kg, opcional' },
       },
       required: [],
@@ -237,6 +455,8 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
       properties: {
         origin: { type: 'string', description: 'Nombre del origen (campo, lote o texto libre)' },
         destination: { type: 'string', description: 'Nombre del destino (planta o texto libre)' },
+        originFromLastLocation: { type: 'boolean', description: 'Usar la ultima ubicacion compartida/guardada como origen' },
+        destinationFromLastLocation: { type: 'boolean', description: 'Usar la ultima ubicacion compartida/guardada como destino' },
         grain: { type: 'string', description: 'Tipo de grano (soja, maiz, trigo, etc.)' },
         weightKg: { type: 'number', description: 'Peso en kilogramos (30 toneladas = 30000)' },
         fieldId: { type: 'string', description: 'UUID del campo de origen (de search_fields)' },

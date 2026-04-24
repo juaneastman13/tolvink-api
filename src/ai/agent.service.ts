@@ -124,7 +124,11 @@ export class AgentService implements OnModuleDestroy {
       // Add document indicator if there's a pending photo/file
       const pendingDoc = state.pendingDocument;
       const docIndicator = pendingDoc?.url ? `\n[ARCHIVO PENDIENTE: "${pendingDoc.name}" listo para adjuntar con attach_document]` : '';
-      const userText = userMessage.slice(0, 5000) + docIndicator;
+      const savedLocation = state.lastLocation;
+      const locIndicator = savedLocation?.lat != null && savedLocation?.lng != null
+        ? `\n[UBICACION DISPONIBLE: usar con originFromLastLocation/destinationFromLastLocation si el usuario confirma que corresponde. Proposito sugerido: ${state.lastLocationPurpose || savedLocation.purpose || 'general'}. Nombre: ${savedLocation.name || savedLocation.address || 'ubicacion'}]`
+        : '';
+      const userText = userMessage.slice(0, 5000) + docIndicator + locIndicator;
 
       // Build messages: sanitized history + new user message
       let geminiMessages: GeminiMessage[] = [
@@ -408,6 +412,7 @@ export class AgentService implements OnModuleDestroy {
     if (parsed.status === 'canceled' && parsed.code) return `Listo.\n📋 ${parsed.code}\nFlete cancelado.`;
     if (parsed.status === 'arrival_registered' && parsed.code) return `Listo.\n📋 ${parsed.code}\nLlegada registrada.`;
     if (parsed.status === 'attached' && parsed.documentName) return `Documento adjuntado: ${parsed.documentName}`;
+    if (parsed.status === 'location_picker' && parsed.url) return parsed.message || `Indica la ubicacion aca: ${parsed.url}`;
     if (parsed.status === 'already_accepted' && parsed.message) return parsed.message;
     if (Array.isArray(parsed.freights)) {
       const lines = parsed.freights.slice(0, 5).map((f: any) => `📋 ${f.code} · ${f.status} · ${f.origin} → ${f.dest}`);

@@ -652,12 +652,15 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }
 
     const state = (session.flowState as any) || {};
+    const locationPurpose = state.locationToken?.purpose || 'general';
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
         flowState: {
           ...state,
-          lastLocation: { lat: latitude, lng: longitude, name: name || '', address: address || '' },
+          lastLocation: { lat: latitude, lng: longitude, name: name || '', address: address || '', purpose: locationPurpose },
+          lastLocationPurpose: locationPurpose,
+          locationToken: null,
         },
       },
     });

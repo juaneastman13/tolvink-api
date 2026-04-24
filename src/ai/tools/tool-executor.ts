@@ -6,6 +6,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
+import { SharedLinksService } from '../../shared-links/shared-links.module';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { hydrateTolvinkPlantLocality } from '../../common/tolvink-plant-locality';
@@ -16,20 +17,21 @@ import { AiProfile, resolveAiProfile } from '../core/ai-profile';
 export const READ_ONLY_TOOLS = new Set([
   'list_freights', 'get_freight_detail', 'get_dashboard',
   'search_plants', 'search_fields', 'search_lots',
+  'list_freight_assignments', 'list_pending_freight_changes',
 ]);
 
 export const QUERY_ONLY_TOOLS = new Set(READ_ONLY_TOOLS);
 
 export const TOOLS_BY_PROFILE: Record<AiProfile, Set<string>> = {
-  producer_manager: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'create_freight_request', 'cancel_freight', 'confirm_action', 'attach_document']),
-  producer_operator: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'create_freight_request', 'confirm_action', 'attach_document']),
-  producer_driver: new Set(['list_freights', 'get_freight_detail', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'attach_document', 'confirm_action']),
-  transporter_manager: new Set(['list_freights', 'get_freight_detail', 'accept_freight_assignment', 'reject_freight_assignment', 'assign_driver_and_truck', 'confirm_action', 'attach_document']),
-  transporter_driver: new Set(['list_freights', 'get_freight_detail', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'attach_document', 'confirm_action']),
-  plant_manager: new Set(['list_freights', 'get_freight_detail', 'approve_freight_request', 'assign_transport_company', 'cancel_freight', 'confirm_action', 'attach_document']),
-  plant_operator: new Set(['list_freights', 'get_freight_detail', 'approve_freight_request', 'assign_transport_company', 'confirm_action', 'attach_document']),
-  plant_driver: new Set(['list_freights', 'get_freight_detail', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'attach_document', 'confirm_action']),
-  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'cancel_freight', 'attach_document']),
+  producer_manager: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  producer_operator: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'generate_tracking_link', 'list_freight_assignments', 'list_pending_freight_changes', 'confirm_action', 'attach_document']),
+  producer_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  transporter_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'list_freight_assignments', 'accept_freight_assignment', 'reject_freight_assignment', 'assign_driver_and_truck', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'generate_tracking_link', 'confirm_action', 'attach_document']),
+  transporter_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  plant_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  plant_operator: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  plant_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'cancel_freight', 'attach_document']),
 };
 
 type PendingActionRecord = {
@@ -56,6 +58,7 @@ export class ToolExecutorService {
   constructor(
     private prisma: PrismaService,
     private freights: FreightsService,
+    private sharedLinks: SharedLinksService,
   ) {}
 
   cleanupPendingActions(): void {
@@ -104,7 +107,19 @@ export class ToolExecutorService {
         case 'search_plants': return await this.handleSearchPlants(input, scopedUser);
         case 'search_fields': return await this.handleSearchFields(input, scopedUser);
         case 'search_lots': return await this.handleSearchLots(input, scopedUser);
+        case 'request_location_picker': return await this.handleRequestLocationPicker(input, scopedUser, session);
         case 'create_freight_request': return await this.handleCreateFreightRequest(input, scopedUser, session);
+        case 'update_freight': return await this.handleUpdateFreight(input, scopedUser, session);
+        case 'generate_tracking_link': return await this.handleGenerateTrackingLink(input, scopedUser);
+        case 'list_freight_assignments': return await this.handleListFreightAssignments(input, scopedUser);
+        case 'assign_multi_trucks': return await this.handleAssignMultiTrucks(input, scopedUser, session);
+        case 'add_truck_to_freight': return await this.handleAddTruckToFreight(input, scopedUser, session);
+        case 'update_freight_assignment': return await this.handleUpdateFreightAssignment(input, scopedUser, session);
+        case 'cancel_freight_assignment': return await this.handleCancelFreightAssignment(input, scopedUser, session);
+        case 'respond_trip': return await this.handleRespondTrip(input, scopedUser, session);
+        case 'list_pending_freight_changes': return await this.handleListPendingFreightChanges(input, scopedUser);
+        case 'approve_pending_freight_change': return await this.handleResolvePendingFreightChange(input, scopedUser, session, 'approve_pending_freight_change');
+        case 'reject_pending_freight_change': return await this.handleResolvePendingFreightChange(input, scopedUser, session, 'reject_pending_freight_change');
         case 'approve_freight_request': return await this.handleApproveFreightRequest(input, scopedUser, session);
         case 'assign_transport_company': return await this.handleAssignTransportCompany(input, scopedUser, session);
         case 'accept_freight_assignment': return await this.handleAcceptFreightAssignment(input, scopedUser, session);
@@ -317,15 +332,60 @@ export class ToolExecutorService {
 
   // ======================== FLOW CORE ========================
 
+  private async handleRequestLocationPicker(input: any, user: any, session: any): Promise<string> {
+    if (!session?.id) return JSON.stringify({ error: 'No hay sesion activa para generar el link de ubicacion.' });
+    const purpose = ['origin', 'destination', 'current'].includes(input.purpose) ? input.purpose : 'general';
+    const token = randomUUID();
+    const slugLabel = purpose === 'origin' ? 'origen' : purpose === 'destination' ? 'destino' : 'ubicacion';
+    const slug = `${slugLabel}-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const current = await this.prisma.whatsAppSession.findUnique({ where: { id: session.id }, select: { flowState: true } });
+    const state = (current?.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...state,
+          locationToken: {
+            token,
+            slug,
+            purpose,
+            createdAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+    const url = `${APP_URL}/api/whatsapp/ubicacion/${slug}`;
+    const label = purpose === 'origin' ? 'origen' : purpose === 'destination' ? 'destino' : 'ubicacion';
+    return JSON.stringify({
+      status: 'location_picker',
+      purpose,
+      url,
+      message: `Indica la ${label} en este mapa: ${url}`,
+    });
+  }
+
   private async handleCreateFreightRequest(input: any, user: any, session: any): Promise<string> {
     if (!input.grain) return JSON.stringify({ error: 'Falta el grano.' });
     if (!input.weightKg || Number(input.weightKg) <= 0) return JSON.stringify({ error: 'Falta el peso del flete.' });
-    if (!input.origin && !input.fieldId && !input.lotId) return JSON.stringify({ error: 'Necesito el origen o un campo/lote.' });
-    if (!input.destination && !input.destPlantId && !input.tolvinkPlantId) return JSON.stringify({ error: 'Necesito el destino o una planta.' });
+    const savedLocation = await this.getSavedLocation(session);
+    const useSavedAsOrigin = input.originFromLastLocation === true || (savedLocation?.purpose === 'origin' && input.originFromLastLocation !== false);
+    const useSavedAsDestination = input.destinationFromLastLocation === true || (savedLocation?.purpose === 'destination' && input.destinationFromLastLocation !== false);
+    const originLotId = input.originLotId || input.lotId;
+    const originName = input.customOriginName || input.origin || (useSavedAsOrigin ? savedLocation?.name : undefined);
+    const destinationName = input.customDestName || input.destination || (useSavedAsDestination ? savedLocation?.name : undefined);
+    const originLat = useSavedAsOrigin ? savedLocation?.lat : input.overrideOriginLat;
+    const originLng = useSavedAsOrigin ? savedLocation?.lng : input.overrideOriginLng;
+    const destLat = useSavedAsDestination ? savedLocation?.lat : input.customDestLat;
+    const destLng = useSavedAsDestination ? savedLocation?.lng : input.customDestLng;
+    const overrideDestLat = input.overrideDestLat;
+    const overrideDestLng = input.overrideDestLng;
+    if (!originName && !input.fieldId && !originLotId && (originLat == null || originLng == null)) return JSON.stringify({ error: 'Necesito el origen, un campo/lote o coordenadas de origen.' });
+    if (!destinationName && !input.destPlantId && !input.tolvinkPlantId && !input.destCompanyId && ((destLat == null || destLng == null) && (overrideDestLat == null || overrideDestLng == null))) return JSON.stringify({ error: 'Necesito el destino, una planta/empresa o coordenadas de destino.' });
 
     const { loadDate, loadTime } = this.getDefaultSchedule(input.loadDate, input.loadTime);
     const grain = this.normalizeGrain(input.grain);
     const tons = this.kgToTons(input.weightKg);
+    const truckCount = input.truckCount ? Number(input.truckCount) : undefined;
     const summary = [
       'Solicitud de flete',
       '',
@@ -337,18 +397,30 @@ export class ToolExecutorService {
     ].join('\n');
 
     return this.stageAction(session.id, 'create_freight_request', {
-      origin: input.origin,
+      origin: originName,
       fieldId: input.fieldId,
-      lotId: input.lotId,
-      destination: input.destination,
+      originLotId,
+      destination: destinationName,
       destPlantId: input.destPlantId,
       tolvinkPlantId: input.tolvinkPlantId,
+      destCompanyId: input.destCompanyId,
       grain,
       weightKg: Number(input.weightKg),
       loadDate,
       loadTime,
       notes: input.notes,
       tons,
+      truckCount,
+      truckId: input.truckId,
+      driverId: input.driverId,
+      useOwnFleet: input.useOwnFleet,
+      producerCompanyId: input.producerCompanyId,
+      overrideOriginLat: originLat,
+      overrideOriginLng: originLng,
+      customDestLat: destLat,
+      customDestLng: destLng,
+      overrideDestLat,
+      overrideDestLng,
     }, summary, undefined, user.companyId);
   }
 
@@ -359,6 +431,154 @@ export class ToolExecutorService {
       freightId: freight.id,
       code: freight.code,
     }, this.buildFreightActionSummary('Aprobar flete', freight), undefined, user.companyId);
+  }
+
+  private async handleUpdateFreight(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const savedLocation = await this.getSavedLocation(session);
+    const useSavedAsDestination = input.destinationFromLastLocation === true || (savedLocation?.purpose === 'destination' && input.destinationFromLastLocation !== false);
+    const dto = this.pickDefined({
+      loadDate: input.loadDate,
+      loadTime: input.loadTime,
+      notes: input.notes,
+      truckCount: input.truckCount ? Number(input.truckCount) : undefined,
+      useOwnFleet: input.useOwnFleet,
+      destPlantId: input.destPlantId,
+      truckId: input.truckId,
+      driverId: input.driverId,
+      customDestName: input.customDestName || input.destination || (useSavedAsDestination ? savedLocation?.name : undefined),
+      customDestLat: useSavedAsDestination ? savedLocation?.lat : input.customDestLat,
+      customDestLng: useSavedAsDestination ? savedLocation?.lng : input.customDestLng,
+    });
+    if (Object.keys(dto).length === 0) return JSON.stringify({ error: 'Necesito al menos un dato para editar el flete.' });
+    return this.stageAction(session.id, 'update_freight', { freightId: freight.id, code: freight.code, dto }, `Editar flete ${freight.code}\n${this.describeObjectChanges(dto)}`, undefined, user.companyId);
+  }
+
+  private async handleGenerateTrackingLink(input: any, user: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const targetCompanyId = input.targetCompanyId || user.activeCompanyId || user.companyId || freight.originCompanyId || freight.producerCompanyId;
+    if (!targetCompanyId) return JSON.stringify({ error: 'No pude determinar la empresa destino del link.' });
+    const link = await this.sharedLinks.createLink({ linkType: 'FREIGHT', targetCompanyId, freightId: freight.id, createdVia: 'WHATSAPP' }, user);
+    return JSON.stringify({ status: link.isReused ? 'reused' : 'created', code: freight.code, url: `${APP_URL}/s/${link.token}`, expiresAt: link.expiresAt });
+  }
+
+  private async handleListFreightAssignments(input: any, user: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    return JSON.stringify({
+      code: freight.code,
+      truckCount: freight.truckCount || null,
+      assignedTruckCount: freight.assignedTruckCount || null,
+      assignments: (freight.assignments || []).map((a: any) => ({
+        assignmentId: a.id,
+        tripNumber: a.tripNumber,
+        status: a.status,
+        tripStatus: a.tripStatus,
+        transportCompanyId: a.transportCompanyId,
+        truckId: a.truckId,
+        driverId: a.driverId,
+        plate: a.plate,
+        driverName: a.driverName,
+        isExternal: a.isExternal,
+      })),
+    });
+  }
+
+  private async handleAssignMultiTrucks(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const trucks = this.buildTruckAssignments(input);
+    if (trucks.length === 0) return JSON.stringify({ error: 'Necesito al menos un camion, empresa transportista o camion externo para asignar.' });
+    return this.stageAction(session.id, 'assign_multi_trucks', { freightId: freight.id, code: freight.code, trucks }, `Asignar ${trucks.length} camion(es)\nFlete: ${freight.code}\n${this.describeTruckAssignments(trucks)}`, undefined, user.companyId);
+  }
+
+  private async handleAddTruckToFreight(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const trucks = this.buildTruckAssignments(input);
+    if (trucks.length === 0) return JSON.stringify({ error: 'Necesito los datos del camion a agregar.' });
+    return this.stageAction(session.id, 'add_truck_to_freight', { freightId: freight.id, code: freight.code, truck: trucks[0] }, `Agregar camion\nFlete: ${freight.code}\n${this.describeTruckAssignments([trucks[0]])}`, undefined, user.companyId);
+  }
+
+  private async handleUpdateFreightAssignment(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+    if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+    const dto = this.pickDefined({
+      transportCompanyId: input.transportCompanyId,
+      truckId: input.truckId,
+      driverId: input.driverId,
+      tons: input.weightKg ? this.kgToTons(input.weightKg) : input.tons,
+      plate: input.plate,
+      externalCompanyName: input.externalCompanyName,
+      externalDriverName: input.externalDriverName,
+    });
+    if (Object.keys(dto).length === 0) return JSON.stringify({ error: 'Necesito al menos un dato para actualizar el viaje.' });
+    return this.stageAction(session.id, 'update_freight_assignment', { freightId: freight.id, code: freight.code, assignmentId: assignment.id, dto }, `Editar viaje ${assignment.tripNumber || ''}\nFlete: ${freight.code}\n${this.describeObjectChanges(dto)}`, undefined, user.companyId);
+  }
+
+  private async handleCancelFreightAssignment(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    if (!input.reason?.trim()) return JSON.stringify({ error: 'Necesito el motivo de cancelacion del viaje.' });
+    const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+    if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+    return this.stageAction(session.id, 'cancel_freight_assignment', { freightId: freight.id, code: freight.code, assignmentId: assignment.id, reason: input.reason.trim() }, `Cancelar viaje ${assignment.tripNumber || ''}\nFlete: ${freight.code}\nMotivo: ${input.reason.trim()}`, undefined, user.companyId);
+  }
+
+  private async handleRespondTrip(input: any, user: any, session: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+    if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+    if (input.action === 'rejected' && !input.reason?.trim()) return JSON.stringify({ error: 'Para rechazar necesito el motivo.' });
+    return this.stageAction(session.id, 'respond_trip', {
+      freightId: freight.id,
+      code: freight.code,
+      assignmentId: assignment.id,
+      action: input.action === 'rejected' ? 'rejected' : 'accepted',
+      reason: input.reason,
+      truckId: input.truckId,
+      driverId: input.driverId,
+    }, `${input.action === 'rejected' ? 'Rechazar' : 'Aceptar'} viaje ${assignment.tripNumber || ''}\nFlete: ${freight.code}${input.reason ? `\nMotivo: ${input.reason}` : ''}`, undefined, user.companyId);
+  }
+
+  private async handleListPendingFreightChanges(input: any, user: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const changes = await this.prisma.freightPendingChange.findMany({
+      where: { freightId: freight.id, status: 'pending' as any },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+    return JSON.stringify({
+      code: freight.code,
+      total: changes.length,
+      changes: changes.map((c: any) => ({
+        changeId: c.id,
+        changeType: c.changeType,
+        fromValue: c.fromValue,
+        toValue: c.toValue,
+        requestedById: c.requestedById,
+        approverCompanyId: c.approverCompanyId,
+        createdAt: c.createdAt,
+      })),
+    });
+  }
+
+  private async handleResolvePendingFreightChange(input: any, user: any, session: any, tool: string): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    let changeId = input.changeId;
+    if (!changeId) {
+      const pending = await this.prisma.freightPendingChange.findMany({ where: { freightId: freight.id, status: 'pending' as any }, select: { id: true }, take: 2 });
+      if (pending.length !== 1) return JSON.stringify({ error: 'Indica el ID del cambio pendiente. Hay cero o varios cambios.' });
+      changeId = pending[0].id;
+    }
+    return this.stageAction(session.id, tool, { freightId: freight.id, code: freight.code, changeId, reason: input.reason }, `${tool === 'approve_pending_freight_change' ? 'Aprobar' : 'Rechazar'} cambio pendiente\nFlete: ${freight.code}\nCambio: ${changeId}${input.reason ? `\nMotivo: ${input.reason}` : ''}`, undefined, user.companyId);
   }
 
   private async handleAssignTransportCompany(input: any, user: any, session: any): Promise<string> {
@@ -443,6 +663,13 @@ export class ToolExecutorService {
   }
 
   private async handleStartFreightTrip(input: any, user: any, session: any): Promise<string> {
+    if (input.code && (input.assignmentId || input.tripNumber != null)) {
+      const freight = await this.resolveFreightByCode(input.code, user);
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+      const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+      if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+      return this.stageAction(session.id, 'start_freight_trip', { freightId: freight.id, assignmentId: assignment.id, code: freight.code }, `Iniciar viaje\nFlete: ${freight.code}\nViaje: ${assignment.tripNumber || assignment.id}`);
+    }
     const target = await this.resolveDriverTripTarget(user, input.code);
     if (!target) return JSON.stringify({ error: 'No encontre un viaje elegible para iniciar. Decime el codigo del flete.' });
     return this.stageAction(session.id, 'start_freight_trip', {
@@ -453,6 +680,18 @@ export class ToolExecutorService {
   }
 
   private async handleConfirmFreightLoaded(input: any, user: any, session: any): Promise<string> {
+    if (input.code && (input.assignmentId || input.tripNumber != null)) {
+      const freight = await this.resolveFreightByCode(input.code, user);
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+      const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+      if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+      return this.stageAction(session.id, 'confirm_freight_loaded', {
+        freightId: freight.id,
+        assignmentId: assignment.id,
+        code: freight.code,
+        loadedTons: input.weightKg ? this.kgToTons(input.weightKg) : undefined,
+      }, `Confirmar carga\nFlete: ${freight.code}\nViaje: ${assignment.tripNumber || assignment.id}${input.weightKg ? `\nPeso: ${this.formatWeightKg(input.weightKg)}` : ''}`);
+    }
     const target = await this.resolveDriverTripTarget(user, input.code);
     if (!target) return JSON.stringify({ error: 'No encontre un viaje elegible para confirmar carga. Decime el codigo del flete.' });
     return this.stageAction(session.id, 'confirm_freight_loaded', {
@@ -476,6 +715,18 @@ export class ToolExecutorService {
   }
 
   private async handleFinishFreight(input: any, user: any, session: any): Promise<string> {
+    if (input.code && (input.assignmentId || input.tripNumber != null)) {
+      const freight = await this.resolveFreightByCode(input.code, user);
+      if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+      const assignment = await this.resolveAnyAssignment(freight.id, input.assignmentId, input.tripNumber);
+      if (!assignment) return JSON.stringify({ error: 'No encontre ese viaje. Indica assignmentId o numero de viaje.' });
+      return this.stageAction(session.id, 'finish_freight', {
+        freightId: freight.id,
+        assignmentId: assignment.id,
+        code: freight.code,
+        destinationWeightKg: input.destinationWeightKg ? Number(input.destinationWeightKg) : undefined,
+      }, `Finalizar viaje\nFlete: ${freight.code}\nViaje: ${assignment.tripNumber || assignment.id}`);
+    }
     const target = await this.resolveDriverTripTarget(user, input.code);
     if (!target) return JSON.stringify({ error: 'No encontre un viaje elegible para finalizar. Decime el codigo del flete.' });
     return this.stageAction(session.id, 'finish_freight', {
@@ -489,6 +740,11 @@ export class ToolExecutorService {
   // ======================== AUTONOMOUS / DOCUMENTS ========================
 
   private async handlePrepareAutonomousFreight(input: any, user: any, session: any): Promise<string> {
+    const savedLocation = await this.getSavedLocation(session);
+    const useSavedAsOrigin = input.originFromLastLocation === true || (savedLocation?.purpose === 'origin' && input.originFromLastLocation !== false);
+    const useSavedAsDestination = input.destinationFromLastLocation === true || (savedLocation?.purpose === 'destination' && input.destinationFromLastLocation !== false);
+    const requestedOrigin = input.origin || (useSavedAsOrigin ? savedLocation?.name : undefined);
+    const requestedDestination = input.destination || (useSavedAsDestination ? savedLocation?.name : undefined);
     const activeFreight = await this.prisma.freight.findFirst({
       where: {
         requestedById: user.sub || user.id,
@@ -512,8 +768,8 @@ export class ToolExecutorService {
         currentOrigin: origin,
         currentDest: dest,
         newFreight: {
-          origin: input.origin,
-          destination: input.destination,
+          origin: requestedOrigin,
+          destination: requestedDestination,
           grain: input.grain,
           weightKg: input.weightKg,
           notes: input.notes,
@@ -525,14 +781,14 @@ export class ToolExecutorService {
         },
       }, `Tenes un flete activo:\n📋 ${activeFreight.code}\n🌾 ${grain}${tons ? ` · ${tons} tn` : ''}\n📍 ${origin} → ${dest}\n\nFinalizalo para crear uno nuevo`);
     }
-    if (!input.origin) return JSON.stringify({ error: 'Falta el origen.' });
-    if (!input.destination) return JSON.stringify({ error: 'Falta el destino.' });
+    if (!requestedOrigin) return JSON.stringify({ error: 'Falta el origen.' });
+    if (!requestedDestination) return JSON.stringify({ error: 'Falta el destino.' });
     if (!input.grain) return JSON.stringify({ error: 'Falta el grano.' });
     if (!input.weightKg || Number(input.weightKg) <= 0) return JSON.stringify({ error: 'Falta el peso.' });
     const { truckId, truckPlate } = await this.autoDetectTruck(user);
     return this.stageAction(session.id, 'prepare_autonomous_freight', {
-      origin: input.origin,
-      destination: input.destination,
+      origin: requestedOrigin,
+      destination: requestedDestination,
       grain: input.grain,
       weightKg: Number(input.weightKg),
       truckPlate,
@@ -627,18 +883,62 @@ export class ToolExecutorService {
     switch (tool) {
       case 'create_freight_request': {
         const freight = await this.freights.create({
-          originLotId: params.lotId || undefined,
+          originLotId: params.originLotId || undefined,
           fieldId: params.fieldId || undefined,
-          customOriginName: !params.fieldId && !params.lotId ? params.origin : undefined,
+          customOriginName: !params.fieldId && !params.originLotId ? params.origin : undefined,
           destPlantId: params.destPlantId || undefined,
           tolvinkPlantId: params.tolvinkPlantId || undefined,
+          destCompanyId: params.destCompanyId || undefined,
           customDestName: !params.destPlantId && !params.tolvinkPlantId ? params.destination : undefined,
+          customDestLat: params.customDestLat,
+          customDestLng: params.customDestLng,
           loadDate: params.loadDate,
           loadTime: params.loadTime,
           items: [{ grain: params.grain, tons: params.tons }],
           notes: params.notes,
+          truckCount: params.truckCount,
+          truckId: params.truckId,
+          driverId: params.driverId,
+          useOwnFleet: params.useOwnFleet,
+          producerCompanyId: params.producerCompanyId,
+          overrideOriginLat: params.overrideOriginLat,
+          overrideOriginLng: params.overrideOriginLng,
+          overrideDestLat: params.overrideDestLat,
+          overrideDestLng: params.overrideDestLng,
         }, synUser);
         return JSON.stringify({ status: 'created', code: (freight as any).code, id: (freight as any).id });
+      }
+      case 'update_freight': {
+        const freight = await this.freights.updateFreight(params.freightId, params.dto, synUser);
+        return JSON.stringify({ status: 'updated', code: params.code || (freight as any).code });
+      }
+      case 'assign_multi_trucks': {
+        const freight = await this.freights.assignMulti(params.freightId, { trucks: params.trucks }, synUser);
+        return JSON.stringify({ status: 'assigned', code: params.code || (freight as any).code, truckCount: params.trucks.length });
+      }
+      case 'add_truck_to_freight': {
+        const assignment = await this.freights.assignTruck(params.freightId, params.truck, synUser);
+        return JSON.stringify({ status: 'assigned', code: params.code, assignmentId: assignment?.id, tripNumber: assignment?.tripNumber });
+      }
+      case 'update_freight_assignment': {
+        const assignment = await this.freights.updateAssignment(params.freightId, params.assignmentId, params.dto, synUser);
+        return JSON.stringify({ status: 'updated', code: params.code, assignmentId: assignment?.id, tripNumber: assignment?.tripNumber });
+      }
+      case 'cancel_freight_assignment': {
+        const freight = await this.freights.cancelAssignment(params.freightId, params.assignmentId, params.reason, synUser);
+        return JSON.stringify({ status: 'assignment_canceled', code: params.code || (freight as any).code });
+      }
+      case 'respond_trip': {
+        const freight = await this.freights.respondTrip(params.freightId, params.assignmentId, { action: params.action, reason: params.reason, truckId: params.truckId, driverId: params.driverId }, synUser);
+        return JSON.stringify({ status: params.action, code: params.code || (freight as any).code });
+      }
+      case 'approve_pending_freight_change': {
+        const freight = await this.freights.approvePendingChange(params.freightId, params.changeId, synUser);
+        return JSON.stringify({ status: 'approved', code: params.code || (freight as any).code, changeId: params.changeId });
+      }
+      case 'reject_pending_freight_change': {
+        const freight = await this.freights.rejectPendingChange(params.freightId, params.changeId, synUser, params.reason);
+        return JSON.stringify({ status: 'rejected', code: params.code || (freight as any).code, changeId: params.changeId });
       }
       case 'approve_freight_request': {
         const freight = await this.freights.approveProducerFreight(params.freightId, synUser);
@@ -827,6 +1127,81 @@ export class ToolExecutorService {
   }
 
   // ======================== LOW-LEVEL HELPERS ========================
+
+  private pickDefined<T extends Record<string, any>>(obj: T): Partial<T> {
+    return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== '')) as Partial<T>;
+  }
+
+  private describeObjectChanges(obj: Record<string, any>): string {
+    return Object.entries(obj)
+      .map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+      .join('\n');
+  }
+
+  private buildTruckAssignments(input: any): any[] {
+    const source = Array.isArray(input.trucks) && input.trucks.length > 0 ? input.trucks : [input];
+    return source
+      .map((t: any) => this.pickDefined({
+        transportCompanyId: t.transportCompanyId,
+        truckId: t.truckId,
+        driverId: t.driverId,
+        tons: t.weightKg ? this.kgToTons(t.weightKg) : t.tons,
+        isExternal: t.isExternal,
+        plate: t.plate,
+        externalCompanyName: t.externalCompanyName,
+        externalDriverName: t.externalDriverName,
+      }))
+      .filter((t: any) => Object.keys(t).length > 0);
+  }
+
+  private async getSavedLocation(session: any): Promise<{ lat: number; lng: number; name?: string; purpose?: string } | null> {
+    if (!session?.id) return null;
+    const current = await this.prisma.whatsAppSession.findUnique({
+      where: { id: session.id },
+      select: { flowState: true },
+    });
+    const state = (current?.flowState as any) || {};
+    const loc = state.lastLocation;
+    if (!loc || loc.lat == null || loc.lng == null) return null;
+    return {
+      lat: Number(loc.lat),
+      lng: Number(loc.lng),
+      name: loc.name || loc.address || 'Ubicacion indicada',
+      purpose: state.lastLocationPurpose || loc.purpose,
+    };
+  }
+
+  private describeTruckAssignments(trucks: any[]): string {
+    return trucks.map((t, index) => {
+      const parts = [
+        t.transportCompanyId ? `empresa ${t.transportCompanyId}` : null,
+        t.plate ? `matricula ${t.plate}` : null,
+        t.truckId ? `camion ${t.truckId}` : null,
+        t.driverId ? `chofer ${t.driverId}` : null,
+        t.tons ? `${t.tons} tn` : null,
+        t.externalCompanyName ? `externo ${t.externalCompanyName}` : null,
+      ].filter(Boolean);
+      return `${index + 1}. ${parts.join(' / ') || 'camion pendiente de datos'}`;
+    }).join('\n');
+  }
+
+  private async resolveAnyAssignment(freightId: string, assignmentId?: string, tripNumber?: number): Promise<any | null> {
+    if (assignmentId) {
+      return this.prisma.freightAssignment.findFirst({
+        where: { id: assignmentId, freightId },
+        select: { id: true, freightId: true, tripNumber: true, status: true, tripStatus: true },
+      });
+    }
+    const assignments = await this.prisma.freightAssignment.findMany({
+      where: { freightId, status: { in: ['active', 'accepted'] } },
+      select: { id: true, freightId: true, tripNumber: true, status: true, tripStatus: true },
+      orderBy: { tripNumber: 'asc' },
+      take: 20,
+    });
+    if (tripNumber != null) return assignments.find((a) => a.tripNumber === Number(tripNumber)) || null;
+    if (assignments.length === 1) return assignments[0];
+    return null;
+  }
 
   private applySessionCompanyScope(user: any, session?: any): any {
     return scopeUserToSessionCompany(user, session);

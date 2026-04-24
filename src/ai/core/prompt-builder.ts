@@ -36,6 +36,8 @@ function buildSharedRules(): string {
 - "si", "dale", "ok", "confirmar", "va" => confirmacion.
 - "no", "cancelar", "deja", "anular" => cancelar accion pendiente.
 - Si el mensaje incluye [ARCHIVO PENDIENTE: ...], adjuntar es la accion por defecto con attach_document.
+- Si el usuario quiere indicar o avisar una ubicacion y no aparece [UBICACION DISPONIBLE: ...] ni acaba de compartir ubicacion por WhatsApp, usar request_location_picker.
+- Si aparece [UBICACION DISPONIBLE: ...], usar esa ubicacion con originFromLastLocation o destinationFromLastLocation cuando el usuario la haya asociado a origen/destino.
 - No mostrar errores tecnicos ni detalles internos del backend.
 </shared_rules>`;
 }
@@ -63,12 +65,16 @@ CONSULTAS: "mis fletes" => list_freights. "como va" => get_dashboard.
     case 'producer_operator':
       return `<profile_rules>
 PUEDE: Solicitar fletes, consultar estados, buscar origen/destino, cancelar solicitudes si la herramienta lo permite.
-NO PUEDE: Aprobar por planta, asignar transportistas, asignar chofer/camion de terceros.
+NO PUEDE: Aprobar por planta ni asignar transportistas de terceros salvo herramientas explicitamente visibles.
 
 SOLICITUD:
 - Para pedir un flete usar create_freight_request.
 - Buscar campos/lotes/plantas antes solo si ayuda a resolver un nombre ambiguo.
 - Si falta fecha u hora, pedirlas o dejar que la herramienta use defaults operativos.
+- Si el pedido menciona varios camiones, flota propia, lote/campo, planta Tolvink, empresa destino o coordenadas, pasar esos datos en create_freight_request.
+- Para editar datos de un flete existente usar update_freight.
+- Para compartir seguimiento usar generate_tracking_link.
+- Para cambios pendientes usar list_pending_freight_changes y luego approve_pending_freight_change o reject_pending_freight_change.
 </profile_rules>`;
 
     case 'producer_driver':
@@ -95,6 +101,10 @@ REGLAS:
 - Rechazar => reject_freight_assignment con motivo.
 - Aceptar operativamente implica asignar chofer y camion.
 - Si el usuario dice "acepta", primero intentar accept_freight_assignment. Si faltan camion/chofer, pedirlos o resolverlos.
+- En fletes multi-camion, usar list_freight_assignments para ubicar el numero de viaje o assignmentId.
+- Para editar camion/chofer/peso de un viaje usar update_freight_assignment.
+- Para iniciar/cargar/finalizar un viaje especifico usar las herramientas de hito con codigo y, si hace falta, numero de viaje.
+- Para compartir seguimiento usar generate_tracking_link.
 </profile_rules>`;
 
     case 'plant_manager':
@@ -107,6 +117,10 @@ REGLAS:
 - Aprobar => approve_freight_request.
 - Asignar transportista => assign_transport_company.
 - Si el nombre del transportista es ambiguo, pedir precision.
+- Para multi-camion usar assign_multi_trucks o add_truck_to_freight; si hay dudas, listar viajes con list_freight_assignments.
+- Para editar flete usar update_freight; para editar un viaje/camion usar update_freight_assignment.
+- Para aprobar o rechazar cambios pendientes usar list_pending_freight_changes y luego approve_pending_freight_change o reject_pending_freight_change.
+- Para compartir seguimiento usar generate_tracking_link.
 </profile_rules>`;
 
     default:
