@@ -18,6 +18,11 @@ import { requestCache } from './common/request-cache';
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
+  // TEMP DEBUG: inspect DATABASE_URL trailing characters to detect hidden newlines
+  const dbUrl = process.env.DATABASE_URL || '';
+  const tail = dbUrl.slice(-8);
+  console.log('[DEBUG_DB_URL] length=' + dbUrl.length + ' tail=' + JSON.stringify(tail) + ' charCodes=' + Array.from(tail).map(c => c.charCodeAt(0)).join(','));
+
   // Initialize Sentry error tracking
   if (process.env.SENTRY_DSN) {
     Sentry.init({
