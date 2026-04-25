@@ -57,6 +57,30 @@ class HealthController {
   ping() {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
+
+  @Get('version')
+  version() {
+    return {
+      status: 'ok',
+      app: 'tolvink-api',
+      version: process.env.npm_package_version || 'unknown',
+      commit:
+        process.env.RAILWAY_GIT_COMMIT_SHA ||
+        process.env.SOURCE_COMMIT ||
+        process.env.GIT_COMMIT ||
+        'unknown',
+      branch:
+        process.env.RAILWAY_GIT_BRANCH ||
+        process.env.GIT_BRANCH ||
+        'unknown',
+      deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || 'unknown',
+      serviceId: process.env.RAILWAY_SERVICE_ID || 'unknown',
+      environmentId: process.env.RAILWAY_ENVIRONMENT_ID || 'unknown',
+      nodeEnv: process.env.NODE_ENV || 'unknown',
+      startedAt: this.startedAt.toISOString(),
+      timestamp: new Date().toISOString(),
+    };
+  }
 }
 
 @Module({ controllers: [HealthController] })
