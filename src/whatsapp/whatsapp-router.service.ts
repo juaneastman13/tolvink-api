@@ -224,6 +224,18 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         orderBy: { updatedAt: 'desc' },
       });
 
+      if (type === 'text') {
+        const textBody = (payload.body || '').trim();
+        if (this.isResetSessionIntent(textBody)) {
+          await this.handleResetSessionCommand(phone, user);
+          return;
+        }
+        if (this.isChangeCompanyIntent(textBody)) {
+          await this.handleChangeCompanyCommand(phone, user, cachedSession);
+          return;
+        }
+      }
+
       // Multi-company: prompt company selection if not confirmed in session
       const activeMemberships = (user.memberships || []).filter((m: any) => m.active);
       if (activeMemberships.length > 1) {
@@ -610,6 +622,85 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       .toLowerCase();
 
     return /\b(mecanica|mecanico|mantenimiento|maquinaria|maquina|maquinas|tractor|tractores|cosechadora|cosechadoras|sembradora|pulverizadora|horometro|service|aceite|filtro|filtros|repuesto|repuestos|taller)\b/.test(normalized);
+  }
+
+  private normalizeCommandText(text: string): string {
+    return (text || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private isResetSessionIntent(text: string): boolean {
+    const normalized = this.normalizeCommandText(text);
+    return /^(reiniciar|reinicia|reset|resetear|resetea|limpiar|limpia|borrar|borra) (sesion|chat|conversacion)$/i.test(normalized)
+      || /^(reiniciar sesion|reset sesion|resetear sesion|limpiar sesion|borrar sesion)$/i.test(normalized)
+      || /^(empezar de nuevo|arrancar de nuevo|volver a empezar)$/i.test(normalized);
+  }
+
+  private isChangeCompanyIntent(text: string): boolean {
+    const normalized = this.normalizeCommandText(text);
+    return /^(cambiar|cambia|elegir|elegi|seleccionar|selecciona) (de )?(empresa|compania|compania activa)$/i.test(normalized)
+      || /^(cambiar empresa|cambia empresa|otra empresa|empresa|empresas)$/i.test(normalized)
+      || /^(operar con otra empresa|quiero cambiar de empresa)$/i.test(normalized);
+  }
+
+  private async handleResetSessionCommand(phone: string, user: any): Promise<void> {
+    await this.prisma.whatsAppSession.deleteMany({ where: { userId: user.id } });
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    await this.wa.sendText(phone, 'Listo, reinicie la sesion de WhatsApp. Se limpiaron acciones, adjuntos y contexto pendiente.');
+    if (memberships.length > 1) {
+      await this.sendCompanySelectionList(phone, user);
+      return;
+    }
+    await this.showMainMenu(phone, user, user.activeCompanyId || user.companyId);
+  }
+
+  private async handleChangeCompanyCommand(phone: string, user: any, cachedSession?: any): Promise<void> {
+    const memberships = (user.memberships || []).filter((m: any) => m.active);
+    if (memberships.length <= 1) {
+      await this.wa.sendText(phone, 'Tu usuario tiene una sola empresa activa para operar por WhatsApp.');
+      await this.showMainMenu(phone, user, user.activeCompanyId || user.companyId);
+      return;
+    }
+
+    let session = cachedSession;
+    if (!session || session.expiresAt <= new Date()) {
+      session = await this.prisma.whatsAppSession.create({
+        data: {
+          userId: user.id,
+          phone: this.wa.normalizePhone(phone),
+          flowType: null,
+          flowStep: '0',
+          flowState: {},
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+        },
+      });
+    } else if (session.flowType) {
+      session = await this.prisma.whatsAppSession.update({
+        where: { id: session.id },
+        data: { flowType: null, flowStep: '0' },
+      });
+    }
+
+    await this.ai.cancelPendingAction(session.id).catch(() => false);
+    const state = (session.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: session.id },
+      data: {
+        flowState: {
+          ...this.stripOperationalFlowState(state),
+          companyConfirmed: false,
+          selectedCompanyId: null,
+        },
+        expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      },
+    });
+    await this.wa.sendText(phone, 'Elegí la empresa con la que querés operar.');
+    await this.sendCompanySelectionList(phone, user);
   }
 
   private async sendMechanicAppOnlyMessage(phone: string): Promise<void> {
