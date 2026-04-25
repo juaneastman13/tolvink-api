@@ -1,0 +1,1113 @@
+TOLVINK — AUDITORÍA MÓDULO WHATSAPP
+Fecha: 2026-04-23
+Alcance: src/whatsapp/, src/ai/, src/common/user-company-scope.ts, src/freights/freights.service.ts, prisma/schema.prisma
+================================================================================
+
+
+SECCIÓN 1: RESUMEN DEL MÓDULO
+================================================================================
+
+1.1 ARQUITECTURA GENERAL
+
+El módulo WhatsApp está compuesto por 4 providers y 1 controller (src/whatsapp/whatsapp.module.ts):
+
+  • WhatsAppController (whatsapp.controller.ts, ~809 líneas)
+    Expone los endpoints HTTP. NO está protegido con JWT: la autenticación descansa
+    en HMAC-SHA256 (firma Meta) y tokens firmados (verifySignedToken).
+
+  • WhatsAppService (whatsapp.service.ts, ~793 líneas)
+    Wrapper de Meta Cloud API v22.0: sendText, sendButtons, sendList, sendSelection,
+    sendTemplate, markRead, sendTypingIndicator, downloadMedia (con whitelist SSRF:
+    lookaside.fbsbx.com, scontent.whatsapp.net, media.fna.whatsapp.net),
+    uploadToStorage (bucket "freight-docs" en Supabase). Retry con backoff [1s, 3s, 9s].
+    Crons de limpieza cada 30 min. Crons de recordatorios y resumen diario DESACTIVADOS
+    (comentados en onModuleInit líneas 63-69 — fase testing).
+
+  • WhatsAppRouterService (whatsapp-router.service.ts, ~3102 líneas)
+    Orquestador principal. Rate limit por teléfono (30 msg/min in-memory + 45 msg/min DB),
+    phone lock secuencial (phoneLocks Map, cap 10.000), dedupe de mensajes con PG advisory
+    lock, cooldown para "no registrado" (10 min) y GPS (30 s).
+
+  • WhatsAppFlowService (whatsapp-flow.service.ts, ~325 líneas)
+    Gestiona flujos multi-step (reject, confirm_loaded, cancel_freight). Timeout 10 min.
+    Rate limit 30 mensajes por flujo en 5 min.
+
+  • AgentService (src/ai/agent.service.ts, ~419 líneas)
+    Agente IA (Gemini) con tool-loop (MAX_TOOL_ITERATIONS=15, TOOL_TIMEOUT_MS=120s,
+    MAX_HISTORY_MESSAGES=40, SESSION_TIMEOUT_MS=60 min, PROMPT_CACHE_TTL_MS=5 min).
+    Layer deterministic intent antes de llamar al LLM.
+
+1.2 MODELO DE IA
+
+  • Provider:      Gemini (@google/genai), configurado en GeminiClient (src/ai/core/gemini.client.ts)
+  • Modelo:        configurable via GEMINI_MODEL env
+  • Audio:         OpenAI Whisper (whisper-1) via OPENAI_API_KEY
+  • System prompt: buildSystemPrompt (src/ai/core/prompt-builder.ts)
+  • Cache key:     ${sessionId}:${isWeb}:${profile}:${scopedCompanyId}
+
+1.3 FLUJO DE ENTRADA (WEBHOOK)
+
+  Endpoint: POST /whatsapp/webhook (WhatsAppController.receive, líneas 86-229)
+
+  1. Verificación HMAC-SHA256 (verifyMetaSignature, líneas 344-367) contra WHATSAPP_APP_SECRET.
+     Si falla → 401 INVALID_SIGNATURE.
+  2. Respuesta 200 EVENT_RECEIVED inmediata (Meta requiere <5s).
+  3. Parseo tipo de mensaje: text / interactive / location / button / audio / image / document.
+  4. Dedupe por waMessageId: Map in-memory TTL 60s + PG advisory lock + whatsAppMessageLog DB.
+  5. markRead fire-and-forget.
+  6. Rate limit por teléfono (20 msg/60s) en phoneRateMap del controller.
+  7. router.handleMessage(phone, type, payload, waMessageId).
+
+  Verificación GET /whatsapp/webhook: Meta envía hub.mode=subscribe + hub.verify_token →
+  se compara con WHATSAPP_VERIFY_TOKEN usando timingSafeEqual.
+
+  Endpoints auxiliares:
+  • POST /whatsapp/location-token        — protegido por INTERNAL_API_KEY (timingSafeEqual)
+  • POST /whatsapp/save-location         — público, token one-time 30 min, JSONB atomic UPDATE
+  • POST /whatsapp/save-location-by-slug — ídem por slug
+  • GET  /whatsapp/daily-map-data?t=...  — token firmado con WHATSAPP_APP_SECRET, contiene cid
+  • POST /whatsapp/live-location         — token firmado con uid, fid, role, name
+  • GET  /whatsapp/live-locations?t=...  — consulta ubicaciones en vivo
+  • POST /whatsapp/live-location/stop    — detiene GPS
+
+1.4 GESTIÓN DE SESIÓN
+
+  Tabla WhatsAppSession (prisma/schema.prisma):
+  - TTL base: 30 min (AI) / 10 min (flow). Sliding window: cada mensaje renueva a 30 min.
+  - flowState (JSON) contiene:
+    · aiMessages            — historial Gemini format (MAX_HISTORY_MESSAGES=40)
+    · selectedCompanyId / companyConfirmed — empresa scoped a nivel sesión
+    · selectionContext      — contexto de pagination/numeric reply
+    · pendingAiAction       — acción pendiente de confirmación (TTL 5 min)
+    · pendingDocument       — foto/doc pendiente de adjuntar (TTL 30 min)
+    · lastLocation          — última ubicación compartida
+    · locationToken         — token del picker de ubicación
+    · _pendingMessage / _pendingAction — congelados esperando selección de empresa
+    · activeContext.lastFreightId/Code/Summary — contexto para LLM tras trimming
+
+  Cleanup masivo cada 30 min (WhatsAppService.cleanupExpired):
+  borra sesiones expiradas >2h, live locations, FreightTracking >90d, WA logs >90d,
+  analytics >180d.
+
+1.5 RESOLUCIÓN DE PERFIL (AiProfile)
+
+  findUserByPhone (router líneas 3049-3094):
+    1. Variante directa por user.phone (E.164 sin +, +598..., 0xx).
+    2. Fallback: busca Company.phone → primer usuario activo ordenado por createdAt asc.
+    3. Include: company + memberships(active=true) con sus companies.
+
+  resolveAiProfile(user) (src/ai/core/ai-profile.ts:34-48):
+    1. getActiveMembership → membership donde companyId === activeCompanyId.
+    2. getCompanyType → si types[] incluye plant → plant; transporter → transporter; default producer.
+    3. normalizeRole:
+       - chofer/driver → driver
+       - gerente/admin/platform_admin → manager
+       - cualquier otro → operator
+    4. Si role=driver && companyType=producer && autonomousDriverEnabled → autonomous_driver.
+    5. Sino → ${companyType}_${role}.
+
+  scopeUserToSessionCompany (src/common/user-company-scope.ts):
+  Sobrescribe activeCompanyId/companyId/company con la membership correspondiente a
+  session.flowState.selectedCompanyId. Usuarios multi-empresa reciben lista de selección
+  hasta que companyConfirmed=true.
+
+
+================================================================================
+SECCIÓN 2: FUNCIONALIDADES POR TIPO DE USUARIO
+================================================================================
+
+  Tools por perfil definidos en TOOLS_BY_PROFILE (src/ai/tools/tool-executor.ts:23-33).
+  Filtrado en ToolExecutorService.filterTools + re-validación en executeTool (líneas 89-97).
+  Si tool no permitido → { error: 'Esa accion no esta habilitada para tu rol en la empresa activa.' }
+
+--------------------------------------------------------------------------------
+2.1 PRODUCER_MANAGER
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, search_plants, search_fields,
+                search_lots, create_freight_request, cancel_freight, confirm_action,
+                attach_document
+  Acciones:     Crear solicitudes de flete (origin/fieldId/lotId, destination/destPlantId/
+                tolvinkPlantId, grain, weightKg, loadDate, loadTime, notes).
+                Cancelar con motivo. Adjuntar docs. Buscar. Consultar fletes.
+  Restricciones: No aprueba (planta). No asigna transportista. No asigna chofer/camión.
+  Flujo especial: create_freight_request siempre entra a staging (stageAction) y retorna
+                  pending_confirmation con botones [CONFIRMAR / CANCELAR].
+
+--------------------------------------------------------------------------------
+2.2 PRODUCER_OPERATOR
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, search_plants, search_fields,
+                search_lots, create_freight_request, confirm_action, attach_document
+  Diferencia:   NO tiene cancel_freight.
+
+--------------------------------------------------------------------------------
+2.3 PRODUCER_DRIVER (también aplica a TRANSPORTER_DRIVER y PLANT_DRIVER)
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, start_freight_trip,
+                confirm_freight_loaded, confirm_freight_arrival, finish_freight,
+                attach_document, confirm_action
+  Acciones:     iniciar viaje → confirmar carga → confirmar llegada → finalizar.
+                Adjuntar evidencia.
+  Restricciones: NO crea fletes. NO cancela. NO asigna.
+  Deterministic: "empece/salgo" → start_freight_trip
+                 "cargue/ya cargue" → confirm_freight_loaded
+                 "llegue" → confirm_freight_arrival
+                 "termine/descargue" → finish_freight
+
+--------------------------------------------------------------------------------
+2.4 TRANSPORTER_MANAGER
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, accept_freight_assignment,
+                reject_freight_assignment, assign_driver_and_truck,
+                confirm_action, attach_document
+  Acciones:     Aceptar asignación (auto-resuelve camión+chofer default si existen).
+                Rechazar con motivo obligatorio. Asignar chofer+camión (fuzzy match).
+  Restricciones: No aprueba (planta). No crea solicitudes. No inicia viaje ni
+                 confirma carga/entrega (eso es del driver).
+  Flujo especial: accept con defaults ya asignados → devuelve already_accepted.
+                  assign_driver_and_truck requiere staging.
+
+--------------------------------------------------------------------------------
+2.5 PLANT_MANAGER
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, approve_freight_request,
+                assign_transport_company, cancel_freight, confirm_action,
+                attach_document
+  Acciones:     Aprobar fletes de productor. Asignar transportista (fuzzy match vía
+                resolveTransportCompany). Cancelar.
+  Restricciones: No opera como transportista (salvo own-fleet a nivel freights.service).
+
+--------------------------------------------------------------------------------
+2.6 PLANT_OPERATOR
+--------------------------------------------------------------------------------
+  Tools:        Igual a plant_manager PERO SIN cancel_freight.
+
+--------------------------------------------------------------------------------
+2.7 PLANT_DRIVER
+--------------------------------------------------------------------------------
+  Tools:        Idéntico a producer_driver / transporter_driver.
+
+--------------------------------------------------------------------------------
+2.8 AUTONOMOUS_DRIVER
+--------------------------------------------------------------------------------
+  Tools:        list_freights, get_freight_detail, get_dashboard, search_plants,
+                search_fields, search_lots, prepare_autonomous_freight, confirm_action,
+                finish_autonomous_freight, cancel_freight, attach_document
+  Requisito:    company.type=producer + role=chofer + company.autonomousDriverEnabled=true
+  Flujo especial:
+    prepare_autonomous_freight (tool-executor.ts líneas 491-547):
+    - Con flete activo propio → stage finish_and_create con botón único FINALIZAR.
+    - Sin flete activo → autoDetectTruck (assignedUserId=user.id primero, fallback al
+      primer camión de company) → stage prepare_autonomous_freight.
+    - Flete se crea en estado loaded (createAutonomousFreight en freights.service.ts:567).
+    finish_autonomous_freight: register_plant_arrival marca arrivedAtPlantAt sin finalizar.
+    Menú autónomo (showMainMenu):
+    - Con arrivedAtPlantAt → botón FINALIZAR FLETE.
+    - Sin arrivedAtPlantAt + flete activo → botón CONFIRMAR LLEGADA.
+    - Sin flete activo → botón SOLICITAR FLETE.
+
+
+================================================================================
+SECCIÓN 3: PLAN DE TESTS
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 INFRAESTRUCTURA DEL WEBHOOK
+--------------------------------------------------------------------------------
+
+  TEST-001: webhook_rejects_missing_signature
+    - Input:           POST /whatsapp/webhook sin header x-hub-signature-256
+    - Tool/Path:       verifyMetaSignature
+    - Resultado:       401 INVALID_SIGNATURE
+    - Tipo:            seguridad
+
+  TEST-002: webhook_rejects_bad_hmac
+    - Input:           Body firmado con secret incorrecto
+    - Tool/Path:       verifyMetaSignature
+    - Resultado:       401 INVALID_SIGNATURE
+    - Tipo:            seguridad
+
+  TEST-003: webhook_verify_token_mismatch
+    - Input:           GET con hub.verify_token erróneo
+    - Resultado:       403 Forbidden
+    - Tipo:            seguridad
+
+  TEST-004: webhook_verify_token_ok
+    - Input:           GET con token correcto
+    - Resultado:       200 + hub.challenge devuelto
+    - Tipo:            funcional
+
+  TEST-005: webhook_deduplication_same_waMessageId
+    - Input:           Mismo id dos veces consecutivas
+    - Resultado:       Segunda ignorada (log "Duplicate"); 1 entrada en whatsAppMessageLog
+    - Tipo:            funcional
+
+  TEST-006: webhook_unknown_interactive_type
+    - Input:           interactive.type = 'unknown_subtype'
+    - Resultado:       Warning logueado; tratado como text con body:''
+    - Tipo:            edge_case
+
+  TEST-007: webhook_status_update_only
+    - Input:           value.statuses[0].status = 'delivered'
+    - Resultado:       WhatsAppMessageLog.status actualizado; no enrutado
+    - Tipo:            funcional
+
+  TEST-008: webhook_invalid_status_value
+    - Input:           status = 'weird'
+    - Resultado:       Ignorado (VALID_STATUSES set)
+    - Tipo:            edge_case
+
+  TEST-009: phone_rate_limit_controller
+    - Input:           21 mensajes del mismo phone en 60 s
+    - Resultado:       Mensaje 21 → "Estás enviando muchos mensajes seguidos…"
+    - Tipo:            seguridad
+
+  TEST-010: phone_rate_limit_db_persistent
+    - Input:           >45 msgs inbound del mismo phone en 60 s (entre instancias)
+    - Resultado:       Router rechaza silencioso
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.2 ENDPOINTS AUXILIARES PÚBLICOS
+--------------------------------------------------------------------------------
+
+  TEST-011: location_token_requires_internal_key
+    - Input:           POST /whatsapp/location-token sin internalKey
+    - Resultado:       401 Unauthorized
+    - Tipo:            seguridad
+
+  TEST-012: location_token_rejects_wrong_key
+    - Input:           Key incorrecta
+    - Resultado:       timingSafeEqual falla → 401
+    - Tipo:            seguridad
+
+  TEST-013: save_location_ok_with_valid_token
+    - Input:           Token válido + lat/lng en rango
+    - Resultado:       200 + flowState.lastLocation actualizado + trigger onLocationSaved
+    - Tipo:            funcional
+
+  TEST-014: save_location_token_expired
+    - Input:           Token con createdAt > 30 min
+    - Resultado:       400 "Token expirado"
+    - Tipo:            edge_case
+
+  TEST-015: save_location_token_reuse
+    - Input:           Token ya usado
+    - Resultado:       UPDATE RETURNING 0 filas → 400 "Token ya utilizado"
+    - Tipo:            edge_case
+
+  TEST-016: save_location_invalid_coords
+    - Input:           lat=91
+    - Resultado:       400 "Invalid coordinates"
+    - Tipo:            edge_case
+
+  TEST-017: save_location_by_slug_invalid_format
+    - Input:           Slug con caracteres inválidos
+    - Resultado:       400 "Invalid slug format"
+    - Tipo:            edge_case
+
+  TEST-018: live_location_token_required
+    - Input:           POST /whatsapp/live-location sin t
+    - Resultado:       400
+    - Tipo:            seguridad
+
+  TEST-019: live_location_freight_canceled
+    - Input:           Token válido, freight en estado canceled
+    - Resultado:       400 "El flete no está activo"
+    - Tipo:            edge_case
+
+  TEST-020: daily_map_data_returns_company_freights
+    - Input:           Token firmado con cid=producer-1, loadDate=today
+    - Resultado:       Array con code, status, origin*, dest*
+    - Tipo:            funcional
+
+--------------------------------------------------------------------------------
+3.3 USUARIO NO REGISTRADO
+--------------------------------------------------------------------------------
+
+  TEST-021: unregistered_phone_sends_register_msg
+    - Input:           Phone no encontrado en users ni companies
+    - Resultado:       "Este número no se encuentra registrado…" (cooldown 10 min)
+    - Tipo:            funcional
+
+  TEST-022: unregistered_phone_cooldown_respected
+    - Input:           Segundo mensaje < 10 min
+    - Resultado:       Silencio
+    - Tipo:            edge_case
+
+  TEST-023: company_phone_fallback_resolves_first_user
+    - Input:           Phone asociado a Company.phone
+    - Resultado:       Resuelve al primer usuario activo ordenado por createdAt asc
+    - Tipo:            funcional
+
+--------------------------------------------------------------------------------
+3.4 SELECCIÓN DE EMPRESA (MULTI-COMPANY)
+--------------------------------------------------------------------------------
+
+  TEST-024: multi_company_prompt_on_first_msg
+    - Input:           User con 2 memberships, sin companyConfirmed, envía "hola"
+    - Resultado:       Lista con rows selco:<companyId>; query no procesada
+    - Tipo:            multi_step
+
+  TEST-025: multi_company_pending_message_replay
+    - Input:           "Quiero crear un flete" antes de confirmar empresa, luego elige empresa
+    - Resultado:       _pendingMessage guardado; replay via handleAiChat con mensaje original
+    - Tipo:            multi_step
+
+  TEST-026: multi_company_pending_button_replay
+    - Input:           button_reply antes de confirmar empresa, luego elige empresa
+    - Resultado:       Replay via handleButtonReply
+    - Tipo:            multi_step
+
+  TEST-027: multi_company_pending_message_concatenation
+    - Input:           Múltiples mensajes operativos antes de confirmar empresa
+    - Resultado:       Concatenados con \n en _pendingMessage (no sobrescrito)
+    - Tipo:            edge_case
+
+  TEST-028: multi_company_pending_action_cleared_on_company_change
+    - Input:           User con pendingAiAction(companyId=A) cambia a empresa B
+    - Resultado:       cancelPendingAction + stripOperationalFlowState ejecutados
+    - Tipo:            seguridad
+
+  TEST-029: multi_company_invalid_company_selection
+    - Input:           User selecciona empresa sin membership activa
+    - Resultado:       "Empresa no válida. Intente de nuevo." + re-envío de lista
+    - Tipo:            edge_case
+
+  TEST-030: company_selection_session_scoped_not_db
+    - Input:           handleCompanySelection ejecutado
+    - Resultado:       user.activeCompanyId NO actualizado en DB; solo en flowState
+    - Tipo:            funcional
+
+  TEST-031: audit_log_on_company_selection
+    - Input:           Selección de empresa
+    - Resultado:       auditLog creado con action='whatsapp_company_selected', metadata.source='whatsapp'
+    - Tipo:            funcional
+
+--------------------------------------------------------------------------------
+3.5 FAST PATHS Y GREETINGS
+--------------------------------------------------------------------------------
+
+  TEST-032: greeting_shows_main_menu
+    - Input:           "hola" / "buenas" / "buen día" / "menu" / "inicio"
+    - Resultado:       showMainMenu según role
+    - Tipo:            funcional
+
+  TEST-033: freight_code_fast_path
+    - Input:           "F26-ABC.1234"
+    - Resultado:       showFreightByCode sin llamar al AI
+    - Tipo:            funcional
+
+  TEST-034: emoji_only_message_no_session
+    - Input:           Solo emojis, sin sesión activa
+    - Resultado:       showMainMenu
+    - Tipo:            edge_case
+
+  TEST-035: emoji_only_message_with_ai_session
+    - Input:           Emojis con historial AI activo
+    - Resultado:       Entra a handleAiChat con "[El usuario envió solo emojis: ...]"
+    - Tipo:            edge_case
+
+  TEST-036: message_over_10k_chars
+    - Input:           >10.000 caracteres
+    - Resultado:       "Mensaje demasiado largo…"
+    - Tipo:            edge_case
+
+  TEST-037: mechanic_intent_blocked
+    - Input:           "cosechadora" / "mantenimiento" / "aceite" / "tractor"
+    - Resultado:       sendMechanicAppOnlyMessage; no llama al AI
+    - Tipo:            funcional
+
+  TEST-038: forwarded_message_tag
+    - Input:           payload.forwarded=true
+    - Resultado:       Texto prefijado "[Mensaje reenviado]" antes de ir al AI
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.6 PRODUCER_MANAGER / PRODUCER_OPERATOR
+--------------------------------------------------------------------------------
+
+  TEST-039: producer_create_freight_happy_path
+    - Input:           "Necesito llevar 30 tn de soja de Campo Norte a ADM"
+    - Tool esperado:   create_freight_request
+    - Resultado:       stageAction → pending_confirmation con botones [CONFIRMAR / CANCELAR]
+    - Tipo:            funcional
+
+  TEST-040: producer_confirm_creates_freight
+    - Input:           "si" (tras pending_confirmation)
+    - Tool esperado:   confirm_action
+    - Resultado:       freights.create ejecutado → "Listo.\n📋 <code>"
+    - Tipo:            multi_step
+
+  TEST-041: producer_create_freight_missing_grain
+    - Input:           "llevar 30 tn de Campo Norte a ADM" (sin grano)
+    - Resultado:       AI pide grano en un solo mensaje
+    - Tipo:            multi_step
+
+  TEST-042: producer_create_freight_zero_weight
+    - Input:           create_freight_request con weightKg=0
+    - Tool esperado:   create_freight_request
+    - Resultado:       { error: 'Falta el peso del flete.' }
+    - Tipo:            edge_case
+
+  TEST-043: producer_create_freight_no_origin
+    - Input:           Sin origin/fieldId/lotId
+    - Resultado:       { error: 'Necesito el origen o un campo/lote.' }
+    - Tipo:            edge_case
+
+  TEST-044: producer_create_freight_no_destination
+    - Input:           Sin destination/destPlantId/tolvinkPlantId
+    - Resultado:       Error análogo al origin
+    - Tipo:            edge_case
+
+  TEST-045: producer_search_plants_prioritizes_linked
+    - Input:           search_plants con nombre de planta vinculada
+    - Resultado:       PlantProducerAccess.active=true devuelto antes de fallback Tolvink
+    - Tipo:            funcional
+
+  TEST-046: producer_search_plants_fallback_tolvink
+    - Input:           Nombre con fuzzy score < threshold contra linked
+    - Resultado:       Busca TolvinkPlant.active
+    - Tipo:            funcional
+
+  TEST-047: producer_operator_cannot_cancel
+    - Input:           producer_operator: "cancelar flete F26-ABC.1234"
+    - Resultado:       Tool no visible; AI responde que no está habilitado
+    - Tipo:            seguridad
+
+  TEST-048: producer_tries_approve_freight
+    - Input:           Producer pide aprobar flete
+    - Resultado:       executeTool rechaza (approve_freight_request no en set)
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.7 TRANSPORTER_MANAGER
+--------------------------------------------------------------------------------
+
+  TEST-049: transporter_accept_happy_path_with_defaults
+    - Input:           Acepta flete con camión único + driver=yo
+    - Tool esperado:   accept_freight_assignment → assign_driver_and_truck
+    - Resultado:       stage con defaults; confirm → asignado
+    - Tipo:            funcional
+
+  TEST-050: transporter_accept_missing_defaults
+    - Input:           Sin camión/chofer default
+    - Resultado:       { error: 'Para aceptar este flete necesito camion y chofer…' }
+    - Tipo:            edge_case
+
+  TEST-051: transporter_assign_driver_fuzzy_ambiguous
+    - Input:           Nombre con 2 matches y score diff < 0.08
+    - Resultado:       { error: 'Encontre varios choferes parecidos: …' }
+    - Tipo:            edge_case
+
+  TEST-052: transporter_assign_truck_plate_normalize
+    - Input:           Plate con espacios/mayúsculas
+    - Resultado:       Normaliza y matchea exact primero
+    - Tipo:            edge_case
+
+  TEST-053: transporter_reject_with_reason
+    - Input:           reject_freight_assignment con reason='cambio de planes'
+    - Tool esperado:   reject_freight_assignment
+    - Resultado:       stage → confirm → freights.respond(action=rejected, reason)
+    - Tipo:            funcional
+
+  TEST-054: transporter_reject_no_reason
+    - Input:           Sin reason en input
+    - Resultado:       { error: 'Necesito el motivo del rechazo.' }
+    - Tipo:            edge_case
+
+  TEST-055: transporter_tries_create_freight
+    - Input:           Pide crear flete
+    - Resultado:       Tool no visible; error estándar
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.8 PRODUCER_DRIVER / TRANSPORTER_DRIVER / PLANT_DRIVER
+--------------------------------------------------------------------------------
+
+  TEST-056: driver_start_trip_unique_assignment
+    - Input:           "empece" con una sola assignment activa
+    - Tool esperado:   start_freight_trip
+    - Resultado:       stage → confirm → viaje iniciado
+    - Tipo:            funcional
+
+  TEST-057: driver_confirm_loaded_with_weight
+    - Input:           "cargue 30500 kg"
+    - Tool esperado:   confirm_freight_loaded con weightKg=30500
+    - Resultado:       stage con loadedTons=30.5
+    - Tipo:            funcional
+
+  TEST-058: driver_confirm_arrival_non_autonomous
+    - Input:           confirm_freight_arrival para freight no autónomo
+    - Resultado:       { error: 'En este flujo no hace falta registrar llegada por separado…' }
+    - Tipo:            funcional
+
+  TEST-059: driver_finish_freight_happy_path
+    - Input:           "termine"
+    - Tool esperado:   finish_freight (via deterministic)
+    - Resultado:       stage → confirm → finalizado
+    - Tipo:            funcional
+
+  TEST-060: driver_multiple_active_trips
+    - Input:           2 assignments activos
+    - Resultado:       resolveDriverTripTarget → null → { error: 'No encontre un viaje elegible…' }
+    - Tipo:            edge_case
+
+  TEST-061: driver_attach_document_no_pending
+    - Input:           attach_document sin pendingDocument en sesión
+    - Resultado:       { error: 'No hay foto o archivo pendiente.' }
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.9 PLANT_MANAGER / PLANT_OPERATOR
+--------------------------------------------------------------------------------
+
+  TEST-062: plant_approve_request
+    - Input:           "Aprobar flete F26-XYZ.0001"
+    - Tool esperado:   approve_freight_request
+    - Resultado:       stage → confirm → freights.approveProducerFreight
+    - Tipo:            funcional
+
+  TEST-063: plant_assign_transport_by_name
+    - Input:           "Asignar Logística Sur al flete F26…"
+    - Tool esperado:   assign_transport_company
+    - Resultado:       resolveTransportCompany fuzzy → stage
+    - Tipo:            funcional
+
+  TEST-064: plant_assign_transport_ambiguous
+    - Input:           2 transportes con nombres similares
+    - Resultado:       { error: ambiguous con options }
+    - Tipo:            edge_case
+
+  TEST-065: plant_operator_cannot_cancel
+    - Input:           plant_operator intenta cancelar flete
+    - Resultado:       cancel_freight no habilitado → error
+    - Tipo:            seguridad
+
+  TEST-066: plant_tries_accept_assignment
+    - Input:           accept_freight_assignment invocado desde perfil plant
+    - Resultado:       Tool no en set → error
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.10 AUTONOMOUS_DRIVER
+--------------------------------------------------------------------------------
+
+  TEST-067: autonomous_prepare_new_freight_no_active
+    - Input:           "Salgo con 25 tn soja de Campo Norte a Rosario" (sin flete activo)
+    - Tool esperado:   prepare_autonomous_freight
+    - Resultado:       autoDetectTruck → stage [CONFIRMAR / CANCELAR]
+    - Tipo:            funcional
+
+  TEST-068: autonomous_prepare_with_active_freight
+    - Input:           prepare_autonomous_freight con flete activo
+    - Resultado:       stage finish_and_create con botón único FINALIZAR
+    - Tipo:            funcional
+
+  TEST-069: autonomous_finish_then_create
+    - Input:           Confirm de staged finish_and_create
+    - Resultado:       Finaliza flete viejo → stage nuevo prepare_autonomous_freight
+    - Tipo:            multi_step
+
+  TEST-070: autonomous_register_arrival
+    - Input:           "llegue a planta"
+    - Tool esperado:   confirm_freight_arrival (validar comportamiento real vs prompt)
+    - Resultado:       arrivedAtPlantAt seteado; botón cambia a FINALIZAR FLETE
+    - Tipo:            funcional
+
+  TEST-071: autonomous_finish_no_active
+    - Input:           finish_autonomous_freight sin fletes autónomos activos
+    - Resultado:       { error: 'No tenes fletes autonomos activos para finalizar.' }
+    - Tipo:            edge_case
+
+  TEST-072: autonomous_auto_detect_truck_assigned_first
+    - Input:           1 camión con assignedUserId=user.id + 1 sin asignar
+    - Resultado:       Se elige el asignado al user
+    - Tipo:            edge_case
+
+  TEST-073: autonomous_tries_assign_transport
+    - Input:           Pide asignar transporte
+    - Resultado:       Tool no habilitado → error
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.11 FLUJOS MULTI-STEP (WhatsAppFlowService)
+--------------------------------------------------------------------------------
+
+  TEST-074: reject_flow_asks_reason
+    - Input:           Botón reject:<freightId> → escribe "poca capacidad"
+    - Resultado:       startFlow('reject_freight') → freights.respond(action=rejected, reason)
+    - Tipo:            multi_step
+
+  TEST-075: reject_flow_reason_too_short
+    - Input:           "ok" (2 chars) como motivo
+    - Resultado:       "El motivo debe tener al menos 3 caracteres"
+    - Tipo:            edge_case
+
+  TEST-076: reject_flow_no_freightId_in_state
+    - Input:           flowState sin freightId
+    - Resultado:       Error + endFlow
+    - Tipo:            edge_case
+
+  TEST-077: confirm_loaded_flow_high_tonnage
+    - Input:           "120" tn
+    - Resultado:       Pide confirmación con botón CONFIRMAR 120 TN
+    - Tipo:            multi_step
+
+  TEST-078: confirm_loaded_flow_confirms
+    - Input:           Botón tons_confirm:yes
+    - Resultado:       freights.confirmLoaded(freightId, user, 120)
+    - Tipo:            multi_step
+
+  TEST-079: confirm_loaded_flow_invalid_number
+    - Input:           "treinta"
+    - Resultado:       "Ingrese un número válido de toneladas"
+    - Tipo:            edge_case
+
+  TEST-080: confirm_loaded_flow_comma_to_dot
+    - Input:           "25,5"
+    - Resultado:       Parsea a 25.5 correctamente
+    - Tipo:            edge_case
+
+  TEST-081: cancel_flow_happy_path
+    - Input:           Botón cancel:<freightId> → escribe motivo → confirma
+    - Resultado:       Flete cancelado
+    - Tipo:            multi_step
+
+  TEST-082: flow_cancel_on_greeting
+    - Input:           En medio de flow, user dice "hola"
+    - Resultado:       Sesión borrada + showMainMenu
+    - Tipo:            funcional
+
+  TEST-083: flow_cancel_on_word_cancel
+    - Input:           En flow, user escribe "cancelar"
+    - Resultado:       "❌ Operación cancelada." + menú
+    - Tipo:            funcional
+
+  TEST-084: flow_expired
+    - Input:           expiresAt < now
+    - Resultado:       endFlow + "Se agotó el tiempo de la sesión…"
+    - Tipo:            edge_case
+
+  TEST-085: flow_rate_limit_30_per_5min
+    - Input:           31er mensaje del mismo user en flow en 5 min
+    - Resultado:       "Ha enviado muchos mensajes en poco tiempo…"
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.12 DOCUMENTOS (pendingDocument)
+--------------------------------------------------------------------------------
+
+  TEST-086: upload_image_flow
+    - Input:           Imagen JPG <16 MB
+    - Resultado:       download → upload Supabase → botones [AL FLETE ACTIVO / A OTRO FLETE / CANCELAR]
+    - Tipo:            funcional
+
+  TEST-087: upload_invalid_mime
+    - Input:           application/zip
+    - Resultado:       "Tipo de archivo no admitido"
+    - Tipo:            edge_case
+
+  TEST-088: upload_too_large
+    - Input:           >16 MB
+    - Resultado:       "El archivo es demasiado grande"
+    - Tipo:            edge_case
+
+  TEST-089: upload_ssrf_not_meta_host
+    - Input:           Meta responde url: https://evil.com/file
+    - Resultado:       downloadMedia rechaza (whitelist falla)
+    - Tipo:            seguridad
+
+  TEST-090: upload_non_https
+    - Input:           URL con esquema http://
+    - Resultado:       Rechazado
+    - Tipo:            seguridad
+
+  TEST-091: doc_attach_to_default_target
+    - Input:           Botón doc_attach_active con assignment única activa
+    - Resultado:       AI invocado con "Adjuntar el archivo pendiente al flete <code>"
+    - Tipo:            funcional
+
+  TEST-092: doc_attach_no_default
+    - Input:           2 assignments activos
+    - Resultado:       "No encontre un flete activo…"
+    - Tipo:            edge_case
+
+  TEST-093: pending_document_ttl_30min
+    - Input:           pendingDocument con Date.now()-createdAt > PENDING_DOCUMENT_TTL_MS
+    - Resultado:       getValidPendingDocument lo borra automáticamente
+    - Tipo:            edge_case
+
+  TEST-094: pending_document_company_mismatch
+    - Input:           pendingDocument.companyId !== session.selectedCompanyId
+    - Resultado:       Borrado automático (router líneas 2100-2109)
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.13 UBICACIÓN
+--------------------------------------------------------------------------------
+
+  TEST-095: location_saves_and_tracks_active_freight
+    - Input:           Driver con assignment.tripStatus=in_progress envía ubicación
+    - Resultado:       FreightTracking.create + GPS cooldown 30s
+    - Tipo:            funcional
+
+  TEST-096: location_cooldown_30s
+    - Input:           2 ubicaciones en 10 s del mismo driver
+    - Resultado:       Segunda no escribe
+    - Tipo:            edge_case
+
+  TEST-097: location_invalid_coords
+    - Input:           lat=95
+    - Resultado:       Warn + return sin escribir
+    - Tipo:            edge_case
+
+  TEST-098: location_picker_auto_advance
+    - Input:           Frontend llama save-location con token válido
+    - Resultado:       onLocationSaved → handleAiChat con "[Ubicación confirmada desde el mapa: ...]"
+    - Tipo:            funcional
+
+  TEST-099: location_in_active_flow
+    - Input:           Ubicación compartida mientras hay flow activo
+    - Resultado:       Solo guarda lastLocation, muestra "UBICACIÓN LISTA"; no avanza flujo
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.14 AUDIO
+--------------------------------------------------------------------------------
+
+  TEST-100: audio_whisper_transcription
+    - Input:           OGG <24 MB
+    - Resultado:       Whisper language=es + prompt Tolvink → tag [Audio transcripto] → AI
+    - Tipo:            funcional
+
+  TEST-101: audio_openai_key_missing
+    - Input:           Sin OPENAI_API_KEY
+    - Resultado:       "El procesamiento de audio no se encuentra disponible…"
+    - Tipo:            error_handling
+
+  TEST-102: audio_oversized
+    - Input:           >24 MB
+    - Resultado:       "El audio excede el límite permitido…"
+    - Tipo:            edge_case
+
+  TEST-103: audio_wrong_mime
+    - Input:           application/pdf bajado como audio
+    - Resultado:       "El archivo no es un audio válido"
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.15 CONFIRM/CANCEL DE PENDING_ACTION
+--------------------------------------------------------------------------------
+
+  TEST-104: confirm_deterministic_shortcut
+    - Input:           "si" / "dale" / "ok" con pending action activa
+    - Resultado:       tryDeterministicIntent ejecuta sin llamar al LLM
+    - Tipo:            funcional
+
+  TEST-105: cancel_deterministic_shortcut
+    - Input:           "no" / "cancelar" con pending action activa
+    - Resultado:       cancelPendingAction
+    - Tipo:            funcional
+
+  TEST-106: pending_action_ttl_5min
+    - Input:           createdAt > 5 min
+    - Resultado:       getPendingActionRecord devuelve undefined + limpia
+    - Tipo:            edge_case
+
+  TEST-107: pending_action_company_mismatch_clears
+    - Input:           session.selectedCompanyId=B, pendingAction.companyId=A
+    - Resultado:       Acción invalidada y removida (tool-executor líneas 877-881)
+    - Tipo:            seguridad
+
+  TEST-108: ai_confirm_button_already_processed
+    - Input:           Botón ai_confirm:<actionId> con pendingActionId diferente
+    - Resultado:       "Esa confirmacion ya vencio o ya fue procesada."
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.16 BOTONES DIRECTOS (handleButtonReply)
+--------------------------------------------------------------------------------
+
+  TEST-109: freightButton_access_check
+    - Input:           accept/<freightId> con freight al que user no tiene acceso
+    - Resultado:       "No tiene acceso a este flete."
+    - Tipo:            seguridad
+
+  TEST-110: button_start_calls_freights_start
+    - Input:           start:<freightId>
+    - Resultado:       freights.start → "🚛 Viaje iniciado."
+    - Tipo:            funcional
+
+  TEST-111: button_confirm_finished
+    - Input:           confirm_finished:<freightId>
+    - Resultado:       freights.confirmFinished ejecutado
+    - Tipo:            funcional
+
+  TEST-112: button_accept_redirects_to_ai
+    - Input:           accept:<freightId>
+    - Resultado:       AI chat con "Quiero asignar camión y chofer al flete <code>"
+    - Tipo:            edge_case
+
+  TEST-113: button_register_arrival_no_active
+    - Input:           register_arrival sin flete autónomo activo
+    - Resultado:       "No tenes un flete activo para registrar llegada."
+    - Tipo:            edge_case
+
+--------------------------------------------------------------------------------
+3.17 ERROR HANDLING
+--------------------------------------------------------------------------------
+
+  TEST-114: gemini_api_down
+    - Input:           Gemini responde con error provider_unavailable
+    - Resultado:       "El asistente esta con alta demanda…"
+    - Tipo:            error_handling
+
+  TEST-115: gemini_provider_suspended
+    - Input:           Error classified as provider_suspended
+    - Resultado:       "El servicio de inteligencia esta temporalmente no disponible…"
+    - Tipo:            error_handling
+
+  TEST-116: freights_service_throws
+    - Input:           freights.create lanza excepción
+    - Resultado:       tool-executor devuelve { error: mensaje-específico }
+    - Tipo:            error_handling
+
+  TEST-117: meta_send_fails_logs_sentry
+    - Input:           3 reintentos fallidos en Meta API
+    - Resultado:       Sentry capture + log outbound status=failed
+    - Tipo:            error_handling
+
+  TEST-118: webhook_invalid_body_structure
+    - Input:           body.entry[0].changes[0] missing
+    - Resultado:       Log "No entry/changes/value found, ignoring" + return
+    - Tipo:            error_handling
+
+  TEST-119: session_not_found_in_button_reply
+    - Input:           confirm sin sesión activa
+    - Resultado:       "No hay una accion pendiente para confirmar."
+    - Tipo:            error_handling
+
+  TEST-120: session_expired_recovery
+    - Input:           Crear sesión nueva tras expirar
+    - Resultado:       activeContext y selectedCompanyId/companyConfirmed recuperados de sesión vieja
+    - Tipo:            error_handling
+
+  TEST-121: tool_loop_deadline_exceeded
+    - Input:           Tool loop sin terminar en 120s
+    - Resultado:       break + devuelve lastText
+    - Tipo:            error_handling
+
+--------------------------------------------------------------------------------
+3.18 RATE LIMITS Y LOCKS
+--------------------------------------------------------------------------------
+
+  TEST-122: ai_rate_limit_20_per_5min
+    - Input:           21 mensajes AI del mismo user en 5 min
+    - Resultado:       "Muchos mensajes seguidos. Aguarda unos minutos."
+    - Tipo:            seguridad
+
+  TEST-123: chat_concurrency_lock
+    - Input:           2 llamadas paralelas al mismo session.id
+    - Resultado:       Segunda espera 2s; si sigue ocupado → "Estoy procesando tu mensaje anterior…"
+    - Tipo:            seguridad
+
+  TEST-124: phone_lock_serializes_messages
+    - Input:           3 mensajes casi simultáneos del mismo phone
+    - Resultado:       Procesados en orden serial
+    - Tipo:            seguridad
+
+  TEST-125: phone_lock_pool_full
+    - Input:           phoneLocks.size >= 10000
+    - Resultado:       Mensaje rechazado sin respuesta
+    - Tipo:            seguridad
+
+--------------------------------------------------------------------------------
+3.19 HISTORIAL Y CONTEXTO
+--------------------------------------------------------------------------------
+
+  TEST-126: history_sanitization_removes_invalid
+    - Input:           Historial con mensaje sin role o sin parts
+    - Resultado:       Filtrado por sanitizeHistory
+    - Tipo:            funcional
+
+  TEST-127: history_orphan_functionResponse_removed
+    - Input:           Primera entrada con functionResponse sin tool_use previo
+    - Resultado:       Removido (agent.service líneas 296-303)
+    - Tipo:            funcional
+
+  TEST-128: response_truncation_respects_word_boundary
+    - Input:           Reply de 2000 chars
+    - Resultado:       Corta en último \n si >50% del max
+    - Tipo:            edge_case
+
+  TEST-129: uuid_strip_from_response
+    - Input:           AI response con UUID inline
+    - Resultado:       UUID removido salvo que esté en URL
+    - Tipo:            funcional
+
+
+================================================================================
+SECCIÓN 4: GAPS Y RIESGOS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 VALIDACIONES DE ROL DÉBILES O AUSENTES
+--------------------------------------------------------------------------------
+
+  GAP-001: handleListReply — dispatcher genérico (router líneas 1265-1269)
+    Los listIds se inyectan de vuelta al AI como "[Seleccionó: <title> (id: <safeId>)]".
+    El sanitizado /[^\w\-.:]/g limita pero no previene prompt injection via título.
+    El title se trunca a 50 chars pero corchetes dentro no se escapan.
+    RIESGO: bajo pero no nulo en título de empresa/camión con contenido malicioso.
+
+  GAP-002: handleGetFreightDetail en path AI vs path directo
+    tool-executor:handleGetFreightDetail filtra por participantCompanyIds pero sin
+    chequeo de rol en empresa activa. showFreightDetail (router) SÍ tiene hasAccess
+    check. Inconsistencia: un operator de planta puede ver detalles via AI que no
+    debería via UI directa.
+
+  GAP-003: daily-map-data token permanente
+    Token firmado con cid no tiene TTL. Un token válido da acceso indefinido a
+    freights de esa company aunque el usuario sea desactivado.
+
+  GAP-004: findUserByPhone fallback por Company.phone
+    Si un teléfono está mal configurado en varias empresas, agarra el PRIMER usuario
+    activo (createdAt asc). Posible impersonación si telefono mal asignado.
+
+  GAP-005: saveLocationToActiveFreights para no-drivers
+    Graba GPS en TODOS los fletes activos donde cualquier companyId del user es
+    origin/dest/transporter. Un operario de productor puede aparecer como tracker
+    en fletes donde no debería.
+
+  GAP-006: Sin validación de user.active en onLocationSaved
+    Un usuario desactivado con sesión activa puede seguir enviando ubicaciones
+    hasta que la sesión expire.
+
+--------------------------------------------------------------------------------
+4.2 FLUJOS SIN MANEJO DE ERROR ROBUSTO
+--------------------------------------------------------------------------------
+
+  GAP-007: onLocationSaved sin Sentry
+    Si handleAiChat lanza dentro de onLocationSaved, el phone lock se libera
+    por el finally pero el error no es capturado ni reportado.
+
+  GAP-008: handleButtonReply 'confirm' legacy sin try/catch
+    JSON.parse(result || '{}') (router línea 1140-1179) sin try/catch.
+    Si confirmPendingAction devuelve string no-JSON → throw no capturado.
+
+  GAP-009: Crons desactivados
+    checkStaleFreights y checkDailySummary comentados en whatsapp.service.ts (líneas 63-69).
+    Si se reactivan sin feature flag, checkDailySummary usa take:500 con N+1 queries
+    y puede throttlear la Meta API con >500 usuarios.
+
+  GAP-010: downloadMedia presupuesto de tiempo
+    Si primer fetch tarda exactamente 10s, segundo fetch no tiene presupuesto suficiente.
+
+  GAP-011: audit_log fire-and-forget
+    auditLog en handleCompanySelection es fire-and-forget (.catch(warn)).
+    Si falla, se pierde el audit trail silenciosamente.
+
+--------------------------------------------------------------------------------
+4.3 POSIBLES FILTRACIONES DE DATOS ENTRE EMPRESAS
+--------------------------------------------------------------------------------
+
+  GAP-012: resolveAllCompanyIds sin activeCompanyId devuelve TODO
+    Si user.activeCompanyId no está seteado (posible en path web), devuelve IDs de
+    TODAS las memberships. Afecta: list_freights, get_dashboard, search_fields,
+    search_lots. En WhatsApp siempre hay activeCompanyId, pero en endpoints web
+    compartidos podría no haberlo.
+
+  GAP-013: pendingDocument.companyId mismatch race window
+    El check existe pero ocurre solo cuando se procesa el siguiente mensaje.
+    Si el usuario adjunta antes de que se detecte el mismatch, puede haber una
+    ventana donde el documento se asigna a la empresa incorrecta.
+
+  GAP-014: activeContext tras primera selección de empresa
+    stripOperationalFlowState solo borra el activeContext si companyChanged=true.
+    La primera selección (null → A) no considera esto "cambio". Validar que
+    no queden datos de empresa anterior en contexto.
+
+  GAP-015: Signed tokens con mismo secreto
+    verifySignedToken y verifyMetaSignature comparten WHATSAPP_APP_SECRET.
+    Un token filtrado podría usarse indistintamente (anti-patrón, separar secrets).
+
+--------------------------------------------------------------------------------
+4.4 ESTADO IN-MEMORY EN INSTANCIA ÚNICA
+--------------------------------------------------------------------------------
+
+  Las siguientes estructuras NO están en Redis y se pierden en restarts/scale-out:
+  • phoneLocks (Map)
+  • gpsWriteCooldowns (Map)
+  • freightCountsCache
+  • unregisteredCooldown (Map)
+  • messageRate (Map, controller)
+  • flowRateMap (Map, WhatsAppFlowService)
+  • _promptCache (Map, AgentService)
+  • _chatLocks (Map, AgentService)
+
+  Nota explícita en router.handleMessage líneas 60-62. Escalar horizontalmente
+  requiere migración de todo esto a Redis antes de añadir instancias.
+  pendingActions duplica estado entre Map in-memory y flowState.pendingAiAction en DB.
+
+--------------------------------------------------------------------------------
+4.5 COBERTURA DE TESTS ACTUAL VS REQUERIDA
+--------------------------------------------------------------------------------
+
+  CUBIERTO HOY:
+  • ai-profile.spec.ts:            resolución de perfil por active membership, autonomous_driver
+  • tool-executor.service.spec.ts: filterTools por perfil, herramienta no habilitada,
+                                   confirm_freight_loaded pending action, multi-company
+                                   scoping, invalidación en company change
+  • whatsapp-flow.service.spec.ts: confirm_loaded happy path, comma-to-dot, high-tonnage
+  • whatsapp-router.service.spec.ts: casos básicos driver y multi-company
+
+  SIN COBERTURA (alta prioridad):
+  • Webhook controller completo (HMAC, dedupe, rate limit, signed tokens)
+  • WhatsAppService (SSRF whitelist, retry, Sentry on failure)
+  • AgentService (tool loop, history sanitization, deterministic intent, rate limit)
+  • Perfiles plant_manager, plant_operator, plant_driver: 0 tests
+  • Perfil autonomous_driver: 0 tests de comportamiento
+  • Autorización cruzada: solo 1 test; faltan 10+ pares de perfiles
+  • Error classification Gemini: 0 tests
+  • Flujos reject_freight y cancel_freight: 0 tests
+  • Flow rate limiting y cancel-on-greeting: 0 tests
+  • pendingDocument TTL, companyId mismatch, MIME allowlist: 0 tests
+  • findUserByPhone fallback por Company.phone: 0 tests (vector de impersonación)
+  • Greeting / fast path / emoji / too-short: 0 tests
+  • tryDeterministicIntent: 0 tests directos
+  • sanitizeHistory: 0 tests directos
+
+--------------------------------------------------------------------------------
+4.6 PRIORIDADES RECOMENDADAS
+--------------------------------------------------------------------------------
+
+  ALTA SEGURIDAD:
+  1. Tests para findUserByPhone fallback (GAP-004)
+  2. SSRF whitelist en downloadMedia
+  3. Signed token expiration y separación de secrets (GAP-015)
+  4. Matriz completa de autorización cruzada (TEST-047, 048, 055, 065, 066, 073)
+
+  ALTA DATOS:
+  5. resolveAllCompanyIds sin activeCompanyId (GAP-012)
+  6. pendingDocument companyId mismatch window (GAP-013)
+  7. activeContext cleanup en primera selección empresa (GAP-014)
+
+  MEDIA UX:
+  8. Tests para flujos reject, cancel, confirm_loaded completos
+  9. Selección de empresa: pagination y pending message replay
+  10. Greeting / fast path completos
+
+  MEDIA RESILIENCIA:
+  11. Gemini error classification
+  12. Session recovery y dedup entre instancias
+  13. handleButtonReply 'confirm' try/catch (GAP-008)
+
+  BAJA (MONITOREO):
+  14. Reactivar crons con feature flag controlado
+  15. Audit log con retry (GAP-011)
+  16. Documentar plan de migración in-memory → Redis
+
+================================================================================
+FIN DE AUDITORÍA
+================================================================================
