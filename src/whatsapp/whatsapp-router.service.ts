@@ -636,7 +636,8 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
   private isResetSessionIntent(text: string): boolean {
     const normalized = this.normalizeCommandText(text);
-    return /^(reiniciar|reinicia|reset|resetear|resetea|limpiar|limpia|borrar|borra) (sesion|chat|conversacion)$/i.test(normalized)
+    return /^(reiniciar|reinicia|reset|resetear|resetea)$/i.test(normalized)
+      || /^(reiniciar|reinicia|reset|resetear|resetea|limpiar|limpia|borrar|borra) (sesion|chat|conversacion)$/i.test(normalized)
       || /^(reiniciar sesion|reset sesion|resetear sesion|limpiar sesion|borrar sesion)$/i.test(normalized)
       || /^(empezar de nuevo|arrancar de nuevo|volver a empezar)$/i.test(normalized);
   }
