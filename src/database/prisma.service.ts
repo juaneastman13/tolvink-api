@@ -21,6 +21,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit() {
     await this.connectWithRetry();
+    if (process.env.NODE_ENV === 'production' && process.env.RUN_RUNTIME_SCHEMA_ENSURE !== 'true') {
+      this.logger.log('Runtime schema ensure skipped in production');
+      return;
+    }
     await this.ensurePoisTable();
     await this.ensureTolvinkPlantsLocalityColumn();
     await this.ensureTruckTables();

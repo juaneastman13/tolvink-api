@@ -56,10 +56,13 @@ async function bootstrap() {
     flushP.catch(() => {}).finally(() => process.exit(1));
   });
 
+  logger.log('Creating Nest application');
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
     bodyParser: false, // Disable built-in parser — we configure our own below
   });
+
+  logger.log('Nest application created');
 
   // Security
   app.use(helmet({
@@ -192,6 +195,7 @@ async function bootstrap() {
 
   // Railway requires binding to 0.0.0.0
   const port = process.env.PORT || 4000;
+  logger.log(`Starting HTTP listener on 0.0.0.0:${port}`);
   await app.listen(port, '0.0.0.0');
   logger.log(`Tolvink API running on port ${port}`);
 }
