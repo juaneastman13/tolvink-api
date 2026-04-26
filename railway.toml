@@ -1,6 +1,8 @@
 [build]
 noCache = true
 
+# preDeployCommand disabled — DIRECT_URL needs to be re-validated against the prod
+# Supabase project before re-enabling. Apply migrations manually for now.
+# To re-enable: preDeployCommand = "npx prisma migrate deploy"
 [deploy]
-preDeployCommand = "npx prisma migrate deploy"
 
