@@ -1,8 +1,6 @@
 [build]
 noCache = true
 
-# preDeployCommand temporarily disabled — DB connection hangs on URL with hidden newline.
-# Once DATABASE_URL/DIRECT_URL are sanitized in Railway, restore:
-# preDeployCommand = "npx prisma migrate deploy"
 [deploy]
+preDeployCommand = "npx prisma migrate deploy"
 
