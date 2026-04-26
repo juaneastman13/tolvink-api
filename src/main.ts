@@ -18,9 +18,10 @@ import { requestCache } from './common/request-cache';
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
-  // TEMP DEBUG: inspect DATABASE_URL trailing characters to detect hidden newlines
+  // TEMP DEBUG: inspect DATABASE_URL trailing characters + unique push marker
   const dbUrl = process.env.DATABASE_URL || '';
   const tail = dbUrl.slice(-8);
+  console.log('[PUSH_MARKER_ALPHA_2026-04-26] If you see this line, Railway is deploying the latest commit');
   console.log('[DEBUG_DB_URL] length=' + dbUrl.length + ' tail=' + JSON.stringify(tail) + ' charCodes=' + Array.from(tail).map(c => c.charCodeAt(0)).join(','));
 
   // Initialize Sentry error tracking
