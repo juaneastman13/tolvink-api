@@ -191,7 +191,24 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
       type: 'object',
       properties: {
         code: { type: 'string', description: 'Codigo del flete' },
-        trucks: { type: 'array', description: 'Lista de camiones con transportCompanyId, truckId, driverId, plate, tons, isExternal, externalCompanyName, externalDriverName' },
+        trucks: {
+          type: 'array',
+          description: 'Lista de camiones con transportCompanyId, truckId, driverId, plate, tons, isExternal, externalCompanyName, externalDriverName',
+          items: {
+            type: 'object',
+            properties: {
+              transportCompanyId: { type: 'string' },
+              truckId: { type: 'string' },
+              driverId: { type: 'string' },
+              plate: { type: 'string' },
+              tons: { type: 'number' },
+              weightKg: { type: 'number' },
+              isExternal: { type: 'boolean' },
+              externalCompanyName: { type: 'string' },
+              externalDriverName: { type: 'string' },
+            },
+          },
+        },
         transportCompanyId: { type: 'string', description: 'UUID empresa transportista' },
         truckId: { type: 'string', description: 'UUID camion' },
         driverId: { type: 'string', description: 'UUID chofer' },
