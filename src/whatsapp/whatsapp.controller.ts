@@ -430,7 +430,11 @@ export class WhatsAppController implements OnModuleDestroy {
       return;
     }
     const apiBase = '/api/whatsapp';
-    const mapsKey = this.config.get<string>('GOOGLE_MAPS_API_KEY') || '';
+    const mapsKey = this.config.get<string>('GOOGLE_MAPS_API_KEY')
+      || this.config.get<string>('VITE_GMAPS_KEY')
+      || this.config.get<string>('VITE_GOOGLE_MAPS_PUBLIC_KEY')
+      || this.config.get<string>('GOOGLE_PLACES_API_KEY')
+      || '';
     const initialPurpose = slug.startsWith('origen-')
       ? 'origin'
       : slug.startsWith('destino-')
@@ -625,7 +629,7 @@ export class WhatsAppController implements OnModuleDestroy {
       setPoint(lat, lng, 7, 'pin_manual');
     };
     function mapsFailed() {
-      document.getElementById('map').innerHTML = '<div class="map-empty">No se pudo cargar Google Maps. Revisar GOOGLE_MAPS_API_KEY en el servidor.</div>';
+      document.getElementById('map').innerHTML = '<div class="map-empty">No se pudo cargar Google Maps. Revisar la configuracion de Maps en el servidor.</div>';
       saveBtn.disabled = true;
       setStatus('El mapa no esta disponible en este momento.', true);
     }
