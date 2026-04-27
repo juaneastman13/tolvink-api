@@ -477,7 +477,7 @@ export class ToolExecutorService {
       ttlMinutes: 7 * 24 * 60,
     });
     return JSON.stringify({
-      status: 'created',
+      status: 'map_link',
       code: freight.code,
       url: link.url,
       message: `Te paso el mapa del flete ${freight.code} para marcar o consultar ubicaciones: ${link.url}`,

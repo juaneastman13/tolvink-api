@@ -128,7 +128,11 @@ export class AgentService implements OnModuleDestroy {
       const locIndicator = savedLocation?.lat != null && savedLocation?.lng != null
         ? `\n[UBICACION DISPONIBLE: usar con originFromLastLocation/destinationFromLastLocation si el usuario confirma que corresponde. Proposito sugerido: ${state.lastLocationPurpose || savedLocation.purpose || 'general'}. Nombre: ${savedLocation.name || savedLocation.address || 'ubicacion'}]`
         : '';
-      const userText = userMessage.slice(0, 5000) + docIndicator + locIndicator;
+      const activeContext = state.activeContext || state._recoveredContext;
+      const freightContextIndicator = activeContext?.lastFreightCode
+        ? `\n[FLETE EN CONTEXTO: ${activeContext.lastFreightCode}. ${activeContext.lastFreightSummary || ''}]`
+        : '';
+      const userText = userMessage.slice(0, 5000) + docIndicator + locIndicator + freightContextIndicator;
 
       // Build messages: sanitized history + new user message
       let geminiMessages: GeminiMessage[] = [
@@ -357,6 +361,18 @@ export class AgentService implements OnModuleDestroy {
     }
 
     const codeMatch = message.match(/\bF\d{2}-[A-Z0-9.\-]+\b/i);
+    const activeContext = ((session?.flowState as any) || {}).activeContext || ((session?.flowState as any) || {})._recoveredContext;
+    const contextualCode = codeMatch?.[0] || activeContext?.lastFreightCode;
+    if (contextualCode && /(mapa|ubicaci[oó]n|ubicaciones|marcar|cargar ubicaci[oó]n|indicar ubicaci[oó]n|punto de carga|carga|descarga)/i.test(normalized)) {
+      const purpose = /(descarga|destino)/i.test(normalized)
+        ? 'descarga'
+        : /(origen|carga)/i.test(normalized)
+          ? 'carga'
+          : 'mapa';
+      const result = await this.toolExecutor.executeTool('generate_freight_map_link', { code: contextualCode, mode: 'edit', purpose }, user, session);
+      return { text: this.renderToolJson(result) };
+    }
+
     if (codeMatch && /(detalle|estado|como va|cómo va|ver)/i.test(normalized)) {
       const result = await this.toolExecutor.executeTool('get_freight_detail', { code: codeMatch[0] }, user, session);
       return { text: this.renderToolJson(result) };
@@ -423,6 +439,7 @@ export class AgentService implements OnModuleDestroy {
     if (parsed.status === 'arrival_registered' && parsed.code) return `Listo.\n📋 ${parsed.code}\nLlegada registrada.`;
     if (parsed.status === 'attached' && parsed.documentName) return `Documento adjuntado: ${parsed.documentName}`;
     if (parsed.status === 'location_picker' && parsed.url) return parsed.message || `Indica la ubicacion aca: ${parsed.url}`;
+    if (parsed.status === 'map_link' && parsed.url) return parsed.message || `Mapa del flete ${parsed.code}: ${parsed.url}`;
     if (parsed.status === 'already_accepted' && parsed.message) return parsed.message;
     if (Array.isArray(parsed.freights)) {
       const lines = parsed.freights.slice(0, 5).map((f: any) => `📋 ${f.code} · ${f.status} · ${f.origin} → ${f.dest}`);

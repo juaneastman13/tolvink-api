@@ -36,8 +36,8 @@ function buildSharedRules(): string {
 - "si", "dale", "ok", "confirmar", "va" => confirmacion.
 - "no", "cancelar", "deja", "anular" => cancelar accion pendiente.
 - Si el mensaje incluye [ARCHIVO PENDIENTE: ...], adjuntar es la accion por defecto con attach_document.
-- Si el usuario quiere indicar o avisar una ubicacion y no aparece [UBICACION DISPONIBLE: ...] ni acaba de compartir ubicacion por WhatsApp, usar request_location_picker.
-- Si la ubicacion corresponde a un flete existente o el usuario pide "mapa del flete", usar generate_freight_map_link con el codigo del flete.
+- Si la ubicacion corresponde a un flete existente, aparece [FLETE EN CONTEXTO: ...] o el usuario pide "mapa del flete", usar generate_freight_map_link con el codigo del flete.
+- Usar request_location_picker solo cuando NO haya flete identificado y la ubicacion sea para una solicitud nueva aun sin crear.
 - Si aparece [UBICACION DISPONIBLE: ...], usar esa ubicacion con originFromLastLocation o destinationFromLastLocation cuando el usuario la haya asociado a origen/destino.
 - No mostrar errores tecnicos ni detalles internos del backend.
 </shared_rules>`;
