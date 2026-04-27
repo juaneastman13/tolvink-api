@@ -4,6 +4,7 @@
 
 export const MAX_TOOL_ITERATIONS = 15;
 export const TOOL_TIMEOUT_MS = 120_000;
+export const WHATSAPP_TOOL_TIMEOUT_MS = 25_000;
 export const MAX_HISTORY_MESSAGES = 40;
 export const SESSION_TIMEOUT_MS = 60 * 60 * 1000;
 export const MAX_RESPONSE_CHARS = 1600;

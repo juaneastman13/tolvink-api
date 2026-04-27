@@ -7,8 +7,10 @@ import { GoogleGenAI } from '@google/genai';
 import type { AiToolDefinition } from '../tools/tool-definitions';
 import {
   getConfiguredAiProvider,
+  getGeminiFallbackModel,
   getGeminiMaxOutputTokens,
   getGeminiModel,
+  getGeminiRequestTimeoutMs,
   getGeminiTemperature,
   LlmMessage,
   LlmResponse,
@@ -24,8 +26,10 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
   private client: GoogleGenAI | null = null;
   private readonly provider = getConfiguredAiProvider();
   private readonly model = getGeminiModel();
+  private readonly fallbackModel = getGeminiFallbackModel();
   private readonly maxOutputTokens = getGeminiMaxOutputTokens();
   private readonly temperature = getGeminiTemperature();
+  private readonly requestTimeoutMs = getGeminiRequestTimeoutMs();
 
   onModuleInit() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -34,7 +38,7 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
         this.logger.warn(`Unsupported AI_PROVIDER=${this.provider}; falling back to Gemini because GEMINI_API_KEY is configured`);
       }
       this.client = new GoogleGenAI({ apiKey });
-      this.logger.log(`Gemini client initialized (model: ${this.model}, key: ${apiKey.slice(0, 8)}...)`);
+      this.logger.log(`Gemini client initialized (model: ${this.model}, fallback: ${this.fallbackModel || 'disabled'}, key: ${apiKey.slice(0, 8)}...)`);
     } else {
       this.logger.error('GEMINI_API_KEY not set — Mechanic module will be unavailable');
     }
@@ -131,8 +135,25 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
   }): Promise<GeminiResponse> {
     if (!this.client) throw new Error('Gemini client not initialized');
 
-    const response = await this.client.models.generateContent({
-      model: this.model,
+    try {
+      return await this.generateWithModel(this.model, params);
+    } catch (error) {
+      if (!this.shouldFallback(error)) throw error;
+      if (!this.fallbackModel || this.fallbackModel === this.model) throw error;
+      this.logger.warn(`Gemini primary model failed; retrying with fallback ${this.fallbackModel}: ${this.summarizeProviderError(error)}`);
+      return this.generateWithModel(this.fallbackModel, params);
+    }
+  }
+
+  private async generateWithModel(model: string, params: {
+    system: string;
+    messages: GeminiMessage[];
+    tools: any[];
+  }): Promise<GeminiResponse> {
+    if (!this.client) throw new Error('Gemini client not initialized');
+
+    const apiCall = this.client.models.generateContent({
+      model,
       contents: params.messages,
       config: {
         systemInstruction: params.system,
@@ -141,10 +162,24 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
         tools: params.tools.length > 0 ? [{ functionDeclarations: params.tools }] : undefined,
       },
     });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`Gemini timeout after ${this.requestTimeoutMs}ms`)),
+        this.requestTimeoutMs,
+      );
+    });
+    const response = await Promise.race([apiCall, timeout]).finally(() => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    });
 
     // Parse response
     const candidate = response.candidates?.[0];
     const parts = candidate?.content?.parts || [];
+    const finishReason = candidate?.finishReason;
+    if (finishReason && !['STOP', 'MAX_TOKENS'].includes(finishReason)) {
+      this.logger.warn(`Gemini finishReason=${finishReason} model=${model}`);
+    }
 
     const textParts = parts.filter((p: any) => p.text).map((p: any) => p.text);
     const functionCalls = parts
@@ -168,6 +203,26 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
       functionCalls,
       rawParts: parts,
       usageMetadata: usage,
+      finishReason,
+      model,
     };
+  }
+
+  private shouldFallback(error: any): boolean {
+    const msg = String(error?.message || error || '').toLowerCase();
+    return msg.includes('404')
+      || msg.includes('not found')
+      || msg.includes('deprecat')
+      || msg.includes('unavailable')
+      || msg.includes('503')
+      || msg.includes('500')
+      || msg.includes('429')
+      || msg.includes('quota')
+      || msg.includes('timeout')
+      || msg.includes('failed_precondition');
+  }
+
+  private summarizeProviderError(error: any): string {
+    return String(error?.message || error || 'unknown').slice(0, 240);
   }
 }

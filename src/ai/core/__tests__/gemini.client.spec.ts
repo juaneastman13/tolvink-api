@@ -1,9 +1,12 @@
 import { GeminiClient } from '../gemini.client';
 import {
+  DEFAULT_GEMINI_FALLBACK_MODEL,
   DEFAULT_GEMINI_MODEL,
   getConfiguredAiProvider,
+  getGeminiFallbackModel,
   getGeminiMaxOutputTokens,
   getGeminiModel,
+  getGeminiRequestTimeoutMs,
   getGeminiTemperature,
 } from '../llm-provider';
 
@@ -24,16 +27,21 @@ describe('Gemini LLM provider', () => {
 
     expect(getConfiguredAiProvider()).toBe('gemini');
     expect(getGeminiModel()).toBe(DEFAULT_GEMINI_MODEL);
+    expect(getGeminiFallbackModel()).toBe(DEFAULT_GEMINI_FALLBACK_MODEL);
   });
 
   it('reads Gemini tuning from env', () => {
     process.env.GEMINI_MODEL = 'gemini-test-model';
+    process.env.GEMINI_FALLBACK_MODEL = 'gemini-fallback-test-model';
     process.env.GEMINI_MAX_OUTPUT_TOKENS = '512';
     process.env.GEMINI_TEMPERATURE = '0.15';
+    process.env.GEMINI_REQUEST_TIMEOUT_MS = '12345';
 
     expect(getGeminiModel()).toBe('gemini-test-model');
+    expect(getGeminiFallbackModel()).toBe('gemini-fallback-test-model');
     expect(getGeminiMaxOutputTokens()).toBe(512);
     expect(getGeminiTemperature()).toBe(0.15);
+    expect(getGeminiRequestTimeoutMs()).toBe(12345);
   });
 
   it('converts Tolvink tool definitions into Gemini function declarations', () => {
@@ -97,6 +105,7 @@ describe('Gemini LLM provider', () => {
     const client = new GeminiClient();
     const generateContent = jest.fn().mockResolvedValue({
       candidates: [{
+        finishReason: 'STOP',
         content: {
           parts: [
             { text: 'Listo' },
@@ -128,6 +137,35 @@ describe('Gemini LLM provider', () => {
     expect(result.text).toBe('Listo');
     expect(result.functionCalls).toEqual([{ name: 'crear_flete', args: { origen: 'Mercedes' } }]);
     expect(result.usageMetadata).toEqual({ promptTokenCount: 10, candidatesTokenCount: 5 });
+    expect(result.finishReason).toBe('STOP');
+    expect(result.model).toBe('gemini-test-model');
+  });
+
+  it('falls back to the stable model when the primary model fails transiently', async () => {
+    process.env.GEMINI_MODEL = 'gemini-preview-test';
+    process.env.GEMINI_FALLBACK_MODEL = 'gemini-stable-test';
+    const client = new GeminiClient();
+    const generateContent = jest.fn()
+      .mockRejectedValueOnce(new Error('503 unavailable'))
+      .mockResolvedValueOnce({
+        candidates: [{
+          finishReason: 'STOP',
+          content: { parts: [{ text: 'Listo fallback' }] },
+        }],
+      });
+
+    (client as any).client = { models: { generateContent } };
+
+    const result = await client.sendMessage({
+      system: 'Sos Tolvink',
+      messages: [{ role: 'user', parts: [{ text: 'hola' }] }],
+      tools: [],
+    });
+
+    expect(generateContent).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'gemini-preview-test' }));
+    expect(generateContent).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'gemini-stable-test' }));
+    expect(result.text).toBe('Listo fallback');
+    expect(result.model).toBe('gemini-stable-test');
   });
 
   it('fails clearly when Gemini is not initialized', async () => {

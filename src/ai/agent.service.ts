@@ -14,7 +14,7 @@ import { classifyAiError, sanitizeErrorForLog } from '../common/error-utils';
 import {
   MAX_TOOL_ITERATIONS, TOOL_TIMEOUT_MS, SESSION_TIMEOUT_MS,
   MAX_HISTORY_MESSAGES, PROMPT_CACHE_TTL_MS, MAX_RESPONSE_CHARS,
-  WEB_MAX_RESPONSE_CHARS,
+  WEB_MAX_RESPONSE_CHARS, WHATSAPP_TOOL_TIMEOUT_MS,
 } from './core/constants';
 
 @Injectable()
@@ -141,7 +141,7 @@ export class AgentService implements OnModuleDestroy {
       const geminiTools = this.gemini.convertTools(filteredDefs);
 
       // Tool loop
-      const loopDeadline = Date.now() + TOOL_TIMEOUT_MS;
+      const loopDeadline = Date.now() + (isWeb ? TOOL_TIMEOUT_MS : WHATSAPP_TOOL_TIMEOUT_MS);
       let loopCount = 0;
       let lastText = '';
 
@@ -161,6 +161,16 @@ export class AgentService implements OnModuleDestroy {
         });
 
         lastText = response.text;
+        if (response.finishReason && response.finishReason !== 'STOP') {
+          this.logger.warn(`Gemini finishReason=${response.finishReason} model=${response.model || 'unknown'}`);
+          if (response.finishReason === 'SAFETY' || response.finishReason === 'RECITATION') {
+            return { text: 'No pude responder eso de forma segura. Reformula el pedido y lo vemos.' };
+          }
+          if (response.finishReason === 'MAX_TOKENS' && response.functionCalls.length === 0) {
+            lastText = response.text || 'La respuesta quedo incompleta. Pedime una consulta mas concreta y la resolvemos.';
+            break;
+          }
+        }
 
         // Add model response to messages — use rawParts to preserve thought_signature
         if (response.rawParts.length > 0) {
