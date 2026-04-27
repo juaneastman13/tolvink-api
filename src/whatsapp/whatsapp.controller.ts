@@ -430,6 +430,244 @@ export class WhatsAppController implements OnModuleDestroy {
       return;
     }
     const apiBase = '/api/whatsapp';
+    const mapsKey = this.config.get<string>('GOOGLE_MAPS_API_KEY') || '';
+    const initialPurpose = slug.startsWith('origen-')
+      ? 'origin'
+      : slug.startsWith('destino-')
+        ? 'destination'
+        : 'general';
+    const mapsScript = mapsKey
+      ? `<script async defer src="https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(mapsKey)}&libraries=places&callback=initMap"></script>`
+      : '';
+    res.setHeader('content-type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tolvink - Indicar ubicacion</title>
+  <style>
+    :root { --green: #1f6f46; --green-dark: #164c33; --ink: #17211b; --muted: #65736a; --line: #d8e0d6; --soft: #f4f7f2; --panel: #fff; --danger: #a24a2b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--soft); }
+    main { min-height: 100vh; display: grid; grid-template-rows: auto minmax(340px, 1fr) auto; }
+    header { padding: 16px 18px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 1040px; margin: 0 auto; }
+    .brand-mark { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: var(--green); color: #fff; font-weight: 800; }
+    .title-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    h1 { margin: 0; font-size: 20px; line-height: 1.2; }
+    p { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.35; }
+    .pill { flex: 0 0 auto; border: 1px solid #b8cfbf; border-radius: 999px; padding: 6px 10px; color: var(--green-dark); background: #eef6f0; font-size: 12px; font-weight: 700; }
+    #map { min-height: 340px; background: #dfe6dd; }
+    .map-empty { height: 100%; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); }
+    .sheet { background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -14px 30px rgba(23, 33, 27, 0.08); }
+    form { max-width: 1040px; margin: 0 auto; padding: 14px 18px 18px; display: grid; gap: 12px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+    input { width: 100%; border: 1px solid #c9d5ca; border-radius: 8px; padding: 12px 13px; font-size: 16px; color: var(--ink); background: #fff; }
+    input:focus { outline: 2px solid rgba(31, 111, 70, 0.2); border-color: var(--green); }
+    .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+    .chip { flex: 0 0 auto; border: 1px solid #c9d5ca; border-radius: 999px; padding: 9px 12px; background: #fff; color: var(--ink); font-weight: 700; font-size: 14px; }
+    .chip.selected { border-color: var(--green); background: #e8f3ec; color: var(--green-dark); }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button { min-height: 48px; border: 0; border-radius: 8px; padding: 12px 14px; font-size: 15px; font-weight: 800; background: var(--green); color: #fff; cursor: pointer; }
+    button.secondary { background: #e8eee6; color: var(--ink); }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .selection { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfa; color: var(--muted); font-size: 14px; line-height: 1.35; }
+    #status { min-height: 20px; font-size: 14px; color: var(--muted); }
+    #status.error { color: var(--danger); }
+    @media (max-width: 680px) {
+      main { grid-template-rows: auto 46vh auto; }
+      header { padding: 13px 14px 11px; }
+      .pill { display: none; }
+      h1 { font-size: 18px; }
+      form { padding: 12px 14px 16px; }
+      .actions { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand">
+        <div class="title-wrap">
+          <span class="brand-mark">T</span>
+          <div>
+            <h1>Indicar ubicacion</h1>
+            <p>Toca el mapa, busca un lugar o usa tu ubicacion actual.</p>
+          </div>
+        </div>
+        <span class="pill">WhatsApp</span>
+      </div>
+    </header>
+    <div id="map"><div class="map-empty">Cargando Google Maps...</div></div>
+    <section class="sheet">
+      <form id="form">
+        <div>
+          <label for="search">Buscar lugar o direccion</label>
+          <input id="search" autocomplete="off" placeholder="Ej: Planta Nueva Palmira, Campo Ruta 3" />
+        </div>
+        <div>
+          <label>Tipo de ubicacion</label>
+          <div class="chips" id="chips"></div>
+        </div>
+        <div class="selection" id="selectedText">Todavia no marcaste un punto.</div>
+        <div>
+          <label for="name">Nombre visible</label>
+          <input id="name" maxlength="255" placeholder="Ej: Campo Paso de los Troncos" />
+        </div>
+        <div class="actions">
+          <button type="button" class="secondary" id="gps">Usar mi ubicacion actual</button>
+          <button type="submit" id="save">Guardar ubicacion</button>
+        </div>
+        <div id="status"></div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const slug = ${JSON.stringify(slug)};
+    const initialPurpose = ${JSON.stringify(initialPurpose)};
+    const hasMapsKey = ${JSON.stringify(Boolean(mapsKey))};
+    const statusEl = document.getElementById('status');
+    const selectedTextEl = document.getElementById('selectedText');
+    const nameEl = document.getElementById('name');
+    const searchEl = document.getElementById('search');
+    const saveBtn = document.getElementById('save');
+    const purposeOptions = [
+      { value: 'origin', label: 'Origen' },
+      { value: 'destination', label: 'Destino' },
+      { value: 'poi', label: 'Punto de interes' },
+      { value: 'load', label: 'Carga' },
+      { value: 'unload', label: 'Descarga' },
+      { value: 'reference', label: 'Referencia' },
+      { value: 'other', label: 'Otro' },
+    ];
+    const selectedPurposes = new Set([initialPurpose === 'general' ? 'reference' : initialPurpose]);
+    let map = null;
+    let marker = null;
+    let geocoder = null;
+    let inputMethod = 'pin_manual';
+    let selectedAddress = '';
+    let lat = -32.5228;
+    let lng = -55.7658;
+    function setStatus(message, isError) {
+      statusEl.textContent = message || '';
+      statusEl.className = isError ? 'error' : '';
+    }
+    function selectedPurposeLabels() {
+      return purposeOptions.filter((option) => selectedPurposes.has(option.value)).map((option) => option.label);
+    }
+    function updateSelectedText() {
+      selectedTextEl.textContent = selectedPurposeLabels().join(', ') + ' - ' + (selectedAddress || 'Punto seleccionado en el mapa');
+    }
+    function renderChips() {
+      const chipsEl = document.getElementById('chips');
+      chipsEl.innerHTML = '';
+      purposeOptions.forEach((option) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'chip' + (selectedPurposes.has(option.value) ? ' selected' : '');
+        button.textContent = option.label;
+        button.addEventListener('click', () => {
+          if (selectedPurposes.has(option.value) && selectedPurposes.size > 1) selectedPurposes.delete(option.value);
+          else selectedPurposes.add(option.value);
+          renderChips();
+          updateSelectedText();
+        });
+        chipsEl.appendChild(button);
+      });
+    }
+    function reverseGeocode(position) {
+      if (!geocoder) { updateSelectedText(); return; }
+      geocoder.geocode({ location: position }, (results, status) => {
+        selectedAddress = status === 'OK' && results && results[0] ? results[0].formatted_address : '';
+        updateSelectedText();
+      });
+    }
+    function setPoint(nextLat, nextLng, zoom, method, address) {
+      lat = Number(nextLat);
+      lng = Number(nextLng);
+      inputMethod = method || inputMethod;
+      selectedAddress = address || '';
+      const position = { lat, lng };
+      if (marker) marker.setPosition(position);
+      if (map && zoom) map.setZoom(zoom);
+      if (map) map.panTo(position);
+      if (address) updateSelectedText();
+      else reverseGeocode(position);
+    }
+    window.initMap = function initMap() {
+      const center = { lat, lng };
+      geocoder = new google.maps.Geocoder();
+      map = new google.maps.Map(document.getElementById('map'), {
+        center,
+        zoom: 7,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+        clickableIcons: true,
+        gestureHandling: 'greedy',
+      });
+      marker = new google.maps.Marker({ position: center, map, draggable: true, title: 'Ubicacion seleccionada' });
+      map.addListener('click', (event) => setPoint(event.latLng.lat(), event.latLng.lng(), 16, 'pin_manual'));
+      marker.addListener('dragend', (event) => setPoint(event.latLng.lat(), event.latLng.lng(), null, 'pin_manual'));
+      const autocomplete = new google.maps.places.Autocomplete(searchEl, { fields: ['geometry', 'formatted_address', 'name'] });
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        if (!place.geometry || !place.geometry.location) {
+          setStatus('No pude ubicar ese lugar. Proba con otra busqueda.', true);
+          return;
+        }
+        const placeName = place.name || searchEl.value.trim();
+        if (!nameEl.value.trim() && placeName) nameEl.value = placeName;
+        setStatus('');
+        setPoint(place.geometry.location.lat(), place.geometry.location.lng(), 16, 'search', place.formatted_address || placeName || '');
+      });
+      setPoint(lat, lng, 7, 'pin_manual');
+    };
+    function mapsFailed() {
+      document.getElementById('map').innerHTML = '<div class="map-empty">No se pudo cargar Google Maps. Revisar GOOGLE_MAPS_API_KEY en el servidor.</div>';
+      saveBtn.disabled = true;
+      setStatus('El mapa no esta disponible en este momento.', true);
+    }
+    document.getElementById('gps').addEventListener('click', () => {
+      if (!navigator.geolocation) { setStatus('Tu navegador no permite geolocalizacion.', true); return; }
+      setStatus('Buscando ubicacion...');
+      navigator.geolocation.getCurrentPosition(
+        pos => { setPoint(pos.coords.latitude, pos.coords.longitude, 16, 'browser_geolocation'); setStatus('Ubicacion actual cargada. Confirmala antes de guardar.'); },
+        () => { setStatus('No se pudo obtener tu ubicacion. Toca el mapa para marcarla.', true); },
+        { enableHighAccuracy: true, timeout: 12000 }
+      );
+    });
+    document.getElementById('form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const purposes = Array.from(selectedPurposes);
+      const labels = selectedPurposeLabels().join(', ');
+      const payload = { slug, lat, lng, name: nameEl.value.trim(), address: selectedAddress || searchEl.value.trim(), purposes, inputMethod };
+      if (!Number.isFinite(payload.lat) || !Number.isFinite(payload.lng)) { setStatus('Selecciona un punto valido en el mapa.', true); return; }
+      if (!purposes.length) { setStatus('Elegi al menos un tipo de ubicacion.', true); return; }
+      if (!confirm('Guardar esta ubicacion como ' + labels + '?')) return;
+      setStatus('Guardando...');
+      saveBtn.disabled = true;
+      const resp = await fetch('${apiBase}/save-location-by-slug', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        saveBtn.disabled = false;
+        setStatus('No se pudo guardar. El enlace puede estar expirado.', true);
+        return;
+      }
+      setStatus('Ubicacion guardada. Ya podes volver a WhatsApp.');
+    });
+    renderChips();
+    updateSelectedText();
+    if (!hasMapsKey) mapsFailed();
+  </script>
+  ${mapsScript}
+</body>
+</html>`);
+    return;
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.send(`<!doctype html>
 <html lang="es">
@@ -539,7 +777,7 @@ export class WhatsAppController implements OnModuleDestroy {
   @Post('save-location')
   @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(200)
-  async saveLocation(@Body() body: { token: string; lat: number; lng: number; name?: string; address?: string }) {
+  async saveLocation(@Body() body: { token: string; lat: number; lng: number; name?: string; address?: string; purposes?: string[]; inputMethod?: string }) {
     if (!body.token || body.lat == null || body.lng == null) {
       throw new BadRequestException('token, lat, lng required');
     }
@@ -577,11 +815,15 @@ export class WhatsAppController implements OnModuleDestroy {
     // Atomic: consume token + save location in one UPDATE.
     // The WHERE clause ensures only one concurrent request can succeed.
     const locationPurpose = state.locationToken?.purpose || 'general';
+    const locationPurposes = this.normalizeLocationPurposes(body.purposes, locationPurpose);
+    const primaryPurpose = locationPurposes[0] || locationPurpose;
+    const inputMethod = this.normalizeLocationInputMethod(body.inputMethod);
     const updated = await this.prisma.$queryRaw<any[]>`
       UPDATE whatsapp_sessions
       SET flow_state = flow_state::jsonb || ${JSON.stringify({
-        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: locationPurpose },
-        lastLocationPurpose: locationPurpose,
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: primaryPurpose, purposes: locationPurposes, inputMethod },
+        lastLocationPurpose: primaryPurpose,
+        lastLocationPurposes: locationPurposes,
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()
@@ -610,7 +852,7 @@ export class WhatsAppController implements OnModuleDestroy {
   @Post('save-location-by-slug')
   @Throttle({ default: { ttl: 60000, limit: 10 } })
   @HttpCode(200)
-  async saveLocationBySlug(@Body() body: { slug: string; lat: number; lng: number; name?: string; address?: string }) {
+  async saveLocationBySlug(@Body() body: { slug: string; lat: number; lng: number; name?: string; address?: string; purposes?: string[]; inputMethod?: string }) {
     if (!body.slug || body.lat == null || body.lng == null) {
       throw new BadRequestException('slug, lat, lng required');
     }
@@ -648,11 +890,15 @@ export class WhatsAppController implements OnModuleDestroy {
 
     // Atomic: consume slug + save location in one UPDATE.
     const locationPurpose = state.locationToken?.purpose || 'general';
+    const locationPurposes = this.normalizeLocationPurposes(body.purposes, locationPurpose);
+    const primaryPurpose = locationPurposes[0] || locationPurpose;
+    const inputMethod = this.normalizeLocationInputMethod(body.inputMethod);
     const updated = await this.prisma.$queryRaw<any[]>`
       UPDATE whatsapp_sessions
       SET flow_state = flow_state::jsonb || ${JSON.stringify({
-        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: locationPurpose },
-        lastLocationPurpose: locationPurpose,
+        lastLocation: { lat: body.lat, lng: body.lng, name: body.name || '', address: body.address || '', purpose: primaryPurpose, purposes: locationPurposes, inputMethod },
+        lastLocationPurpose: primaryPurpose,
+        lastLocationPurposes: locationPurposes,
         locationToken: null,
       })}::jsonb,
       updated_at = NOW()
@@ -671,6 +917,23 @@ export class WhatsAppController implements OnModuleDestroy {
     );
 
     return { success: true };
+  }
+
+  private normalizeLocationPurposes(raw: unknown, fallback: string): string[] {
+    const allowed = new Set(['origin', 'destination', 'current', 'general', 'poi', 'load', 'unload', 'reference', 'other']);
+    const input = Array.isArray(raw) ? raw : [];
+    const normalized = input
+      .filter((item): item is string => typeof item === 'string')
+      .map(item => item.trim().toLowerCase())
+      .filter(item => allowed.has(item));
+    const unique = Array.from(new Set(normalized));
+    if (unique.length) return unique.slice(0, 4);
+    return [allowed.has(fallback) ? fallback : 'general'];
+  }
+
+  private normalizeLocationInputMethod(raw?: string): string {
+    const allowed = new Set(['pin_manual', 'browser_geolocation', 'search']);
+    return raw && allowed.has(raw) ? raw : 'pin_manual';
   }
 
   // ======================== DAILY MAP DATA ================================

@@ -69,7 +69,7 @@ async function bootstrap() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", 'https://maps.googleapis.com', 'https://maps.gstatic.com'],
         // NOTE: 'unsafe-inline' is required for styles because the React frontend
         // uses inline styles extensively (theme.jsx, component style props). Removing
         // it would break the app. Won't-fix unless migrating to CSS-in-JS with nonces.
