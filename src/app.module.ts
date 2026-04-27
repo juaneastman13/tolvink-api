@@ -23,6 +23,7 @@ import { OcrModule } from './ocr/ocr.module';
 import { WeighTicketsModule } from './weigh-tickets/weigh-tickets.module';
 import { WebChatModule } from './web-chat/web-chat.module';
 import { SharedLinksModule } from './shared-links/shared-links.module';
+import { FreightLocationsModule } from './freight-locations/freight-locations.module';
 import { ModulesController, ModulesService } from './modules/modules.controller';
 import { MachinesController, MachineTemplatesController, MachinesService } from './machines/machines.controller';
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
@@ -50,6 +51,7 @@ import { CompanyProductsController, CompanyProductsService } from './company-pro
     WeighTicketsModule,
     WebChatModule,
     SharedLinksModule,
+    FreightLocationsModule,
     StockModule,
   ],
   controllers: [

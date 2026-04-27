@@ -37,6 +37,7 @@ function buildSharedRules(): string {
 - "no", "cancelar", "deja", "anular" => cancelar accion pendiente.
 - Si el mensaje incluye [ARCHIVO PENDIENTE: ...], adjuntar es la accion por defecto con attach_document.
 - Si el usuario quiere indicar o avisar una ubicacion y no aparece [UBICACION DISPONIBLE: ...] ni acaba de compartir ubicacion por WhatsApp, usar request_location_picker.
+- Si la ubicacion corresponde a un flete existente o el usuario pide "mapa del flete", usar generate_freight_map_link con el codigo del flete.
 - Si aparece [UBICACION DISPONIBLE: ...], usar esa ubicacion con originFromLastLocation o destinationFromLastLocation cuando el usuario la haya asociado a origen/destino.
 - No mostrar errores tecnicos ni detalles internos del backend.
 </shared_rules>`;
@@ -74,6 +75,7 @@ SOLICITUD:
 - Si el pedido menciona varios camiones, flota propia, lote/campo, planta Tolvink, empresa destino o coordenadas, pasar esos datos en create_freight_request.
 - Para editar datos de un flete existente usar update_freight.
 - Para compartir seguimiento usar generate_tracking_link.
+- Para compartir o cargar ubicaciones operativas del flete usar generate_freight_map_link.
 - Para cambios pendientes usar list_pending_freight_changes y luego approve_pending_freight_change o reject_pending_freight_change.
 </profile_rules>`;
 
@@ -105,6 +107,7 @@ REGLAS:
 - Para editar camion/chofer/peso de un viaje usar update_freight_assignment.
 - Para iniciar/cargar/finalizar un viaje especifico usar las herramientas de hito con codigo y, si hace falta, numero de viaje.
 - Para compartir seguimiento usar generate_tracking_link.
+- Para compartir o cargar ubicaciones operativas del flete usar generate_freight_map_link.
 </profile_rules>`;
 
     case 'plant_manager':
@@ -121,6 +124,7 @@ REGLAS:
 - Para editar flete usar update_freight; para editar un viaje/camion usar update_freight_assignment.
 - Para aprobar o rechazar cambios pendientes usar list_pending_freight_changes y luego approve_pending_freight_change o reject_pending_freight_change.
 - Para compartir seguimiento usar generate_tracking_link.
+- Para compartir o cargar ubicaciones operativas del flete usar generate_freight_map_link.
 </profile_rules>`;
 
     default:

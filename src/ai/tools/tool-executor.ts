@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma.service';
 import { FreightsService } from '../../freights/freights.service';
 import { SharedLinksService } from '../../shared-links/shared-links.module';
+import { FreightLocationsService } from '../../freight-locations/freight-locations.service';
 import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { hydrateTolvinkPlantLocality } from '../../common/tolvink-plant-locality';
@@ -23,15 +24,15 @@ export const READ_ONLY_TOOLS = new Set([
 export const QUERY_ONLY_TOOLS = new Set(READ_ONLY_TOOLS);
 
 export const TOOLS_BY_PROFILE: Record<AiProfile, Set<string>> = {
-  producer_manager: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
-  producer_operator: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'generate_tracking_link', 'list_freight_assignments', 'list_pending_freight_changes', 'confirm_action', 'attach_document']),
-  producer_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
-  transporter_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'list_freight_assignments', 'accept_freight_assignment', 'reject_freight_assignment', 'assign_driver_and_truck', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'generate_tracking_link', 'confirm_action', 'attach_document']),
-  transporter_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
-  plant_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
-  plant_operator: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'generate_tracking_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
-  plant_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
-  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'cancel_freight', 'attach_document']),
+  producer_manager: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  producer_operator: new Set(['list_freights', 'get_freight_detail', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'create_freight_request', 'update_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'list_pending_freight_changes', 'confirm_action', 'attach_document']),
+  producer_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  transporter_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'list_freight_assignments', 'accept_freight_assignment', 'reject_freight_assignment', 'assign_driver_and_truck', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'generate_tracking_link', 'generate_freight_map_link', 'confirm_action', 'attach_document']),
+  transporter_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  plant_manager: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'cancel_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'cancel_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  plant_operator: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'approve_freight_request', 'assign_transport_company', 'update_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'assign_multi_trucks', 'add_truck_to_freight', 'update_freight_assignment', 'respond_trip', 'start_freight_trip', 'confirm_freight_loaded', 'finish_freight', 'list_pending_freight_changes', 'approve_pending_freight_change', 'reject_pending_freight_change', 'confirm_action', 'attach_document']),
+  plant_driver: new Set(['list_freights', 'get_freight_detail', 'request_location_picker', 'start_freight_trip', 'confirm_freight_loaded', 'confirm_freight_arrival', 'finish_freight', 'generate_tracking_link', 'generate_freight_map_link', 'list_freight_assignments', 'attach_document', 'confirm_action']),
+  autonomous_driver: new Set(['list_freights', 'get_freight_detail', 'get_dashboard', 'search_plants', 'search_fields', 'search_lots', 'request_location_picker', 'generate_freight_map_link', 'prepare_autonomous_freight', 'confirm_action', 'finish_autonomous_freight', 'cancel_freight', 'attach_document']),
 };
 
 type PendingActionRecord = {
@@ -59,6 +60,7 @@ export class ToolExecutorService {
     private prisma: PrismaService,
     private freights: FreightsService,
     private sharedLinks: SharedLinksService,
+    private freightLocations: FreightLocationsService,
   ) {}
 
   cleanupPendingActions(): void {
@@ -111,6 +113,7 @@ export class ToolExecutorService {
         case 'create_freight_request': return await this.handleCreateFreightRequest(input, scopedUser, session);
         case 'update_freight': return await this.handleUpdateFreight(input, scopedUser, session);
         case 'generate_tracking_link': return await this.handleGenerateTrackingLink(input, scopedUser);
+        case 'generate_freight_map_link': return await this.handleGenerateFreightMapLink(input, scopedUser);
         case 'list_freight_assignments': return await this.handleListFreightAssignments(input, scopedUser);
         case 'assign_multi_trucks': return await this.handleAssignMultiTrucks(input, scopedUser, session);
         case 'add_truck_to_freight': return await this.handleAddTruckToFreight(input, scopedUser, session);
@@ -462,6 +465,23 @@ export class ToolExecutorService {
     if (!targetCompanyId) return JSON.stringify({ error: 'No pude determinar la empresa destino del link.' });
     const link = await this.sharedLinks.createLink({ linkType: 'FREIGHT', targetCompanyId, freightId: freight.id, createdVia: 'WHATSAPP' }, user);
     return JSON.stringify({ status: link.isReused ? 'reused' : 'created', code: freight.code, url: `${APP_URL}/s/${link.token}`, expiresAt: link.expiresAt });
+  }
+
+  private async handleGenerateFreightMapLink(input: any, user: any): Promise<string> {
+    const freight = await this.resolveFreightByCode(input.code, user);
+    if (!freight) return JSON.stringify({ error: `No se encontro flete "${input.code}".` });
+    const link = await this.freightLocations.createMapLink(freight.id, user, {
+      mode: input.mode === 'read' ? 'read' : 'edit',
+      source: 'WHATSAPP_AGENT',
+      purpose: input.purpose || input.locationType || 'map',
+      ttlMinutes: 7 * 24 * 60,
+    });
+    return JSON.stringify({
+      status: 'created',
+      code: freight.code,
+      url: link.url,
+      message: `Te paso el mapa del flete ${freight.code} para marcar o consultar ubicaciones: ${link.url}`,
+    });
   }
 
   private async handleListFreightAssignments(input: any, user: any): Promise<string> {

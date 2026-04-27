@@ -109,7 +109,7 @@ describe('ToolExecutorService', () => {
       confirmLoaded: jest.fn().mockResolvedValue({ code: 'F26-AAA.0001' }),
     };
 
-    service = new ToolExecutorService(prisma, freights, { createLink: jest.fn() } as any);
+    service = new ToolExecutorService(prisma, freights, { createLink: jest.fn() } as any, { createMapLink: jest.fn() } as any);
   });
 
   describe('driver permissions and actions', () => {

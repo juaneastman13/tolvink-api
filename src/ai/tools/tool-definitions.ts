@@ -175,6 +175,21 @@ export const ALL_TOOL_DEFINITIONS: AiToolDefinition[] = [
   },
 
   {
+    name: 'generate_freight_map_link',
+    description: 'Genera un link de mapa compartible para ver y, si tiene permisos, cargar ubicaciones operativas de un flete.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'Codigo del flete' },
+        mode: { type: 'string', enum: ['read', 'edit'], description: 'read=solo lectura, edit=permite cargar ubicacion al usuario autorizado' },
+        purpose: { type: 'string', description: 'Para que se enviara el mapa: carga, descarga, origen, destino, referencia, consulta' },
+        locationType: { type: 'string', enum: ['ORIGIN', 'DESTINATION', 'POINT_OF_INTEREST', 'LOAD_LOCATION', 'UNLOAD_LOCATION', 'OPERATIONAL_REFERENCE', 'OTHER'], description: 'Tipo sugerido de ubicacion a cargar' },
+      },
+      required: ['code'],
+    },
+  },
+
+  {
     name: 'list_freight_assignments',
     description: 'Lista viajes/camiones de un flete multi-camion: assignmentId, numero de viaje, camion, chofer y estado.',
     input_schema: {
