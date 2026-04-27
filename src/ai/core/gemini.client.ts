@@ -51,16 +51,36 @@ export class GeminiClient implements OnModuleInit, ToolCallingLlmProvider {
       description: t.description,
       parameters: {
         type: 'OBJECT',
-        properties: Object.fromEntries(
-          Object.entries(t.input_schema.properties || {}).map(([k, v]: [string, any]) => [k, {
-            type: (v.type || 'string').toUpperCase(),
-            description: v.description || '',
-            ...(v.enum ? { enum: v.enum } : {}),
-          }]),
-        ),
+        properties: this.convertSchemaProperties(t.input_schema.properties || {}),
         ...(t.input_schema.required?.length ? { required: t.input_schema.required } : {}),
       },
     }));
+  }
+
+  private convertSchemaProperties(properties: Record<string, any>): Record<string, any> {
+    return Object.fromEntries(
+      Object.entries(properties).map(([key, value]: [string, any]) => [key, this.convertSchema(value)]),
+    );
+  }
+
+  private convertSchema(schema: any): any {
+    const type = (schema?.type || 'string').toUpperCase();
+    const converted: any = {
+      type,
+      ...(schema?.description ? { description: schema.description } : {}),
+      ...(schema?.enum ? { enum: schema.enum } : {}),
+    };
+
+    if (type === 'ARRAY') {
+      converted.items = this.convertSchema(schema?.items || { type: 'string' });
+    }
+
+    if (type === 'OBJECT') {
+      converted.properties = this.convertSchemaProperties(schema?.properties || {});
+      if (schema?.required?.length) converted.required = schema.required;
+    }
+
+    return converted;
   }
 
   /** Convert Anthropic-format message history to Gemini format */

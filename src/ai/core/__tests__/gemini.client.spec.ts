@@ -47,6 +47,18 @@ describe('Gemini LLM provider', () => {
         properties: {
           estado: { type: 'string', description: 'Estado del flete', enum: ['pendiente', 'activo'] },
           limite: { type: 'number', description: 'Cantidad maxima' },
+          trucks: {
+            type: 'array',
+            description: 'Camiones a asignar',
+            items: {
+              type: 'object',
+              properties: {
+                truckId: { type: 'string' },
+                tons: { type: 'number' },
+              },
+              required: ['truckId'],
+            },
+          },
         },
         required: ['estado'],
       },
@@ -60,6 +72,18 @@ describe('Gemini LLM provider', () => {
         properties: {
           estado: { type: 'STRING', description: 'Estado del flete', enum: ['pendiente', 'activo'] },
           limite: { type: 'NUMBER', description: 'Cantidad maxima' },
+          trucks: {
+            type: 'ARRAY',
+            description: 'Camiones a asignar',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                truckId: { type: 'STRING' },
+                tons: { type: 'NUMBER' },
+              },
+              required: ['truckId'],
+            },
+          },
         },
         required: ['estado'],
       },
