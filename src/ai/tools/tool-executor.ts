@@ -12,7 +12,7 @@ import { buildSyntheticUser } from '../../common/build-synthetic-user';
 import { fuzzySearch, ENTITY_ALIASES } from '../../common/fuzzy-match';
 import { hydrateTolvinkPlantLocality } from '../../common/tolvink-plant-locality';
 import { getScopedRole, scopeUserToSessionCompany } from '../../common/user-company-scope';
-import { APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
+import { API_PUBLIC_URL, APP_URL, FREIGHT_STATUS_SHORT } from '../core/constants';
 import { AiProfile, resolveAiProfile } from '../core/ai-profile';
 
 export const READ_ONLY_TOOLS = new Set([
@@ -357,7 +357,7 @@ export class ToolExecutorService {
         },
       },
     });
-    const url = `${APP_URL}/api/whatsapp/ubicacion/${slug}`;
+    const url = `${API_PUBLIC_URL}/api/whatsapp/ubicacion/${slug}`;
     const label = purpose === 'origin' ? 'origen' : purpose === 'destination' ? 'destino' : 'ubicacion';
     return JSON.stringify({
       status: 'location_picker',

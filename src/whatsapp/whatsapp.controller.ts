@@ -409,11 +409,16 @@ export class WhatsAppController implements OnModuleDestroy {
       },
     });
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com';
+    const apiPublicUrl = (
+      this.config.get<string>('API_PUBLIC_URL')
+      || (this.config.get<string>('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get<string>('RAILWAY_PUBLIC_DOMAIN')}` : '')
+      || this.config.get<string>('FRONTEND_URL')
+      || 'https://tolvink.com'
+    ).replace(/\/$/, '');
     return {
       token,
       slug,
-      url: `${frontendUrl}/api/whatsapp/ubicacion/${slug}`,
+      url: `${apiPublicUrl}/api/whatsapp/ubicacion/${slug}`,
     };
   }
 

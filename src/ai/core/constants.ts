@@ -11,6 +11,12 @@ export const MAX_RESPONSE_CHARS = 1600;
 export const WEB_MAX_RESPONSE_CHARS = 3000;
 export const PROMPT_CACHE_TTL_MS = 5 * 60 * 1000;
 export const APP_URL = process.env.FRONTEND_URL || 'https://tolvink.com';
+export const API_PUBLIC_URL = (
+  process.env.API_PUBLIC_URL
+  || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '')
+  || process.env.FRONTEND_URL
+  || 'https://tolvink.com'
+).replace(/\/$/, '');
 export const URUGUAY_UTC_OFFSET_MS = -3 * 60 * 60 * 1000;
 
 export const FREIGHT_STATUS_SHORT: Record<string, string> = {

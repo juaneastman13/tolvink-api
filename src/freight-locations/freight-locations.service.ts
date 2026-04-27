@@ -367,6 +367,11 @@ export class FreightLocationsService {
   }
 
   private getAppUrl(): string {
-    return (this.config.get<string>('FRONTEND_URL') || 'https://tolvink.com').replace(/\/$/, '');
+    return (
+      this.config.get<string>('API_PUBLIC_URL')
+      || (this.config.get<string>('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get<string>('RAILWAY_PUBLIC_DOMAIN')}` : '')
+      || this.config.get<string>('FRONTEND_URL')
+      || 'https://tolvink.com'
+    ).replace(/\/$/, '');
   }
 }
