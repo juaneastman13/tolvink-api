@@ -107,7 +107,14 @@ describe('WhatsAppRouterService', () => {
       cancelPendingAction: jest.fn().mockResolvedValue(true),
     };
 
-    service = new WhatsAppRouterService(prisma, wa, flow, freights, ai);
+    const agentV2 = {
+      isEnabled: jest.fn().mockReturnValue(false),
+      getMode: jest.fn().mockReturnValue('legacy'),
+      chat: jest.fn(),
+      handleLocation: jest.fn(),
+    };
+
+    service = new WhatsAppRouterService(prisma, wa, flow, freights, ai, agentV2 as any);
   });
 
   describe('driver actions', () => {

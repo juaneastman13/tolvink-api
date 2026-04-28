@@ -24,6 +24,7 @@
   "dependencies": {
     "@google/genai": "^1.48.0",
     "@langchain/core": "^1.1.39",
+    "@langchain/langgraph": "^1.2.8",
     "@langchain/openai": "^1.4.3",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.2.0",
@@ -48,7 +49,8 @@
     "prisma": "^5.8.0",
     "reflect-metadata": "^0.2.1",
     "rxjs": "^7.8.1",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.3.0",

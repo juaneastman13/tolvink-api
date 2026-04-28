@@ -9,6 +9,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsService } from '../freights/freights.service';
 import { AgentService } from '../ai/agent.service';
+import { AgentV2Service } from '../agent-v2/agent-v2.service';
 import { AiProfile, resolveAiProfile } from '../ai/core/ai-profile';
 import { buildSyntheticUser as buildSyntheticUserHelper } from '../common/build-synthetic-user';
 import { SelectionItem, resolveSelectionReply } from '../common/selection-helpers';
@@ -75,8 +76,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     private flow: WhatsAppFlowService,
     private freights: FreightsService,
     private ai: AgentService,
+    private agentV2: AgentV2Service,
   ) {
-    this.logger.log('AI provider: gemini-router + openai-agent');
+    this.logger.log(`[Agent Router] Mode: ${this.agentV2.getMode()}`);
 
     const openaiKey = process.env.OPENAI_API_KEY;
     if (openaiKey) {
@@ -430,7 +432,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // Check for active AI session — reuse cached session if available
       const activeSession = selSession || cachedSession;
       const hasHistory = activeSession && !activeSession.flowType && ((activeSession.flowState as any)?.aiMessages?.length > 0);
-      if (hasHistory && this.ai.isEnabled()) {
+      if (hasHistory && (this.agentV2.isEnabled() || this.ai.isEnabled())) {
         const msg = emojiOnly ? `[El usuario envió solo emojis: ${t}]` : t;
         await this.handleAiChat(phone, user, msg, cachedSession);
       } else {
@@ -445,7 +447,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     }
 
     // AI-powered handler for all other text (actual requests/queries)
-    if (this.ai.isEnabled()) {
+    if (this.agentV2.isEnabled() || this.ai.isEnabled()) {
       await this.handleAiChat(phone, user, t, cachedSession);
       return;
     }
@@ -546,8 +548,10 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       // Show "typing" indicator so user sees the bot is working
       this.wa.sendTypingIndicator(phone).catch((err) => this.logger.debug(`[typing] indicator failed: ${err.message}`));
 
-      // Route to AI agent (Gemini)
-      const result = await this.ai.chat(phone, text, user, session);
+      // Route to selected conversational agent.
+      const result = this.agentV2.isEnabled()
+        ? await this.agentV2.chat(phone, text, user, session)
+        : await this.ai.chat(phone, text, user, session);
       const reply = result.text;
       const buttons = result.buttons;
 
@@ -764,6 +768,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`GPS tracking save failed for user ${user.id}: ${err.message}`);
       await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch((err2) => this.logger.warn(`[gps] error feedback send failed: ${err2.message}`));
     });
+
+    if (this.agentV2.isEnabled()) {
+      const result = await this.agentV2.handleLocation(phone, user, session, {
+        lat: latitude,
+        lng: longitude,
+        label: name || address || undefined,
+      });
+      await this.wa.sendText(phone, result.text);
+      return;
+    }
 
     // Forward as text to AI so the agent knows the user shared a location (no raw coords — policy)
     const locationDesc = (name || address || 'ubicación').replace(/[\[\]]/g, '').slice(0, 100);
