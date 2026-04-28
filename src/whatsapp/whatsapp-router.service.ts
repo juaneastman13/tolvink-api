@@ -749,6 +749,9 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     const state = (session.flowState as any) || {};
     const locationPurpose = state.locationToken?.purpose || 'general';
+    const isAgentV2FreightLocationCapture = this.agentV2.isEnabled()
+      && state.agentV2?.currentFlow === 'create_freight'
+      && state.agentV2?.currentStep === 'awaiting_location';
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
@@ -760,6 +763,16 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         },
       },
     });
+
+    if (isAgentV2FreightLocationCapture) {
+      const result = await this.agentV2.handleLocation(phone, user, session, {
+        lat: latitude,
+        lng: longitude,
+        label: name || address || undefined,
+      });
+      await this.wa.sendText(phone, result.text);
+      return;
+    }
 
     // GPS tracking: save position to FreightTracking for any active freight the user is involved in
     this.saveLocationToActiveFreights(user, latitude, longitude).catch(async (err) => {
