@@ -5,6 +5,7 @@ import { isGlobalCancelMessage } from '../nodes/cancel-intent';
 import { makeCancelPendingActionNode } from '../nodes/cancel-pending-action.node';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { checkActionPolicy } from '../policies/action-policy';
+import { buildFreightActionButtons } from '../policies/freight-action-buttons';
 
 describe('Agent V2 routing safety', () => {
   const previousMode = process.env.AGENT_MODE;
@@ -123,6 +124,50 @@ describe('query_freights input extraction', () => {
     expect(extractQueryFreightsInput('como va ese viaje', 'F-123')).toMatchObject({
       freightCode: 'F-123',
     });
+  });
+});
+
+describe('agent-v2 freight action buttons', () => {
+  const driverUser = { id: 'driver-1', activeCompanyId: 'transporter-1' };
+
+  it('offers start button to transporter/driver on accepted freight', () => {
+    const buttons = buildFreightActionButtons({
+      id: 'freight-1',
+      status: 'accepted',
+      originCompanyId: 'producer-1',
+      destCompanyId: 'plant-1',
+      assignmentTransportCompanyId: 'transporter-1',
+      assignmentDriverId: 'driver-1',
+    }, driverUser, 'transporter-1');
+
+    expect(buttons).toEqual([{ id: 'start:freight-1', title: 'INICIAR VIAJE' }]);
+  });
+
+  it('offers reception confirmation to destination company on loaded freight', () => {
+    const buttons = buildFreightActionButtons({
+      id: 'freight-1',
+      status: 'loaded',
+      originCompanyId: 'producer-1',
+      destCompanyId: 'plant-1',
+      assignmentTransportCompanyId: 'transporter-1',
+      assignmentDriverId: 'driver-1',
+      plantFinishedConfirmedAt: null,
+    }, { id: 'plant-user', activeCompanyId: 'plant-1' }, 'plant-1');
+
+    expect(buttons).toEqual([{ id: 'confirm_finished:freight-1', title: 'CONFIRMAR RECEPCION' }]);
+  });
+
+  it('does not offer operational buttons to unrelated users', () => {
+    const buttons = buildFreightActionButtons({
+      id: 'freight-1',
+      status: 'in_progress',
+      originCompanyId: 'producer-1',
+      destCompanyId: 'plant-1',
+      assignmentTransportCompanyId: 'transporter-1',
+      assignmentDriverId: 'driver-1',
+    }, { id: 'other', activeCompanyId: 'other-company' }, 'other-company');
+
+    expect(buttons).toEqual([]);
   });
 });
 

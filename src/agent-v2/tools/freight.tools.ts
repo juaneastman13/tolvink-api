@@ -38,6 +38,13 @@ export type FreightListItem = {
   transportCompany?: string | null;
   driver?: string | null;
   truck?: string | null;
+  originCompanyId?: string | null;
+  destCompanyId?: string | null;
+  assignmentTransportCompanyId?: string | null;
+  assignmentDriverId?: string | null;
+  transporterFinishedConfirmedAt?: Date | string | null;
+  plantFinishedConfirmedAt?: Date | string | null;
+  producerLoadedConfirmedAt?: Date | string | null;
 };
 
 @Injectable()
@@ -168,6 +175,8 @@ export class AgentV2FreightTools {
       id: freight.id,
       code: freight.code,
       status: freight.status,
+      originCompanyId: freight.originCompanyId || null,
+      destCompanyId: freight.destCompanyId || null,
       product: item?.grain || null,
       tons: item?.tons == null ? null : Number(item.tons),
       origin: freight.originName || freight.originCompany?.name || null,
@@ -177,6 +186,11 @@ export class AgentV2FreightTools {
       transportCompany: assignment?.transportCompany?.name || null,
       driver: assignment?.driver?.name || null,
       truck: assignment?.truck?.plate || null,
+      assignmentTransportCompanyId: assignment?.transportCompanyId || null,
+      assignmentDriverId: assignment?.driverId || null,
+      transporterFinishedConfirmedAt: freight.transporterFinishedConfirmedAt || null,
+      plantFinishedConfirmedAt: freight.plantFinishedConfirmedAt || null,
+      producerLoadedConfirmedAt: freight.producerLoadedConfirmedAt || null,
     };
   }
 

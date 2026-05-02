@@ -1,6 +1,7 @@
 import { AgentState } from '../schemas/agent-state.schema';
 import { AgentV2FreightTools, QueryFreightsInput } from '../tools/freight.tools';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
+import { buildFreightActionButtons } from '../policies/freight-action-buttons';
 
 export const QUERY_FREIGHTS_FLOW = {
   name: 'query_freights',
@@ -17,8 +18,10 @@ export function makeQueryFreightsFlow(
     const input = extractQueryFreightsInput(state.lastUserMessage, state.activeFreightCode);
     if (input.freightCode) {
       const detail = await freightTools.getFreightDetail(input, userProvider());
+      const user = userProvider();
       return {
         response: detail ? renderer.freightDetail(detail) : renderer.noFreightsFound(),
+        buttons: detail ? buildFreightActionButtons(detail, user, state.activeCompanyId) : undefined,
         activeFreightCode: detail?.code || state.activeFreightCode || null,
         shouldPause: false,
         nodeHistory: [{ node: 'queryFreights', mode: 'detail', at: new Date().toISOString() }],
@@ -26,8 +29,10 @@ export function makeQueryFreightsFlow(
       };
     }
     const items = await freightTools.listFreights(input, userProvider());
+    const user = userProvider();
     return {
       response: renderer.freightList(items),
+      buttons: items.length === 1 ? buildFreightActionButtons(items[0], user, state.activeCompanyId) : undefined,
       activeFreightCode: items.length === 1 ? items[0].code : state.activeFreightCode || null,
       shouldPause: false,
       nodeHistory: [{ node: 'queryFreights', mode: 'list', count: items.length, at: new Date().toISOString() }],

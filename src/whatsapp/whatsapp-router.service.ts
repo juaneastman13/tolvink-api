@@ -323,7 +323,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
         }
 
         // Notification action buttons (accept, reject, confirm_loaded, etc.) override active flow
-        if (type === 'button_reply' && payload.id && /^(accept|reject|confirm_loaded|confirm_finished|detail):/.test(payload.id)) {
+        if (type === 'button_reply' && payload.id && /^(accept|reject|start|confirm_loaded|confirm_finished|detail):/.test(payload.id)) {
           await this.prisma.whatsAppSession.delete({ where: { id: session.id } });
           await this.handleButtonReply(phone, user, payload.id, payload.title);
           return;

@@ -75,6 +75,7 @@ export class AgentV2Service {
       executedResult: prior.executedResult || null,
       lastUserMessage: userMessage.slice(0, 5000),
       response: undefined,
+      buttons: undefined,
       shouldPause: false,
       shouldPersist: true,
       audit: [],
@@ -112,7 +113,7 @@ export class AgentV2Service {
       result: finalState.shouldPause ? 'paused' : 'completed',
       confirmationRequired: finalState.pendingConfirmation || false,
     }));
-    return { text: finalState.response || renderer.error() };
+    return { text: finalState.response || renderer.error(), buttons: finalState.buttons };
   }
 
   async handleLocation(
