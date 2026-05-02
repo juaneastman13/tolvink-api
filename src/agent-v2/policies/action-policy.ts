@@ -17,7 +17,18 @@ export function checkActionPolicy(state: AgentState, action: AgentActionName): P
       requiresConfirmation: false,
     };
   }
-  if (!canRolePerformAction({ activeRole: state.activeRole }, action)) {
+  if (state.membershipActive === false) {
+    return {
+      allowed: false,
+      reason: 'Tu membresia no esta activa para operar con esta empresa.',
+      requiresConfirmation: false,
+    };
+  }
+  if (!canRolePerformAction({
+    activeRole: state.activeRole,
+    companyType: state.activeCompanyType,
+    membershipActive: state.membershipActive,
+  }, action)) {
     return {
       allowed: false,
       reason: 'Tu rol no tiene permisos para realizar esa accion por WhatsApp.',
@@ -29,4 +40,3 @@ export function checkActionPolicy(state: AgentState, action: AgentActionName): P
     requiresConfirmation: requiresExplicitConfirmation(action),
   };
 }
-

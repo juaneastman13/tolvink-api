@@ -12,6 +12,7 @@ import { resolveConfirmationNode } from '../nodes/resolve-confirmation.node';
 import { makeCancelPendingActionNode } from '../nodes/cancel-pending-action.node';
 import { askConfirmationAgainNode } from '../nodes/ask-confirmation-again.node';
 import { makeRenderSuccessNode } from '../nodes/render-success.node';
+import { isGlobalCancelMessage } from '../nodes/cancel-intent';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { AgentV2FreightTools } from '../tools/freight.tools';
 import { AgentState } from '../schemas/agent-state.schema';
@@ -35,6 +36,7 @@ export function buildFreightGraph(
     .addNode('cancelPendingAction', makeCancelPendingActionNode(renderer))
     .addNode('askConfirmationAgain', askConfirmationAgainNode)
     .addConditionalEdges(START, routeFreightStart, {
+      cancelPendingAction: 'cancelPendingAction',
       extractSlots: 'extractSlots',
       resolveConfirmation: 'resolveConfirmation',
     })
@@ -63,7 +65,10 @@ export function buildFreightGraph(
     .compile();
 }
 
-function routeFreightStart(state: AgentState): 'extractSlots' | 'resolveConfirmation' {
+function routeFreightStart(state: AgentState): 'cancelPendingAction' | 'extractSlots' | 'resolveConfirmation' {
+  if (state.currentFlow === 'create_freight' && state.currentStep && isGlobalCancelMessage(state.lastUserMessage)) {
+    return 'cancelPendingAction';
+  }
   if (state.currentStep === 'awaiting_confirmation' || state.pendingConfirmation) {
     return 'resolveConfirmation';
   }

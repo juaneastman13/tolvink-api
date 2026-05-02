@@ -23,6 +23,7 @@ describe('WhatsAppRouterService', () => {
   let flow: any;
   let freights: any;
   let ai: any;
+  let agentV2: any;
 
   const phone = '59899111222';
   const driverUser = {
@@ -107,11 +108,11 @@ describe('WhatsAppRouterService', () => {
       cancelPendingAction: jest.fn().mockResolvedValue(true),
     };
 
-    const agentV2 = {
+    agentV2 = {
       isEnabled: jest.fn().mockReturnValue(false),
       getMode: jest.fn().mockReturnValue('legacy'),
       chat: jest.fn(),
-      handleLocation: jest.fn(),
+      handleLocation: jest.fn().mockResolvedValue({ text: 'Ubicacion recibida' }),
     };
 
     service = new WhatsAppRouterService(prisma, wa, flow, freights, ai, agentV2 as any);
@@ -290,6 +291,39 @@ describe('WhatsAppRouterService', () => {
       expect(help).not.toContain('flota propia');
       expect(features).not.toContain('Equipo');
       expect(guide).toContain('SIN ASIGNAR');
+    });
+  });
+
+  describe('Agent V2 location capture', () => {
+    it('should not save GPS tracking when a location belongs to create_freight V2 capture', async () => {
+      agentV2.isEnabled.mockReturnValue(true);
+      prisma.whatsAppSession.findFirst.mockResolvedValue({
+        id: 'session-v2',
+        flowType: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        flowState: {
+          agentV2: {
+            currentFlow: 'create_freight',
+            currentStep: 'awaiting_location',
+          },
+        },
+      });
+      const gpsSpy = jest.spyOn(service as any, 'saveLocationToActiveFreights');
+
+      await service['handleLocation'](
+        phone,
+        driverUser,
+        { latitude: -34.9, longitude: -56.1, name: 'Campo', address: 'Ruta' },
+      );
+
+      expect(agentV2.handleLocation).toHaveBeenCalledWith(
+        phone,
+        driverUser,
+        expect.objectContaining({ id: 'session-v2' }),
+        expect.objectContaining({ lat: -34.9, lng: -56.1 }),
+      );
+      expect(gpsSpy).not.toHaveBeenCalled();
+      expect(wa.sendText).toHaveBeenCalledWith(phone, 'Ubicacion recibida');
     });
   });
 });

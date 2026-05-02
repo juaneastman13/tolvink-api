@@ -1,4 +1,5 @@
 import { AgentState } from '../schemas/agent-state.schema';
+import { isGlobalCancelMessage } from './cancel-intent';
 
 export async function resolveConfirmationNode(state: AgentState): Promise<Partial<AgentState>> {
   const answer = normalize(state.lastUserMessage);
@@ -9,7 +10,7 @@ export async function resolveConfirmationNode(state: AgentState): Promise<Partia
       shouldPause: false,
     };
   }
-  if (/^(no|cancelar|cancela|anular|deja|dejalo)$/.test(answer)) {
+  if (/^no$/.test(answer) || isGlobalCancelMessage(state.lastUserMessage)) {
     return {
       currentStep: 'cancelled',
       shouldPause: false,
@@ -24,4 +25,3 @@ export async function resolveConfirmationNode(state: AgentState): Promise<Partia
 function normalize(value: string): string {
   return (value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
-

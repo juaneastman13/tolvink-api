@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { GeminiClient } from '../ai/core/gemini.client';
-import { getScopedRole, scopeUserToSessionCompany } from '../common/user-company-scope';
+import { getActiveMembership, getScopedCompany, getScopedRole, scopeUserToSessionCompany } from '../common/user-company-scope';
 import { AgentState, AgentStateSchema } from './schemas/agent-state.schema';
 import { WhatsAppAgentV2Renderer } from './renderers/whatsapp.renderer';
 import { AgentV2FreightTools } from './tools/freight.tools';
@@ -37,6 +37,8 @@ export class AgentV2Service {
   async chat(phone: string, userMessage: string, user: any, session: any): Promise<{ text: string; buttons?: Array<{ id: string; title: string }> }> {
     const started = Date.now();
     const scopedUser = scopeUserToSessionCompany(user, session);
+    const scopedCompany = getScopedCompany(scopedUser);
+    const activeMembership = getActiveMembership(scopedUser);
     const renderer = new WhatsAppAgentV2Renderer();
     const checkpointStore = new WhatsAppSessionCheckpointStore(this.prisma, this.logger);
     const checkpoint = session?.id ? await checkpointStore.load(session.id) : null;
@@ -48,7 +50,9 @@ export class AgentV2Service {
       phone,
       sessionId: session?.id,
       activeCompanyId: scopedUser.activeCompanyId || scopedUser.companyId || null,
+      activeCompanyType: scopedCompany?.type || scopedCompany?.types?.[0] || null,
       activeRole: getScopedRole(scopedUser) || scopedUser.role || null,
+      membershipActive: activeMembership ? activeMembership.active !== false : null,
       currentIntent: prior.currentIntent,
       currentFlow: prior.currentFlow || null,
       currentStep: prior.currentStep || null,

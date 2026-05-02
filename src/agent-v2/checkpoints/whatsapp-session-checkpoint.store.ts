@@ -47,6 +47,9 @@ export function toPersistedAgentState(state: AgentState): Record<string, unknown
     currentFlow: state.currentFlow,
     currentStep: state.currentStep,
     awaitingSlot: state.awaitingSlot,
+    activeCompanyType: state.activeCompanyType || null,
+    activeRole: state.activeRole || null,
+    membershipActive: state.membershipActive ?? null,
     slots: state.slots || {},
     originText: state.originText || null,
     destinationText: state.destinationText || null,
@@ -70,4 +73,3 @@ export function toPersistedAgentState(state: AgentState): Record<string, unknown
     updatedAt: new Date().toISOString(),
   };
 }
-
