@@ -1099,7 +1099,20 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     if (freightActions.includes(action) && entityId) {
       const freight = await this.prisma.freight.findUnique({
         where: { id: entityId },
-        select: { originCompanyId: true, destCompanyId: true, assignments: { select: { transportCompanyId: true, driverId: true } } },
+        select: {
+          id: true,
+          code: true,
+          status: true,
+          originCompanyId: true,
+          destCompanyId: true,
+          transporterFinishedConfirmedAt: true,
+          plantFinishedConfirmedAt: true,
+          producerLoadedConfirmedAt: true,
+          assignments: {
+            where: { status: { in: ['active', 'accepted'] } },
+            select: { transportCompanyId: true, driverId: true },
+          },
+        },
       }).catch(e => { this.logger.warn(e.message); return null; });
       if (!freight) {
         await this.wa.sendText(phone, 'Flete no encontrado.');
@@ -1111,9 +1124,27 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       const canAccess = allUserCompanies.some(c => c === freight.originCompanyId || c === freight.destCompanyId)
         || freight.assignments.some(a => allUserCompanies.includes(a.transportCompanyId) || a.driverId === user.id);
       if (!canAccess) {
+        await this.auditWhatsAppFreightButton(user, entityId, action, 'blocked_access');
         await this.wa.sendText(phone, 'No tiene acceso a este flete.');
         return;
       }
+      const stateBoundActions = ['accept', 'assign_truck', 'reject', 'start', 'confirm_loaded', 'confirm_finished'];
+      if (stateBoundActions.includes(action)) {
+        const expectedAction = action === 'assign_truck' ? 'accept' : action;
+        const availableActions = this.getActionButtons(freight, user, activeCoId)
+          .map((button) => button.id.split(':')[0]);
+        if (!availableActions.includes(expectedAction)) {
+          await this.auditWhatsAppFreightButton(user, entityId, action, 'blocked_stale_or_invalid_state', {
+            status: freight.status,
+            availableActions,
+          });
+          await this.wa.sendText(phone, `Esa accion ya no esta disponible para el flete ${freight.code || ''}. Pedi el detalle actualizado para ver las opciones vigentes.`);
+          return;
+        }
+      }
+      await this.auditWhatsAppFreightButton(user, entityId, action, 'accepted_for_execution', {
+        status: freight.status,
+      });
     }
 
     try {
@@ -3164,6 +3195,33 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
 
     // Max 3 buttons — trim if needed
     return buttons.slice(0, 3);
+  }
+
+  private async auditWhatsAppFreightButton(
+    user: any,
+    freightId: string,
+    buttonAction: string,
+    result: string,
+    metadata?: Record<string, unknown>,
+  ) {
+    const userId = user?.id || user?.sub;
+    if (!userId || !freightId) return;
+    this.prisma.auditLog.create({
+      data: {
+        entityType: 'freight',
+        entityId: freightId,
+        freightId,
+        action: 'whatsapp_freight_button',
+        userId,
+        metadata: {
+          source: 'whatsapp',
+          buttonAction,
+          result,
+          activeCompanyId: user.activeCompanyId || user.companyId || null,
+          ...metadata,
+        },
+      },
+    }).catch(e => this.logger.warn(`WhatsApp freight button audit failed: ${e.message}`));
   }
 
   // ======================== USER LOOKUP =================================

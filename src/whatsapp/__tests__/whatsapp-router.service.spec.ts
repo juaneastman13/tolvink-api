@@ -79,6 +79,9 @@ describe('WhatsAppRouterService', () => {
       whatsAppMessageLog: {
         count: jest.fn().mockResolvedValue(0),
       },
+      auditLog: {
+        create: jest.fn().mockResolvedValue({}),
+      },
     };
 
     wa = {
@@ -206,8 +209,14 @@ describe('WhatsAppRouterService', () => {
 
     it('should route confirm_loaded button presses into the load confirmation flow', async () => {
       prisma.freight.findUnique.mockResolvedValue({
+        id: 'freight-1',
+        code: 'F-1',
+        status: 'in_progress',
         originCompanyId: 'producer-1',
         destCompanyId: 'plant-1',
+        transporterFinishedConfirmedAt: null,
+        plantFinishedConfirmedAt: null,
+        producerLoadedConfirmedAt: null,
         assignments: [{ transportCompanyId: 'transporter-1', driverId: 'driver-1' }],
       });
 
@@ -232,6 +241,39 @@ describe('WhatsAppRouterService', () => {
 
       expect(flow.startFlow).not.toHaveBeenCalled();
       expect(wa.sendText).toHaveBeenCalledWith(phone, 'No tiene acceso a este flete.');
+    });
+
+    it('should reject stale operational buttons before executing mutation', async () => {
+      prisma.freight.findUnique.mockResolvedValue({
+        id: 'freight-1',
+        code: 'F-1',
+        status: 'loaded',
+        originCompanyId: 'producer-1',
+        destCompanyId: 'plant-1',
+        transporterFinishedConfirmedAt: null,
+        plantFinishedConfirmedAt: null,
+        producerLoadedConfirmedAt: null,
+        assignments: [{ transportCompanyId: 'transporter-1', driverId: 'driver-1' }],
+      });
+
+      await service['handleButtonReply'](phone, driverUser, 'start:freight-1', 'INICIAR VIAJE');
+
+      expect(freights.start).not.toHaveBeenCalled();
+      expect(wa.sendText).toHaveBeenCalledWith(
+        phone,
+        expect.stringContaining('ya no esta disponible'),
+      );
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'whatsapp_freight_button',
+            metadata: expect.objectContaining({
+              buttonAction: 'start',
+              result: 'blocked_stale_or_invalid_state',
+            }),
+          }),
+        }),
+      );
     });
   });
 
