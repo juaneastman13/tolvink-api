@@ -116,6 +116,16 @@ export class WhatsAppAgentV2Renderer {
     return 'Decime el codigo del flete para pasarte el mapa. Ejemplo: F-123';
   }
 
+  pickLocationViaLink(url: string, type: 'origin' | 'destination'): string {
+    const label = type === 'destination' ? 'destino' : 'origen';
+    return [
+      `Si no podes enviar la ubicacion desde WhatsApp, abri este link y marcala en el mapa para indicar el ${label}:`,
+      url,
+      '',
+      'El link vence en 30 min. Volve a esta conversacion despues de guardar.',
+    ].join('\n');
+  }
+
   publicMapLink(url: string, ttlMinutes: number, allowedTypes: string[]): string {
     const types = allowedTypes
       .map((t) => ({

@@ -888,6 +888,23 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const loc = state.lastLocation;
     if (!loc) return;
 
+    // V2 picker-link path: if the user requested a map link from agent v2 during
+    // create_freight/awaiting_location, route the saved point as if it were a
+    // WhatsApp pin and let the agent continue the flow.
+    if (
+      this.agentV2.isEnabled()
+      && state.agentV2?.currentFlow === 'create_freight'
+      && state.agentV2?.currentStep === 'awaiting_location'
+    ) {
+      const result = await this.agentV2.handleLocation(session.phone, user, session, {
+        lat: Number(loc.lat),
+        lng: Number(loc.lng),
+        label: loc.name || loc.address || undefined,
+      });
+      if (result?.text) await this.wa.sendText(session.phone, result.text);
+      return;
+    }
+
     // If in active flow → location is already saved in flowState.lastLocation
     // Don't auto-advance; user presses "UBICACIÓN LISTA" button to continue
     if (session.flowType) {

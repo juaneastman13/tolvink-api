@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { randomUUID, randomBytes } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { GeminiClient } from '../ai/core/gemini.client';
 import { getActiveMembership, getScopedCompany, getScopedRole, scopeUserToSessionCompany } from '../common/user-company-scope';
@@ -10,6 +12,8 @@ import { buildMainGraph } from './graphs/main.graph';
 import { WhatsAppSessionCheckpointStore } from './checkpoints/whatsapp-session-checkpoint.store';
 import { canAttachIncomingLocation } from './policies/location-policy';
 
+const MAP_LINK_REQUEST_RE = /\b(mapa|link|enlace|web|url|pc|computadora|escritorio)\b/i;
+
 @Injectable()
 export class AgentV2Service {
   private readonly logger = new Logger(AgentV2Service.name);
@@ -20,6 +24,7 @@ export class AgentV2Service {
     private gemini: GeminiClient,
     private freightTools: AgentV2FreightTools,
     private locationTools: AgentV2LocationTools,
+    private config: ConfigService,
   ) {}
 
   isEnabled(): boolean {
@@ -46,6 +51,28 @@ export class AgentV2Service {
     const checkpoint = session?.id ? await checkpointStore.load(session.id) : null;
     const prior = checkpoint?.state || ((session?.flowState as any) || {}).agentV2 || {};
     const conversationId = session?.id || phone;
+
+    // Short-circuit: if the user is at create_freight/awaiting_location and asks for a
+    // picker link instead of sending a WhatsApp pin (common from desktop WhatsApp Web),
+    // mint a one-shot session-scoped picker token and reply with the SPA URL. The picker
+    // posts back to /api/whatsapp/save-location-by-slug, which already routes to
+    // agentV2.handleLocation when the V2 flow is in awaiting_location.
+    if (
+      session?.id
+      && prior?.currentFlow === 'create_freight'
+      && prior?.currentStep === 'awaiting_location'
+      && MAP_LINK_REQUEST_RE.test(userMessage)
+    ) {
+      const type = prior.locationRequestType === 'destination' ? 'destination' : 'origin';
+      try {
+        const url = await this.mintPickerLink(session.id, type);
+        return { text: renderer.pickLocationViaLink(url, type) };
+      } catch (e: any) {
+        this.logger.warn(`[AgentV2] mintPickerLink failed: ${e?.message}`);
+        // Fall through to graph if minting fails — user gets the standard prompt.
+      }
+    }
+
     const initialState = AgentStateSchema.parse({
       channel: 'whatsapp',
       userId: user.id,
@@ -166,6 +193,45 @@ export class AgentV2Service {
     };
     await this.saveCheckpointPatch(session.id, statePatch);
     return this.chat(phone, `[Ubicacion de ${type} recibida]`, user, session);
+  }
+
+  /**
+   * Mint a session-scoped picker URL pointing to the SPA route /ubicacion/<slug>.
+   * Stores the slug+token in flowState.locationToken so the existing
+   * /api/whatsapp/save-location-by-slug endpoint can resolve it. The agentV2
+   * branch in flowState is left untouched, so when the picker posts back the
+   * router can detect we're still in create_freight/awaiting_location and
+   * dispatch to handleLocation.
+   */
+  private async mintPickerLink(sessionId: string, type: 'origin' | 'destination'): Promise<string> {
+    const token = randomUUID();
+    const slug = `${type}-${randomBytes(4).toString('hex')}`;
+    const current = await this.prisma.whatsAppSession.findUnique({
+      where: { id: sessionId },
+      select: { flowState: true },
+    });
+    const flowState = (current?.flowState as any) || {};
+    await this.prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: {
+        flowState: {
+          ...flowState,
+          locationToken: {
+            token,
+            slug,
+            purpose: type,
+            createdAt: new Date().toISOString(),
+            source: 'agent_v2',
+          },
+        },
+      },
+    });
+    const base = (
+      this.config.get<string>('FRONTEND_URL')
+      || this.config.get<string>('PUBLIC_APP_URL')
+      || 'https://tolvink.com'
+    ).replace(/\/$/, '');
+    return `${base}/ubicacion/${slug}`;
   }
 
   private async persistState(session: any, state: AgentState, checkpointStore?: WhatsAppSessionCheckpointStore): Promise<void> {

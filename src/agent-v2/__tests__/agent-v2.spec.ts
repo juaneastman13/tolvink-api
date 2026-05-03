@@ -18,21 +18,21 @@ describe('Agent V2 routing safety', () => {
 
   it('defaults to legacy when AGENT_MODE is not set', () => {
     delete process.env.AGENT_MODE;
-    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('legacy');
     expect(service.isEnabled()).toBe(false);
   });
 
   it('uses v2 only when explicitly enabled', () => {
     process.env.AGENT_MODE = 'v2';
-    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('v2');
     expect(service.isEnabled()).toBe(true);
   });
 
   it('falls back to legacy for invalid values', () => {
     process.env.AGENT_MODE = 'experimental';
-    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('legacy');
   });
 });
