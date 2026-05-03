@@ -5,6 +5,9 @@ export async function detectIntentNode(state: AgentState): Promise<Partial<Agent
   if (state.currentFlow === 'create_freight' && state.currentStep) {
     return { currentIntent: 'create_freight' };
   }
+  if (state.currentFlow === 'share_map' && state.currentStep === 'awaiting_freight_code') {
+    return { currentIntent: 'share_map' };
+  }
   return { currentIntent: detectIntentHeuristic(state.lastUserMessage) };
 }
 
@@ -35,4 +38,3 @@ function normalize(value: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
-

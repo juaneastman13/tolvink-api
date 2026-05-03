@@ -5,6 +5,7 @@ import { getActiveMembership, getScopedCompany, getScopedRole, scopeUserToSessio
 import { AgentState, AgentStateSchema } from './schemas/agent-state.schema';
 import { WhatsAppAgentV2Renderer } from './renderers/whatsapp.renderer';
 import { AgentV2FreightTools } from './tools/freight.tools';
+import { AgentV2LocationTools } from './tools/location.tools';
 import { buildMainGraph } from './graphs/main.graph';
 import { WhatsAppSessionCheckpointStore } from './checkpoints/whatsapp-session-checkpoint.store';
 import { canAttachIncomingLocation } from './policies/location-policy';
@@ -18,6 +19,7 @@ export class AgentV2Service {
     private prisma: PrismaService,
     private gemini: GeminiClient,
     private freightTools: AgentV2FreightTools,
+    private locationTools: AgentV2LocationTools,
   ) {}
 
   isEnabled(): boolean {
@@ -85,7 +87,7 @@ export class AgentV2Service {
       errors: prior.errors || [],
     });
 
-    const graph = buildMainGraph(this.gemini, renderer, this.freightTools, () => scopedUser);
+    const graph = buildMainGraph(this.gemini, renderer, this.freightTools, this.locationTools, () => scopedUser);
     this.logger.log(JSON.stringify({
       msg: 'agent_v2_start',
       mode: this.getMode(),

@@ -7,17 +7,21 @@ import { routeIntentNode } from '../nodes/route-intent.node';
 import { makeRenderResponseNode } from '../nodes/render-response.node';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { AgentV2FreightTools } from '../tools/freight.tools';
+import { AgentV2LocationTools } from '../tools/location.tools';
 import { buildFreightGraph } from './freight.graph';
 import { makeQueryFreightsFlow } from '../flows/query-freights.flow';
+import { makeShareMapFlow } from '../flows/share-map.flow';
 
 export function buildMainGraph(
   gemini: GeminiClient,
   renderer: WhatsAppAgentV2Renderer,
   freightTools: AgentV2FreightTools,
+  locationTools: AgentV2LocationTools,
   userProvider: () => any,
 ) {
   const freightGraph = buildFreightGraph(gemini, renderer, freightTools, userProvider);
   const queryFreightsFlow = makeQueryFreightsFlow(freightTools, renderer, userProvider);
+  const shareMapFlow = makeShareMapFlow(freightTools, locationTools, renderer, userProvider);
 
   const runSubgraph = async (state: AgentState): Promise<Partial<AgentState>> => {
     if (state.currentFlow === 'create_freight') {
@@ -25,6 +29,9 @@ export function buildMainGraph(
     }
     if (state.currentFlow === 'query_freights') {
       return await queryFreightsFlow(state);
+    }
+    if (state.currentFlow === 'share_map') {
+      return await shareMapFlow(state);
     }
     return {};
   };

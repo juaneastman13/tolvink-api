@@ -7,9 +7,14 @@ export async function routeIntentNode(state: AgentState): Promise<Partial<AgentS
       currentStep: state.currentStep || 'extracting_slots',
     };
   }
+  if (state.currentIntent === 'share_map') {
+    return {
+      currentFlow: 'share_map',
+      currentStep: state.currentStep || 'resolving_freight',
+    };
+  }
   return {
     currentFlow: state.currentIntent || 'unknown',
     currentStep: 'ready',
   };
 }
-

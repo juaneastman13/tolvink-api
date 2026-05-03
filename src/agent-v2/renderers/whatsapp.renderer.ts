@@ -112,6 +112,10 @@ export class WhatsAppAgentV2Renderer {
     return 'Todavia no tengo ese flujo activo en Agent V2. Puedo ayudarte a crear una solicitud de flete.';
   }
 
+  askFreightCodeForMap(): string {
+    return 'Decime el codigo del flete para pasarte el mapa. Ejemplo: F-123';
+  }
+
   publicMapLink(url: string, ttlMinutes: number, allowedTypes: string[]): string {
     const types = allowedTypes
       .map((t) => ({

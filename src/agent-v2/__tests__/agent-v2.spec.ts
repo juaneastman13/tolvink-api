@@ -1,6 +1,7 @@
 import { AgentV2Service } from '../agent-v2.service';
 import { validateSlotsNode } from '../nodes/validate-slots.node';
 import { extractQueryFreightsInput } from '../flows/query-freights.flow';
+import { extractMapFreightCode } from '../flows/share-map.flow';
 import { isGlobalCancelMessage } from '../nodes/cancel-intent';
 import { makeCancelPendingActionNode } from '../nodes/cancel-pending-action.node';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
@@ -17,21 +18,21 @@ describe('Agent V2 routing safety', () => {
 
   it('defaults to legacy when AGENT_MODE is not set', () => {
     delete process.env.AGENT_MODE;
-    const service = new AgentV2Service({} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('legacy');
     expect(service.isEnabled()).toBe(false);
   });
 
   it('uses v2 only when explicitly enabled', () => {
     process.env.AGENT_MODE = 'v2';
-    const service = new AgentV2Service({} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('v2');
     expect(service.isEnabled()).toBe(true);
   });
 
   it('falls back to legacy for invalid values', () => {
     process.env.AGENT_MODE = 'experimental';
-    const service = new AgentV2Service({} as any, {} as any, {} as any);
+    const service = new AgentV2Service({} as any, {} as any, {} as any, {} as any);
     expect(service.getMode()).toBe('legacy');
   });
 });
@@ -124,6 +125,16 @@ describe('query_freights input extraction', () => {
     expect(extractQueryFreightsInput('como va ese viaje', 'F-123')).toMatchObject({
       freightCode: 'F-123',
     });
+  });
+});
+
+describe('share_map input extraction', () => {
+  it('detects explicit freight code for map links', () => {
+    expect(extractMapFreightCode('pasame el mapa del flete F-123')).toBe('F-123');
+  });
+
+  it('uses active freight context for map links', () => {
+    expect(extractMapFreightCode('pasame el mapa de ese viaje', 'F-456')).toBe('F-456');
   });
 });
 
