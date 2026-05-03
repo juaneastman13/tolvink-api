@@ -188,7 +188,6 @@ export class FreightMapPublicAnonController {
   @Throttle({ default: { ttl: 60000, limit: 60 } })
   @ApiOperation({ summary: 'Pagina movil de mapa publico anonimo' })
   async page(@Param('token') token: string, @Res() res: Response) {
-    await this.service.getPublicMapData(token);
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.send(renderMapPage(token, '/api/freight-map-public', this.service.getGoogleMapsKey()));
   }

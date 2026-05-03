@@ -367,5 +367,27 @@ describe('WhatsAppRouterService', () => {
       expect(gpsSpy).not.toHaveBeenCalled();
       expect(wa.sendText).toHaveBeenCalledWith(phone, 'Ubicacion recibida');
     });
+
+    it('should not save GPS tracking for loose locations while Agent V2 is enabled', async () => {
+      agentV2.isEnabled.mockReturnValue(true);
+      agentV2.handleLocation.mockResolvedValue({ text: 'Ubicacion recibida sin flujo activo' });
+      prisma.whatsAppSession.findFirst.mockResolvedValue({
+        id: 'session-v2',
+        flowType: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        flowState: {},
+      });
+      const gpsSpy = jest.spyOn(service as any, 'saveLocationToActiveFreights');
+
+      await service['handleLocation'](
+        phone,
+        driverUser,
+        { latitude: -34.9, longitude: -56.1, name: 'Campo', address: 'Ruta' },
+      );
+
+      expect(agentV2.handleLocation).toHaveBeenCalled();
+      expect(gpsSpy).not.toHaveBeenCalled();
+      expect(wa.sendText).toHaveBeenCalledWith(phone, 'Ubicacion recibida sin flujo activo');
+    });
   });
 });

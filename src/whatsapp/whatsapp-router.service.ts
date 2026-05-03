@@ -774,15 +774,7 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // GPS tracking: save position to FreightTracking for any active freight the user is involved in
-    this.saveLocationToActiveFreights(user, latitude, longitude).catch(async (err) => {
-      // P2002 = duplicate GPS write (race condition) — silently ignore
-      if (err?.code === 'P2002') return;
-      this.logger.error(`GPS tracking save failed for user ${user.id}: ${err.message}`);
-      await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch((err2) => this.logger.warn(`[gps] error feedback send failed: ${err2.message}`));
-    });
-
-    if (this.agentV2.isEnabled()) {
+    if (this.agentV2.isEnabled() && locationPurpose !== 'tracking') {
       const result = await this.agentV2.handleLocation(phone, user, session, {
         lat: latitude,
         lng: longitude,
@@ -791,6 +783,14 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       await this.wa.sendText(phone, result.text);
       return;
     }
+
+    // GPS tracking: save position to FreightTracking for any active freight the user is involved in
+    this.saveLocationToActiveFreights(user, latitude, longitude).catch(async (err) => {
+      // P2002 = duplicate GPS write (race condition) — silently ignore
+      if (err?.code === 'P2002') return;
+      this.logger.error(`GPS tracking save failed for user ${user.id}: ${err.message}`);
+      await this.wa.sendText(phone, 'No se pudo guardar su ubicación. Intente enviarla de nuevo.').catch((err2) => this.logger.warn(`[gps] error feedback send failed: ${err2.message}`));
+    });
 
     // Forward as text to AI so the agent knows the user shared a location (no raw coords — policy)
     const locationDesc = (name || address || 'ubicación').replace(/[\[\]]/g, '').slice(0, 100);
