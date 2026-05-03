@@ -204,12 +204,39 @@ export class FreightLocationsService {
         });
       }
 
+      await this.mirrorToFreightBase(tx, payload.fid, input);
+
       // No auditLog row here: AuditLog.userId is required, and these saves are anonymous.
       // The trail lives in FreightLocation: source=PUBLIC_LINK + inputMethod + actorRole='public_link'.
       // The link emission already left an auditLog ('public_map_link_created') with the jti.
 
       return { success: true, location: created };
     });
+  }
+
+  /**
+   * Mirror an ORIGIN/DESTINATION location into the Freight base columns so the
+   * authenticated app map (which reads originLat/Lng/Name and destLat/Lng/Name
+   * directly off the Freight row) reflects edits done via the picker (auth,
+   * shared link or public link). LOAD/UNLOAD and POI types are intentionally
+   * not mirrored — they are operational annotations, not the freight's route
+   * endpoints. The label fallback chain keeps a meaningful name even when the
+   * input has none.
+   */
+  private async mirrorToFreightBase(tx: any, freightId: string, input: LocationInput) {
+    if (input.type !== 'ORIGIN' && input.type !== 'DESTINATION') return;
+    const baseName = (input.label?.trim() || input.address?.trim() || '').slice(0, 255) || null;
+    const data: Record<string, unknown> = {};
+    if (input.type === 'ORIGIN') {
+      data.originLat = input.lat;
+      data.originLng = input.lng;
+      if (baseName) data.originName = baseName;
+    } else {
+      data.destLat = input.lat;
+      data.destLng = input.lng;
+      if (baseName) data.destName = baseName;
+    }
+    await tx.freight.update({ where: { id: freightId }, data });
   }
 
   private normalizeAllowedTypes(input?: LocationType[] | string[]): LocationType[] {
@@ -422,6 +449,8 @@ export class FreightLocationsService {
           data: { status: 'REPLACED', replacedById: created.id },
         });
       }
+
+      await this.mirrorToFreightBase(tx, freightId, input);
 
       await tx.auditLog.create({
         data: {
