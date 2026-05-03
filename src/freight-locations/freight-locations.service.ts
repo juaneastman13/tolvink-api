@@ -97,10 +97,18 @@ export class FreightLocationsService {
     return {
       token,
       jti,
-      url: `${this.getAppUrl()}/api/freight-map-public/${token}`,
+      url: `${this.getPublicFrontendUrl()}/freight-map-public/${token}`,
       expiresInMinutes: ttl,
       allowedTypes,
     };
+  }
+
+  private getPublicFrontendUrl(): string {
+    return (
+      this.config.get<string>('FRONTEND_URL')
+      || this.config.get<string>('PUBLIC_APP_URL')
+      || 'https://tolvink.com'
+    ).replace(/\/$/, '');
   }
 
   async getPublicMapData(token: string) {
