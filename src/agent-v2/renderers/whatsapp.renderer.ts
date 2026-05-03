@@ -112,6 +112,23 @@ export class WhatsAppAgentV2Renderer {
     return 'Todavia no tengo ese flujo activo en Agent V2. Puedo ayudarte a crear una solicitud de flete.';
   }
 
+  publicMapLink(url: string, ttlMinutes: number, allowedTypes: string[]): string {
+    const types = allowedTypes
+      .map((t) => ({
+        ORIGIN: 'origen', DESTINATION: 'destino', POINT_OF_INTEREST: 'punto de interes',
+        LOAD_LOCATION: 'carga', UNLOAD_LOCATION: 'descarga', OPERATIONAL_REFERENCE: 'referencia',
+      } as Record<string, string>)[t] || t.toLowerCase())
+      .join(', ');
+    const hours = Math.max(1, Math.round(ttlMinutes / 60));
+    return [
+      'Abri este link para indicar ubicaciones en el mapa:',
+      url,
+      '',
+      `Podes marcar: ${types}.`,
+      `El link vence en ${hours} h.`,
+    ].join('\n');
+  }
+
   error(message?: string): string {
     return message || 'No pude procesar el mensaje. Proba de nuevo.';
   }

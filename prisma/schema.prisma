@@ -1489,6 +1489,7 @@ enum FreightLocationSource {
   WEB_APP
   SHARED_LINK
   WHATSAPP_AGENT
+  PUBLIC_LINK
 }
 
 enum FreightLocationInputMethod {
@@ -1530,10 +1531,10 @@ model SharedLink {
 model FreightLocation {
   id           String                     @id @default(uuid())
   freightId    String                     @map("freight_id")
-  userId       String                     @map("user_id")
-  userName     String                     @map("user_name") @db.VarChar(255)
-  companyId    String                     @map("company_id")
-  companyName  String                     @map("company_name") @db.VarChar(255)
+  userId       String?                    @map("user_id")
+  userName     String?                    @map("user_name") @db.VarChar(255)
+  companyId    String?                    @map("company_id")
+  companyName  String?                    @map("company_name") @db.VarChar(255)
   actorRole    String                     @map("actor_role") @db.VarChar(50)
   type         FreightLocationType
   lat          Decimal                    @db.Decimal(10, 6)
@@ -1550,8 +1551,8 @@ model FreightLocation {
   updatedAt    DateTime                   @updatedAt @map("updated_at")
 
   freight    Freight           @relation(fields: [freightId], references: [id], onDelete: Cascade)
-  user       User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  company    Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  user       User?             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  company    Company?          @relation(fields: [companyId], references: [id], onDelete: Restrict)
   replacedBy FreightLocation?  @relation("FreightLocationReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
   replaces   FreightLocation[] @relation("FreightLocationReplacement")
 

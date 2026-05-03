@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { createSignedToken, verifySignedToken } from '../common/signed-token';
 
@@ -28,18 +29,194 @@ type MapTokenPayload = {
   uid?: string;
   cid?: string;
   mode?: 'read' | 'edit';
-  source?: 'WEB_APP' | 'SHARED_LINK' | 'WHATSAPP_AGENT';
+  source?: 'WEB_APP' | 'SHARED_LINK' | 'WHATSAPP_AGENT' | 'PUBLIC_LINK';
   purpose?: string;
+  anon?: boolean;
+  allowedTypes?: LocationType[];
+  jti?: string;
 };
 
 const REPLACING_TYPES = new Set<LocationType>(['ORIGIN', 'DESTINATION', 'LOAD_LOCATION', 'UNLOAD_LOCATION']);
 
+const DEFAULT_PUBLIC_TYPES: LocationType[] = ['ORIGIN', 'DESTINATION', 'POINT_OF_INTEREST'];
+const PUBLIC_LINK_DEFAULT_TTL_MIN = 24 * 60;
+const PUBLIC_LINK_RATE_LIMIT_PER_TOKEN = 30; // saves per token lifetime (in-memory)
+
 @Injectable()
 export class FreightLocationsService {
+  // In-memory rate limit per public token (jti -> count). Cleared on process restart.
+  // Acceptable for Stage 1 because tokens are short-lived; if multi-instance, move to DB or Redis.
+  private publicTokenSaves = new Map<string, number>();
+
   constructor(
     private prisma: PrismaService,
     private config: ConfigService,
   ) {}
+
+  // ======================== PUBLIC LINK (no-auth) ========================
+
+  async createPublicMapLink(freightId: string, opts?: {
+    allowedTypes?: LocationType[];
+    ttlMinutes?: number;
+    purpose?: string;
+    createdByUserId?: string;
+  }) {
+    const freight = await this.prisma.freight.findUnique({
+      where: { id: freightId },
+      select: { id: true, code: true },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    const allowedTypes = this.normalizeAllowedTypes(opts?.allowedTypes);
+    const ttl = Math.min(Math.max(opts?.ttlMinutes || PUBLIC_LINK_DEFAULT_TTL_MIN, 5), 7 * 24 * 60);
+    const jti = randomUUID();
+
+    const token = createSignedToken({
+      fid: freightId,
+      mode: 'edit',
+      source: 'PUBLIC_LINK',
+      anon: true,
+      allowedTypes,
+      purpose: opts?.purpose,
+      jti,
+    }, this.getSecret(), ttl);
+
+    if (opts?.createdByUserId) {
+      await this.prisma.auditLog.create({
+        data: {
+          entityType: 'freight_location',
+          entityId: freightId,
+          action: 'public_map_link_created',
+          userId: opts.createdByUserId,
+          freightId,
+          metadata: { jti, allowedTypes, ttlMinutes: ttl, purpose: opts?.purpose || null },
+        },
+      }).catch(() => undefined);
+    }
+
+    return {
+      token,
+      jti,
+      url: `${this.getAppUrl()}/api/freight-map-public/${token}`,
+      expiresInMinutes: ttl,
+      allowedTypes,
+    };
+  }
+
+  async getPublicMapData(token: string) {
+    const payload = this.verifyMapToken(token);
+    if (payload.source !== 'PUBLIC_LINK' || !payload.anon) {
+      throw new ForbiddenException('Este enlace no es de uso publico');
+    }
+    const allowedTypes = this.normalizeAllowedTypes(payload.allowedTypes);
+    const data = await this.buildMapData(payload.fid, {
+      canEdit: true,
+      source: 'PUBLIC_LINK',
+      actorCompanyId: undefined,
+      actorCompanies: [],
+      purpose: payload.purpose,
+    });
+    return {
+      ...data,
+      freight: {
+        ...data.freight,
+        assignments: [],
+      },
+      locations: data.locations
+        .filter((loc) => allowedTypes.includes(loc.type as LocationType))
+        .map((loc) => ({
+          id: loc.id,
+          type: loc.type,
+          status: loc.status,
+          lat: loc.lat,
+          lng: loc.lng,
+          label: loc.label,
+          address: loc.address,
+          description: loc.description,
+          source: loc.source,
+          inputMethod: loc.inputMethod,
+          createdAt: loc.createdAt,
+        })),
+      liveLocations: [],
+      permissions: {
+        ...data.permissions,
+        anonymous: true,
+        allowedTypes,
+      },
+    };
+  }
+
+  async savePublicLocation(token: string, input: LocationInput) {
+    const payload = this.verifyMapToken(token);
+    if (payload.source !== 'PUBLIC_LINK' || !payload.anon || payload.mode === 'read') {
+      throw new ForbiddenException('Este enlace no permite guardar ubicaciones');
+    }
+    const allowed = this.normalizeAllowedTypes(payload.allowedTypes);
+    if (!allowed.includes(input.type)) {
+      throw new BadRequestException(`Tipo no permitido para este enlace. Permitidos: ${allowed.join(', ')}`);
+    }
+    const jti = payload.jti || 'no-jti';
+    const used = this.publicTokenSaves.get(jti) || 0;
+    if (used >= PUBLIC_LINK_RATE_LIMIT_PER_TOKEN) {
+      throw new ForbiddenException('Este enlace alcanzo el maximo de ubicaciones permitidas. Solicita uno nuevo.');
+    }
+    this.publicTokenSaves.set(jti, used + 1);
+
+    this.validateLocationInput(input);
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.freightLocation.create({
+        data: {
+          freightId: payload.fid,
+          userId: null,
+          userName: null,
+          companyId: null,
+          companyName: null,
+          actorRole: 'public_link',
+          type: input.type as any,
+          lat: input.lat,
+          lng: input.lng,
+          label: input.label?.trim() || null,
+          address: input.address?.trim() || null,
+          description: input.description?.trim() || null,
+          source: 'PUBLIC_LINK' as any,
+          inputMethod: (input.inputMethod || 'PIN_MANUAL') as any,
+        },
+      });
+
+      if (REPLACING_TYPES.has(input.type)) {
+        await tx.freightLocation.updateMany({
+          where: {
+            freightId: payload.fid,
+            type: input.type as any,
+            status: 'ACTIVE',
+            id: { not: created.id },
+          },
+          data: { status: 'REPLACED', replacedById: created.id },
+        });
+      }
+
+      // No auditLog row here: AuditLog.userId is required, and these saves are anonymous.
+      // The trail lives in FreightLocation: source=PUBLIC_LINK + inputMethod + actorRole='public_link'.
+      // The link emission already left an auditLog ('public_map_link_created') with the jti.
+
+      return { success: true, location: created };
+    });
+  }
+
+  private normalizeAllowedTypes(input?: LocationType[] | string[]): LocationType[] {
+    const validValues = new Set<LocationType>([
+      'ORIGIN', 'DESTINATION', 'POINT_OF_INTEREST', 'LOAD_LOCATION',
+      'UNLOAD_LOCATION', 'OPERATIONAL_REFERENCE', 'OTHER',
+    ]);
+    const raw = Array.isArray(input) ? input : [];
+    const filtered = raw
+      .map((v) => String(v).toUpperCase())
+      .filter((v): v is LocationType => validValues.has(v as LocationType));
+    return filtered.length ? Array.from(new Set(filtered)) : [...DEFAULT_PUBLIC_TYPES];
+  }
+  // ======================== END PUBLIC LINK ==============================
+
 
   async createMapLink(freightId: string, user: any, opts?: {
     mode?: 'read' | 'edit';
@@ -373,5 +550,13 @@ export class FreightLocationsService {
       || this.config.get<string>('FRONTEND_URL')
       || 'https://tolvink.com'
     ).replace(/\/$/, '');
+  }
+
+  getGoogleMapsKey(): string {
+    return this.config.get<string>('GOOGLE_MAPS_API_KEY')
+      || this.config.get<string>('VITE_GMAPS_KEY')
+      || this.config.get<string>('VITE_GOOGLE_MAPS_PUBLIC_KEY')
+      || this.config.get<string>('GOOGLE_PLACES_API_KEY')
+      || '';
   }
 }
