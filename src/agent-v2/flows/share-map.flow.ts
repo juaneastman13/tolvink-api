@@ -2,6 +2,7 @@ import { AgentState } from '../schemas/agent-state.schema';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { AgentV2FreightTools } from '../tools/freight.tools';
 import { AgentV2LocationTools } from '../tools/location.tools';
+import { extractFreightCode } from '../utils/freight-code';
 
 export const SHARE_MAP_FLOW = {
   name: 'share_map',
@@ -61,11 +62,10 @@ export function makeShareMapFlow(
 }
 
 export function extractMapFreightCode(message: string, activeFreightCode?: string | null): string | undefined {
-  const direct = message.match(/\bF[-\s]?\d+\b/i)?.[0]?.replace(/\s+/g, '').toUpperCase();
+  const direct = extractFreightCode(message);
   if (direct) return direct;
   const normalized = normalize(message);
   if (/ese (flete|viaje)|este (flete|viaje)|el mismo/.test(normalized)) return activeFreightCode || undefined;
-  if (/^\s*F[-\s]?\d+\s*$/i.test(message || '')) return (message || '').replace(/\s+/g, '').toUpperCase();
   return undefined;
 }
 

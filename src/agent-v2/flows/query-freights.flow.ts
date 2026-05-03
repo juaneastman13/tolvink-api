@@ -2,6 +2,7 @@ import { AgentState } from '../schemas/agent-state.schema';
 import { AgentV2FreightTools, QueryFreightsInput } from '../tools/freight.tools';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { buildFreightActionButtons } from '../policies/freight-action-buttons';
+import { extractFreightCode } from '../utils/freight-code';
 
 export const QUERY_FREIGHTS_FLOW = {
   name: 'query_freights',
@@ -43,7 +44,7 @@ export function makeQueryFreightsFlow(
 
 export function extractQueryFreightsInput(message: string, activeFreightCode?: string | null): QueryFreightsInput {
   const normalized = normalize(message);
-  const code = message.match(/\bF[-\s]?\d+\b/i)?.[0]?.replace(/\s+/g, '').toUpperCase()
+  const code = extractFreightCode(message)
     || (/ese (flete|viaje)/.test(normalized) ? activeFreightCode || undefined : undefined);
   const statusFilter = /pendiente|sin asignar/.test(normalized)
     ? 'pending_assignment'

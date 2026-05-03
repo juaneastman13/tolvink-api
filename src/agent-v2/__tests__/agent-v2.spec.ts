@@ -126,11 +126,21 @@ describe('query_freights input extraction', () => {
       freightCode: 'F-123',
     });
   });
+
+  it('detects Tolvink freight codes in detail queries', () => {
+    expect(extractQueryFreightsInput('detalle F26-BKP.2847')).toMatchObject({
+      freightCode: 'F26-BKP.2847',
+    });
+  });
 });
 
 describe('share_map input extraction', () => {
   it('detects explicit freight code for map links', () => {
     expect(extractMapFreightCode('pasame el mapa del flete F-123')).toBe('F-123');
+  });
+
+  it('detects Tolvink freight codes for map links', () => {
+    expect(extractMapFreightCode('pasame mapa del F26-BKP.2847')).toBe('F26-BKP.2847');
   });
 
   it('uses active freight context for map links', () => {
