@@ -119,10 +119,10 @@ export class WhatsAppAgentV2Renderer {
   pickLocationViaLink(url: string, type: 'origin' | 'destination'): string {
     const label = type === 'destination' ? 'destino' : 'origen';
     return [
-      `Si no podes enviar la ubicacion desde WhatsApp, abri este link y marcala en el mapa para indicar el ${label}:`,
+      `Marca la ubicacion exacta del ${label} en este mapa:`,
       url,
       '',
-      'El link vence en 30 min. Volve a esta conversacion despues de guardar.',
+      'Despues de guardar, vuelvo a continuar la solicitud desde aca.',
     ].join('\n');
   }
 
