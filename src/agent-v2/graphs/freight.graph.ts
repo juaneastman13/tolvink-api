@@ -22,12 +22,13 @@ export function buildFreightGraph(
   renderer: WhatsAppAgentV2Renderer,
   freightTools: AgentV2FreightTools,
   userProvider: () => any,
+  locationLinkProvider?: (state: AgentState, type: 'origin' | 'destination') => Promise<string | null>,
 ) {
   return new StateGraph(AgentStateAnnotation)
     .addNode('extractSlots', makeExtractSlotsNode(gemini))
     .addNode('validateSlots', validateSlotsNode)
     .addNode('askMissingSlot', makeAskMissingSlotNode(renderer))
-    .addNode('askLocation', makeAskLocationNode(renderer))
+    .addNode('askLocation', makeAskLocationNode(renderer, locationLinkProvider))
     .addNode('checkPolicy', checkPolicyNode)
     .addNode('prepareConfirmation', makePrepareConfirmationNode(renderer))
     .addNode('resolveConfirmation', resolveConfirmationNode)

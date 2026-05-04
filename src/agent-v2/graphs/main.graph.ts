@@ -18,8 +18,9 @@ export function buildMainGraph(
   freightTools: AgentV2FreightTools,
   locationTools: AgentV2LocationTools,
   userProvider: () => any,
+  locationLinkProvider?: (state: AgentState, type: 'origin' | 'destination') => Promise<string | null>,
 ) {
-  const freightGraph = buildFreightGraph(gemini, renderer, freightTools, userProvider);
+  const freightGraph = buildFreightGraph(gemini, renderer, freightTools, userProvider, locationLinkProvider);
   const queryFreightsFlow = makeQueryFreightsFlow(freightTools, renderer, userProvider);
   const shareMapFlow = makeShareMapFlow(freightTools, locationTools, renderer, userProvider);
 

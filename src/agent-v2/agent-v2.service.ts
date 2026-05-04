@@ -52,11 +52,8 @@ export class AgentV2Service {
     const prior = checkpoint?.state || ((session?.flowState as any) || {}).agentV2 || {};
     const conversationId = session?.id || phone;
 
-    // Short-circuit: if the user is at create_freight/awaiting_location and asks for a
-    // picker link instead of sending a WhatsApp pin (common from desktop WhatsApp Web),
-    // mint a one-shot session-scoped picker token and reply with the SPA URL. The picker
-    // posts back to /api/whatsapp/save-location-by-slug, which already routes to
-    // agentV2.handleLocation when the V2 flow is in awaiting_location.
+    // Compatibility: if the user asks for a picker link again while the flow is waiting
+    // for a location, refresh the same kind of session-scoped map link.
     if (
       session?.id
       && prior?.currentFlow === 'create_freight'
@@ -114,7 +111,14 @@ export class AgentV2Service {
       errors: prior.errors || [],
     });
 
-    const graph = buildMainGraph(this.gemini, renderer, this.freightTools, this.locationTools, () => scopedUser);
+    const graph = buildMainGraph(
+      this.gemini,
+      renderer,
+      this.freightTools,
+      this.locationTools,
+      () => scopedUser,
+      (_state, type) => session?.id ? this.mintPickerLink(session.id, type) : Promise.resolve(null),
+    );
     this.logger.log(JSON.stringify({
       msg: 'agent_v2_start',
       mode: this.getMode(),

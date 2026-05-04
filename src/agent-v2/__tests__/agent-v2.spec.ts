@@ -4,6 +4,7 @@ import { extractQueryFreightsInput } from '../flows/query-freights.flow';
 import { extractMapFreightCode } from '../flows/share-map.flow';
 import { isGlobalCancelMessage } from '../nodes/cancel-intent';
 import { makeCancelPendingActionNode } from '../nodes/cancel-pending-action.node';
+import { makeAskLocationNode } from '../nodes/ask-location.node';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
 import { checkActionPolicy } from '../policies/action-policy';
 import { buildFreightActionButtons } from '../policies/freight-action-buttons';
@@ -75,6 +76,22 @@ describe('create_freight location gating', () => {
     } as any);
     expect(result.currentStep).toBe('awaiting_location');
     expect(result.locationRequestType).toBe('destination');
+  });
+
+  it('offers a map picker link as the primary location request', async () => {
+    const node = makeAskLocationNode(
+      new WhatsAppAgentV2Renderer(),
+      async (_state, type) => `https://tolvink.com/ubicacion/${type}-abc123`,
+    );
+    const result = await node({
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_location',
+      locationRequestType: 'origin',
+    } as any);
+
+    expect(result.response).toContain('https://tolvink.com/ubicacion/origin-abc123');
+    expect(result.response).toContain('marcala en el mapa');
+    expect(result.response).not.toContain('boton de ubicacion de WhatsApp');
   });
 });
 
