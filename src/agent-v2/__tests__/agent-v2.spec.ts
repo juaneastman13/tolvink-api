@@ -81,7 +81,7 @@ describe('create_freight location gating', () => {
   it('offers a map picker link as the primary location request', async () => {
     const node = makeAskLocationNode(
       new WhatsAppAgentV2Renderer(),
-      async (_state, type) => `https://tolvink.com/api/whatsapp/ubicacion/${type}-abc123`,
+      async (_state, type) => `https://tolvink.com/freight-map-public/${type}-abc123`,
     );
     const result = await node({
       currentFlow: 'create_freight',
@@ -89,7 +89,7 @@ describe('create_freight location gating', () => {
       locationRequestType: 'origin',
     } as any);
 
-    expect(result.response).toContain('https://tolvink.com/api/whatsapp/ubicacion/origin-abc123');
+    expect(result.response).toContain('https://tolvink.com/freight-map-public/origin-abc123');
     expect(result.response).toContain('Marca la ubicacion exacta');
     expect(result.response).not.toContain('boton de ubicacion de WhatsApp');
   });

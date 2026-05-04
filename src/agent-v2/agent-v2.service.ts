@@ -200,9 +200,9 @@ export class AgentV2Service {
   }
 
   /**
-   * Mint a session-scoped picker URL pointing to the API-hosted route
-   * /api/whatsapp/ubicacion/<slug>. This is used before a freight exists, so it
-   * cannot use /freight-map-public/:token yet because that token requires fid.
+   * Mint a session-scoped picker URL under the same public map route used for
+   * existing freights. The /freight-map-public controller detects these short
+   * draft slugs and posts back to the WhatsApp session endpoint.
    * Stores the slug+token in flowState.locationToken so the existing
    * /api/whatsapp/save-location-by-slug endpoint can resolve it. The agentV2
    * branch in flowState is left untouched, so when the picker posts back the
@@ -233,13 +233,13 @@ export class AgentV2Service {
       },
     });
     const base = (
-      this.config.get<string>('API_PUBLIC_URL')
-      || (this.config.get<string>('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get<string>('RAILWAY_PUBLIC_DOMAIN')}` : '')
-      || this.config.get<string>('FRONTEND_URL')
+      this.config.get<string>('FRONTEND_URL')
       || this.config.get<string>('PUBLIC_APP_URL')
+      || this.config.get<string>('API_PUBLIC_URL')
+      || (this.config.get<string>('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get<string>('RAILWAY_PUBLIC_DOMAIN')}` : '')
       || 'https://tolvink.com'
     ).replace(/\/$/, '');
-    return `${base}/api/whatsapp/ubicacion/${slug}`;
+    return `${base}/freight-map-public/${slug}`;
   }
 
   private async persistState(session: any, state: AgentState, checkpointStore?: WhatsAppSessionCheckpointStore): Promise<void> {
