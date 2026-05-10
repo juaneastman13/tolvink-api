@@ -58,6 +58,7 @@ export function buildFreightGraph(
       executeAction: 'executeAction',
       cancelPendingAction: 'cancelPendingAction',
       askConfirmationAgain: 'askConfirmationAgain',
+      end: END,
     })
     .addEdge('executeAction', 'renderSuccess')
     .addEdge('renderSuccess', END)
@@ -86,8 +87,12 @@ function routeAfterPolicy(state: AgentState): 'prepareConfirmation' | 'end' {
   return state.currentStep === 'policy_ok' ? 'prepareConfirmation' : 'end';
 }
 
-function routeAfterConfirmation(state: AgentState): 'executeAction' | 'cancelPendingAction' | 'askConfirmationAgain' {
+function routeAfterConfirmation(state: AgentState): 'executeAction' | 'cancelPendingAction' | 'askConfirmationAgain' | 'end' {
   if (state.currentStep === 'confirmed') return 'executeAction';
   if (state.currentStep === 'cancelled') return 'cancelPendingAction';
+  // resolveConfirmation prefilled a response (stale/missing pendingAction or
+  // expired). Skip askConfirmationAgain — its node would overwrite the
+  // response with the generic "necesito si o no" prompt.
+  if (state.response) return 'end';
   return 'askConfirmationAgain';
 }

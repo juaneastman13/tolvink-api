@@ -74,6 +74,7 @@ describe('WhatsAppRouterService', () => {
       },
       whatsAppSession: {
         findFirst: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),
       },
       whatsAppMessageLog: {
@@ -93,6 +94,7 @@ describe('WhatsAppRouterService', () => {
         totalPages: 1,
         totalItems: 1,
       }),
+      sendTypingIndicator: jest.fn().mockResolvedValue(null),
       normalizePhone: jest.fn((value: string) => value),
     };
 
@@ -333,6 +335,114 @@ describe('WhatsAppRouterService', () => {
       expect(help).not.toContain('flota propia');
       expect(features).not.toContain('Equipo');
       expect(guide).toContain('SIN ASIGNAR');
+    });
+  });
+
+  describe('Agent V2 priority gate (handleText)', () => {
+    const v2Session = {
+      id: 'session-v2',
+      flowType: null,
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      flowState: {
+        selectedCompanyId: 'producer-1',
+        companyConfirmed: true,
+        agentV2: {
+          currentFlow: 'create_freight',
+          currentStep: 'awaiting_slot',
+          awaitingSlot: 'truckCount',
+        },
+      },
+    };
+
+    beforeEach(() => {
+      agentV2.isEnabled.mockReturnValue(true);
+      agentV2.chat.mockResolvedValue({ text: 'Cuantos camiones necesitas?' });
+    });
+
+    it('routes a 1-char numeric reply to V2 instead of the legacy main menu', async () => {
+      const showMenu = jest.spyOn(service as any, 'showMainMenu').mockResolvedValue(undefined);
+
+      await service['handleText'](phone, multiCompanyUser, '1', v2Session);
+
+      expect(agentV2.chat).toHaveBeenCalledWith(
+        phone,
+        '1',
+        multiCompanyUser,
+        expect.objectContaining({ id: 'session-v2' }),
+      );
+      expect(showMenu).not.toHaveBeenCalled();
+      expect(wa.sendText).toHaveBeenCalledWith(phone, 'Cuantos camiones necesitas?');
+    });
+
+    it('does NOT consume a stale selectionContext while V2 is awaiting input', async () => {
+      const sessionWithSelection = {
+        ...v2Session,
+        flowState: {
+          ...v2Session.flowState,
+          selectionContext: { purpose: 'company_selection', items: [{ id: 'selco:x', title: 'X' }], shownItems: [{ id: 'selco:x', title: 'X' }] },
+        },
+      };
+
+      await service['handleText'](phone, multiCompanyUser, '1', sessionWithSelection);
+
+      // The selectionContext branch would have called dispatchSelectionResult
+      // and updated the session. With the gate, V2 must own the message.
+      expect(agentV2.chat).toHaveBeenCalled();
+      expect(prisma.whatsAppSession.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            flowState: expect.not.objectContaining({ selectionContext: expect.anything() }),
+          }),
+        }),
+      );
+    });
+
+    it('routes a freight code straight to V2 when share_map is awaiting it', async () => {
+      const shareMapSession = {
+        ...v2Session,
+        flowState: {
+          ...v2Session.flowState,
+          agentV2: {
+            currentFlow: 'share_map',
+            currentStep: 'awaiting_freight_code',
+          },
+        },
+      };
+
+      await service['handleText'](phone, multiCompanyUser, 'F26-AAA.0001', shareMapSession);
+
+      expect(agentV2.chat).toHaveBeenCalledWith(
+        phone,
+        'F26-AAA.0001',
+        multiCompanyUser,
+        expect.objectContaining({ id: 'session-v2' }),
+      );
+    });
+
+    it('falls through to the legacy menu when V2 has no awaiting step', async () => {
+      const idleSession = {
+        ...v2Session,
+        flowState: {
+          ...v2Session.flowState,
+          agentV2: { currentFlow: null, currentStep: null },
+        },
+      };
+      const showMenu = jest.spyOn(service as any, 'showMainMenu').mockResolvedValue(undefined);
+
+      await service['handleText'](phone, multiCompanyUser, '1', idleSession);
+
+      expect(agentV2.chat).not.toHaveBeenCalled();
+      expect(showMenu).toHaveBeenCalled();
+    });
+
+    it('legacy mode is unaffected — short reply still goes to the menu', async () => {
+      agentV2.isEnabled.mockReturnValue(false);
+      const showMenu = jest.spyOn(service as any, 'showMainMenu').mockResolvedValue(undefined);
+
+      await service['handleText'](phone, multiCompanyUser, '1', v2Session);
+
+      expect(agentV2.chat).not.toHaveBeenCalled();
+      expect(showMenu).toHaveBeenCalled();
     });
   });
 

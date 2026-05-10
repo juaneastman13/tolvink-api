@@ -21,7 +21,12 @@ export const PendingActionSchema = z.object({
   summary: z.string(),
   requiresConfirmation: z.boolean().default(true),
   auditId: z.string().optional(),
+  createdAt: z.string().optional(),
 });
 
 export type PendingAction = z.infer<typeof PendingActionSchema>;
+
+// Pending confirmations expire after 30 minutes; a "si" arriving later
+// must NOT execute the stale action — checked in resolveConfirmationNode.
+export const PENDING_ACTION_TTL_MS = 30 * 60 * 1000;
 

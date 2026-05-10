@@ -241,3 +241,73 @@ describe('agent-v2 policies', () => {
     expect(decision.reason).toContain('empresa');
   });
 });
+
+describe('resolveConfirmationNode safety guards', () => {
+  // Imported lazily so the rest of the suite is unaffected by the schema TTL constant.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { resolveConfirmationNode } = require('../nodes/resolve-confirmation.node');
+
+  it('refuses to confirm when there is no pendingAction', async () => {
+    const result = await resolveConfirmationNode({
+      lastUserMessage: 'si',
+      pendingAction: null,
+      pendingConfirmation: true,
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_confirmation',
+    });
+    expect(result.currentStep).toBeNull();
+    expect(result.currentFlow).toBeNull();
+    expect(result.pendingConfirmation).toBe(false);
+    expect(result.response).toContain('No tengo una solicitud pendiente');
+  });
+
+  it('refuses to confirm when pendingAction has expired', async () => {
+    const old = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    const result = await resolveConfirmationNode({
+      lastUserMessage: 'si',
+      pendingAction: { action: 'create_freight', payload: {}, summary: '', requiresConfirmation: true, createdAt: old },
+      pendingConfirmation: true,
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_confirmation',
+    });
+    expect(result.currentStep).toBeNull();
+    expect(result.pendingAction).toBeNull();
+    expect(result.response).toContain('expiro');
+  });
+
+  it('confirms when pendingAction is fresh', async () => {
+    const fresh = new Date().toISOString();
+    const result = await resolveConfirmationNode({
+      lastUserMessage: 'si',
+      pendingAction: { action: 'create_freight', payload: {}, summary: '', requiresConfirmation: true, createdAt: fresh },
+      pendingConfirmation: true,
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_confirmation',
+    });
+    expect(result.currentStep).toBe('confirmed');
+    expect(result.pendingConfirmation).toBe(false);
+  });
+
+  it('cancellation always wins, regardless of pendingAction state', async () => {
+    const result = await resolveConfirmationNode({
+      lastUserMessage: 'cancelar',
+      pendingAction: null,
+      pendingConfirmation: true,
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_confirmation',
+    });
+    expect(result.currentStep).toBe('cancelled');
+  });
+
+  it('asks again on ambiguous answers', async () => {
+    const result = await resolveConfirmationNode({
+      lastUserMessage: 'mas o menos',
+      pendingAction: { action: 'create_freight', payload: {}, summary: '', requiresConfirmation: true, createdAt: new Date().toISOString() },
+      pendingConfirmation: true,
+      currentFlow: 'create_freight',
+      currentStep: 'awaiting_confirmation',
+    });
+    expect(result.currentStep).toBe('confirmation_unclear');
+    expect(result.shouldPause).toBe(true);
+  });
+});

@@ -30,6 +30,7 @@ export function makePrepareConfirmationNode(renderer: WhatsAppAgentV2Renderer) {
         summary,
         requiresConfirmation: true,
         auditId: actionId,
+        createdAt: new Date().toISOString(),
       },
       response: summary,
       shouldPause: true,

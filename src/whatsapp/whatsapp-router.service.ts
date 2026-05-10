@@ -117,6 +117,24 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     this.messageRate.clear();
   }
 
+  // Agent V2 steps where the user's next message must be consumed by V2.
+  // Anything else (terminal states, one-shot ready, null) lets the legacy
+  // router decide. Keep this list in sync with src/agent-v2/nodes/*.
+  private static readonly AGENT_V2_AWAITING_STEPS: ReadonlySet<string> = new Set([
+    'awaiting_slot',
+    'awaiting_location',
+    'awaiting_confirmation',
+    'confirmation_unclear',
+    'awaiting_freight_code',
+  ]);
+
+  private hasActiveAgentV2Step(session: any): boolean {
+    if (!this.agentV2.isEnabled()) return false;
+    const v2 = ((session?.flowState as any) || {}).agentV2;
+    if (!v2?.currentFlow || !v2?.currentStep) return false;
+    return WhatsAppRouterService.AGENT_V2_AWAITING_STEPS.has(v2.currentStep);
+  }
+
   // ======================== MAIN ENTRY POINT ============================
 
   async handleMessage(phone: string, type: string, payload: any, waMessageId: string) {
@@ -373,6 +391,19 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     // Safety: cap extremely long messages before processing
     if (t.length > 10_000) {
       await this.wa.sendText(phone, 'Mensaje demasiado largo. Máximo 10.000 caracteres.');
+      return;
+    }
+
+    // ---- Agent V2 priority gate ----
+    // If V2 is mid-flow waiting for user input, ANY text belongs to that flow.
+    // Without this, short replies like "1" hit the "tooShort" branch below and
+    // get redirected to the legacy main menu (because hasHistory only inspects
+    // flowState.aiMessages, not flowState.agentV2). Same problem with the
+    // selectionContext block (a stale numeric handler from a previous list)
+    // and with the F-code fast path (if the user is mid-share_map, V2 must
+    // resolve the code, not the legacy short-circuit).
+    if (this.hasActiveAgentV2Step(cachedSession)) {
+      await this.handleAiChat(phone, user, t, cachedSession);
       return;
     }
 
@@ -752,6 +783,22 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
     const isAgentV2FreightLocationCapture = this.agentV2.isEnabled()
       && state.agentV2?.currentFlow === 'create_freight'
       && state.agentV2?.currentStep === 'awaiting_location';
+
+    // When V2 is the consumer, hand the location over BEFORE touching flowState
+    // so the V2 checkpoint is the single writer for that turn. Touching
+    // lastLocation/locationToken first racins with V2's own state save and
+    // can leave a stale lastLocation visible to the legacy agent on the
+    // next message.
+    if (isAgentV2FreightLocationCapture) {
+      const result = await this.agentV2.handleLocation(phone, user, session, {
+        lat: latitude,
+        lng: longitude,
+        label: name || address || undefined,
+      });
+      await this.wa.sendText(phone, result.text);
+      return;
+    }
+
     await this.prisma.whatsAppSession.update({
       where: { id: session.id },
       data: {
@@ -764,15 +811,6 @@ export class WhatsAppRouterService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    if (isAgentV2FreightLocationCapture) {
-      const result = await this.agentV2.handleLocation(phone, user, session, {
-        lat: latitude,
-        lng: longitude,
-        label: name || address || undefined,
-      });
-      await this.wa.sendText(phone, result.text);
-      return;
-    }
 
     if (this.agentV2.isEnabled() && locationPurpose !== 'tracking') {
       const result = await this.agentV2.handleLocation(phone, user, session, {
