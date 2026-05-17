@@ -240,7 +240,7 @@ SUPABASE_SERVICE_KEY=<STAGING_SERVICE_ROLE_KEY>
 # ──────────── AI (Gemini) ────────────
 # Se puede reusar la key de prod o crear una nueva
 AI_PROVIDER=gemini
-GEMINI_MODEL=gemini-3.1-flash-lite-preview
+GEMINI_MODEL=gemini-3.1-pro
 GEMINI_API_KEY=<KEY_DE_STAGING_O_LA_MISMA_DE_PROD>
 
 # ──────────── OpenAI Whisper ────────────

@@ -2,7 +2,7 @@ import { END, START, StateGraph } from '@langchain/langgraph';
 import { GeminiClient } from '../../ai/core/gemini.client';
 import { AgentState, AgentStateAnnotation } from '../schemas/agent-state.schema';
 import { loadSessionNode } from '../nodes/load-session.node';
-import { detectIntentNode } from '../nodes/detect-intent.node';
+import { makeDetectIntentNode } from '../nodes/detect-intent.node';
 import { routeIntentNode } from '../nodes/route-intent.node';
 import { makeRenderResponseNode } from '../nodes/render-response.node';
 import { WhatsAppAgentV2Renderer } from '../renderers/whatsapp.renderer';
@@ -39,7 +39,7 @@ export function buildMainGraph(
 
   return new StateGraph(AgentStateAnnotation)
     .addNode('loadSession', loadSessionNode)
-    .addNode('detectIntent', detectIntentNode)
+    .addNode('detectIntent', makeDetectIntentNode(gemini))
     .addNode('routeIntent', routeIntentNode)
     .addNode('runSubgraph', runSubgraph)
     .addNode('renderResponse', makeRenderResponseNode(renderer))

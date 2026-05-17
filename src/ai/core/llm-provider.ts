@@ -3,8 +3,8 @@ import type { AiToolDefinition } from '../tools/tool-definitions';
 export type AiProviderName = 'gemini';
 
 export const DEFAULT_AI_PROVIDER: AiProviderName = 'gemini';
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite-preview';
-export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.1-pro';
+export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.1-flash';
 export const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 2048;
 export const DEFAULT_GEMINI_TEMPERATURE = 0.3;
 export const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 25_000;
