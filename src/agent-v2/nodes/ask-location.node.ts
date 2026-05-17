@@ -7,6 +7,19 @@ export function makeAskLocationNode(renderer: WhatsAppAgentV2Renderer, linkProvi
   return async function askLocationNode(state: AgentState): Promise<Partial<AgentState>> {
     if (state.currentFlow !== 'create_freight' || state.currentStep !== 'awaiting_location') return {};
     const type = state.locationRequestType === 'destination' ? 'destination' : 'origin';
+
+    // Si hay matches ambiguos, ofrecer elegir antes del map picker.
+    if ((state.locationChoices || []).length > 0 && state.awaitingLocationChoice === type) {
+      const rendered = renderer.askLocationChoice(type, state.locationChoices);
+      return {
+        response: rendered.text,
+        buttons: rendered.buttons,
+        shouldPause: true,
+        pendingLocationRequest: true,
+        nodeHistory: [{ node: 'askLocation', type, mode: 'choice', count: state.locationChoices.length, at: new Date().toISOString() }],
+      };
+    }
+
     const url = linkProvider ? await linkProvider(state, type).catch(() => null) : null;
     return {
       response: url
@@ -16,7 +29,7 @@ export function makeAskLocationNode(renderer: WhatsAppAgentV2Renderer, linkProvi
           : renderer.askOriginLocation(),
       shouldPause: true,
       pendingLocationRequest: true,
-      nodeHistory: [{ node: 'askLocation', type, at: new Date().toISOString() }],
+      nodeHistory: [{ node: 'askLocation', type, mode: 'map', at: new Date().toISOString() }],
     };
   };
 }

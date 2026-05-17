@@ -26,6 +26,42 @@ export class WhatsAppAgentV2Renderer {
     return questions[slot] || 'Me falta un dato para continuar.';
   }
 
+  askMissingSlots(slots: string[]): string {
+    if (!slots.length) return 'Me falta un dato para continuar.';
+    if (slots.length === 1) return this.askMissingSlot(slots[0]);
+    const labels: Record<string, string> = {
+      product: 'Producto (soja, maiz, trigo, etc.)',
+      origin: 'Origen (campo o lugar de carga)',
+      destination: 'Destino (planta o lugar de descarga)',
+      date: 'Fecha (hoy, manana o DD/MM)',
+      time: 'Hora (ej. 8am o 14:30)',
+      truckCount: 'Cantidad de camiones',
+    };
+    const lines = slots.map((s) => `• ${labels[s] || s}`);
+    return [
+      'Para armar la solicitud necesito estos datos. Podes mandarmelos todos en un mismo mensaje:',
+      '',
+      ...lines,
+      '',
+      'Ejemplo: "3 camiones de soja desde mi campo San Jose hasta planta Bunge, manana 8am".',
+    ].join('\n');
+  }
+
+  askLocationChoice(type: 'origin' | 'destination', choices: Array<{ id: string; label: string }>): { text: string; buttons: Array<{ id: string; title: string }> } {
+    const label = type === 'destination' ? 'destino' : 'origen';
+    const lines = choices.slice(0, 9).map((c, i) => `${i + 1}. ${c.label}`);
+    return {
+      text: [
+        `Encontre estas opciones para el ${label}. Elegi una:`,
+        '',
+        ...lines,
+        '',
+        'Si ninguna es la que queres, escribi "otra" para indicar en el mapa.',
+      ].join('\n'),
+      buttons: choices.slice(0, 9).map((c) => ({ id: `loc:${type}:${c.id}`, title: c.label.slice(0, 24) })),
+    };
+  }
+
   askOriginLocation(): string {
     return 'Enviame la ubicacion exacta del origen usando el boton de ubicacion de WhatsApp.';
   }

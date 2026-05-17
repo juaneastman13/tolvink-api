@@ -2,9 +2,10 @@ import { END, START, StateGraph } from '@langchain/langgraph';
 import { GeminiClient } from '../../ai/core/gemini.client';
 import { AgentStateAnnotation } from '../schemas/agent-state.schema';
 import { makeExtractSlotsNode } from '../nodes/extract-slots.node';
-import { validateSlotsNode } from '../nodes/validate-slots.node';
+import { makeValidateSlotsNode } from '../nodes/validate-slots.node';
 import { makeAskMissingSlotNode } from '../nodes/ask-missing-slot.node';
 import { makeAskLocationNode } from '../nodes/ask-location.node';
+import { AgentV2LocationTools } from '../tools/location.tools';
 import { checkPolicyNode } from '../nodes/check-policy.node';
 import { makePrepareConfirmationNode } from '../nodes/prepare-confirmation.node';
 import { makeExecuteActionNode } from '../nodes/execute-action.node';
@@ -23,10 +24,11 @@ export function buildFreightGraph(
   freightTools: AgentV2FreightTools,
   userProvider: () => any,
   locationLinkProvider?: (state: AgentState, type: 'origin' | 'destination') => Promise<string | null>,
+  locationTools?: AgentV2LocationTools,
 ) {
   return new StateGraph(AgentStateAnnotation)
     .addNode('extractSlots', makeExtractSlotsNode(gemini))
-    .addNode('validateSlots', validateSlotsNode)
+    .addNode('validateSlots', makeValidateSlotsNode(locationTools, userProvider))
     .addNode('askMissingSlot', makeAskMissingSlotNode(renderer))
     .addNode('askLocation', makeAskLocationNode(renderer, locationLinkProvider))
     .addNode('checkPolicy', checkPolicyNode)

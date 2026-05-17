@@ -1,27 +1,41 @@
 import { GeminiClient } from '../../ai/core/gemini.client';
 import { CREATE_FREIGHT_SLOT_EXTRACTOR_PROMPT } from '../prompts/slot-extractor.prompt';
-import { AgentState } from '../schemas/agent-state.schema';
+import { AgentLocation, AgentState } from '../schemas/agent-state.schema';
 import { CreateFreightSlotsPatchSchema } from '../schemas/freight.schema';
 
 export function makeExtractSlotsNode(gemini: GeminiClient) {
   return async function extractSlotsNode(state: AgentState): Promise<Partial<AgentState>> {
     if (state.currentFlow !== 'create_freight') return {};
 
-    if (state.currentStep === 'awaiting_slot' && state.awaitingSlot) {
-      const value = parseSingleSlot(state.awaitingSlot, state.lastUserMessage);
-      return {
-        originText: state.awaitingSlot === 'origin' ? String(value || '') : state.originText,
-        destinationText: state.awaitingSlot === 'destination' ? String(value || '') : state.destinationText,
-        slots: {
-          ...(state.slots || {}),
-          [state.awaitingSlot]: value,
-        },
-        awaitingSlot: null,
-        nodeHistory: [{ node: 'extractSlots', mode: 'single_slot', slot: state.awaitingSlot, at: new Date().toISOString() }],
-      };
+    // Si estabamos esperando que el usuario elija entre matches ambiguos de ubicacion,
+    // intentar resolver su respuesta (button id, numero "1", o "otra" para ir al map).
+    if (state.currentStep === 'awaiting_location' && (state.locationChoices || []).length > 0 && state.awaitingLocationChoice) {
+      const resolved = resolveLocationChoice(state);
+      if (resolved) return resolved;
     }
 
     const heuristicSlots = extractCreateFreightSlotsHeuristic(state.lastUserMessage);
+
+    // Fallback puntual: si estabamos esperando UN slot puntual y el usuario respondio
+    // algo corto que la heuristica no levanto (ej. "3" para truckCount), intentar parseo single.
+    if (
+      state.currentStep === 'awaiting_slot'
+      && state.awaitingSlot
+      && (state.missingSlots || []).length === 1
+      && Object.keys(heuristicSlots).length === 0
+    ) {
+      const value = parseSingleSlot(state.awaitingSlot, state.lastUserMessage);
+      if (value !== undefined && value !== '' && value !== null) {
+        return {
+          originText: state.awaitingSlot === 'origin' ? String(value || '') : state.originText,
+          destinationText: state.awaitingSlot === 'destination' ? String(value || '') : state.destinationText,
+          slots: { ...(state.slots || {}), [state.awaitingSlot]: value },
+          awaitingSlot: null,
+          nodeHistory: [{ node: 'extractSlots', mode: 'single_slot_fallback', slot: state.awaitingSlot, at: new Date().toISOString() }],
+        };
+      }
+    }
+
     const llmSlots = await extractWithLlm(gemini, state.lastUserMessage).catch(() => ({}));
     const llmPatch = llmSlots as Record<string, unknown>;
     const originText = (heuristicSlots.origin || llmPatch.origin || state.originText || state.slots?.origin || null) as string | null;
@@ -113,4 +127,60 @@ function normalizeTime(hourRaw: string, minuteRaw?: string, meridian?: string): 
 
 function cleanPlace(value: string): string {
   return value.replace(/\b(\d+)\s*(camion|camiones)\b/ig, '').trim().replace(/[.,;]+$/, '');
+}
+
+function resolveLocationChoice(state: AgentState): Partial<AgentState> | null {
+  const type = state.awaitingLocationChoice!;
+  const msg = (state.lastUserMessage || '').trim();
+  const lower = msg.toLowerCase();
+
+  // "otra" / "ninguna" / "mapa" -> ir al map picker, limpiar choices
+  if (/^(otra|otro|ninguna|ninguno|mapa|en el mapa)$/i.test(lower)) {
+    return {
+      currentStep: 'awaiting_location',
+      locationChoices: [],
+      awaitingLocationChoice: null,
+      locationRequestType: type,
+      pendingLocationRequest: true,
+      shouldPause: true,
+      nodeHistory: [{ node: 'extractSlots', mode: 'choice_skip_to_map', type, at: new Date().toISOString() }],
+    };
+  }
+
+  // Button id: "loc:origin:abc"
+  let chosenId: string | null = null;
+  const buttonMatch = msg.match(/^loc:(origin|destination):(.+)$/);
+  if (buttonMatch && buttonMatch[1] === type) chosenId = buttonMatch[2];
+
+  // Numero: "1", "2"...
+  if (!chosenId) {
+    const n = Number(msg.match(/^\d+$/)?.[0]);
+    if (Number.isFinite(n) && n >= 1 && n <= state.locationChoices.length) {
+      chosenId = state.locationChoices[n - 1].id;
+    }
+  }
+
+  if (!chosenId) return null;
+  const choice = state.locationChoices.find((c) => c.id === chosenId);
+  if (!choice) return null;
+
+  const user = state as any;
+  const location: AgentLocation = {
+    lat: choice.lat,
+    lng: choice.lng,
+    label: choice.label,
+    source: 'backend_known_location',
+    capturedAt: new Date().toISOString(),
+    capturedByUserId: user?.userId || '',
+  };
+  const patch: Partial<AgentState> = {
+    locationChoices: [],
+    awaitingLocationChoice: null,
+    locationRequestType: null,
+    pendingLocationRequest: false,
+    nodeHistory: [{ node: 'extractSlots', mode: 'choice_resolved', type, choiceId: chosenId, at: new Date().toISOString() }],
+  };
+  if (type === 'origin') patch.originLocation = location;
+  else patch.destinationLocation = location;
+  return patch;
 }
