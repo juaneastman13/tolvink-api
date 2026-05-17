@@ -49,16 +49,24 @@ export class WhatsAppAgentV2Renderer {
 
   askLocationChoice(type: 'origin' | 'destination', choices: Array<{ id: string; label: string }>): { text: string; buttons: Array<{ id: string; title: string }> } {
     const label = type === 'destination' ? 'destino' : 'origen';
-    const lines = choices.slice(0, 9).map((c, i) => `${i + 1}. ${c.label}`);
+    const top = choices.slice(0, 5);
+    const lines = top.map((c, i) => `${i + 1}. ${c.label}`);
+    // WhatsApp permite max 3 botones interactivos con titles unicos de hasta 20 chars.
+    // Usamos "1. Label", "2. Label", "3. Label" para garantizar unicidad incluso si los labels
+    // truncados coinciden. El resto de opciones queda visible solo en el texto numerado.
+    const buttons = top.slice(0, 3).map((c, i) => ({
+      id: `loc:${type}:${c.id}`,
+      title: `${i + 1}. ${c.label}`.slice(0, 20),
+    }));
     return {
       text: [
-        `Encontre estas opciones para el ${label}. Elegi una:`,
+        `Encontre estas opciones para el ${label}. Elegi una respondiendo con el numero:`,
         '',
         ...lines,
         '',
         'Si ninguna es la que queres, escribi "otra" para indicar en el mapa.',
       ].join('\n'),
-      buttons: choices.slice(0, 9).map((c) => ({ id: `loc:${type}:${c.id}`, title: c.label.slice(0, 24) })),
+      buttons,
     };
   }
 
