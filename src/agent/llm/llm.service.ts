@@ -10,11 +10,14 @@ export class AgentLlmError extends Error {
 }
 
 type MessageParam = Anthropic.Messages.MessageParam;
+type Tool = Anthropic.Messages.Tool;
+type Message = Anthropic.Messages.Message;
 
 interface ChatOptions {
   model?: 'sonnet' | 'haiku';
   temperature?: number;
   maxTokens?: number;
+  tools?: Tool[];
 }
 
 @Injectable()
@@ -23,7 +26,6 @@ export class LlmService {
   private client: Anthropic;
   private anthropicKey: string;
 
-  // Model IDs
   private readonly SONNET_MODEL = 'claude-sonnet-4-6';
   private readonly HAIKU_MODEL = 'claude-haiku-4-5-20251001';
   private readonly DEFAULT_MODEL = this.SONNET_MODEL;
@@ -37,10 +39,19 @@ export class LlmService {
   }
 
   /**
-   * Call Claude for a conversation turn. System prompt gets prompt caching for cost reduction.
-   * Returns the text content of the assistant's response.
+   * Call Claude and return the assistant's text reply (no tools).
+   * For tool use, call `complete()` instead.
    */
   async chat(systemPrompt: string, messages: MessageParam[], options: ChatOptions = {}): Promise<string> {
+    const response = await this.complete(systemPrompt, messages, options);
+    const textContent = response.content.find((c) => c.type === 'text');
+    return textContent && textContent.type === 'text' ? textContent.text : '';
+  }
+
+  /**
+   * Call Claude and return the full Message (with tool_use blocks if tools are provided).
+   */
+  async complete(systemPrompt: string, messages: MessageParam[], options: ChatOptions = {}): Promise<Message> {
     const startTime = Date.now();
     const model = options.model === 'haiku' ? this.HAIKU_MODEL : this.DEFAULT_MODEL;
 
@@ -49,40 +60,34 @@ export class LlmService {
         throw new AgentLlmError('ANTHROPIC_API_KEY not configured', 'NO_API_KEY');
       }
 
-      const response = await this.client.messages.create({
+      const request: Anthropic.Messages.MessageCreateParamsNonStreaming = {
         model,
         max_tokens: options.maxTokens ?? 1024,
         temperature: options.temperature ?? 0.7,
         system: systemPrompt,
         messages,
-      } as any); // TODO: Etapa 2 - Add prompt caching with cache_control when SDK supports it
+      };
+      if (options.tools && options.tools.length > 0) {
+        request.tools = options.tools;
+      }
+
+      const response = await this.client.messages.create(request);
 
       const elapsed = Date.now() - startTime;
-      const textContent = response.content.find((c) => c.type === 'text');
-      const responseText = textContent && textContent.type === 'text' ? textContent.text : '';
-
+      const toolCalls = response.content.filter((c) => c.type === 'tool_use').length;
       this.logger.debug(
-        `[LLM] ${model} completed in ${elapsed}ms | ` +
-        `tokens: ${response.usage.input_tokens} in, ${response.usage.output_tokens} out`,
+        `[LLM] ${model} ${elapsed}ms | in:${response.usage.input_tokens} out:${response.usage.output_tokens} | tools:${toolCalls} | stop:${response.stop_reason}`,
       );
 
-      return responseText;
+      return response;
     } catch (error) {
       const elapsed = Date.now() - startTime;
       this.logger.error(`[LLM] Error after ${elapsed}ms: ${error instanceof Error ? error.message : String(error)}`);
 
       if (error instanceof Anthropic.APIError) {
-        throw new AgentLlmError(
-          `Anthropic API error: ${error.message}`,
-          error.status?.toString() ?? 'UNKNOWN',
-          error,
-        );
+        throw new AgentLlmError(`Anthropic API error: ${error.message}`, error.status?.toString() ?? 'UNKNOWN', error);
       }
-
-      if (error instanceof AgentLlmError) {
-        throw error;
-      }
-
+      if (error instanceof AgentLlmError) throw error;
       throw new AgentLlmError(
         `LLM error: ${error instanceof Error ? error.message : String(error)}`,
         'UNKNOWN',
@@ -91,16 +96,10 @@ export class LlmService {
     }
   }
 
-  /**
-   * Get the model ID (for testing/logging purposes)
-   */
   getModelId(type: 'sonnet' | 'haiku' = 'sonnet'): string {
     return type === 'haiku' ? this.HAIKU_MODEL : this.SONNET_MODEL;
   }
 
-  /**
-   * Check if the API key is configured
-   */
   isConfigured(): boolean {
     return !!this.anthropicKey;
   }
