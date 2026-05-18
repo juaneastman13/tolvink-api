@@ -6,7 +6,7 @@ export type Intent = 'create_freight' | 'general';
 export class IntentRouterService {
   private readonly logger = new Logger(IntentRouterService.name);
 
-  private readonly createFreightRegex = /crear?\s+(un\s+)?flete|nuevo\s+flete|quiero\s+(mandar|fletar|transportar)|cargar\s+un\s+cami[oó]n|transportar\s+grano/i;
+  private readonly createFreightRegex = /crear?\s+(un\s+)?flete|nuevo\s+flete|quiero\s+(mandar|fletar|transportar|solicitar)|cargar\s+un\s+cami[oó]n|transportar\s+grano/i;
 
   classify(messageType: string, payload: any): Intent {
     // Non-text messages → general handler (images, locations, button replies all go through general)
