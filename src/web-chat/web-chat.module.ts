@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
-import { WebChatController } from './web-chat.controller';
-import { WebChatService } from './web-chat.service';
-import { AiModule } from '../ai/ai.module';
+// TODO: Etapa 0 - Web chat service removed pending agent system rebuild
+// import { WebChatController } from './web-chat.controller';
+// import { WebChatService } from './web-chat.service';
 import { OcrModule } from '../ocr/ocr.module';
 
+// TODO: AiModule + WebChatService removed in Etapa 0. Needs refactoring in Etapa 1
+// to use the new agent system (Anthropic SDK instead of Gemini + LangChain)
 @Module({
-  imports: [AiModule, OcrModule],
-  controllers: [WebChatController],
-  providers: [WebChatService],
+  imports: [OcrModule],
+  controllers: [],
+  providers: [],
 })
 export class WebChatModule {}

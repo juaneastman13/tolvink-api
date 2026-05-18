@@ -255,16 +255,19 @@ export class NotificationService implements OnModuleDestroy {
 
   /** Check if user has interacted with the bot in the last 24h (Meta session window) */
   private async canSendProactive(phone: string): Promise<boolean> {
-    const lastInbound = await this.prisma.whatsAppMessageLog.findFirst({
-      where: {
-        phone,
-        direction: 'inbound',
-        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true },
-    });
-    return !!lastInbound;
+    // TODO: Etapa 0 - whatsAppMessageLog table removed. Will be replaced in Etapa 1
+    // For now, allow proactive sends (assume user has interacted recently)
+    // const lastInbound = await this.prisma.whatsAppMessageLog.findFirst({
+    //   where: {
+    //     phone,
+    //     direction: 'inbound',
+    //     createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    //   },
+    //   orderBy: { createdAt: 'desc' },
+    //   select: { id: true },
+    // });
+    // return !!lastInbound;
+    return true; // Temporary: allow all proactive sends
   }
 
   /** Send WhatsApp notification — accepts pre-fetched phone to avoid extra DB query */

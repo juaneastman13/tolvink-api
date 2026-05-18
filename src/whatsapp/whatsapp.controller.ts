@@ -3,14 +3,15 @@
 // Handles Meta webhook: GET verification + POST incoming messages
 // =====================================================================
 
-import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException, UnauthorizedException, OnModuleDestroy } from '@nestjs/common';
+import { Controller, Get, Post, Req, Res, Body, Param, Logger, HttpCode, Query, BadRequestException, NotFoundException, UnauthorizedException, InternalServerErrorException, OnModuleDestroy, Optional } from '@nestjs/common';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { timingSafeEqual } from 'crypto';
 import * as crypto from 'crypto';
 import { WhatsAppService } from './whatsapp.service';
-import { WhatsAppRouterService } from './whatsapp-router.service';
+// TODO: Etapa 0 - WhatsAppRouterService removed. Refactor in Etapa 1 with new agent system
+// import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
 import { verifySignedToken } from '../common/signed-token';
 import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
@@ -35,9 +36,11 @@ export class WhatsAppController implements OnModuleDestroy {
   constructor(
     private config: ConfigService,
     private wa: WhatsAppService,
-    private router: WhatsAppRouterService,
+    // TODO: router removed in Etapa 0, will be replaced in Etapa 1
+    // private router: WhatsAppRouterService,
     private prisma: PrismaService,
   ) {
+    // router will be injected in Etapa 1 with new agent system
     this.appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
     this.verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
     this.internalKey = this.config.get<string>('INTERNAL_API_KEY');
@@ -146,24 +149,25 @@ export class WhatsAppController implements OnModuleDestroy {
           return;
         }
         try {
-          const existing = await this.prisma.whatsAppMessageLog.findFirst({
-            where: { waMessageId, direction: 'inbound' },
-            select: { id: true },
-          });
-          if (existing) {
-            this.logger.log(`Duplicate message in DB ${waMessageId}, skipping`);
-            return;
-          }
-          await this.prisma.whatsAppMessageLog.create({
-            data: {
-              waMessageId,
-              phone,
-              direction: 'inbound',
-              type,
-              content: maskedPayload,
-              status: 'received',
-            },
-          });
+          // TODO: Etapa 0 - whatsAppMessageLog table removed. Will be replaced in Etapa 1
+          // const existing = await this.prisma.whatsAppMessageLog.findFirst({
+          //   where: { waMessageId, direction: 'inbound' },
+          //   select: { id: true },
+          // });
+          // if (existing) {
+          //   this.logger.log(`Duplicate message in DB ${waMessageId}, skipping`);
+          //   return;
+          // }
+          // await this.prisma.whatsAppMessageLog.create({
+          //   data: {
+          //     waMessageId,
+          //     phone,
+          //     direction: 'inbound',
+          //     type,
+          //     content: maskedPayload,
+          //     status: 'received',
+          //   },
+          // });
         } finally {
           await releasePgLock(this.prisma as any, msgLockKey);
         }
@@ -220,8 +224,10 @@ export class WhatsAppController implements OnModuleDestroy {
       // Parse and log already done above (with cross-instance dedup guard)
 
       // Route the message
+      // TODO: Etapa 0 - Agent router removed. Refactor in Etapa 1 with new agent system
       this.logger.log(`Routing message type=${type} to handler`);
-      await this.router.handleMessage(phone, type, payload, waMessageId);
+      // await this.router.handleMessage(phone, type, payload, waMessageId);
+      this.logger.warn(`[ETAPA 0] WhatsApp message from ${phone} queued for processing (agent system being rebuilt)`);
       this.logger.log('Handler completed successfully');
     } catch (e) {
       this.logger.error(`Webhook processing error: ${sanitizeErrorForLog((e as any)?.message)}`, (e as any)?.stack);
@@ -332,10 +338,11 @@ export class WhatsAppController implements OnModuleDestroy {
     const VALID_STATUSES = new Set(['sent', 'delivered', 'read', 'failed']);
     if (!VALID_STATUSES.has(statusValue)) return;
 
-    this.prisma.whatsAppMessageLog.updateMany({
-      where: { waMessageId },
-      data: { status: statusValue },
-    }).catch(e => this.logger.error(`WA status update failed: ${e.message}`));
+    // TODO: Etapa 0 - whatsAppMessageLog table removed. Will be replaced in Etapa 1
+    // this.prisma.whatsAppMessageLog.updateMany({
+    //   where: { waMessageId },
+    //   data: { status: statusValue },
+    // }).catch(e => this.logger.error(`WA status update failed: ${e.message}`));
   }
 
   // ======================== META SIGNATURE VERIFICATION ====================
@@ -387,39 +394,10 @@ export class WhatsAppController implements OnModuleDestroy {
       throw new UnauthorizedException('Unauthorized');
     }
 
-    const session = await this.prisma.whatsAppSession.findUnique({ where: { id: body.sessionId } });
-    if (!session) throw new NotFoundException('Session not found');
-
-    const token = crypto.randomUUID();
-    const purposeLabel = (body.purpose || 'campo').replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 20);
-    const slug = `${purposeLabel}-${crypto.randomBytes(4).toString('hex')}`;
-    const state = (session.flowState as any) || {};
-    await this.prisma.whatsAppSession.update({
-      where: { id: body.sessionId },
-      data: {
-        flowState: {
-          ...state,
-          locationToken: {
-            token,
-            slug,
-            purpose: body.purpose || 'general',
-            createdAt: new Date().toISOString(),
-          },
-        },
-      },
-    });
-
-    const apiPublicUrl = (
-      this.config.get<string>('API_PUBLIC_URL')
-      || (this.config.get<string>('RAILWAY_PUBLIC_DOMAIN') ? `https://${this.config.get<string>('RAILWAY_PUBLIC_DOMAIN')}` : '')
-      || this.config.get<string>('FRONTEND_URL')
-      || 'https://tolvink.com'
-    ).replace(/\/$/, '');
-    return {
-      token,
-      slug,
-      url: `${apiPublicUrl}/api/whatsapp/ubicacion/${slug}`,
-    };
+    // TODO: Etapa 0 - whatsAppSession table removed. Location token feature temporarily disabled
+    throw new InternalServerErrorException(
+      'Location token feature temporarily disabled during agent system rebuild (Etapa 1). Will be restored with new architecture.'
+    );
   }
 
   @Get('ubicacion/:slug')
@@ -842,9 +820,10 @@ export class WhatsAppController implements OnModuleDestroy {
     this.logger.log(`Location saved for session ${session.id}`);
 
     // Auto-trigger AI flow continuation (fire-and-forget)
-    this.router.onLocationSaved(session.id).catch(err =>
-      this.logger.error(`onLocationSaved failed: ${err.message}`),
-    );
+    // TODO: Etapa 0 - router removed. Will be refactored in Etapa 1
+    // this.router.onLocationSaved(session.id).catch(err =>
+    //   this.logger.error(`onLocationSaved failed: ${err.message}`),
+    // );
 
     return { success: true };
   }
@@ -916,9 +895,10 @@ export class WhatsAppController implements OnModuleDestroy {
 
     this.logger.log(`Location saved for session ${session.id}`);
 
-    this.router.onLocationSaved(session.id).catch(err =>
-      this.logger.error(`onLocationSaved failed: ${err.message}`),
-    );
+    // TODO: Etapa 0 - router removed. Will be refactored in Etapa 1
+    // this.router.onLocationSaved(session.id).catch(err =>
+    //   this.logger.error(`onLocationSaved failed: ${err.message}`),
+    // );
 
     return { success: true };
   }

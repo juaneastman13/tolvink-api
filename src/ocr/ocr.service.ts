@@ -1,8 +1,8 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenAI } from '@google/genai';
+// TODO: OCR service needs refactoring to use Anthropic SDK in Etapa 1+ (was using Gemini + GoogleGenAI)
+// import { GoogleGenAI } from '@google/genai';
 import { DocType, OcrResult } from './ocr.dto';
-import { DEFAULT_GEMINI_MODEL } from '../ai/core/llm-provider';
 
 const MAX_TOKENS = 2000;
 const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -125,18 +125,20 @@ const STRUCTURED_FIELDS = [
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
-  private client: GoogleGenAI | null = null;
+  private client: any | null = null; // TODO: GoogleGenAI removed - replace with Anthropic SDK
   private supabaseUrl: string;
   private readonly model: string;
 
   constructor(private config: ConfigService) {
-    this.model = (config.get<string>('GEMINI_MODEL') || DEFAULT_GEMINI_MODEL).trim();
+    // TODO: Etapa 0 - GEMINI_* removed. OCR service disabled during rebuild
+    // this.model = (config.get<string>('GEMINI_MODEL') || DEFAULT_GEMINI_MODEL).trim();
+    this.model = 'disabled-in-etapa-0';
     const apiKey = config.get<string>('GEMINI_API_KEY');
-    if (apiKey) {
-      this.client = new GoogleGenAI({ apiKey });
-      this.logger.log(`OCR service enabled (Gemini Vision, model: ${this.model})`);
+    if (apiKey && false) { // Disabled in Etapa 0
+      // this.client = new GoogleGenAI({ apiKey });
+      // this.logger.log(`OCR service enabled (Gemini Vision, model: ${this.model})`);
     } else {
-      this.logger.warn('GEMINI_API_KEY not set — OCR disabled');
+      this.logger.warn('OCR service disabled during agent rebuild (Etapa 0). Will be restored in Etapa 1');
     }
     this.supabaseUrl = (config.get<string>('SUPABASE_URL') || '').trim();
   }

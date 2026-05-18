@@ -79,9 +79,10 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
     try {
       const now = new Date();
       // Delete expired WhatsApp sessions (older than 2 hours past expiry)
-      const sessResult = await this.prisma.whatsAppSession.deleteMany({
-        where: { expiresAt: { lt: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
-      });
+      // TODO: Etapa 0 - whatsAppSession table removed. Will be replaced in Etapa 1
+      // const sessResult = await this.prisma.whatsAppSession.deleteMany({
+      //   where: { expiresAt: { lt: new Date(now.getTime() - 2 * 60 * 60 * 1000) } },
+      // });
       // Delete expired refresh tokens
       const tokResult = await this.prisma.refreshToken.deleteMany({
         where: { expiresAt: { lt: now } },
@@ -125,9 +126,10 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
           { used: true, createdAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
         ]},
       });
-      const totalCleaned = sessResult.count + tokResult.count + liveResult.count + trackResult.count + waLogResult.count + analyticsResult.count + notifResult.count + resetResult.count;
+      // TODO: Etapa 0 - sessResult no longer available (whatsAppSession table removed)
+      const totalCleaned = tokResult.count + liveResult.count + trackResult.count + waLogResult.count + analyticsResult.count + notifResult.count + resetResult.count;
       if (totalCleaned > 0) {
-        this.logger.log(`Cleanup: ${sessResult.count} sessions, ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs, ${analyticsResult.count} old analytics, ${notifResult.count} old notifications, ${resetResult.count} expired reset codes deleted`);
+        this.logger.log(`Cleanup: ${tokResult.count} tokens, ${liveResult.count} live locs, ${trackResult.count} old tracking, ${waLogResult.count} old WA logs, ${analyticsResult.count} old analytics, ${notifResult.count} old notifications, ${resetResult.count} expired reset codes deleted`);
       }
     } catch (e) {
       this.logger.error(`Cleanup failed: ${e.message}`);
@@ -727,16 +729,17 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
         const data = await res.json();
         const waMessageId = data?.messages?.[0]?.id || null;
 
-        this.prisma.whatsAppMessageLog.create({
-          data: {
-            waMessageId,
-            phone: normalized,
-            direction: 'outbound',
-            type: payload.type || 'text',
-            content: { type: payload.type },
-            status: 'sent',
-          },
-        }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
+        // TODO: Etapa 0 - whatsAppMessageLog table removed. Will be replaced in Etapa 1
+        // this.prisma.whatsAppMessageLog.create({
+        //   data: {
+        //     waMessageId,
+        //     phone: normalized,
+        //     direction: 'outbound',
+        //     type: payload.type || 'text',
+        //     content: { type: payload.type },
+        //     status: 'sent',
+        //   },
+        // }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
 
         return waMessageId;
       } catch (e) {
@@ -762,15 +765,16 @@ export class WhatsAppService implements OnModuleInit, OnModuleDestroy {
       }
     } catch { /* Sentry not available */ }
 
-    this.prisma.whatsAppMessageLog.create({
-      data: {
-        phone: normalized,
-        direction: 'outbound',
-        type: payload.type || 'text',
-        content: { type: payload.type },
-        status: 'failed',
-      },
-    }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
+    // TODO: Etapa 0 - whatsAppMessageLog table removed. Will be replaced in Etapa 1
+    // this.prisma.whatsAppMessageLog.create({
+    //   data: {
+    //     phone: normalized,
+    //     direction: 'outbound',
+    //     type: payload.type || 'text',
+    //     content: { type: payload.type },
+    //     status: 'failed',
+    //   },
+    // }).catch(e => this.logger.warn(`WA log write failed: ${e.message}`));
 
     return null;
   }
