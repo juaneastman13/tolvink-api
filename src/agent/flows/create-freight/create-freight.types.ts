@@ -2,6 +2,7 @@ export interface CreateFreightSlots {
   companyId?: string; // Selected company for this freight
   grain?: string;
   tons?: number;
+  truckCount?: number;
   loadDate?: string; // YYYY-MM-DD
   loadTime?: string; // HH:MM
   originFieldId?: string;

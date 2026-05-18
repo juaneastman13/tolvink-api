@@ -142,12 +142,13 @@ export class CreateFreightFlow {
    * Step: opening → transition to collecting with opening message
    */
   private handleOpening(state: CreateFreightState, userCtx: UserContext): { reply: AgentReply; nextState: CreateFreightState } {
-    const openingMsg = `¡Vamos con el flete! Contame todo lo que podás:
-📦 Producto y cantidad (ej: soja 200 tn)
-📅 Fecha y hora (ej: 15 de junio, 08:00)
-🏭 Destino (ej: Planta ACA)
+    const openingMsg = `¡Vamos con el flete! Contame:
+📦 Producto (ej: soja, maíz, trigo)
+🚚 Cantidad de camiones (ej: 3 camiones)
+📅 Fecha y hora de carga
+🏭 Destino
 
-Cuanto más detalle, menos preguntas te hago 😉`;
+Cuanto más detalle me des, menos te pregunto 😉`;
 
     return {
       reply: { type: 'text', text: openingMsg },
@@ -175,12 +176,13 @@ Cuanto más detalle, menos preguntas te hago 😉`;
     const extracted = await this.extractSlots(payload.body);
     const merged = { ...state.slots, ...extracted };
 
-    // Check which required fields are missing
+    // Required: producto, camiones, fecha, hora, destino. Cantidad (tons) es opcional.
     const missing: string[] = [];
     if (!merged.grain) missing.push('producto');
-    if (!merged.tons) missing.push('cantidad en toneladas');
-    if (!merged.loadDate) missing.push('fecha');
-    if (!merged.loadTime) missing.push('hora');
+    if (!merged.truckCount) missing.push('cantidad de camiones');
+    if (!merged.loadDate) missing.push('fecha de carga');
+    if (!merged.loadTime) missing.push('hora de carga');
+    if (!merged.destName) missing.push('destino');
 
     // If all required fields present → move to origin
     if (missing.length === 0) {
@@ -369,16 +371,18 @@ Lo estamos coordinando con el transportista.`;
     const today = this.formatDateISO(new Date());
     const tomorrow = this.formatDateISO(new Date(Date.now() + 24 * 60 * 60 * 1000));
 
-    const extractPrompt = `Sos un extractor de datos de logística argentina.
-Del mensaje del usuario, extraé estos campos si están presentes:
-- grain: producto (soja, maiz, trigo, cebada, sorgo, colza, arroz u otro)
-- tons: número de toneladas (sólo número)
-- loadDate: fecha en formato YYYY-MM-DD. Hoy = ${today}, mañana = ${tomorrow}. Formatos aceptados: "15/06", "15 de junio", "el lunes", etc.
-- loadTime: hora de carga en formato HH:MM (24h, ej: 08:00, 14:30)
-- destName: nombre de la planta o destino si está mencionado
+    const extractPrompt = `Sos un extractor de datos de fletes agropecuarios (Argentina).
+Del mensaje del usuario, extraé SÓLO estos campos:
+- grain: producto/carga (ej: soja, maíz, trigo, cebada, sorgo, colza, arroz, fertilizante, etc.)
+- tons: cantidad en toneladas si la menciona (sólo número, opcional)
+- truckCount: cantidad de camiones (sólo número entero, ej: "3 camiones" → 3, "un camión" → 1)
+- loadDate: fecha de carga en formato YYYY-MM-DD. Hoy = ${today}, mañana = ${tomorrow}. Acepta "15/06", "15 de junio", "el lunes", etc.
+- loadTime: hora de carga en formato HH:MM 24h (ej: 08:00, 14:30)
+- destName: nombre del destino (planta, puerto, lugar)
 
-Respondé SÓLO con JSON válido. Para campos no mencionados usá null.
-Ejemplo: {"grain":"soja","tons":200,"loadDate":"2025-06-15","loadTime":"08:00","destName":"Planta ACA"}`;
+No inventes datos. Para campos no mencionados usá null.
+Respondé SÓLO con JSON válido, sin texto adicional.
+Ejemplo: {"grain":"soja","tons":200,"truckCount":3,"loadDate":"2025-06-15","loadTime":"08:00","destName":"Planta ACA"}`;
 
     try {
       const response = await this.llm.chat(
@@ -392,6 +396,7 @@ Ejemplo: {"grain":"soja","tons":200,"loadDate":"2025-06-15","loadTime":"08:00","
 
       if (json.grain) slots.grain = String(json.grain);
       if (json.tons) slots.tons = Number(json.tons);
+      if (json.truckCount) slots.truckCount = Number(json.truckCount);
       if (json.loadDate) slots.loadDate = String(json.loadDate);
       if (json.loadTime) slots.loadTime = String(json.loadTime);
       if (json.destName) slots.destName = String(json.destName);
@@ -410,8 +415,12 @@ Ejemplo: {"grain":"soja","tons":200,"loadDate":"2025-06-15","loadTime":"08:00","
   private buildConfirmationMessage(slots: CreateFreightSlots): string {
     let msg = '*Resumen del flete:*\n';
 
-    if (slots.grain && slots.tons) {
-      msg += `📦 ${slots.grain} — ${slots.tons} tn\n`;
+    if (slots.grain) {
+      msg += `📦 ${slots.grain}${slots.tons ? ` — ${slots.tons} tn` : ''}\n`;
+    }
+
+    if (slots.truckCount) {
+      msg += `🚚 ${slots.truckCount} ${slots.truckCount === 1 ? 'camión' : 'camiones'}\n`;
     }
 
     if (slots.loadDate && slots.loadTime) {
