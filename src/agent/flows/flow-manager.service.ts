@@ -21,13 +21,13 @@ export class FlowManagerService {
     switch (flowName) {
       case 'create_freight': {
         const initialState: CreateFreightState = {
-          step: 'opening',
+          step: 'selecting_company',
           slots: {},
         };
 
         const activeFlow: ActiveFlow = {
           flowName: 'create_freight',
-          step: 'opening',
+          step: 'selecting_company',
           slots: {},
           meta: {},
           startedAt: Date.now(),
@@ -35,7 +35,15 @@ export class FlowManagerService {
 
         this.flowState.setActiveFlow(phone, activeFlow);
 
-        const { reply } = await this.createFreightFlow.handle(phone, 'text', {}, initialState, userCtx);
+        const { reply, nextState } = await this.createFreightFlow.handle(phone, 'text', {}, initialState, userCtx);
+
+        // Update state after handling (in case handleSelectingCompany auto-selects company)
+        this.flowState.updateActiveFlow(phone, {
+          step: nextState.step,
+          slots: nextState.slots,
+          meta: nextState.meta || {},
+        });
+
         return reply;
       }
 

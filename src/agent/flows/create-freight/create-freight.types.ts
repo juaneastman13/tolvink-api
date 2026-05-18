@@ -1,4 +1,5 @@
 export interface CreateFreightSlots {
+  companyId?: string; // Selected company for this freight
   grain?: string;
   tons?: number;
   loadDate?: string; // YYYY-MM-DD
@@ -11,7 +12,7 @@ export interface CreateFreightSlots {
   tolvinkPlantId?: string;
 }
 
-export type CreateFreightStep = 'opening' | 'collecting' | 'origin' | 'confirming';
+export type CreateFreightStep = 'selecting_company' | 'opening' | 'collecting' | 'origin' | 'confirming';
 
 export interface CreateFreightState {
   step: CreateFreightStep;

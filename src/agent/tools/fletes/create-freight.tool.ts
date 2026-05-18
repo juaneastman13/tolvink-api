@@ -14,12 +14,12 @@ export class CreateFreightTool {
    * Execute freight creation with collected slots.
    */
   async execute(userCtx: UserContext, slots: CreateFreightSlots): Promise<{ code: string }> {
-    if (!userCtx.userId || !userCtx.companyId) {
+    if (!userCtx.userId) {
       throw new Error('Missing user context');
     }
 
-    if (!slots.grain || !slots.tons || !slots.loadDate || !slots.loadTime) {
-      throw new Error('Missing required slots');
+    if (!slots.companyId || !slots.grain || !slots.tons || !slots.loadDate || !slots.loadTime) {
+      throw new Error('Missing required slots or company selection');
     }
 
     // Build DTO
@@ -60,7 +60,7 @@ export class CreateFreightTool {
     // Build synthetic user (mimics JWT-like structure)
     const syntheticUser = {
       sub: userCtx.userId,
-      companyId: userCtx.companyId,
+      companyId: slots.companyId,
       companyType: userCtx.companyType,
       role: 'operator',
       companyTypes: [userCtx.companyType],

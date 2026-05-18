@@ -30,6 +30,9 @@ export class CreateFreightFlow {
   ): Promise<{ reply: AgentReply; nextState: CreateFreightState }> {
     try {
       switch (state.step) {
+        case 'selecting_company':
+          return this.handleSelectingCompany(type, payload, state, userCtx);
+
         case 'opening':
           return this.handleOpening(state, userCtx);
 
@@ -55,6 +58,84 @@ export class CreateFreightFlow {
         nextState: state,
       };
     }
+  }
+
+  /**
+   * Step: selecting_company → show user's active companies as button options
+   */
+  private async handleSelectingCompany(
+    type: string,
+    payload: any,
+    state: CreateFreightState,
+    userCtx: UserContext,
+  ): Promise<{ reply: AgentReply; nextState: CreateFreightState }> {
+    // First time in this step: show company options
+    if (state.meta?.companyPromptShown !== true) {
+      const memberships = await this.prisma.user.findUnique({
+        where: { id: userCtx.userId },
+        select: {
+          memberships: {
+            where: { active: true },
+            select: { companyId: true, company: { select: { id: true, name: true } } },
+          },
+        },
+      });
+
+      const companies = memberships?.memberships?.map((m) => ({ id: m.companyId, name: m.company.name })) || [];
+
+      if (companies.length === 0) {
+        return {
+          reply: { type: 'text', text: 'No tenés empresas activas. Contactá a administración.' },
+          nextState: state,
+        };
+      }
+
+      if (companies.length === 1) {
+        // Single company: auto-select
+        const merged = { ...state.slots, companyId: companies[0].id };
+        return {
+          reply: { type: 'text', text: `Usando tu empresa: ${companies[0].name}` },
+          nextState: { ...state, step: 'opening', slots: merged, meta: { companyPromptShown: false } },
+        };
+      }
+
+      // Multiple companies: show buttons
+      const buttons = companies.map((c) => ({
+        id: `company:${c.id}`,
+        title: c.name.slice(0, 25),
+      }));
+
+      return {
+        reply: { type: 'buttons', text: '¿Cuál es tu empresa?', buttons },
+        nextState: { ...state, meta: { companyPromptShown: true } },
+      };
+    }
+
+    // User selected a company
+    if (type === 'button_reply') {
+      const btnId = payload.id;
+      if (btnId.startsWith('company:')) {
+        const companyId = btnId.slice(8);
+        const merged = { ...state.slots, companyId };
+        return {
+          reply: { type: 'text', text: 'Perfecto. Ahora vamos con el flete.' },
+          nextState: { ...state, step: 'opening', slots: merged, meta: { companyPromptShown: false } },
+        };
+      }
+    }
+
+    // If we're waiting for company selection and user sent text
+    if (type === 'text') {
+      return {
+        reply: { type: 'text', text: 'Seleccioná tu empresa con los botones.' },
+        nextState: state,
+      };
+    }
+
+    return {
+      reply: { type: 'text', text: '¿Cuál es tu empresa?' },
+      nextState: state,
+    };
   }
 
   /**
@@ -133,7 +214,7 @@ Cuanto más detalle, menos preguntas te hago 😉`;
     if (state.meta?.originPromptShown !== true) {
       // First time in origin step → show field selection or ask for GPS
       const fields = await this.prisma.field.findMany({
-        where: { companyId: userCtx.companyId, active: true },
+        where: { companyId: state.slots.companyId, active: true },
         select: { id: true, name: true },
         take: 3,
       });
