@@ -24,7 +24,7 @@ export class LlmService {
   private anthropicKey: string;
 
   // Model IDs
-  private readonly SONNET_MODEL = 'claude-sonnet-4-6-20241022';
+  private readonly SONNET_MODEL = 'claude-sonnet-4-6';
   private readonly HAIKU_MODEL = 'claude-haiku-4-5-20251001';
   private readonly DEFAULT_MODEL = this.SONNET_MODEL;
 
