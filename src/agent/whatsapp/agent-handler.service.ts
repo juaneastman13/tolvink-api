@@ -50,7 +50,7 @@ export class AgentHandlerService {
       }
 
       // Classify intent
-      const intent = this.intentRouter.classify(type, payload);
+      const intent = await this.intentRouter.classify(type, payload);
 
       if (intent === 'create_freight') {
         if (!userCtx) {
