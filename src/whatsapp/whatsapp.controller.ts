@@ -13,6 +13,7 @@ import { WhatsAppService } from './whatsapp.service';
 // TODO: Etapa 0 - WhatsAppRouterService removed. Refactor in Etapa 1 with new agent system
 // import { WhatsAppRouterService } from './whatsapp-router.service';
 import { PrismaService } from '../database/prisma.service';
+import { AgentHandlerService } from '../agent/whatsapp/agent-handler.service';
 import { verifySignedToken } from '../common/signed-token';
 import { acquirePgLockWithWait, releasePgLock } from '../common/distributed-lock';
 import { sanitizeErrorForLog } from '../common/error-utils';
@@ -39,8 +40,8 @@ export class WhatsAppController implements OnModuleDestroy {
     // TODO: router removed in Etapa 0, will be replaced in Etapa 1
     // private router: WhatsAppRouterService,
     private prisma: PrismaService,
+    @Optional() private agentHandler: AgentHandlerService | null,
   ) {
-    // router will be injected in Etapa 1 with new agent system
     this.appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
     this.verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
     this.internalKey = this.config.get<string>('INTERNAL_API_KEY');
@@ -223,12 +224,16 @@ export class WhatsAppController implements OnModuleDestroy {
 
       // Parse and log already done above (with cross-instance dedup guard)
 
-      // Route the message
-      // TODO: Etapa 0 - Agent router removed. Refactor in Etapa 1 with new agent system
-      this.logger.log(`Routing message type=${type} to handler`);
-      // await this.router.handleMessage(phone, type, payload, waMessageId);
-      this.logger.warn(`[ETAPA 0] WhatsApp message from ${phone} queued for processing (agent system being rebuilt)`);
-      this.logger.log('Handler completed successfully');
+      // Route the message to agent handler
+      if (this.agentHandler) {
+        const reply = await this.agentHandler.handle(phone, type, payload);
+        if (reply.type === 'text') {
+          await this.wa.sendText(phone, reply.text);
+        }
+        this.logger.log(`Handler completed successfully`);
+      } else {
+        this.logger.warn(`[AGENT] No handler registered, dropping message from ${maskedPhone}`);
+      }
     } catch (e) {
       this.logger.error(`Webhook processing error: ${sanitizeErrorForLog((e as any)?.message)}`, (e as any)?.stack);
     }

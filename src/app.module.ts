@@ -30,6 +30,7 @@ import { MaintenanceController, MaintenanceService } from './maintenance/mainten
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 import { StockModule } from './stock/stock.module';
 import { CompanyProductsController, CompanyProductsService } from './company-products/company-products.controller';
+import { AgentModule } from './agent/agent.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { CompanyProductsController, CompanyProductsService } from './company-pro
     DatabaseModule,
     CommonModule,
     AuthModule,
+    AgentModule,
     FreightsModule,
     HealthModule,
     NotificationModule,

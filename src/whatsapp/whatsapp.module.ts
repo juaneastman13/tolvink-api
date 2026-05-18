@@ -5,9 +5,10 @@ import { WhatsAppController } from './whatsapp.controller';
 // import { WhatsAppRouterService } from './whatsapp-router.service';
 // import { WhatsAppFlowService } from './whatsapp-flow.service';
 import { FreightsModule } from '../freights/freights.module';
+import { AgentModule } from '../agent/agent.module';
 
 @Module({
-  imports: [FreightsModule],
+  imports: [FreightsModule, AgentModule],
   controllers: [WhatsAppController],
   providers: [
     WhatsAppService,
