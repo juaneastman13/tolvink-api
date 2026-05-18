@@ -7,6 +7,7 @@ export interface UserContext {
   companyId: string;
   companyType: string;
   name?: string;
+  companyName?: string;
 }
 
 @Injectable()
@@ -41,12 +42,12 @@ export class UserContextService {
         companyId: true,
         userTypes: true,
         companyByType: true,
-        company: { select: { type: true, types: true } },
+        company: { select: { type: true, types: true, name: true } },
         memberships: {
           where: { active: true },
           select: {
             companyId: true,
-            company: { select: { type: true, types: true } },
+            company: { select: { type: true, types: true, name: true } },
           },
         },
       },
@@ -63,11 +64,17 @@ export class UserContextService {
 
     this.logger.debug(`Found user: ${dbUser.id.slice(0, 8)}... (${synthUser.companyType})`);
 
+    // Resolve active company name from memberships (preferred) or fallback to user.company
+    const activeMembership = dbUser.memberships?.find((m: any) => m.companyId === synthUser.companyId);
+    const companyName: string | undefined =
+      activeMembership?.company?.name || (dbUser.company as any)?.name || undefined;
+
     return {
       userId: dbUser.id,
       companyId: synthUser.companyId,
       companyType: synthUser.companyType,
       name: dbUser.name,
+      companyName,
     };
   }
 

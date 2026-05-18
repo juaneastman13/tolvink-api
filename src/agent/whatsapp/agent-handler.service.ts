@@ -64,7 +64,7 @@ export class AgentHandlerService {
       }
 
       // General LLM handler (Echo Bot from Etapa 1)
-      return this.handleGeneralMessage(phone, type, payload);
+      return this.handleGeneralMessage(phone, type, payload, userCtx);
     } catch (error) {
       this.logger.error(
         `Unhandled error in handler: ${error instanceof Error ? error.message : String(error)}`,
@@ -80,7 +80,7 @@ export class AgentHandlerService {
   /**
    * Handle general messages with Echo Bot (Etapa 1 functionality).
    */
-  private async handleGeneralMessage(phone: string, type: string, payload: MessagePayload): Promise<AgentReply> {
+  private async handleGeneralMessage(phone: string, type: string, payload: MessagePayload, userCtx: import('../tools/context/user-context.service').UserContext | null): Promise<AgentReply> {
     // Parse message to user-facing text
     const userMessage = this.parseMessagePayload(type, payload);
     if (!userMessage) {
@@ -102,7 +102,7 @@ export class AgentHandlerService {
     this.logger.debug(`[${phone.slice(-4)}] General message: ${userMessage.substring(0, 80)}`);
 
     // Call Claude
-    const systemPrompt = buildSystemPrompt();
+    const systemPrompt = buildSystemPrompt(userCtx);
     let assistantResponse: string;
 
     try {
