@@ -54,7 +54,8 @@ const listUserCompanies: ToolDef = {
       name: m.company?.name ?? '(sin nombre)',
       type: m.company?.type ?? '',
     }));
-    return { ok: true, data: { companies } };
+    logger.debug(`list_user_companies → ${companies.length} results: ${companies.map((c) => c.name).join(', ')}`);
+    return { ok: true, data: { companies, totalReturned: companies.length } };
   },
 };
 
@@ -62,11 +63,16 @@ const listUserCompanies: ToolDef = {
 const listUserFields: ToolDef = {
   schema: {
     name: 'list_user_fields',
-    description: 'Lista los campos guardados de una empresa para sugerir como origen de un flete.',
+    description:
+      'Lista los campos guardados de una empresa (opcionalmente filtrados por nombre, parcial e insensible a mayúsculas/acentos). Llamala SIEMPRE antes de afirmar que un campo no existe.',
     input_schema: {
       type: 'object',
       properties: {
         companyId: { type: 'string', description: 'UUID de la empresa' },
+        nameMatch: {
+          type: 'string',
+          description: 'Opcional. Si lo pasás, filtra campos cuyo nombre contiene este texto (case-insensitive). Útil para buscar "El Trillo", "Norte", etc.',
+        },
       },
       required: ['companyId'],
     },
@@ -74,12 +80,18 @@ const listUserFields: ToolDef = {
   async handler(input, ctx) {
     const companyId = String(input?.companyId || '');
     if (!companyId) return { ok: false, error: 'companyId requerido' };
+    const nameMatch = input?.nameMatch ? String(input.nameMatch).trim() : '';
+    const where: any = { companyId, active: true };
+    if (nameMatch) {
+      where.name = { contains: nameMatch, mode: 'insensitive' };
+    }
     const fields = await ctx.prisma.field.findMany({
-      where: { companyId, active: true },
+      where,
       select: { id: true, name: true },
-      take: 10,
+      take: 20,
     });
-    return { ok: true, data: { fields } };
+    logger.debug(`list_user_fields(companyId=${companyId.slice(0, 8)}.., match="${nameMatch}") → ${fields.length} results`);
+    return { ok: true, data: { fields, totalReturned: fields.length } };
   },
 };
 

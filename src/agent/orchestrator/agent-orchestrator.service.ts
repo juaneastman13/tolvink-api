@@ -130,6 +130,11 @@ export class AgentOrchestratorService {
           maxTokens: 1024,
           tools: this.toolSchemas,
         });
+        const stopReason = response.stop_reason;
+        const tools = response.content
+          .filter((c) => c.type === 'tool_use')
+          .map((c: any) => `${c.name}(${JSON.stringify(c.input).slice(0, 120)})`);
+        this.logger.log(`[${phone.slice(-4)}] round ${round + 1}: stop=${stopReason} tools=[${tools.join(', ')}]`);
       } catch (error) {
         this.logger.error(`LLM error: ${error instanceof Error ? error.message : String(error)}`);
         return { type: 'text', text: 'Tuve un problema procesando tu mensaje. Probá de nuevo en un momento.' };
