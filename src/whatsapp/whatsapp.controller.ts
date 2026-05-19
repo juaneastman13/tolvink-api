@@ -229,8 +229,10 @@ export class WhatsAppController implements OnModuleDestroy {
         const reply = await this.agentHandler.handle(phone, type, payload);
         if (reply.type === 'text') {
           await this.wa.sendText(phone, reply.text);
+        } else if (reply.type === 'buttons') {
+          await this.wa.sendButtons(phone, reply.text, reply.buttons);
         }
-        this.logger.log(`Handler completed successfully`);
+        this.logger.log(`Handler completed (type=${reply.type})`);
       } else {
         this.logger.warn(`[AGENT] No handler registered, dropping message from ${maskedPhone}`);
       }
