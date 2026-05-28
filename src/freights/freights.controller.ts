@@ -3,7 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { FreightsService } from './freights.service';
 import { AssignmentSuggestionsService } from './assignment-suggestions.service';
-import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto, MoveAssignmentDto, ReorderAssignmentsDto } from './freights.dto';
+import { CreateFreightDto, AssignFreightDto, RespondAssignmentDto, CancelFreightDto, AssignMultiTruckDto, TruckAssignmentDto, RespondTripDto, UpdateAssignmentDto, AddDocumentDto, ConfirmLoadedDto, AddTrackingDto, UpdateFreightDto, ReorderQueueDto, CancelAssignmentDto, ResolvePendingChangeDto, SaveOcrDataDto, MoveAssignmentDto, ReorderAssignmentsDto, UpdateMtopDto } from './freights.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { FreightAccessGuard } from '../common/guards/freight-access.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -383,6 +383,13 @@ export class FreightsController {
   @ApiOperation({ summary: 'Editar flete (campos según estado, algunos requieren aprobación)' })
   updateFreight(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateFreightDto, @CurrentUser() user: any) {
     return this.service.updateFreight(id, dto, user);
+  }
+
+  @Patch(':id/mtop')
+  @Roles('producer', 'plant', 'transporter')
+  @ApiOperation({ summary: 'Guardar datos de Guía de Carga MTOP (número, código de acceso, opciones)' })
+  updateMtop(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMtopDto, @CurrentUser() user: any) {
+    return this.service.updateMtop(id, dto, user);
   }
 
   @Post(':id/pending-changes/:changeId/approve')

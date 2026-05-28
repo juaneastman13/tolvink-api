@@ -596,6 +596,44 @@ export class SaveOcrDataDto {
   ocrData: Record<string, any>;
 }
 
+export class UpdateMtopDto {
+  @ApiProperty({ required: false, description: 'Número de guía MTOP' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  mtopGuideId?: string;
+
+  @ApiProperty({ required: false, description: 'Código de acceso directo MTOP' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  mtopAccessCode?: string;
+
+  @ApiProperty({ required: false, enum: ['pendiente', 'activa', 'finalizada'] })
+  @IsOptional()
+  @IsIn(['pendiente', 'activa', 'finalizada'])
+  mtopGuideStatus?: string;
+
+  @ApiProperty({ required: false, enum: [24, 48, 72], description: 'Validez de la guía en horas' })
+  @IsOptional()
+  @IsNumber()
+  @IsIn([24, 48, 72])
+  @Type(() => Number)
+  mtopDuration?: number;
+
+  @ApiProperty({ required: false, enum: ['simple', 'recolecta', 'distribuye', 'multiples'] })
+  @IsOptional()
+  @IsIn(['simple', 'recolecta', 'distribuye', 'multiples'])
+  mtopModeOfOperation?: string;
+
+  @ApiProperty({ required: false, description: 'Precio del transporte en pesos uruguayos' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  mtopTransportPrice?: number;
+}
+
 export class RespondTripDto {
   @ApiProperty({ enum: ['accepted', 'rejected'] })
   @IsEnum(['accepted', 'rejected'])

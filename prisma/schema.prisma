@@ -497,6 +497,11 @@ model Truck {
   currentOdometer  Int?      @map("current_odometer")
   lastOdometerDate DateTime? @map("last_odometer_date")
 
+  // MTOP vehicle configuration
+  vehicleConfigType String? @map("vehicle_config_type") @db.VarChar(30) // camion | tractor | bitren | tritren
+  remolqueOnePlate  String? @map("remolque_one_plate") @db.VarChar(20)
+  remolqueTwoPlate  String? @map("remolque_two_plate") @db.VarChar(20)
+
   assignments FreightAssignment[]
   documents   TruckDocument[]
   expenses    TruckExpense[]
@@ -838,6 +843,14 @@ model Freight {
   // Producer → Plant approval
   needsPlantApproval Boolean   @default(false) @map("needs_plant_approval")
   plantApprovedAt    DateTime? @map("plant_approved_at")
+
+  // MTOP Guía de Carga (Uruguay — permiso de transporte de carga por carretera)
+  mtopGuideId          String?  @map("mtop_guide_id") @db.VarChar(50)
+  mtopAccessCode       String?  @map("mtop_access_code") @db.VarChar(50)
+  mtopGuideStatus      String?  @map("mtop_guide_status") @db.VarChar(20) // pendiente | activa | finalizada
+  mtopDuration         Int?     @map("mtop_duration") // 24, 48 or 72 hours
+  mtopModeOfOperation  String?  @map("mtop_mode_of_operation") @db.VarChar(30) // simple | recolecta | distribuye | multiples
+  mtopTransportPrice   Decimal? @map("mtop_transport_price") @db.Decimal(12, 2)
 
   // Relations
   originCompany   Company       @relation("FreightOriginCompany", fields: [originCompanyId], references: [id], onDelete: Restrict)

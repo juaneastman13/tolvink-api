@@ -5116,4 +5116,38 @@ export class FreightsService {
       drivers: Object.values(driverMap).map(d => ({ name: d.name, plate: d.plate, trips: d.trips, tons: r(d.tons), avgTripsPerDay: d.dates.size > 0 ? r(d.trips / d.dates.size) : 0 })).sort((a, b) => b.trips - a.trips).slice(0, 15),
     };
   }
+
+  async updateMtop(
+    freightId: string,
+    dto: { mtopGuideId?: string; mtopAccessCode?: string; mtopGuideStatus?: string; mtopDuration?: number; mtopModeOfOperation?: string; mtopTransportPrice?: number },
+    user: any,
+  ) {
+    const allIds = await this.resolveAllCompanyIds(user);
+
+    const freight = await this.prisma.freight.findFirst({
+      where: {
+        id: freightId,
+        OR: [
+          { originCompanyId: { in: allIds } },
+          { destCompanyId: { in: allIds } },
+          { assignments: { some: { transportCompanyId: { in: allIds }, status: { in: ['active', 'accepted'] } } } },
+        ],
+      },
+    });
+    if (!freight) throw new NotFoundException('Flete no encontrado');
+
+    const data: Record<string, any> = {};
+    if (dto.mtopGuideId !== undefined) data.mtopGuideId = dto.mtopGuideId || null;
+    if (dto.mtopAccessCode !== undefined) data.mtopAccessCode = dto.mtopAccessCode || null;
+    if (dto.mtopGuideStatus !== undefined) data.mtopGuideStatus = dto.mtopGuideStatus || null;
+    if (dto.mtopDuration !== undefined) data.mtopDuration = dto.mtopDuration ?? null;
+    if (dto.mtopModeOfOperation !== undefined) data.mtopModeOfOperation = dto.mtopModeOfOperation || null;
+    if (dto.mtopTransportPrice !== undefined) {
+      data.mtopTransportPrice = dto.mtopTransportPrice != null ? new Prisma.Decimal(dto.mtopTransportPrice) : null;
+    }
+
+    const updated = await this.prisma.freight.update({ where: { id: freightId }, data });
+    this.broadcastAndInvalidate(freightId, updated);
+    return { ok: true };
+  }
 }
