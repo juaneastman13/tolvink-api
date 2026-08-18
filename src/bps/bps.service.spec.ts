@@ -30,6 +30,7 @@ describe('BpsService', () => {
 
   const mockPrisma: any = {
     company: { findUnique: jest.fn() },
+    bpsToken: { findUnique: jest.fn(), upsert: jest.fn(), updateMany: jest.fn() },
     bpsEmpresaMonitoreada: { findFirst: jest.fn(), findMany: jest.fn(), upsert: jest.fn(), update: jest.fn() },
     bpsConsulta: { create: jest.fn(), findMany: jest.fn() },
     bpsConfig: { findUnique: jest.fn(), upsert: jest.fn() },
@@ -176,6 +177,65 @@ describe('BpsService', () => {
     it('sincronizarCuenta sin cuenta conectada → NotFound', async () => {
       mockPrisma.bpsCuenta.findUnique.mockResolvedValue(null);
       await expect(service.sincronizarCuenta(user)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('token de integración (Excel)', () => {
+    it('crearToken devuelve el valor en claro pero persiste solo el hash', async () => {
+      mockPrisma.bpsToken.upsert.mockResolvedValue({});
+      const { token } = await service.crearToken(user);
+      expect(token).toMatch(/^bps_[a-f0-9]{48}$/);
+      const args = mockPrisma.bpsToken.upsert.mock.calls[0][0];
+      expect(args.create.tokenHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(args)).not.toContain(token);
+    });
+
+    it('resolveToken acepta un token válido y devuelve su companyId', async () => {
+      mockPrisma.bpsToken.upsert.mockResolvedValue({});
+      const { token } = await service.crearToken(user);
+      const hash = mockPrisma.bpsToken.upsert.mock.calls[0][0].create.tokenHash;
+      mockPrisma.bpsToken.findUnique.mockImplementation(({ where }: any) =>
+        Promise.resolve(where.tokenHash === hash ? { companyId: 'comp-1', active: true } : null));
+      expect(await service.resolveToken(token)).toBe('comp-1');
+    });
+
+    it('resolveToken rechaza tokens inválidos, revocados o con formato incorrecto', async () => {
+      await expect(service.resolveToken(undefined)).rejects.toThrow(ForbiddenException);
+      await expect(service.resolveToken('cualquier-cosa')).rejects.toThrow(ForbiddenException);
+      mockPrisma.bpsToken.findUnique.mockResolvedValue({ companyId: 'comp-1', active: false });
+      await expect(service.resolveToken(`bps_${'a'.repeat(48)}`)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('getTokenInfo nunca devuelve el hash', async () => {
+      mockPrisma.bpsToken.findUnique.mockResolvedValue({ companyId: 'comp-1', tokenHash: 'h'.repeat(64), active: true, createdAt: new Date() });
+      const info = await service.getTokenInfo(user);
+      expect(info.existe).toBe(true);
+      expect(JSON.stringify(info)).not.toContain('h'.repeat(64));
+    });
+  });
+
+  describe('endpoints Excel', () => {
+    it('excelVigencia sirve el snapshot fresco sin llamar a BPS', async () => {
+      mockPrisma.bpsEmpresaMonitoreada.findFirst.mockResolvedValue({
+        estado: 'VIGENTE', ultimaConsulta: new Date(Date.now() - 60_000),
+      });
+      expect(await service.excelVigencia('comp-1', RUT_VALIDO)).toBe('VIGENTE');
+      expect(mockClient.consultarVigencia).not.toHaveBeenCalled();
+    });
+
+    it('excelVigencia re-consulta en vivo si el snapshot está vencido', async () => {
+      mockPrisma.bpsEmpresaMonitoreada.findFirst.mockResolvedValue({
+        id: 'emp-1', companyId: 'comp-1', estado: 'VIGENTE', ultimaConsulta: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      });
+      mockClient.consultarVigencia.mockResolvedValue({ estado: 'NO_VIGENTE' });
+      expect(await service.excelVigencia('comp-1', RUT_VALIDO)).toBe('NO_VIGENTE');
+    });
+
+    it('excelVigencia degrada a texto, nunca lanza', async () => {
+      expect(await service.excelVigencia('comp-1', '123')).toBe('RUT_INVALIDO');
+      mockPrisma.bpsEmpresaMonitoreada.findFirst.mockResolvedValue(null);
+      mockClient.consultarVigencia.mockRejectedValue(new Error('BPS caído'));
+      expect(await service.excelVigencia('comp-1', RUT_VALIDO)).toBe('DESCONOCIDO');
     });
   });
 });

@@ -1876,3 +1876,14 @@ model BpsConfig {
 
   @@map("bps_config")
 }
+
+model BpsToken {
+  id        String   @id @default(uuid())
+  companyId String   @unique @map("company_id")
+  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("bps_tokens")
+}

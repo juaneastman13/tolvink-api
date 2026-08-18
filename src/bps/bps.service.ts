@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash, randomBytes } from 'crypto';
 import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { CompanyResolutionService } from '../common/services/company-resolution.service';
@@ -281,6 +282,92 @@ export class BpsService {
       this.mapBpsError(e);
     }
     return this.getDatosCuenta(user);
+  }
+
+  // ======================== TOKEN DE INTEGRACIÓN (Excel) ===============
+  // Token de solo lectura para consumir el estado BPS desde Excel/Power
+  // Query sin usuario Tolvink. Se persiste únicamente el hash SHA-256.
+
+  private hashToken(raw: string) {
+    return createHash('sha256').update(raw).digest('hex');
+  }
+
+  async getTokenInfo(user: any) {
+    const { companyId } = await this.resolveBpsContext(user);
+    const token = await this.prisma.bpsToken.findUnique({ where: { companyId } });
+    return token?.active ? { existe: true, createdAt: token.createdAt } : { existe: false };
+  }
+
+  /** Genera (o regenera) el token. El valor en claro se devuelve UNA sola vez. */
+  async crearToken(user: any) {
+    const { companyId } = await this.resolveBpsContext(user);
+    const raw = `bps_${randomBytes(24).toString('hex')}`;
+    await this.prisma.bpsToken.upsert({
+      where: { companyId },
+      create: { companyId, tokenHash: this.hashToken(raw) },
+      update: { tokenHash: this.hashToken(raw), active: true },
+    });
+    return { token: raw };
+  }
+
+  async revocarToken(user: any) {
+    const { companyId } = await this.resolveBpsContext(user);
+    await this.prisma.bpsToken.updateMany({ where: { companyId }, data: { active: false } });
+    return { existe: false };
+  }
+
+  /** Resuelve un token en claro a su companyId. Lanza 403 si es inválido. */
+  async resolveToken(raw: string | undefined): Promise<string> {
+    if (!raw || !/^bps_[a-f0-9]{48}$/.test(raw)) throw new ForbiddenException('Token de integración inválido');
+    const token = await this.prisma.bpsToken.findUnique({ where: { tokenHash: this.hashToken(raw) } });
+    if (!token?.active) throw new ForbiddenException('Token de integración inválido o revocado');
+    return token.companyId;
+  }
+
+  // ======================== ENDPOINTS EXCEL ============================
+
+  /** Snapshot de empresas monitoreadas para Excel (sin llamadas en vivo a BPS). */
+  async excelEmpresas(companyId: string) {
+    const empresas = await this.prisma.bpsEmpresaMonitoreada.findMany({
+      where: { companyId, active: true },
+      orderBy: { nombre: 'asc' },
+    });
+    return empresas.map((e) => ({
+      rut: e.rut,
+      nombre: e.nombre || '',
+      estado: e.estado,
+      vigenteHasta: e.vigenteHasta ? e.vigenteHasta.toISOString().slice(0, 10) : '',
+      ultimaConsulta: e.ultimaConsulta ? e.ultimaConsulta.toISOString() : '',
+    }));
+  }
+
+  /**
+   * Estado de vigencia de un RUT como texto plano (para =SERVICIOWEB en Excel).
+   * Sirve el snapshot si tiene menos de 6 h; si está vencido y BPS está
+   * habilitado, re-consulta en vivo. Nunca lanza: los errores degradan a texto.
+   */
+  async excelVigencia(companyId: string, rut: string): Promise<string> {
+    const rutLimpio = String(rut || '').replace(/\D/g, '');
+    if (!validarRut(rutLimpio)) return 'RUT_INVALIDO';
+
+    const empresa = await this.prisma.bpsEmpresaMonitoreada.findFirst({
+      where: { companyId, rut: rutLimpio, active: true },
+    });
+    const SNAPSHOT_FRESCO_MS = 6 * 60 * 60 * 1000;
+    if (empresa?.ultimaConsulta && Date.now() - empresa.ultimaConsulta.getTime() < SNAPSHOT_FRESCO_MS) {
+      return empresa.estado;
+    }
+    if (this.config.get<string>('BPS_ENABLED') !== 'true') {
+      return empresa?.estado || 'DESCONOCIDO';
+    }
+    try {
+      const resultado = await this.client.consultarVigencia(rutLimpio);
+      if (empresa) await this.registrarConsulta(empresa, resultado);
+      return resultado.estado;
+    } catch (e: any) {
+      this.logger.warn(`Consulta Excel de vigencia falló para RUT ${rutLimpio}: ${e.message}`);
+      return empresa?.estado || 'DESCONOCIDO';
+    }
   }
 
   /**

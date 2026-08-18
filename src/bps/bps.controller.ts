@@ -109,4 +109,29 @@ export class BpsController {
   getDatosCuenta(@CurrentUser() user: any) {
     return this.bpsService.getDatosCuenta(user);
   }
+
+  // ── Token de integración (Excel / Power Query) ──
+
+  @Get('token')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...BPS_ROLES)
+  @ApiOperation({ summary: 'Estado del token de integración (nunca devuelve el valor)' })
+  getToken(@CurrentUser() user: any) {
+    return this.bpsService.getTokenInfo(user);
+  }
+
+  @Post('token')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...BPS_ROLES)
+  @ApiOperation({ summary: 'Genera o regenera el token de integración — el valor se muestra una sola vez' })
+  crearToken(@CurrentUser() user: any) {
+    return this.bpsService.crearToken(user);
+  }
+
+  @Patch('token/revoke')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...BPS_ROLES)
+  revocarToken(@CurrentUser() user: any) {
+    return this.bpsService.revocarToken(user);
+  }
 }
