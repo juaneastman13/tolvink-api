@@ -78,6 +78,8 @@ enum NotificationType {
   freight_updated
   message_received
   conversation_started
+  bps_certificado
+  bps_cuenta
 }
 
 enum DocumentStep {
@@ -1795,4 +1797,82 @@ model CompanyProduct {
   @@index([companyId])
   @@index([companyId, isActive])
   @@map("company_products")
+}
+
+// ======================== BPS (Banco de Previsión Social) ================
+// Consultas de certificados y cuenta autenticada. Sin relaciones a Company
+// (scoping por companyId escalar) para minimizar el churn del schema.
+
+model BpsCuenta {
+  id                String    @id @default(uuid())
+  companyId         String    @unique @map("company_id")
+  usuario           String    @db.VarChar(100)
+  credencialCifrada String    @map("credencial_cifrada") @db.Text
+  ultimaSync        DateTime? @map("ultima_sync")
+  ultimoError       String?   @map("ultimo_error") @db.VarChar(500)
+  active            Boolean   @default(true)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  datos BpsDatoCuenta[]
+
+  @@map("bps_cuentas")
+}
+
+model BpsDatoCuenta {
+  id         String   @id @default(uuid())
+  cuentaId   String   @map("cuenta_id")
+  tipo       String   @db.VarChar(20) // OBSERVACIONES | OBLIGACIONES | NOMINA
+  estado     String   @default("DESCONOCIDO") @db.VarChar(20) // OK | ATENCION | DESCONOCIDO
+  resumen    String?  @db.VarChar(500)
+  detalle    Json?
+  obtenidoEn DateTime @default(now()) @map("obtenido_en")
+
+  cuenta BpsCuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+
+  @@index([cuentaId, tipo, obtenidoEn])
+  @@map("bps_datos_cuenta")
+}
+
+model BpsEmpresaMonitoreada {
+  id              String    @id @default(uuid())
+  companyId       String    @map("company_id")
+  linkedCompanyId String?   @map("linked_company_id")
+  rut             String    @db.VarChar(12)
+  nombre          String?   @db.VarChar(255)
+  estado          String    @default("DESCONOCIDO") @db.VarChar(20) // VIGENTE | NO_VIGENTE | EN_TRAMITE | DESCONOCIDO
+  vigenteHasta    DateTime? @map("vigente_hasta")
+  ultimaConsulta  DateTime? @map("ultima_consulta")
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  consultas BpsConsulta[]
+
+  @@unique([companyId, rut])
+  @@index([companyId, active])
+  @@map("bps_empresas_monitoreadas")
+}
+
+model BpsConsulta {
+  id           String    @id @default(uuid())
+  empresaId    String    @map("empresa_id")
+  estado       String    @db.VarChar(20)
+  vigenteHasta DateTime? @map("vigente_hasta")
+  raw          Json?
+  consultadoEn DateTime  @default(now()) @map("consultado_en")
+
+  empresa BpsEmpresaMonitoreada @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, consultadoEn])
+  @@map("bps_consultas")
+}
+
+model BpsConfig {
+  companyId          String   @id @map("company_id")
+  frecuencia         String   @default("diaria") @db.VarChar(15) // diaria | semanal | quincenal
+  alertasActivas     Boolean  @default(true) @map("alertas_activas")
+  notificarDiasAntes Int      @default(7) @map("notificar_dias_antes")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("bps_config")
 }

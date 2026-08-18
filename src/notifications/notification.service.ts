@@ -114,6 +114,12 @@ export class NotificationService implements OnModuleDestroy {
 
   // ======================== NOTIFY USER ==================================
 
+  /** Deep link del push según el tipo: las notificaciones BPS viven en Mi Flota */
+  private pushUrl(type: NotificationType, entityId?: string): string {
+    if (String(type).startsWith('bps_')) return '/trucks';
+    return entityId ? `/freight/${entityId}` : '/';
+  }
+
   async notify(
     userId: string,
     type: NotificationType,
@@ -128,7 +134,7 @@ export class NotificationService implements OnModuleDestroy {
     });
 
     // Send push (fire-and-forget, log errors)
-    this.sendPush(userId, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
+    this.sendPush(userId, { title, body, url: this.pushUrl(type, entityId) })
       .catch((e) => this.logger.error(`Push send failed for user ${userId}: ${e.message}`));
 
     // WhatsApp notification (fire-and-forget)
@@ -176,7 +182,7 @@ export class NotificationService implements OnModuleDestroy {
 
     // Fire-and-forget: push + SSE per user (non-blocking)
     for (const uid of userIds) {
-      this.sendPush(uid, { title, body, url: entityId ? `/freight/${entityId}` : '/' })
+      this.sendPush(uid, { title, body, url: this.pushUrl(type, entityId) })
         .catch((e) => this.logger.error(`Push send failed for user ${uid}: ${e.message}`));
       this.sse.emitToUser(uid, 'notification:new', { type, title, entityId });
     }

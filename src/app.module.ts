@@ -29,6 +29,7 @@ import { MachinesController, MachineTemplatesController, MachinesService } from 
 import { MaintenanceController, MaintenanceService } from './maintenance/maintenance.controller';
 import { MechanicDashboardController, MechanicDashboardService } from './mechanic-dashboard/mechanic-dashboard.controller';
 import { StockModule } from './stock/stock.module';
+import { BpsModule } from './bps/bps.module';
 import { CompanyProductsController, CompanyProductsService } from './company-products/company-products.controller';
 import { AgentModule } from './agent/agent.module';
 
@@ -55,6 +56,7 @@ import { AgentModule } from './agent/agent.module';
     SharedLinksModule,
     FreightLocationsModule,
     StockModule,
+    BpsModule,
   ],
   controllers: [
     CatalogController,
