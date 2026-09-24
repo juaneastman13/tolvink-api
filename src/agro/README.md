@@ -47,32 +47,67 @@ src/agro/
     └── *.spec.ts                # golden tests contra el Excel (Fase 3)
 ```
 
-## Endpoints (Fase 1)
+## Endpoints
 
 Todos bajo `/agro/*` y protegidos por `JwtAuthGuard + ModuleAccessGuard('agro')`.
 El header `x-agro-empresa-id` es requerido cuando la Company tiene más de una
 `AgroEmpresa` activa.
 
+### Setup (Fase 1)
 | Método | Ruta | Rol mínimo | Descripción |
 |---|---|---|---|
-| GET | `/agro/empresas` | agro_* | Lista empresas de la Company |
-| POST | `/agro/empresas` | agro_admin | Crea empresa + aplica seeds base |
-| PATCH | `/agro/empresas/:id` | agro_admin | Actualiza empresa |
-| GET | `/agro/config` | agro_* | Config de la empresa activa (crea default si no existe) |
-| PUT | `/agro/config` | agro_admin | Upsert config |
-| GET | `/agro/maestros/centros` | agro_* | Lista centros |
-| POST | `/agro/maestros/centros` | agro_admin | Upsert centro |
-| GET | `/agro/maestros/categorias` | agro_* | Lista categorías animales |
-| POST | `/agro/maestros/categorias` | agro_admin | Upsert categoría |
-| GET | `/agro/maestros/cuentas` | agro_* | Lista plan de cuentas |
-| POST | `/agro/maestros/cuentas` | agro_admin | Upsert cuenta |
-| GET | `/agro/maestros/terceros?tipo=` | agro_* | Lista terceros |
-| POST | `/agro/maestros/terceros` | agro_admin, agro_carga | Crea tercero |
-| PATCH | `/agro/maestros/terceros/:id` | agro_admin | Actualiza tercero |
-| GET | `/agro/maestros/productos` | agro_* | Lista productos |
-| POST | `/agro/maestros/productos` | agro_admin | Upsert producto |
-| GET | `/agro/tipo-cambio` | agro_* | Serie UYU/USD |
-| POST | `/agro/tipo-cambio` | agro_admin, agro_carga | Set TC de una fecha |
+| GET/POST/PATCH | `/agro/empresas[/:id]` | admin | CRUD multi-empresa (POST aplica seeds base) |
+| GET/PUT | `/agro/config` | admin | Config por empresa |
+| GET/POST | `/agro/maestros/centros` | admin | Centros |
+| GET/POST | `/agro/maestros/categorias` | admin | Categorías animales con UG |
+| GET/POST | `/agro/maestros/cuentas` | admin | Plan de cuentas |
+| GET/POST/PATCH | `/agro/maestros/terceros[/:id]` | admin, carga | Terceros |
+| GET/POST | `/agro/maestros/productos` | admin | Insumos y granos |
+| GET/POST | `/agro/tipo-cambio` | admin, carga | Serie UYU/USD (fuente MANUAL/BCU) |
+
+### Maestros operativos (Fase 2)
+| Método | Ruta | Rol mínimo | Descripción |
+|---|---|---|---|
+| GET/POST/PATCH/DELETE | `/agro/campos[/:id]` | admin | Campos |
+| POST/PATCH/DELETE | `/agro/campos/potreros[/:id]` | admin | Potreros |
+| GET/POST/PATCH | `/agro/lotes-campania[/:id]?campania=` | admin, carga | Lotes × campaña (orden de producción) |
+| GET/POST/PATCH | `/agro/tandas[/:id]` | admin, carga | Tandas de feedlot |
+| GET/POST/PATCH | `/agro/prestamos[/:id]` | admin | Préstamos |
+
+### Movimientos (Fase 2 — append-only)
+| Método | Ruta | Rol mínimo | Descripción |
+|---|---|---|---|
+| GET | `/agro/hacienda?desde&hasta&centro&categoriaCod&tandaId&tipo` | agro_* | Lista movs |
+| GET | `/agro/hacienda/stock?hasta=` | agro_* | Snapshot de stock a una fecha |
+| POST | `/agro/hacienda` | admin, carga | Crea mov con validación de stock |
+| POST | `/agro/hacienda/:id/anular` | admin | Anula (append-only) |
+| GET/POST | `/agro/granos` | admin, carga | Movs de granos; `tipo=FEEDLOT` aplica §5.2 |
+| POST | `/agro/granos/:id/anular` | admin | Anula |
+| GET/POST | `/agro/gastos` | admin, carga | Gastos con normalización money |
+| POST | `/agro/gastos/:id/anular` | admin | Anula |
+| GET/POST | `/agro/labores` | admin, carga | Labores agrícolas |
+| POST | `/agro/labores/:id/anular` | admin | Anula |
+| GET/POST | `/agro/lluvias` | admin, carga | Registro pluvial |
+| POST | `/agro/import/tsv` | admin, carga | Importa TSV/CSV pegado (con dryRun) |
+
+### Validaciones aplicadas en `POST`
+- **Hacienda** (`dominio/stock-hacienda.ts`, 12 tests): stock por `(centro, categoriaCod)` nunca negativo; `TRANSF` requiere destino distinto; `RECATEG` requiere categoría destino; `PESADA/DICOSE/TACTO` no mueven stock; `INVENTARIO` setea saldo absoluto.
+- **Granos**: `FEEDLOT` requiere `tandaId` + `precioNetoUsdT` o (`precioReferenciaUsdT` [+`fleteUsdT`+`comisionUsdT`]) — se auto-calcula el neto en campo (`dominio/transferencia-grano.ts`).
+- **Gastos**: `moneda + monto + tipoCambio → montoUsd` persistido. Si no se envía `tipoCambio`, se resuelve automáticamente del `AgroTipoCambio` del día (o el más reciente hacia atrás).
+
+### Importador TSV — formato de columnas
+
+Headers en minúsculas, decimales con coma, fechas `dd/mm/yyyy` o ISO. Se acepta `\t` o `;` como separador.
+
+**hacienda:** `fecha, tipo, centro, categoria, centro_destino, categoria_destino, tanda_id, cabezas, kg_cab, kg_total, usd_kg, prenadas, tercero_id, guia, obs, fecha_cobro_pago`
+
+**granos:** `fecha, tipo, lote_campania_id, producto_id, toneladas, precio_neto_usd_t, precio_referencia_usd_t, flete_usd_t, comision_usd_t, fecha_cobro, tanda_id, obs`
+
+**gastos:** `fecha, tercero_id, cuenta_id, centro, lote_campania_id, tanda_id, prestamo_id, detalle, moneda, monto, tipo_cambio, comprobante, fecha_pago, cantidad, unidad`
+
+**labores:** `fecha, lote_campania_id, tipo_labor, hectareas, propia, tarifa_usd_ha, obs`
+
+**lluvias:** `fecha, mm, pluviometro`
 
 Además, el selector de módulo existente acepta ahora `'agro'`:
 
@@ -80,7 +115,6 @@ Además, el selector de módulo existente acepta ahora `'agro'`:
 
 ## Fases pendientes
 
-- **Fase 2 — Captura**: movimientos de hacienda, granos, gastos, labores, lluvias; importación TSV/Excel.
 - **Fase 3 — Núcleo de cálculo**: reglas §5, golden tests contra el Excel de referencia.
 - **Fase 4 — Reportes**: tablero, resultados por actividad, tandas, KPIs, informe socios PDF.
 - **Fase 5 — Presupuesto y caja**: presupuesto físico/precio/económico, escenarios, caja 12 meses, integración BCU para TC.

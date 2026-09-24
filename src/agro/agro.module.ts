@@ -18,6 +18,46 @@ import {
   AgroTipoCambioController,
   AgroTipoCambioService,
 } from './tipo-cambio/agro-tipo-cambio.controller';
+import {
+  AgroCamposController,
+  AgroCamposService,
+} from './campos/agro-campos.controller';
+import {
+  AgroLotesController,
+  AgroLotesService,
+} from './lotes/agro-lotes.controller';
+import {
+  AgroTandasController,
+  AgroTandasService,
+} from './tandas/agro-tandas.controller';
+import {
+  AgroPrestamosController,
+  AgroPrestamosService,
+} from './prestamos/agro-prestamos.controller';
+import {
+  AgroHaciendaController,
+  AgroHaciendaService,
+} from './hacienda/agro-hacienda.controller';
+import {
+  AgroGranosController,
+  AgroGranosService,
+} from './granos/agro-granos.controller';
+import {
+  AgroGastosController,
+  AgroGastosService,
+} from './gastos/agro-gastos.controller';
+import {
+  AgroLaboresController,
+  AgroLaboresService,
+} from './labores/agro-labores.controller';
+import {
+  AgroLluviasController,
+  AgroLluviasService,
+} from './lluvias/agro-lluvias.controller';
+import {
+  AgroImportController,
+  AgroImportService,
+} from './import/agro-import.controller';
 
 /**
  * Módulo de gestión agropecuaria (Cruz Del Sur). Aislado del módulo de
@@ -35,6 +75,16 @@ import {
     AgroConfigController,
     AgroMaestrosController,
     AgroTipoCambioController,
+    AgroCamposController,
+    AgroLotesController,
+    AgroTandasController,
+    AgroPrestamosController,
+    AgroHaciendaController,
+    AgroGranosController,
+    AgroGastosController,
+    AgroLaboresController,
+    AgroLluviasController,
+    AgroImportController,
   ],
   providers: [
     AgroScopeService,
@@ -44,6 +94,16 @@ import {
     AgroConfigService,
     AgroMaestrosService,
     AgroTipoCambioService,
+    AgroCamposService,
+    AgroLotesService,
+    AgroTandasService,
+    AgroPrestamosService,
+    AgroHaciendaService,
+    AgroGranosService,
+    AgroGastosService,
+    AgroLaboresService,
+    AgroLluviasService,
+    AgroImportService,
   ],
   exports: [AgroScopeService],
 })
