@@ -222,35 +222,39 @@ export function renderDecisionHtml<T>(tipo: string, r: DecisionResultado<T>): st
   return `<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${escapeHtml(nombre)} · Tolvink</title>
 <style>${TOLVINK_BASE_CSS}</style>
 </head><body>
 <main>
-  ${tolvinkHeader('Tolvink · Agro', [nombre, 'Modelo de decisión'])}
+  ${tolvinkHeader(nombre, {
+    subtitle: 'Modelo de decisión — cálculo con los parámetros enviados.',
+    contextPill: 'Agro',
+  })}
+  <div class="content">
+    <div class="card">
+      <div class="kpi-num">${fmtN(Number(r.resultado.valorPrincipal), 2)}<span class="u">${escapeHtml(r.resultado.unidad)}</span></div>
+      <div class="kpi-interp">${escapeHtml(r.resultado.interpretacion)}</div>
+    </div>
 
-  <div class="card">
-    <div class="kpi-num">${fmtN(Number(r.resultado.valorPrincipal), 2)}<span class="u">${escapeHtml(r.resultado.unidad)}</span></div>
-    <div class="kpi-interp">${escapeHtml(r.resultado.interpretacion)}</div>
-  </div>
+    <div class="rec-box">
+      <strong>Recomendación</strong>
+      ${escapeHtml(r.recomendacion)}
+    </div>
 
-  <div class="rec-box">
-    <strong>Recomendación</strong>
-    ${escapeHtml(r.recomendacion)}
-  </div>
+    ${r.alertas.length ? `<div class="card"><h2>Alertas</h2><ul class="alertas">${alertas}</ul></div>` : ''}
+    ${svgCurva ? `<div class="card"><h2>Curva</h2>${svgCurva}</div>` : ''}
+    ${svgHeatmap ? `<div class="card"><h2>Tabla de doble entrada</h2>${svgHeatmap}</div>` : ''}
+    ${svgEscenarios ? `<div class="card"><h2>Escenarios</h2>${svgEscenarios}</div>` : ''}
 
-  ${r.alertas.length ? `<div class="card"><h2>Alertas</h2><ul class="alertas">${alertas}</ul></div>` : ''}
-  ${svgCurva ? `<div class="card"><h2>Curva</h2>${svgCurva}</div>` : ''}
-  ${svgHeatmap ? `<div class="card"><h2>Tabla de doble entrada</h2>${svgHeatmap}</div>` : ''}
-  ${svgEscenarios ? `<div class="card"><h2>Escenarios</h2>${svgEscenarios}</div>` : ''}
+    <div class="card noprint">
+      <h2>Parámetros de entrada</h2>
+      <pre class="params">${escapeHtml(params)}</pre>
+    </div>
 
-  <div class="card noprint">
-    <h2>Parámetros de entrada</h2>
-    <pre class="params">${escapeHtml(params)}</pre>
-  </div>
-
-  <div class="footer-note noprint">
-    Para guardar como PDF: Imprimir → Guardar como PDF.
+    <div class="footer-note noprint">
+      Para guardar como PDF: Imprimir → Guardar como PDF.
+    </div>
   </div>
 </main>
 </body></html>`;

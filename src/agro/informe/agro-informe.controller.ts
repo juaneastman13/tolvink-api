@@ -121,8 +121,8 @@ export class AgroInformeService {
     const rows = (data.porActividad as any[])
       .map((a) => {
         const mb = Number(new Decimal(a.mbDespuesTierra));
-        const cls = mb < 0 ? 'style="color:var(--danger)"' : '';
-        return `<tr><td>${escapeHtml(a.centro)}</td><td class="num" ${cls}>USD ${fmt(new Decimal(a.mbDespuesTierra))}</td></tr>`;
+        const cls = mb < 0 ? ' class="num neg-value"' : ' class="num"';
+        return `<tr><td>${escapeHtml(a.centro)}</td><td${cls}>USD ${fmt(new Decimal(a.mbDespuesTierra))}</td></tr>`;
       })
       .join('');
     const tandas = (data.tandasFeedlot as any[])
@@ -140,81 +140,108 @@ export class AgroInformeService {
     return `<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Informe de socios · ${escapeHtml(data.nombreEjercicio)} · Tolvink</title>
 <style>${TOLVINK_BASE_CSS}
-  @page { size: A4; margin: 16mm; }
   .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-  @media (max-width: 640px) { .kpi-grid { grid-template-columns: 1fr; } }
-  .kpi-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
-  .kpi-tile label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-  .kpi-tile strong { display: block; font-size: 22px; color: var(--green-dark); font-variant-numeric: tabular-nums; font-weight: 700; }
-  .kpi-tile.neg strong { color: var(--danger); }
-  .kpi-tile .u { color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 4px; }
-  .narrativa p { margin: 0 0 10px; color: var(--ink); font-size: 14px; }
-  .eq-line { color: var(--muted); font-size: 14px; }
-  .eq-line strong { color: var(--green-dark); font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) { .kpi-grid { grid-template-columns: 1fr; } }
+  .kpi-tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--green);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-card);
+  }
+  .kpi-tile.neg { border-left-color: var(--danger); }
+  .kpi-tile label {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+  .kpi-tile .val {
+    display: block;
+    font-size: 26px;
+    color: var(--green-dark);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    line-height: 1.1;
+  }
+  .kpi-tile.neg .val { color: var(--danger); }
+  .kpi-tile .u { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: 5px; letter-spacing: 0; }
+  .narrativa p { margin: 0 0 12px; color: var(--ink); font-size: 14px; line-height: 1.6; }
+  .narrativa p:last-child { margin-bottom: 0; }
+  .eq-line { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0; }
+  .eq-line strong { color: var(--green-dark); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .neg-value { color: var(--danger); }
 </style>
 </head><body>
 <main>
-  ${tolvinkHeader(
-    'Tolvink · Agro',
-    [`Informe de socios · Ejercicio ${data.nombreEjercicio}`, `${desde} — ${hasta}`],
-  )}
-
-  <div class="card narrativa">
-    ${narrativa}
-  </div>
-
-  <div class="kpi-grid">
-    <div class="kpi-tile ${Number(data.resumen.resultadoOperativo) < 0 ? 'neg' : ''}">
-      <label>Resultado operativo</label>
-      <strong>${fmt(new Decimal(data.resumen.resultadoOperativo))}<span class="u">USD</span></strong>
+  ${tolvinkHeader(`Informe de socios · Ejercicio ${data.nombreEjercicio}`, {
+    subtitle: `Del ${desde} al ${hasta}`,
+    contextPill: 'Agro',
+  })}
+  <div class="content">
+    <div class="card narrativa">
+      ${narrativa}
     </div>
-    <div class="kpi-tile ${Number(data.resumen.resultadoNeto) < 0 ? 'neg' : ''}">
-      <label>Resultado neto</label>
-      <strong>${fmt(new Decimal(data.resumen.resultadoNeto))}<span class="u">USD</span></strong>
+
+    <div class="kpi-grid">
+      <div class="kpi-tile ${Number(data.resumen.resultadoOperativo) < 0 ? 'neg' : ''}">
+        <label>Resultado operativo</label>
+        <span class="val">${fmt(new Decimal(data.resumen.resultadoOperativo))}<span class="u">USD</span></span>
+      </div>
+      <div class="kpi-tile ${Number(data.resumen.resultadoNeto) < 0 ? 'neg' : ''}">
+        <label>Resultado neto</label>
+        <span class="val">${fmt(new Decimal(data.resumen.resultadoNeto))}<span class="u">USD</span></span>
+      </div>
+      <div class="kpi-tile ${Number(data.resumen.resultadoTenencia) < 0 ? 'neg' : ''}">
+        <label>Tenencia (aparte)</label>
+        <span class="val">${fmt(new Decimal(data.resumen.resultadoTenencia))}<span class="u">USD</span></span>
+      </div>
     </div>
-    <div class="kpi-tile ${Number(data.resumen.resultadoTenencia) < 0 ? 'neg' : ''}">
-      <label>Tenencia (aparte)</label>
-      <strong>${fmt(new Decimal(data.resumen.resultadoTenencia))}<span class="u">USD</span></strong>
+
+    <div class="card">
+      <h2>Margen por actividad — después de tierra</h2>
+      <table class="data">
+        <thead><tr><th>Actividad</th><th class="num">Margen USD</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>
-  </div>
 
-  <div class="card">
-    <h2>Margen por actividad — después de tierra</h2>
-    <table class="data">
-      <thead><tr><th>Actividad</th><th class="num">Margen USD</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>
+    ${
+      tandas
+        ? `<div class="card">
+      <h2>Tandas de feedlot</h2>
+      <table class="data">
+        <thead><tr><th>Tanda</th><th class="num">Días</th><th class="num">GMD</th><th class="num">Margen / cabeza</th></tr></thead>
+        <tbody>${tandas}</tbody>
+      </table>
+    </div>`
+        : ''
+    }
 
-  ${
-    tandas
-      ? `<div class="card">
-    <h2>Tandas de feedlot</h2>
-    <table class="data">
-      <thead><tr><th>Tanda</th><th class="num">Días</th><th class="num">GMD</th><th class="num">Margen / cabeza</th></tr></thead>
-      <tbody>${tandas}</tbody>
-    </table>
-  </div>`
-      : ''
-  }
+    ${
+      data.equivalencias
+        ? `<div class="card">
+      <h2>Equivalencias — precios base fijos</h2>
+      <p class="eq-line">
+        kg de carne equivalente: <strong>${fmt(new Decimal(data.equivalencias.kgCarneEquivalente))}</strong>
+        &nbsp;·&nbsp;
+        t de soja equivalente: <strong>${fmt(new Decimal(data.equivalencias.tSojaEquivalente))}</strong>
+      </p>
+    </div>`
+        : ''
+    }
 
-  ${
-    data.equivalencias
-      ? `<div class="card">
-    <h2>Equivalencias — precios base fijos</h2>
-    <p class="eq-line">
-      kg de carne equivalente: <strong>${fmt(new Decimal(data.equivalencias.kgCarneEquivalente))}</strong>
-      · t de soja equivalente: <strong>${fmt(new Decimal(data.equivalencias.tSojaEquivalente))}</strong>
-    </p>
-  </div>`
-      : ''
-  }
-
-  <div class="footer-note noprint">
-    Para guardar como PDF: Imprimir → Guardar como PDF.
+    <div class="footer-note noprint">
+      Para guardar como PDF: Imprimir → Guardar como PDF.
+    </div>
   </div>
 </main>
 </body></html>`;
