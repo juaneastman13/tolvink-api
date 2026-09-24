@@ -143,6 +143,36 @@ Además, el selector de módulo existente acepta ahora `'agro'`:
 | GET | `/agro/informe/socios.json?ejercicio=` | agro_* | Informe para socios (JSON) |
 | GET | `/agro/informe/socios.html?ejercicio=` | agro_* | Informe HTML print-friendly ("Guardar como PDF" desde el navegador) |
 
+### Decisiones (Fase 7)
+
+Cada endpoint acepta parámetros por body y devuelve un `DecisionResultado`
+con la misma forma: `resultado { valorPrincipal, unidad, interpretacion }` +
+`curva` (línea) + `matriz` (heatmap) + `escenarios` (comparativa
+PESIMISTA/BASE/OPTIMISTA/**SECA**) + `alertas[]` + `recomendacion`.
+El frontend puede tener un componente único que renderice cualquiera.
+
+| Método | Ruta | Rol mínimo | Modelo |
+|---|---|---|---|
+| POST | `/agro/decisiones/momento-venta` | agro_* | Curva de valor por día con escalones de precio, óptimo por CO |
+| POST | `/agro/decisiones/precio-max-reposicion` | agro_* | Techo de compra por kg vivo dado plan de venta; heatmap (precio × kg) |
+| POST | `/agro/decisiones/fertilizacion` | agro_* | Mitscherlich; dosis óptima económica; alerta por relación precio grano/fert |
+| POST | `/agro/decisiones/van-pasturas` | agro_* | VAN + TIR + recupero descontado + heatmap (kg incrementales × precio) |
+| POST | `/agro/decisiones/maquinaria` | agro_* | Comprar vs contratar; ha de indiferencia; VAN; curva costo/ha vs ha/año |
+| POST | `/agro/decisiones/comercializacion-granos` | agro_* | Vender ya vs esperar N meses; incluye CO + almacenaje |
+| POST | `/agro/decisiones/compra-insumos` | agro_* | Anticipar vs esperar; precio de indiferencia; ROI de anticipar |
+| POST | `/agro/decisiones/renta-max` | agro_* | Renta máxima que preserva margen objetivo; heatmap (rinde × precio) |
+| POST | `/agro/decisiones/recomposicion` | agro_* | Mix óptimo de actividades por MB/ha ajustado por capital |
+| GET | `/agro/decisiones/:tipo.html?data=<b64>` | agro_* | Vista HTML print-friendly con SVG inline (curva + heatmap + escenarios) |
+
+**Escenarios integrados** (multiplicativos sobre inputs relevantes):
+- PESIMISTA: −15% precio, −15% rinde, +10% costos
+- BASE: sin cambio
+- OPTIMISTA: +15% precio, +15% rinde, −5% costos
+- **SECA**: −40% rinde, −30% GMD pastoreo, +15% costos, +40% suplementación (spec del brief)
+
+Cada modelo devuelve el resultado bajo los 4 escenarios en `escenarios{}`
+para comparar de una.
+
 ## Capa de dominio (funciones puras — `src/agro/dominio/*`)
 
 Todas sin dependencia de Nest/Prisma. Trabajan con `Decimal` para
@@ -177,5 +207,4 @@ escenario, no la implementación.
 ## Fases pendientes
 
 - **Fase 6 — WhatsApp** (postergada por decisión del usuario): dominio `agro` en `AgentOrchestratorService`, staging en `agro_captura_pendiente`, idempotencia. La tabla `agro_captura_pendiente` ya existe en el schema.
-- **Fase 7 — Modelos de decisión**: momento óptimo de venta, comprar vs contratar, VAN/TIR pasturas, etc.
 - **Amortizaciones**: requiere modelar `agro_bien` con vida útil. Mientras tanto se cargan como gastos ESTRUCTURA / centro EST.

@@ -79,6 +79,10 @@ import {
   AgroInformeController,
   AgroInformeService,
 } from './informe/agro-informe.controller';
+import {
+  AgroDecisionesController,
+  AgroDecisionesService,
+} from './decisiones/agro-decisiones.controller';
 
 /**
  * Módulo de gestión agropecuaria (Cruz Del Sur). Aislado del módulo de
@@ -112,6 +116,7 @@ import {
     AgroBcuController,
     AgroExportController,
     AgroInformeController,
+    AgroDecisionesController,
   ],
   providers: [
     AgroScopeService,
@@ -138,6 +143,7 @@ import {
     AgroBcuService,
     AgroExportService,
     AgroInformeService,
+    AgroDecisionesService,
   ],
   exports: [AgroScopeService],
 })
