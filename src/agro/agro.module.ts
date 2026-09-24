@@ -71,6 +71,14 @@ import {
 } from './caja/agro-caja.controller';
 import { AgroBcuController } from './bcu/agro-bcu.controller';
 import { AgroBcuService } from './bcu/agro-bcu.service';
+import {
+  AgroExportController,
+  AgroExportService,
+} from './export/agro-export.controller';
+import {
+  AgroInformeController,
+  AgroInformeService,
+} from './informe/agro-informe.controller';
 
 /**
  * Módulo de gestión agropecuaria (Cruz Del Sur). Aislado del módulo de
@@ -102,6 +110,8 @@ import { AgroBcuService } from './bcu/agro-bcu.service';
     AgroPresupuestoController,
     AgroCajaController,
     AgroBcuController,
+    AgroExportController,
+    AgroInformeController,
   ],
   providers: [
     AgroScopeService,
@@ -126,6 +136,8 @@ import { AgroBcuService } from './bcu/agro-bcu.service';
     AgroPresupuestoService,
     AgroCajaService,
     AgroBcuService,
+    AgroExportService,
+    AgroInformeService,
   ],
   exports: [AgroScopeService],
 })

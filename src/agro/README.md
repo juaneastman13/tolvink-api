@@ -134,6 +134,15 @@ Además, el selector de módulo existente acepta ahora `'agro'`:
 | GET | `/agro/caja?anclaje=&saldoInicial=&escenario=` | agro_* | Flujo 12m rolling: real hasta anclaje + presupuesto en adelante; alertas ROJO/AMARILLO |
 | POST | `/agro/bcu/sync` | admin | Sincroniza TC del día contra API BCU (idempotente) |
 
+### Exportaciones e informes
+
+| Método | Ruta | Rol mínimo | Descripción |
+|---|---|---|---|
+| GET | `/agro/export/:dominio.csv?desde&hasta` | agro_* | CSV UTF-8+BOM formato UY (hacienda/granos/gastos/labores/lluvias) |
+| GET | `/agro/export/excel.xlsx?desde&hasta` | agro_* | Libro Excel con una hoja por dominio |
+| GET | `/agro/informe/socios.json?ejercicio=` | agro_* | Informe para socios (JSON) |
+| GET | `/agro/informe/socios.html?ejercicio=` | agro_* | Informe HTML print-friendly ("Guardar como PDF" desde el navegador) |
+
 ## Capa de dominio (funciones puras — `src/agro/dominio/*`)
 
 Todas sin dependencia de Nest/Prisma. Trabajan con `Decimal` para
