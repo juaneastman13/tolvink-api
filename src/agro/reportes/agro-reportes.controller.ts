@@ -12,7 +12,9 @@ import { AgroScopeService } from '../common/agro-scope.service';
 import { AgroRolesGuard } from '../common/agro-roles.guard';
 import { ModuleAccessGuard } from '../common/module-access.guard';
 import { empresaIdOf, requireFecha } from '../common/agro-base.controller';
+import { AgroEscenario } from '@prisma/client';
 import { AgroReportesService } from './agro-reportes.service';
+import { AgroDesviosService } from './agro-desvios.service';
 
 /**
  * Endpoints de sólo-lectura para el tablero, el informe de socios y los KPI.
@@ -25,6 +27,7 @@ import { AgroReportesService } from './agro-reportes.service';
 export class AgroReportesController {
   constructor(
     private service: AgroReportesService,
+    private desvios: AgroDesviosService,
     private scope: AgroScopeService,
   ) {}
 
@@ -89,6 +92,24 @@ export class AgroReportesController {
     return this.service.equivalenciasEmpresa(
       await empresaIdOf(this.scope, user, req),
       ejercicio ? parseInt(ejercicio, 10) : undefined,
+    );
+  }
+
+  /**
+   * §6 — Presupuesto vs Real por (centro, concepto), con descomposición
+   * precio/cantidad y alertas según config.desvioUsd/desvioPct.
+   */
+  @Get('desvios')
+  async desviosPresupuestoVsReal(
+    @CurrentUser() user: any,
+    @Req() req: any,
+    @Query('ejercicio') ejercicio?: string,
+    @Query('escenario') escenario?: AgroEscenario,
+  ) {
+    return this.desvios.presupuestoVsReal(
+      await empresaIdOf(this.scope, user, req),
+      ejercicio ? parseInt(ejercicio, 10) : undefined,
+      escenario,
     );
   }
 }

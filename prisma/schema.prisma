@@ -1933,6 +1933,8 @@ model AgroEmpresa {
   lluvias       AgroLluvia[]
   precios       AgroPrecio[]
   capturasPend  AgroCapturaPendiente[]
+  presFisico    AgroPresFisico[]
+  presPrecio    AgroPresPrecio[]
 
   @@index([companyId, active])
   @@map("agro_empresa")
@@ -2043,9 +2045,11 @@ model AgroProducto {
   createdAt DateTime         @default(now()) @map("created_at")
   updatedAt DateTime         @updatedAt @map("updated_at")
 
-  empresa    AgroEmpresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresa    AgroEmpresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   movsGranos AgroMovGrano[]
   precios    AgroPrecio[]
+  presFisico AgroPresFisico[]
+  presPrecio AgroPresPrecio[]
 
   @@unique([empresaId, codigo])
   @@map("agro_producto")
@@ -2100,11 +2104,12 @@ model AgroLoteCampania {
   createdAt     DateTime             @default(now()) @map("created_at")
   updatedAt     DateTime             @updatedAt @map("updated_at")
 
-  empresa    AgroEmpresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  potrero    AgroPotrero?   @relation(fields: [potreroId], references: [id], onDelete: SetNull)
+  empresa    AgroEmpresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  potrero    AgroPotrero?     @relation(fields: [potreroId], references: [id], onDelete: SetNull)
   movsGranos AgroMovGrano[]
   gastos     AgroGasto[]
   labores    AgroLabor[]
+  presFisico AgroPresFisico[]
 
   @@index([empresaId, campania])
   @@map("agro_lote_campania")
@@ -2354,4 +2359,55 @@ model AgroCapturaPendiente {
   @@index([empresaId, estado])
   @@index([phone, createdAt])
   @@map("agro_captura_pendiente")
+}
+
+// ======================== AGRO — PRESUPUESTO =========================
+
+// Presupuesto físico: cantidades planificadas por mes/centro/categoría/producto.
+// El económico se CALCULA a partir de (físico × precio).
+model AgroPresFisico {
+  id           String   @id @default(uuid())
+  empresaId    String   @map("empresa_id")
+  ejercicio    Int      // año de finalización del ejercicio
+  mes          Int      // 1..12 (mes calendario)
+  centro       AgroCentroTipo?
+  categoriaCod String?  @map("categoria_cod") @db.VarChar(20)
+  productoId   String?  @map("producto_id")
+  loteCampaniaId String? @map("lote_campania_id")
+  concepto     String   @db.VarChar(50) // NACIMIENTO | DESTETE | COMPRA | VENTA | TRANSF | PESO | HA_SEMBRADA | RINDE | INSUMO_HA | GRANO_FEEDLOT | ...
+  cantidad     Decimal  @db.Decimal(14, 3)
+  unidad       AgroUnidad?
+  obs          String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  empresa      AgroEmpresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  producto     AgroProducto?     @relation(fields: [productoId], references: [id], onDelete: SetNull)
+  loteCampania AgroLoteCampania? @relation(fields: [loteCampaniaId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId, ejercicio, mes])
+  @@index([empresaId, ejercicio, concepto])
+  @@map("agro_pres_fisico")
+}
+
+// Precio presupuestado por producto/categoría/mes y por escenario.
+model AgroPresPrecio {
+  id           String        @id @default(uuid())
+  empresaId    String        @map("empresa_id")
+  ejercicio    Int
+  mes          Int           // 1..12
+  escenario    AgroEscenario
+  productoId   String?       @map("producto_id")
+  categoriaCod String?       @map("categoria_cod") @db.VarChar(20)
+  precioUsd    Decimal       @map("precio_usd") @db.Decimal(12, 4)
+  unidad       AgroUnidad?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  empresa  AgroEmpresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  producto AgroProducto? @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, ejercicio, mes, escenario, productoId, categoriaCod])
+  @@index([empresaId, ejercicio, escenario])
+  @@map("agro_pres_precio")
 }

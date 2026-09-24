@@ -119,9 +119,20 @@ Además, el selector de módulo existente acepta ahora `'agro'`:
 |---|---|---|---|
 | GET | `/agro/reportes/ejercicio-actual` | agro_* | Ejercicio y rango derivado de `mesInicioEjercicio` |
 | GET | `/agro/reportes/stock?hasta=` | agro_* | Snapshot de stock por (centro, categoría) |
-| GET | `/agro/reportes/resultados?ejercicio=` | agro_* | Vista negocios + vista empresa (§5.7) |
+| GET | `/agro/reportes/resultados?ejercicio=` | agro_* | Vista negocios + vista empresa (§5.7) con MAQ TARIFA (§5.4), tenencia (§5.3) y dif de cambio |
 | GET | `/agro/reportes/tandas` | agro_* | Feedlot por tanda (§5.9) |
 | GET | `/agro/reportes/equivalencias?ejercicio=` | agro_* | kg carne / t soja equivalentes (§5.8) |
+| GET | `/agro/reportes/desvios?ejercicio=&escenario=` | agro_* | Presupuesto vs real por (centro, concepto), Δprecio y Δcantidad, alerta según umbrales |
+
+### Presupuesto y caja (Fase 5)
+
+| Método | Ruta | Rol mínimo | Descripción |
+|---|---|---|---|
+| GET/POST/DELETE | `/agro/presupuesto/fisico[/:id]?ejercicio=` | admin, carga | Cantidades planificadas por mes/centro/concepto |
+| GET/POST | `/agro/presupuesto/precio?ejercicio=&escenario=` | admin, carga | Precios por mes, producto/categoría y escenario |
+| GET | `/agro/presupuesto/economico?ejercicio=&escenario=` | agro_* | Físico × precio calculado, totales por centro |
+| GET | `/agro/caja?anclaje=&saldoInicial=&escenario=` | agro_* | Flujo 12m rolling: real hasta anclaje + presupuesto en adelante; alertas ROJO/AMARILLO |
+| POST | `/agro/bcu/sync` | admin | Sincroniza TC del día contra API BCU (idempotente) |
 
 ## Capa de dominio (funciones puras — `src/agro/dominio/*`)
 
@@ -141,9 +152,21 @@ correctitud numérica. Actualmente **64 tests unitarios en verde**.
 | `resultado-empresa.ts` | §5.7 | Vista negocios y vista empresa con reversión de renta ficta |
 | `equivalencias.ts` | §5.8 | kg carne / t soja equivalente con precios base fijos |
 | `feedlot.ts` | §5.9 | GMD, conversión, costo/kg ganado, margen por cabeza y día, breakeven |
+| `presupuesto.ts` | §4.4 | Físico × precio, matching por producto/categoría/mes |
+| `desvio.ts` | §6 | Δtotal, Δprecio, Δcantidad + umbral USD/% para alerta |
+| `caja.ts` | §6 | Rolling 12m, saldo mes a mes, alerta ROJO/AMARILLO, monto a financiar |
+
+## Escenario dorado
+
+`src/agro/__integration__/escenario-cruz-del-sur.spec.ts` implementa un
+ejercicio completo (600 ha agri + 400 ha ganadería + 1 tanda de 100
+novillos) con todos los flujos de §5 y §6 encadenados. Reemplaza al Excel
+de referencia del brief: los "resultados esperados" son numéricos e
+inline, verificables a mano; si un cálculo se ajusta, se cambia el
+escenario, no la implementación.
 
 ## Fases pendientes
 
-- **Fase 5 — Presupuesto y caja**: presupuesto físico/precio/económico, escenarios, caja 12 meses, integración BCU para TC.
 - **Fase 6 — WhatsApp** (postergada por decisión del usuario): dominio `agro` en `AgentOrchestratorService`, staging en `agro_captura_pendiente`, idempotencia. La tabla `agro_captura_pendiente` ya existe en el schema.
 - **Fase 7 — Modelos de decisión**: momento óptimo de venta, comprar vs contratar, VAN/TIR pasturas, etc.
+- **Amortizaciones**: requiere modelar `agro_bien` con vida útil. Mientras tanto se cargan como gastos ESTRUCTURA / centro EST.

@@ -12,6 +12,8 @@ import { aplicar, MovHacienda, StockMap, stockKey } from '../dominio/stock-hacie
 import { calcularTanda } from '../dominio/feedlot';
 import { MargenActividad, vistaEmpresa, vistaNegocios } from '../dominio/resultado-empresa';
 import { kgCarneEquivalente, tSojaEquivalente } from '../dominio/equivalencias';
+import { consolidarMaquinariaTarifa } from '../dominio/costos-compartidos';
+import { descomponerValor } from '../dominio/valuacion';
 
 /**
  * Servicio que lee de la base y aplica las funciones puras de dominio.
@@ -196,15 +198,75 @@ export class AgroReportesService {
       }));
 
     const vn = vistaNegocios(margenes);
+
+    // §5.4 — Consolidación MAQ modo TARIFA. Sumamos ingresos (labores propias
+    // valorizadas a tarifa de contratista) − costos reales cargados al centro MAQ.
+    let resultadoMaqUsd = new Decimal(0);
+    if (config?.modoMaquinaria === 'TARIFA') {
+      const [laboresPropias, gastosMaq] = await Promise.all([
+        this.prisma.agroLabor.findMany({
+          where: {
+            empresaId,
+            propia: true,
+            anuladoAt: null,
+            fecha: { gte: desde, lte: hasta },
+            tarifaUsdHa: { not: null },
+          },
+          select: { hectareas: true, tarifaUsdHa: true },
+        }),
+        this.prisma.agroGasto.findMany({
+          where: {
+            empresaId,
+            centro: 'MAQ',
+            anuladoAt: null,
+            fecha: { gte: desde, lte: hasta },
+          },
+          select: { montoUsd: true },
+        }),
+      ]);
+      const entradas = [
+        {
+          ingresoTarifa: laboresPropias.reduce<Decimal>(
+            (a, l) => a.plus(new Decimal(l.hectareas).mul(l.tarifaUsdHa ?? 0)),
+            new Decimal(0),
+          ),
+          costoReal: gastosMaq.reduce<Decimal>(
+            (a, g) => a.plus(new Decimal(g.montoUsd)),
+            new Decimal(0),
+          ),
+        },
+      ];
+      resultadoMaqUsd = consolidarMaquinariaTarifa(entradas).diferencia;
+      // Los costos MAQ ya se computaron aparte; los saco de costosDirectos para no doblarlos.
+      costosDirectos.set('MAQ', new Decimal(0));
+    }
+
+    // §5.3 — Resultado por tenencia: cambio de valor del stock de hacienda por
+    // efecto precio entre inicio y fin del ejercicio. Se muestra APARTE.
+    const resultadoTenenciaUsd = await this.calcularTenenciaHacienda(
+      empresaId,
+      desde,
+      hasta,
+    );
+
+    // Diferencia de cambio del ejercicio: sobre gastos y cobros en UYU con
+    // fechas fecha vs fechaPago/fechaCobroPago separadas — la diferencia entre
+    // el TC del devengamiento y el del pago genera dif de cambio. Aproximación
+    // razonable: sumar (montoUyu / tcPago − montoUsd) por cada gasto con
+    // fechaPago != fecha.
+    const diferenciaCambioUsd = await this.calcularDifCambio(empresaId, desde, hasta);
+
     const ve = vistaEmpresa({
       margenes,
       rentaFictaTotalUsd: rentaFictaTotal,
-      resultadoMaqUsd: 0, // TODO: consolidar en modo TARIFA cuando haya labores con tarifa
+      resultadoMaqUsd,
       estructuraNoAsignadaUsd: estructuraNoAsignada,
-      amortizacionesNoAsignadasUsd: 0, // TODO: cuando se modele amortización
+      // TODO amortizaciones — requiere modelar `agro_bien` con vida útil.
+      // Mientras tanto el usuario puede cargarlas como gastos con cuenta ESTRUCTURA/centro EST.
+      amortizacionesNoAsignadasUsd: 0,
       interesesUsd: intereses,
-      diferenciaCambioUsd: 0, // TODO
-      resultadoTenenciaUsd: 0, // TODO cuando corra la descomposición de inventarios
+      diferenciaCambioUsd,
+      resultadoTenenciaUsd,
     });
 
     return {
@@ -359,6 +421,124 @@ export class AgroReportesService {
       }),
       baseMbUsd: totalMbDespuesTierra,
     };
+  }
+
+  // ── §5.3 tenencia + dif de cambio ─────────────────────────────────
+
+  /**
+   * Efecto tenencia sobre stock de hacienda entre `desde` y `hasta`.
+   *
+   * Para cada (centro, categoria): descompone Δvalor en efecto físico
+   * (mérito productivo, ya reflejado en el operativo) y efecto precio.
+   * Sumamos SÓLO el efecto precio (tenencia) y lo devolvemos.
+   *
+   * Precio a las dos fechas: `AgroPrecio` filtrado por productoId=null +
+   * `categoriaCod` (precios de hacienda). Si no hay precio para una
+   * combinación, se salta.
+   */
+  private async calcularTenenciaHacienda(
+    empresaId: string,
+    desde: Date,
+    hasta: Date,
+  ): Promise<Decimal> {
+    const [stockInicial, stockFinal] = await Promise.all([
+      // -1 día para captar el saldo justo antes del ejercicio
+      this.stockAt(empresaId, new Date(desde.getTime() - 24 * 3600 * 1000)),
+      this.stockAt(empresaId, hasta),
+    ]);
+    const preciosIni = await this.preciosHaciendaAt(empresaId, desde);
+    const preciosFin = await this.preciosHaciendaAt(empresaId, hasta);
+
+    let acumTenencia = new Decimal(0);
+    const keys = new Set([...stockInicial.keys(), ...stockFinal.keys()]);
+    for (const k of keys) {
+      const [centro, cat] = k.split('::');
+      const kgI = stockInicial.get(k) ?? 0;
+      const kgF = stockFinal.get(k) ?? 0;
+      const pI = preciosIni.get(cat);
+      const pF = preciosFin.get(cat);
+      if (!pI || !pF) continue; // sin precios, no puedo separar efectos
+      const d = descomponerValor({
+        kgInicial: kgI,
+        precioInicial: pI,
+        kgFinal: kgF,
+        precioFinal: pF,
+      });
+      acumTenencia = acumTenencia.plus(d.efectoPrecio);
+    }
+    return acumTenencia.toDecimalPlaces(2, Decimal.ROUND_HALF_EVEN);
+  }
+
+  private async preciosHaciendaAt(
+    empresaId: string,
+    fecha: Date,
+  ): Promise<Map<string, Decimal>> {
+    // Última precio conocido <= fecha, por categoriaCod (productoId = null).
+    const rows = await this.prisma.agroPrecio.findMany({
+      where: {
+        empresaId,
+        fecha: { lte: fecha },
+        productoId: null,
+        categoriaCod: { not: null },
+      },
+      orderBy: { fecha: 'desc' },
+    });
+    const out = new Map<string, Decimal>();
+    for (const r of rows) {
+      if (!r.categoriaCod) continue;
+      if (!out.has(r.categoriaCod)) out.set(r.categoriaCod, new Decimal(r.precioUsd));
+    }
+    return out;
+  }
+
+  /**
+   * Diferencia de cambio del ejercicio: gastos y cobros en UYU cuya fecha
+   * de pago/cobro cae dentro del ejercicio y difiere de la fecha de
+   * devengamiento. Aproximación pragmática:
+   *   difUsd = montoUyu · (1/tcPago − 1/tcDevengado)
+   * El signo indica ganancia (+) o pérdida (−) por tipo de cambio.
+   *
+   * Requiere que el pago esté ya cargado con su propio TC (moneda UYU).
+   * Si no está, no lo cuenta.
+   */
+  private async calcularDifCambio(
+    empresaId: string,
+    desde: Date,
+    hasta: Date,
+  ): Promise<Decimal> {
+    const gastosUyu = await this.prisma.agroGasto.findMany({
+      where: {
+        empresaId,
+        moneda: 'UYU',
+        anuladoAt: null,
+        fecha: { gte: desde, lte: hasta },
+        fechaPago: { not: null, gte: desde, lte: hasta },
+      },
+      select: { monto: true, tipoCambio: true, fechaPago: true },
+    });
+    let acum = new Decimal(0);
+    for (const g of gastosUyu) {
+      if (!g.fechaPago) continue;
+      const tcPago = await this.tcAt(empresaId, g.fechaPago);
+      if (!tcPago) continue;
+      const usdDevengado = new Decimal(g.monto).div(g.tipoCambio);
+      const usdPagado = new Decimal(g.monto).div(tcPago);
+      // Egresos: pagar con MÁS pesos que los estimados = perdí (dif negativa).
+      acum = acum.plus(usdDevengado.minus(usdPagado));
+    }
+    return acum.toDecimalPlaces(2, Decimal.ROUND_HALF_EVEN);
+  }
+
+  private async tcAt(empresaId: string, fecha: Date): Promise<Decimal | null> {
+    const exact = await this.prisma.agroTipoCambio.findUnique({
+      where: { empresaId_fecha: { empresaId, fecha } },
+    });
+    if (exact) return new Decimal(exact.uyuUsd);
+    const back = await this.prisma.agroTipoCambio.findFirst({
+      where: { empresaId, fecha: { lte: fecha } },
+      orderBy: { fecha: 'desc' },
+    });
+    return back ? new Decimal(back.uyuUsd) : null;
   }
 
   // ── Ejercicio actual / helpers para el frontend ──────────────────
