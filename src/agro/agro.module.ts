@@ -58,6 +58,8 @@ import {
   AgroImportController,
   AgroImportService,
 } from './import/agro-import.controller';
+import { AgroReportesController } from './reportes/agro-reportes.controller';
+import { AgroReportesService } from './reportes/agro-reportes.service';
 
 /**
  * Módulo de gestión agropecuaria (Cruz Del Sur). Aislado del módulo de
@@ -85,6 +87,7 @@ import {
     AgroLaboresController,
     AgroLluviasController,
     AgroImportController,
+    AgroReportesController,
   ],
   providers: [
     AgroScopeService,
@@ -104,6 +107,7 @@ import {
     AgroLaboresService,
     AgroLluviasService,
     AgroImportService,
+    AgroReportesService,
   ],
   exports: [AgroScopeService],
 })

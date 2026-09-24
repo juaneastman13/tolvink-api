@@ -113,10 +113,37 @@ Además, el selector de módulo existente acepta ahora `'agro'`:
 
 - `PATCH /users/preferred-module` con `{ preferredModule: "agro" }`
 
+### Reportes (Fase 4)
+
+| Método | Ruta | Rol mínimo | Descripción |
+|---|---|---|---|
+| GET | `/agro/reportes/ejercicio-actual` | agro_* | Ejercicio y rango derivado de `mesInicioEjercicio` |
+| GET | `/agro/reportes/stock?hasta=` | agro_* | Snapshot de stock por (centro, categoría) |
+| GET | `/agro/reportes/resultados?ejercicio=` | agro_* | Vista negocios + vista empresa (§5.7) |
+| GET | `/agro/reportes/tandas` | agro_* | Feedlot por tanda (§5.9) |
+| GET | `/agro/reportes/equivalencias?ejercicio=` | agro_* | kg carne / t soja equivalentes (§5.8) |
+
+## Capa de dominio (funciones puras — `src/agro/dominio/*`)
+
+Todas sin dependencia de Nest/Prisma. Trabajan con `Decimal` para
+correctitud numérica. Actualmente **64 tests unitarios en verde**.
+
+| Archivo | Regla del brief | Qué hace |
+|---|---|---|
+| `ejercicio.ts` | §5.1 | Rango de un ejercicio, corte intermedio, "ejercicio de X fecha" |
+| `moneda.ts` | §4.3 | Normalización `{monto,moneda,tipoCambio,montoUsd}` (banker rounding) |
+| `stock-hacienda.ts` | §4.3 | `aplicar`, `validar`, `proyectarStock` sobre movs de hacienda |
+| `transferencia-grano.ts` | §5.2 | Valor neto en campo + asiento gemelo AGR/FEED |
+| `valuacion.ts` | §5.3 | Descompone Δ valor de inventario en efecto físico y efecto precio |
+| `costos-compartidos.ts` | §5.4 | Reparto por % explícito, reparto por UG, MAQ modo TARIFA (sobre/subrecupero) |
+| `campania.ts` | §5.5 | Clasifica campaña: reconoce resultado en ejercicio de cosecha o activa "cultivos en pie" |
+| `costo-oportunidad.ts` | §5.6 | CO = capital × tasa × fracción-año (sólo vista de decisión) |
+| `resultado-empresa.ts` | §5.7 | Vista negocios y vista empresa con reversión de renta ficta |
+| `equivalencias.ts` | §5.8 | kg carne / t soja equivalente con precios base fijos |
+| `feedlot.ts` | §5.9 | GMD, conversión, costo/kg ganado, margen por cabeza y día, breakeven |
+
 ## Fases pendientes
 
-- **Fase 3 — Núcleo de cálculo**: reglas §5, golden tests contra el Excel de referencia.
-- **Fase 4 — Reportes**: tablero, resultados por actividad, tandas, KPIs, informe socios PDF.
 - **Fase 5 — Presupuesto y caja**: presupuesto físico/precio/económico, escenarios, caja 12 meses, integración BCU para TC.
-- **Fase 6 — WhatsApp**: dominio `agro` en `AgentOrchestratorService`, staging en `agro_captura_pendiente`, idempotencia.
+- **Fase 6 — WhatsApp** (postergada por decisión del usuario): dominio `agro` en `AgentOrchestratorService`, staging en `agro_captura_pendiente`, idempotencia. La tabla `agro_captura_pendiente` ya existe en el schema.
 - **Fase 7 — Modelos de decisión**: momento óptimo de venta, comprar vs contratar, VAN/TIR pasturas, etc.
