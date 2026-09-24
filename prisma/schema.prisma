@@ -845,12 +845,12 @@ model Freight {
   plantApprovedAt    DateTime? @map("plant_approved_at")
 
   // MTOP Guía de Carga (Uruguay — permiso de transporte de carga por carretera)
-  mtopGuideId          String?  @map("mtop_guide_id") @db.VarChar(50)
-  mtopAccessCode       String?  @map("mtop_access_code") @db.VarChar(50)
-  mtopGuideStatus      String?  @map("mtop_guide_status") @db.VarChar(20) // pendiente | activa | finalizada
-  mtopDuration         Int?     @map("mtop_duration") // 24, 48 or 72 hours
-  mtopModeOfOperation  String?  @map("mtop_mode_of_operation") @db.VarChar(30) // simple | recolecta | distribuye | multiples
-  mtopTransportPrice   Decimal? @map("mtop_transport_price") @db.Decimal(12, 2)
+  mtopGuideId         String?  @map("mtop_guide_id") @db.VarChar(50)
+  mtopAccessCode      String?  @map("mtop_access_code") @db.VarChar(50)
+  mtopGuideStatus     String?  @map("mtop_guide_status") @db.VarChar(20) // pendiente | activa | finalizada
+  mtopDuration        Int?     @map("mtop_duration") // 24, 48 or 72 hours
+  mtopModeOfOperation String?  @map("mtop_mode_of_operation") @db.VarChar(30) // simple | recolecta | distribuye | multiples
+  mtopTransportPrice  Decimal? @map("mtop_transport_price") @db.Decimal(12, 2)
 
   // Relations
   originCompany   Company       @relation("FreightOriginCompany", fields: [originCompanyId], references: [id], onDelete: Restrict)
@@ -1795,4 +1795,563 @@ model CompanyProduct {
   @@index([companyId])
   @@index([companyId, isActive])
   @@map("company_products")
+}
+
+// =====================================================================
+// AGRO MODULE — Módulo de gestión agropecuaria (Cruz Del Sur)
+// Aislado del módulo de logística. Tablas con prefijo agro_.
+// Ver docs/agro/CRUZ_DEL_SUR_MODULO_TOLVINK.md
+// =====================================================================
+
+// ======================== AGRO ENUMS =================================
+
+enum AgroModoMaquinaria {
+  PORCENTAJE
+  TARIFA
+}
+
+enum AgroEscenario {
+  PESIMISTA
+  BASE
+  OPTIMISTA
+}
+
+enum AgroCentroTipo {
+  CRI // Cría
+  REC // Recría
+  FEED // Feedlot
+  AGR // Agricultura
+  MAQ // Maquinaria
+  PAS // Pasturas compartidas (opcional por empresa)
+  EST // Estructura / no asignado
+}
+
+enum AgroTipoLoteCampania {
+  SOJA1
+  SOJA2
+  TRIGO
+}
+
+enum AgroTipoTercero {
+  PROVEEDOR
+  CLIENTE
+  FRIGORIFICO
+  CONTRATISTA
+  BANCO
+  OTRO
+}
+
+enum AgroTipoProducto {
+  SEMILLA
+  FERTILIZANTE
+  AGROQUIMICO
+  RACION
+  GRANO_COMERCIAL
+  COMBUSTIBLE
+  SANIDAD
+  OTRO
+}
+
+enum AgroUnidad {
+  KG
+  TON
+  LT
+  UN
+  HA
+  DOSIS
+  BOLSA
+}
+
+enum AgroCuentaTipo {
+  INGRESO
+  COSTO_DIRECTO
+  COSTO_INDIRECTO
+  ESTRUCTURA
+  FINANCIERO
+  IMPUESTO
+}
+
+enum AgroMovHaciendaTipo {
+  NACIMIENTO
+  COMPRA
+  VENTA
+  MUERTE
+  TRANSF
+  RECATEG
+  PESADA
+  INVENTARIO
+  DICOSE
+  TACTO
+}
+
+enum AgroMovGranoTipo {
+  COSECHA
+  VENTA
+  FEEDLOT // transferencia interna al feedlot (grano propio)
+}
+
+enum AgroMovOrigen {
+  WEB
+  WHATSAPP
+  IMPORT
+}
+
+enum AgroPrestamoMoneda {
+  USD
+  UYU
+}
+
+// ======================== AGRO MASTERS ===============================
+
+// Empresa (razón social) dentro del tenant. Un Company de Tolvink puede
+// contener varias AgroEmpresa (multi-empresa dentro del mismo tenant).
+model AgroEmpresa {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  nombre    String   @db.VarChar(255)
+  rut       String?  @db.VarChar(20)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  config        AgroConfig?
+  centros       AgroCentro[]
+  categorias    AgroCategoriaAnimal[]
+  cuentas       AgroCuenta[]
+  terceros      AgroTercero[]
+  productos     AgroProducto[]
+  campos        AgroCampo[]
+  potreros      AgroPotrero[]
+  lotesCampania AgroLoteCampania[]
+  tandas        AgroTanda[]
+  prestamos     AgroPrestamo[]
+  tiposCambio   AgroTipoCambio[]
+  movsHacienda  AgroMovHacienda[]
+  movsGranos    AgroMovGrano[]
+  gastos        AgroGasto[]
+  labores       AgroLabor[]
+  lluvias       AgroLluvia[]
+  precios       AgroPrecio[]
+  capturasPend  AgroCapturaPendiente[]
+
+  @@index([companyId, active])
+  @@map("agro_empresa")
+}
+
+// Configuración por empresa. Row única.
+model AgroConfig {
+  id                    String             @id @default(uuid())
+  empresaId             String             @unique @map("empresa_id")
+  mesInicioEjercicio    Int                @default(1) @map("mes_inicio_ejercicio") // 1-12
+  cierreIntermedioMes   Int?               @map("cierre_intermedio_mes") // ej. 6 (DICOSE 30/06)
+  cierreIntermedioDia   Int?               @map("cierre_intermedio_dia") // ej. 30
+  tasaCostoOportunidad  Decimal            @default(0.05) @map("tasa_costo_oportunidad") @db.Decimal(6, 4)
+  modoMaquinaria        AgroModoMaquinaria @default(PORCENTAJE) @map("modo_maquinaria")
+  escenarioActivo       AgroEscenario      @default(BASE) @map("escenario_activo")
+  pasHabilitado         Boolean            @default(false) @map("pas_habilitado")
+  pBaseCarne            Decimal            @default(0) @map("p_base_carne") @db.Decimal(12, 4) // USD/kg
+  pBaseSoja             Decimal            @default(0) @map("p_base_soja") @db.Decimal(12, 4) // USD/t
+  pBaseTrigo            Decimal            @default(0) @map("p_base_trigo") @db.Decimal(12, 4) // USD/t
+  desvioUsd             Decimal            @default(1000) @map("desvio_usd") @db.Decimal(14, 2)
+  desvioPct             Decimal            @default(0.1) @map("desvio_pct") @db.Decimal(5, 4)
+  saldoMinimoOperativo  Decimal            @default(15000) @map("saldo_minimo_operativo") @db.Decimal(14, 2)
+  porcentajesAsignacion Json               @default("{}") @map("porcentajes_asignacion") // { personal: {...}, maquinaria: {...} }
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("agro_config")
+}
+
+model AgroCentro {
+  id        String         @id @default(uuid())
+  empresaId String         @map("empresa_id")
+  codigo    AgroCentroTipo
+  nombre    String         @db.VarChar(100)
+  active    Boolean        @default(true)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, codigo])
+  @@map("agro_centro")
+}
+
+model AgroCategoriaAnimal {
+  id             String          @id @default(uuid())
+  empresaId      String          @map("empresa_id")
+  codigo         String          @db.VarChar(20)
+  nombre         String          @db.VarChar(100)
+  equivalenciaUg Decimal         @map("equivalencia_ug") @db.Decimal(6, 3)
+  centroHabitual AgroCentroTipo? @map("centro_habitual")
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, codigo])
+  @@map("agro_categoria_animal")
+}
+
+model AgroCuenta {
+  id            String          @id @default(uuid())
+  empresaId     String          @map("empresa_id")
+  codigo        String          @db.VarChar(20)
+  nombre        String          @db.VarChar(150)
+  tipo          AgroCuentaTipo
+  centroDefault AgroCentroTipo? @map("centro_default")
+  active        Boolean         @default(true)
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  gastos  AgroGasto[]
+
+  @@unique([empresaId, codigo])
+  @@map("agro_cuenta")
+}
+
+model AgroTercero {
+  id        String          @id @default(uuid())
+  empresaId String          @map("empresa_id")
+  nombre    String          @db.VarChar(200)
+  tipo      AgroTipoTercero
+  rut       String?         @db.VarChar(20)
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  empresa      AgroEmpresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  movsHacienda AgroMovHacienda[]
+  gastos       AgroGasto[]
+
+  @@index([empresaId, tipo])
+  @@map("agro_tercero")
+}
+
+model AgroProducto {
+  id        String           @id @default(uuid())
+  empresaId String           @map("empresa_id")
+  codigo    String           @db.VarChar(30)
+  nombre    String           @db.VarChar(200)
+  tipo      AgroTipoProducto
+  unidad    AgroUnidad
+  active    Boolean          @default(true)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  empresa    AgroEmpresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  movsGranos AgroMovGrano[]
+  precios    AgroPrecio[]
+
+  @@unique([empresaId, codigo])
+  @@map("agro_producto")
+}
+
+model AgroCampo {
+  id            String   @id @default(uuid())
+  empresaId     String   @map("empresa_id")
+  nombre        String   @db.VarChar(200)
+  hectareas     Decimal  @db.Decimal(10, 2)
+  propio        Boolean  @default(true)
+  rentaUsdHaAno Decimal? @map("renta_usd_ha_ano") @db.Decimal(10, 2) // real si arrendado, ficta si propio
+  aptitud       String?  @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  empresa  AgroEmpresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  potreros AgroPotrero[]
+
+  @@map("agro_campo")
+}
+
+model AgroPotrero {
+  id        String   @id @default(uuid())
+  empresaId String   @map("empresa_id")
+  campoId   String   @map("campo_id")
+  nombre    String   @db.VarChar(150)
+  hectareas Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  empresa       AgroEmpresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  campo         AgroCampo          @relation(fields: [campoId], references: [id], onDelete: Cascade)
+  lotesCampania AgroLoteCampania[]
+
+  @@index([campoId])
+  @@map("agro_potrero")
+}
+
+// Lote agrícola × campaña. Actúa como orden de producción que acumula costos.
+model AgroLoteCampania {
+  id            String               @id @default(uuid())
+  empresaId     String               @map("empresa_id")
+  potreroId     String?              @map("potrero_id")
+  campania      String               @db.VarChar(20) // ej. "2025/26"
+  tipo          AgroTipoLoteCampania
+  hectareas     Decimal              @db.Decimal(10, 2)
+  fechaSiembra  DateTime?            @map("fecha_siembra") @db.Date
+  fechaCosecha  DateTime?            @map("fecha_cosecha") @db.Date
+  rindeEsperado Decimal?             @map("rinde_esperado") @db.Decimal(8, 2) // kg/ha o t/ha
+  cerrado       Boolean              @default(false)
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
+
+  empresa    AgroEmpresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  potrero    AgroPotrero?   @relation(fields: [potreroId], references: [id], onDelete: SetNull)
+  movsGranos AgroMovGrano[]
+  gastos     AgroGasto[]
+  labores    AgroLabor[]
+
+  @@index([empresaId, campania])
+  @@map("agro_lote_campania")
+}
+
+model AgroTanda {
+  id           String    @id @default(uuid())
+  empresaId    String    @map("empresa_id")
+  codigo       String    @db.VarChar(30)
+  fechaIngreso DateTime  @map("fecha_ingreso") @db.Date
+  corral       String?   @db.VarChar(50)
+  categoriaCod String?   @map("categoria_cod") @db.VarChar(20)
+  fechaCierre  DateTime? @map("fecha_cierre") @db.Date
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  empresa      AgroEmpresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  movsHacienda AgroMovHacienda[]
+  movsGranos   AgroMovGrano[]
+  gastos       AgroGasto[]
+
+  @@unique([empresaId, codigo])
+  @@map("agro_tanda")
+}
+
+model AgroPrestamo {
+  id          String             @id @default(uuid())
+  empresaId   String             @map("empresa_id")
+  nombre      String             @db.VarChar(200)
+  capital     Decimal            @db.Decimal(14, 2)
+  moneda      AgroPrestamoMoneda
+  tasaAnual   Decimal            @map("tasa_anual") @db.Decimal(6, 4)
+  cuotas      Int
+  garantia    String?            @db.VarChar(200)
+  fechaInicio DateTime           @map("fecha_inicio") @db.Date
+  active      Boolean            @default(true)
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@map("agro_prestamo")
+}
+
+model AgroTipoCambio {
+  id        String   @id @default(uuid())
+  empresaId String   @map("empresa_id")
+  fecha     DateTime @db.Date
+  uyuUsd    Decimal  @map("uyu_usd") @db.Decimal(10, 4) // pesos por USD
+  fuente    String   @default("MANUAL") @db.VarChar(20) // MANUAL | BCU
+  createdAt DateTime @default(now()) @map("created_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@unique([empresaId, fecha])
+  @@map("agro_tipo_cambio")
+}
+
+// ======================== AGRO MOVEMENTS =============================
+
+model AgroMovHacienda {
+  id               String              @id @default(uuid())
+  empresaId        String              @map("empresa_id")
+  fecha            DateTime            @db.Date
+  tipo             AgroMovHaciendaTipo
+  centro           AgroCentroTipo
+  categoriaCod     String              @map("categoria_cod") @db.VarChar(20)
+  centroDestino    AgroCentroTipo?     @map("centro_destino")
+  categoriaDestino String?             @map("categoria_destino") @db.VarChar(20)
+  tandaId          String?             @map("tanda_id") // para feedlot: identificador de tanda
+  cabezas          Int
+  kgCab            Decimal?            @map("kg_cab") @db.Decimal(8, 2)
+  kgTotal          Decimal?            @map("kg_total") @db.Decimal(12, 2)
+  usdKg            Decimal?            @map("usd_kg") @db.Decimal(10, 4)
+  prenadas         Int?
+  terceroId        String?             @map("tercero_id")
+  guia             String?             @db.VarChar(50)
+  obs              String?             @db.Text
+  fechaCobroPago   DateTime?           @map("fecha_cobro_pago") @db.Date
+
+  // Auditoría / append-only
+  origen          AgroMovOrigen @default(WEB)
+  createdBy       String?       @map("created_by")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  anuladoAt       DateTime?     @map("anulado_at")
+  anuladoPor      String?       @map("anulado_por")
+  motivoAnulacion String?       @map("motivo_anulacion") @db.Text
+
+  empresa AgroEmpresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  tanda   AgroTanda?   @relation(fields: [tandaId], references: [id], onDelete: SetNull)
+  tercero AgroTercero? @relation(fields: [terceroId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, centro, categoriaCod])
+  @@index([empresaId, tandaId])
+  @@map("agro_mov_hacienda")
+}
+
+model AgroMovGrano {
+  id             String           @id @default(uuid())
+  empresaId      String           @map("empresa_id")
+  fecha          DateTime         @db.Date
+  tipo           AgroMovGranoTipo
+  loteCampaniaId String?          @map("lote_campania_id")
+  productoId     String           @map("producto_id")
+  toneladas      Decimal          @db.Decimal(12, 3)
+  precioNetoUsdT Decimal?         @map("precio_neto_usd_t") @db.Decimal(12, 4) // valor neto en campo
+  fechaCobro     DateTime?        @map("fecha_cobro") @db.Date
+  tandaId        String?          @map("tanda_id") // si tipo=FEEDLOT
+  obs            String?          @db.Text
+
+  origen          AgroMovOrigen @default(WEB)
+  createdBy       String?       @map("created_by")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  anuladoAt       DateTime?     @map("anulado_at")
+  anuladoPor      String?       @map("anulado_por")
+  motivoAnulacion String?       @map("motivo_anulacion") @db.Text
+
+  empresa      AgroEmpresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  loteCampania AgroLoteCampania? @relation(fields: [loteCampaniaId], references: [id], onDelete: SetNull)
+  producto     AgroProducto      @relation(fields: [productoId], references: [id], onDelete: Restrict)
+  tanda        AgroTanda?        @relation(fields: [tandaId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, loteCampaniaId])
+  @@index([empresaId, tandaId])
+  @@map("agro_mov_grano")
+}
+
+model AgroGasto {
+  id             String         @id @default(uuid())
+  empresaId      String         @map("empresa_id")
+  fecha          DateTime       @db.Date
+  terceroId      String?        @map("tercero_id")
+  cuentaId       String         @map("cuenta_id")
+  centro         AgroCentroTipo
+  loteCampaniaId String?        @map("lote_campania_id")
+  tandaId        String?        @map("tanda_id")
+  prestamoId     String?        @map("prestamo_id")
+  detalle        String?        @db.Text
+  moneda         String         @db.VarChar(3) // USD, UYU
+  monto          Decimal        @db.Decimal(14, 2)
+  tipoCambio     Decimal        @map("tipo_cambio") @db.Decimal(10, 4)
+  montoUsd       Decimal        @map("monto_usd") @db.Decimal(14, 2)
+  comprobante    String?        @db.VarChar(100)
+  fechaPago      DateTime?      @map("fecha_pago") @db.Date
+  cantidad       Decimal?       @db.Decimal(14, 3)
+  unidad         AgroUnidad?
+
+  origen          AgroMovOrigen @default(WEB)
+  createdBy       String?       @map("created_by")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  anuladoAt       DateTime?     @map("anulado_at")
+  anuladoPor      String?       @map("anulado_por")
+  motivoAnulacion String?       @map("motivo_anulacion") @db.Text
+
+  empresa      AgroEmpresa       @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  tercero      AgroTercero?      @relation(fields: [terceroId], references: [id], onDelete: SetNull)
+  cuenta       AgroCuenta        @relation(fields: [cuentaId], references: [id], onDelete: Restrict)
+  loteCampania AgroLoteCampania? @relation(fields: [loteCampaniaId], references: [id], onDelete: SetNull)
+  tanda        AgroTanda?        @relation(fields: [tandaId], references: [id], onDelete: SetNull)
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, centro])
+  @@index([empresaId, cuentaId])
+  @@map("agro_gasto")
+}
+
+model AgroLabor {
+  id             String   @id @default(uuid())
+  empresaId      String   @map("empresa_id")
+  fecha          DateTime @db.Date
+  loteCampaniaId String   @map("lote_campania_id")
+  tipoLabor      String   @map("tipo_labor") @db.VarChar(100)
+  hectareas      Decimal  @db.Decimal(10, 2)
+  propia         Boolean  @default(true)
+  tarifaUsdHa    Decimal? @map("tarifa_usd_ha") @db.Decimal(10, 2)
+  obs            String?  @db.Text
+
+  origen    AgroMovOrigen @default(WEB)
+  createdBy String?       @map("created_by")
+  createdAt DateTime      @default(now()) @map("created_at")
+  anuladoAt DateTime?     @map("anulado_at")
+
+  empresa      AgroEmpresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  loteCampania AgroLoteCampania @relation(fields: [loteCampaniaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, fecha])
+  @@index([loteCampaniaId])
+  @@map("agro_labor")
+}
+
+model AgroLluvia {
+  id          String   @id @default(uuid())
+  empresaId   String   @map("empresa_id")
+  fecha       DateTime @db.Date
+  mm          Decimal  @db.Decimal(6, 2)
+  pluviometro String?  @db.VarChar(100)
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, fecha])
+  @@map("agro_lluvia")
+}
+
+// Serie de precios por producto/categoría/fecha (hacienda, granos, insumos)
+model AgroPrecio {
+  id           String          @id @default(uuid())
+  empresaId    String          @map("empresa_id")
+  fecha        DateTime        @db.Date
+  productoId   String?         @map("producto_id")
+  categoriaCod String?         @map("categoria_cod") @db.VarChar(20)
+  centro       AgroCentroTipo?
+  precioUsd    Decimal         @map("precio_usd") @db.Decimal(12, 4)
+  concepto     String?         @db.VarChar(50) // BRUTO | NETO_CAMPO | REFERENCIA
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  empresa  AgroEmpresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  producto AgroProducto? @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, productoId, fecha])
+  @@map("agro_precio")
+}
+
+// Staging para captura por WhatsApp: nada se inserta en las tablas
+// definitivas hasta la confirmación del usuario.
+model AgroCapturaPendiente {
+  id            String    @id @default(uuid())
+  empresaId     String    @map("empresa_id")
+  phone         String    @db.VarChar(50)
+  messageId     String?   @unique @map("message_id") @db.VarChar(120) // idempotencia
+  mensajeCrudo  String    @map("mensaje_crudo") @db.Text
+  parsed        Json // filas candidatas por dominio: HACIENDA, GASTOS, GRANOS, LLUVIAS
+  dudas         Json      @default("[]")
+  observaciones Json      @default("[]")
+  estado        String    @default("PENDIENTE") @db.VarChar(20) // PENDIENTE | CONFIRMADO | RECHAZADO | EXPIRADO
+  confirmadoBy  String?   @map("confirmado_by")
+  confirmadoAt  DateTime? @map("confirmado_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  expiraAt      DateTime? @map("expira_at")
+
+  empresa AgroEmpresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  @@index([empresaId, estado])
+  @@index([phone, createdAt])
+  @@map("agro_captura_pendiente")
 }

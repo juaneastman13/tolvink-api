@@ -31,6 +31,7 @@ import { MechanicDashboardController, MechanicDashboardService } from './mechani
 import { StockModule } from './stock/stock.module';
 import { CompanyProductsController, CompanyProductsService } from './company-products/company-products.controller';
 import { AgentModule } from './agent/agent.module';
+import { AgroModule } from './agro/agro.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { AgentModule } from './agent/agent.module';
     SharedLinksModule,
     FreightLocationsModule,
     StockModule,
+    AgroModule,
   ],
   controllers: [
     CatalogController,

@@ -13,7 +13,7 @@ import { PrismaService } from '../database/prisma.service';
 export class UpdatePreferredModuleDto {
   @IsString()
   @IsOptional()
-  @IsIn(['logistics', 'mechanic', 'stock', null])
+  @IsIn(['logistics', 'mechanic', 'stock', 'agro', null])
   preferredModule: string | null;
 }
 
